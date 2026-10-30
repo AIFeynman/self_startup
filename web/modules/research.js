@@ -101,6 +101,9 @@ export default {
   },
 };
 
+// 被备选引擎代跑的结果：原引擎名后标明，避免误以为两个引擎都跑通了
+const subTag = (h, x) => (x.used_engine && x.used_engine !== x.engine
+  ? h('span.tag.warn', { title: `${ENGINE_NAMES[x.engine] || x.engine} 没跑通，平台自动回退` }, `由 ${ENGINE_NAMES[x.used_engine] || x.used_engine} 代跑`) : null);
 const statusTag = (h, s) => { const [t, c] = STATUS[s] || [s || '—', 'gray']; return h('span.tag' + (c ? '.' + c : ''), {}, t); };
 const dots = (h, progress) => h('div.rs-dots', {}, progress.map((x) =>
   h('span.rs-dot.' + x.status, { title: `${ENGINE_NAMES[x.engine] || x.engine}：${(STATUS[x.status] || [x.status])[0]}` }, [h('i'), ENGINE_PILLS[x.engine] || x.engine])));
@@ -304,7 +307,7 @@ async function detail(el, ctx, id) {
     for (const x of done) {
       const body = md(x.content); body.classList.add('rs-read');
       el.append(h('details.card.rs-result', { id: 'rs-res-' + x.id, open: !r.synthesis && done.length === 1 },
-        [h('summary', {}, [ui.icon(ENGINE_ICON[x.engine] || 'robot'), ENGINE_NAMES[x.engine] || x.engine, h('span.muted', { style: { fontFamily: 'var(--font)', fontWeight: 400 } }, fmt(x.finished_at))]), body]));
+        [h('summary', {}, [ui.icon(ENGINE_ICON[x.engine] || 'robot'), ENGINE_NAMES[x.engine] || x.engine, subTag(h, x), h('span.muted', { style: { fontFamily: 'var(--font)', fontWeight: 400 } }, fmt(x.finished_at))]), body]));
     }
   }
 }
@@ -313,7 +316,7 @@ function engineCard(x, ctx, rerender, root) {
   const { api, h, toast, ui } = ctx;
   const act = async (path, body) => { try { await api.post(`/api/research/results/${x.id}/${path}`, body); rerender(); } catch (e) { toast(e.message, true); } };
   const card = h('div.card' + (x.status === 'awaiting_paste' ? '.wide' : ''));
-  card.append(h('div.eh', {}, [h('span.ic', {}, ui.icon(ENGINE_ICON[x.engine] || 'robot')), h('b', {}, ENGINE_NAMES[x.engine] || x.engine), statusTag(h, x.status)]));
+  card.append(h('div.eh', {}, [h('span.ic', {}, ui.icon(ENGINE_ICON[x.engine] || 'robot')), h('b', {}, ENGINE_NAMES[x.engine] || x.engine), subTag(h, x), statusTag(h, x.status)]));
   const logEl = h('pre.muted', { style: { display: 'none' } });
 
   if (x.status === 'done') {

@@ -53,7 +53,7 @@ router = APIRouter()
 def _job_cards(hours: float) -> list[dict]:
     since = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
     out = []
-    for j in db.rows("SELECT id,module,ref,engine,status,prompt,output,log,created_at,started_at,finished_at FROM jobs "
+    for j in db.rows("SELECT id,module,ref,engine,status,prompt,output,log,created_at,started_at,finished_at,fallback_from FROM jobs "
                      "WHERE created_at>=? ORDER BY id DESC LIMIT 100", [since]):
         last = j["finished_at"] or j["started_at"] or j["created_at"]
         state, reason = {"queued": ("running", "排队中"), "running": ("running", "执行中"),
@@ -67,6 +67,8 @@ def _job_cards(hours: float) -> list[dict]:
         need = jobs.needs_you(j["output"]) if j["status"] == "done" else []
         if need:
             state, reason = "attention", f"待你审批 {len(need)} 项：{need[0][:60]}"
+        if j.get("fallback_from"):
+            reason += f" · {j['fallback_from']} 未跑通，已由 {j['engine']} 代跑"
         out.append({"key": f"job:{j['id']}", "engine": "platform", "session_id": str(j["id"]), "project": j["module"],
                     "cwd": "", "branch": "", "title": scanner._clip(f"{kind} · {title}", 80), "link": link,
                     "last_human": "", "last_agent": scanner._clip(j["output"] or "") or (f"正在：{doing}" if doing else ""),

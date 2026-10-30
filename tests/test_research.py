@@ -153,3 +153,20 @@ def test_quick_product_and_progress(client, fakes):
     r = client.post("/api/research", json={"topic": "进度点", "engines": ["claude", "codex"]}).json()
     row = next(x for x in client.get("/api/research").json() if x["id"] == r["id"])
     assert [x["engine"] for x in row["progress"]] == ["claude", "codex"] and row["progress"][0]["status"] == "running"
+
+
+def test_fallback_keeps_requested_engine_and_is_labeled(client, fakes):
+    submitted, _ = fakes
+    r = client.post("/api/research", json={"topic": "回退标注", "angles": ["技术原理"], "engines": ["claude", "codex"]}).json()
+    cl, cx = r["results"]
+    R.on_job_done({"ref": f"research:{r['id']}:r{cl['id']}", "status": "done", "output": "A", "engine": "claude"})
+    # codex 没跑通，平台回退到 claude 代跑
+    R.on_job_done({"ref": f"research:{r['id']}:r{cx['id']}", "status": "done", "output": "B", "engine": "claude",
+                   "fallback_from": "codex"})
+    got = {x["id"]: x for x in client.get(f"/api/research/{r['id']}").json()["results"]}
+    assert got[cx["id"]]["engine"] == "codex" and got[cx["id"]]["used_engine"] == "claude"
+    assert got[cl["id"]]["used_engine"] == ""
+    doc = Path(client.get(f"/api/research/{r['id']}").json()["doc_path"]).read_text("utf-8")
+    assert "Codex（未跑通，由 Claude Code 代跑）" in doc
+    client.post(f"/api/research/{r['id']}/synthesize")
+    assert "由 Claude Code 代跑" in submitted[-1]["prompt"] and "不是独立来源" in submitted[-1]["prompt"]
