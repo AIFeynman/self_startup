@@ -31,6 +31,9 @@ for name, m in mods.items():
 def _startup():
     jobs._mark_interrupted()  # 只在真正启动服务时清理上次中断的任务
     kb.schedule_sync(0.5)
+    for m in mods.values():  # 板块自己的后台循环（如规划的到点自动派发）
+        if hasattr(m, "on_startup"):
+            m.on_startup()
 
 
 @app.middleware("http")

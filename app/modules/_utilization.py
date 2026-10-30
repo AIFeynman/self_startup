@@ -27,8 +27,8 @@ from . import _review_sessions as rs
 SLOT_MIN = 10
 WORK_GAP = 10 * 60
 TOOL_GAP = 45 * 60
-WAIT_MAX = 3 * 3600
-VERSION = 2               # 口径版本：改了算法就 +1，旧快照会被重算
+WAIT_MAX = rs.WAIT_MAX
+VERSION = 3               # 口径版本：改了算法就 +1，旧快照会被重算
 IDLE_MIN_GAP = 30          # 分钟：工作时间里连续这么久没有 Agent 在跑，算「空档」
 _cache: dict[str, tuple[tuple, tuple]] = {}
 
@@ -137,12 +137,13 @@ def _sweep(per_session: list[list[tuple]], cap: int) -> tuple[float, int]:
 
 
 def analyze(day: Date, session_dirs: dict, focus_windows: list[dict], day_start: str = "08:30",
-            day_end: str = "23:00", concurrency: int = 3, now: datetime | None = None) -> dict:
+            day_end: str = "23:00", concurrency: int = 3, now: datetime | None = None,
+            chat_ids: set[str] = frozenset()) -> dict:
     now = now or datetime.now()
     sessions = []
     for path, reader in _files(session_dirs, day):
         try:
-            t = session_timeline(*_read(path, reader), day)
+            t = session_timeline(*rs.promote_platform_chat(*_read(path, reader), chat_ids), day)
         except Exception:  # noqa: BLE001 —— 坏文件跳过
             t = None
         if t and (t["active"] or t["humans"]):

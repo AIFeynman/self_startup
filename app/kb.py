@@ -273,7 +273,7 @@ def _daily(docs: list[dict]) -> list[dict]:
         if ef:
             s = json.loads(ef["summary"] or "{}")
             body.append(f"\n## Agent 效率\n- 会话 {s.get('sessions', 0)}（交互 {s.get('interactive', 0)}），人工介入 {s.get('human_turns', 0)} 次，"
-                        f"等待合计 {s.get('wait_total_min', 0)} 分钟，工具调用 {s.get('tool_calls', 0)}")
+                        f"Agent 等你 {s.get('wait_wall_min', s.get('wait_total_min', 0))} 分钟（墙钟；各会话累加 {s.get('wait_total_min', 0)}），工具调用 {s.get('tool_calls', 0)}")
             if ef.get("reflection"):
                 body.append(f"\n### 反思\n{ef['reflection']}")
         ut = db.row("SELECT * FROM agent_util WHERE date=?", [date]) if _has("agent_util") else None

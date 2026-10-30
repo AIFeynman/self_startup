@@ -23,6 +23,8 @@ DEFAULTS: dict = {
     "day_end": "23:00",
     # 同一时刻最多并行的自动任务数（Claude Code / Codex 并发度）
     "max_agent_concurrency": 3,
+    # 规划排好的自动任务（auto + Claude/Codex）到开始时间、依赖完成后自动派发，不用人点
+    "plan_auto_dispatch": True,
     "engines": {
         "default": "claude",            # claude / codex
         "claude": {

@@ -7,7 +7,7 @@
     notify  后台任务通知等系统消息（不算人工，也不算 Agent 活跃）
 指标：
     active  相邻事件间隔里「以 agent 事件结尾」的部分之和（单段封顶 IDLE_CAP）
-    wait    Agent 停下到下一条人工消息之间的间隔（人的响应耗时；汇总时单段封顶 WAIT_CAP）
+    wait    Agent 停下到下一条人工消息之间的间隔；≤ WAIT_MAX 计入「等你」（与 Agent 看板 · 时间利用同一口径），更长视为离开
 """
 from __future__ import annotations
 
@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import Iterable
 
 IDLE_CAP = 15 * 60      # 单段 Agent 活跃时间封顶（秒）：更长视为空闲
-WAIT_CAP = 30 * 60      # 单段人工等待封顶：更长视为离开，不算「被打断的注意力」
+WAIT_MAX = 3 * 3600     # 单段等待超过这个视为人离开，不计入「等你」（看板 · 时间利用共用）
 TEXT_MAX = 300
+VERSION = 2             # 统计口径版本：改了算法就 +1，复盘里旧的效率快照会重扫
 
 KIND_LABELS = {"new_task": "新任务/追加", "correct": "纠正/转向", "approve": "确认/继续",
                "interrupt": "中断", "answer": "回答提问", "check": "询问进度"}
@@ -245,6 +246,14 @@ def read_codex(path: Path) -> tuple[dict, list[dict]]:
     return meta, events
 
 
+def promote_platform_chat(meta: dict, events: list[dict], chat_ids: set[str]) -> tuple[dict, list[dict]]:
+    """平台对话面板走 claude -p / codex exec，日志里像脚本会话；但提示是人在面板里打的字，按人工交互算。"""
+    if meta.get("session_id") not in chat_ids:
+        return meta, events
+    return ({**meta, "automated": False, "platform_chat": True},
+            [{**e, "kind": "human"} if e["kind"] == "auto" else e for e in events])
+
+
 # ---------- 统计 ----------
 
 def summarize(meta: dict, events: list[dict], day: Date) -> dict | None:
@@ -294,7 +303,7 @@ def summarize(meta: dict, events: list[dict], day: Date) -> dict | None:
         "active_min": round(active / 60, 1),
         "human_turns": len(msgs), "kinds": kinds,
         "auto_prompts": sum(1 for e in day_ev if e["kind"] == "auto"),
-        "wait_total_min": round(sum(min(w, WAIT_CAP) for w in waits) / 60, 1),
+        "wait_total_min": round(sum(w for w in waits if w <= WAIT_MAX) / 60, 1),
         "wait_median_min": round(statistics.median(waits) / 60, 1) if waits else 0,
         "tool_calls": sum(1 for e in agent_ev if e.get("tool")),
         "tool_errors": sum(1 for e in agent_ev if e.get("error")),
@@ -331,14 +340,14 @@ def _codex_files(dirs: Iterable[str], day: Date, since: float) -> list[Path]:
     return out
 
 
-def scan(day: Date, session_dirs: dict) -> list[dict]:
+def scan(day: Date, session_dirs: dict, chat_ids: set[str] = frozenset()) -> list[dict]:
     since = datetime.combine(day, datetime.min.time()).timestamp()
     out = []
     jobs = [(read_claude, p) for p in _claude_files(session_dirs.get("claude", []), since)]
     jobs += [(read_codex, p) for p in _codex_files(session_dirs.get("codex", []), day, since)]
     for reader, p in jobs:
         try:
-            s = summarize(*reader(p), day)
+            s = summarize(*promote_platform_chat(*reader(p), chat_ids), day)
         except Exception as e:  # noqa: BLE001  坏文件不影响整体
             s = None
             out.append({"engine": "?", "file": str(p), "error": str(e)[:200]})
@@ -369,7 +378,7 @@ def aggregate(sessions: list[dict]) -> dict:
         p["active_min"] = round(p["active_min"] + s["active_min"], 1)
     waits = [m["wait_min"] for s in sessions for m in s["messages"] if m["wait_min"] is not None]
     agg = {
-        "sessions": len(sessions), "interactive": len(inter), "automated": len(sessions) - len(inter),
+        "v": VERSION, "sessions": len(sessions), "interactive": len(inter), "automated": len(sessions) - len(inter),
         "human_turns": sum(s["human_turns"] for s in sessions), "kinds": kinds,
         "active_min": round(sum(s["active_min"] for s in sessions), 1),
         "active_min_interactive": round(sum(s["active_min"] for s in inter), 1),
@@ -394,4 +403,5 @@ def headline(a: dict) -> str:
     k = a.get("kinds", {})
     return (f"交互会话 {a['interactive']}（另自动 {a['automated']}）· 人工介入 {a['human_turns']} 次"
             f"（纠正 {k.get('correct', 0)} / 中断 {k.get('interrupt', 0)} / 确认 {k.get('approve', 0)}）"
-            f" · Agent 活跃 {a.get('active_min_interactive', a['active_min']) / 60:.1f}h（含自动 {a['active_min'] / 60:.1f}h）· 等待中位 {a['wait_median_min']} 分 · 峰值并行 {a['peak_parallel']}")
+            f" · Agent 活跃 {a.get('active_min_interactive', a['active_min']) / 60:.1f}h（含自动 {a['active_min'] / 60:.1f}h）· 等待中位 {a['wait_median_min']} 分"
+            + (f" · 等你 {a['wait_wall_min']} 分（墙钟）" if "wait_wall_min" in a else "") + f" · 峰值并行 {a['peak_parallel']}")

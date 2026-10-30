@@ -11,8 +11,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import agent, db, jobs, settings, tasks
-from . import _review_sessions as rs
+from .. import agent, chat, db, jobs, settings, tasks
+from . import _review_sessions as rs, _utilization as util
 
 TITLE = "复盘"
 ORDER = 10
@@ -391,12 +391,38 @@ def on_job_done(job: dict) -> None:
         md, sugg = parse_suggestions(job.get("output") or "")
         valid = {t["id"] for t in tasks.list_for(date)}
         upsert_record(date, {"ai_analysis": md, "task_suggestions": [s for s in sugg if s["task_id"] in valid]})
+        auto_apply(date)
     elif kind == "reflect":
         _upsert_stats(date, {"reflection": (job.get("output") or "").strip()})
 
 
+_NO_EVIDENCE = re.compile(r"^\s*(无证据|没有证据|未找到|暂无|无)")
+
+
+def auto_apply(date: str) -> list[int]:
+    """AI 检查完成后，把「有证据、且让事项往前走」的建议直接写回事项（done / partial 且进度高于当前）；
+    其它（降级、无证据、todo）留给人在复盘页点「采用」。返回自动采用的建议下标。"""
+    rec = get_record(date)
+    done = []
+    for i, s in enumerate(rec["task_suggestions"]):
+        if s.get("applied") or s.get("dismissed") or s.get("status") not in ("done", "partial"):
+            continue
+        if not (s.get("evidence") or "").strip() or _NO_EVIDENCE.match(s["evidence"]):
+            continue
+        t = db.row("SELECT status, progress FROM tasks WHERE id=?", [s["task_id"]])
+        if not t or t["status"] == "done" or (s["status"] != "done" and (s.get("progress") or 0) <= (t["progress"] or 0)):
+            continue
+        _apply(date, i, auto=True)
+        done.append(i)
+    return done
+
+
 @router.post("/suggestions/{date}/{idx}/apply")
 def api_apply(date: str, idx: int):
+    return _apply(date, idx)
+
+
+def _apply(date: str, idx: int, auto: bool = False) -> dict:
     rec = get_record(date)
     sugg = rec["task_suggestions"]
     if idx < 0 or idx >= len(sugg):
@@ -409,6 +435,8 @@ def api_apply(date: str, idx: int):
             patch["notes"] = ((t.get("notes") or "") + f"\n[复盘] {s['problem']}").strip()
     task = tasks.patch(s["task_id"], patch)
     s["applied"] = True
+    if auto:
+        s["auto"] = True
     upsert_record(date, {"task_suggestions": sugg})
     return {"task": task, "suggestion": s}
 
@@ -590,8 +618,17 @@ def _stale(date: str, scanned_at: str, minutes: int = 10) -> bool:
 
 
 def scan_efficiency(date: str) -> dict:
-    sessions = rs.scan(Date.fromisoformat(date), settings.get("session_dirs", {}) or {})
+    cfg = settings.load()
+    ids = chat.engine_sessions()
+    sessions = rs.scan(Date.fromisoformat(date), cfg.get("session_dirs", {}) or {}, ids)
     summary = rs.aggregate(sessions)
+    try:  # 墙钟等待与「Agent 看板 · 时间利用」同一算法（多个会话同时等只算一次）
+        u = util.analyze(Date.fromisoformat(date), cfg.get("session_dirs", {}) or {}, cfg["focus_windows"], cfg["day_start"],
+                         cfg["day_end"], int(cfg.get("max_agent_concurrency", 3)), chat_ids=ids)["summary"]
+        summary["wait_wall_min"] = u["wait_wall_min"]
+        summary["headline"] = rs.headline(summary)
+    except Exception:  # noqa: BLE001
+        pass
     runs = platform_runs(date)
     summary["platform_jobs"] = len(runs["jobs"])
     summary["platform_jobs_failed"] = sum(1 for j in runs["jobs"] if j["status"] == "failed")
@@ -601,7 +638,8 @@ def scan_efficiency(date: str) -> dict:
 
 def get_efficiency(date: str, scan_if_missing: bool = True) -> dict | None:
     r = db.row("SELECT * FROM review_agent_stats WHERE date=?", [date])
-    if scan_if_missing and (not r or not r.get("scanned_at") or _stale(date, r["scanned_at"])):
+    if scan_if_missing and (not r or not r.get("scanned_at") or _stale(date, r["scanned_at"])
+                            or _loads(r["summary"], {}).get("v") != rs.VERSION):
         return scan_efficiency(date)
     if not r or not r.get("scanned_at"):
         return None

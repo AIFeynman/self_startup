@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 from datetime import date as Date, datetime, timedelta
 from pathlib import Path
 
@@ -682,6 +684,56 @@ def _finish_run(job: dict) -> None:
         notes = (t["notes"] + "\n" if t["notes"] else "") + f"[Agent {job.get('engine')} {st}] {result[:400]}"
         tasks.patch(t["id"], {"status": "done" if st == "done" else "partial",
                               "progress": 100 if st == "done" else 50, "notes": notes})
+    try:  # 依赖它的下一个任务不用等下一轮
+        auto_dispatch()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------- 到点自动派发
+AUTO_TICK = 60  # 秒
+
+
+def due_tasks(date: str, now_hm: str) -> list[dict]:
+    """到点、可以直接交给 Agent 的子任务：auto + claude/codex、还没开始、没派过、依赖都已完成、排程开始时间已到。"""
+    ts = tasks.list_for(date)
+    byid = {t["id"]: t for t in ts}
+    parents = set(_children_map(ts))
+    ran = {r["task_id"] for r in db.rows("SELECT DISTINCT task_id FROM plan_runs")}
+    out = [t for t in ts if t["id"] not in parents and t["id"] not in ran and t["status"] == "todo"
+           and t["human_level"] == "auto" and t["executor"] in ("claude", "codex")
+           and t["start_time"] and t["start_time"] <= now_hm
+           and all(byid.get(d, {}).get("status") == "done" for d in t["depends_on"])]
+    return sorted(out, key=lambda t: (t["start_time"], t["priority"], t["id"]))
+
+
+def auto_dispatch(now: datetime | None = None) -> list[int]:
+    """把到点的自动任务派出去（设置 plan_auto_dispatch，默认开），不超过 Agent 并发度。返回派出的任务 id。"""
+    cfg = settings.load()
+    if not cfg.get("plan_auto_dispatch", True):
+        return []
+    now = now or datetime.now()
+    busy = db.row("SELECT count(*) AS n FROM plan_runs r JOIN jobs j ON j.id=r.job_id WHERE j.status IN ('queued','running')")["n"]
+    free = int(cfg.get("max_agent_concurrency", 3)) - busy
+    sent = []
+    for t in due_tasks(now.date().isoformat(), now.strftime("%H:%M"))[:max(0, free)]:
+        launch(t["id"])
+        tasks.patch(t["id"], {"notes": ((t["notes"] or "") + f"\n[自动派发 {now:%H:%M}] 到排程时间、依赖已完成").strip()})
+        sent.append(t["id"])
+    return sent
+
+
+def _dispatch_loop() -> None:
+    while True:
+        try:
+            auto_dispatch()
+        except Exception:  # noqa: BLE001 —— 下一轮再试
+            pass
+        time.sleep(AUTO_TICK)
+
+
+def on_startup() -> None:
+    threading.Thread(target=_dispatch_loop, daemon=True, name="plan-auto-dispatch").start()
 
 
 @router.get("/runs")

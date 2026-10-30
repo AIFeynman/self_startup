@@ -17,7 +17,7 @@ from datetime import date as Date, datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db, jobs, settings, tasks
+from .. import chat, db, jobs, settings, tasks
 from . import _agents_scan as scanner, _deliveries as deliv, _utilization as util
 
 TITLE = "Agent 看板"
@@ -271,7 +271,7 @@ def utilization(day: str = "", refresh: bool = False) -> dict:
         return {**json.loads(row["data"]), "summary": json.loads(row["summary"]), "cached": True}
     cfg = settings.load()
     r = util.analyze(Date.fromisoformat(day), cfg.get("session_dirs", {}), cfg["focus_windows"], cfg["day_start"],
-                     cfg["day_end"], int(cfg.get("max_agent_concurrency", 3)))
+                     cfg["day_end"], int(cfg.get("max_agent_concurrency", 3)), chat_ids=chat.engine_sessions())
     db.execute("INSERT INTO agent_util(date,summary,data,updated_at) VALUES (?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
                "summary=excluded.summary, data=excluded.data, updated_at=excluded.updated_at",
                [day, json.dumps(r["summary"], ensure_ascii=False),

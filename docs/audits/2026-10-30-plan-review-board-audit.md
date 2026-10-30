@@ -144,3 +144,27 @@
 
 - 版本：`feat/metrics-audit`，代码提交 `15b464f`，文档提交见 `git log -1 feat/metrics-audit`。
 - 回滚：合并后如有问题，`git revert <merge commit>` 即可。不涉及数据迁移；旧代码会把新快照当成普通缓存读取（多出来的字段会被忽略）。需要的话，可以让 `agent_util` 过去几天的数据在旧口径下重算（`/api/agents/utilization?date=…&refresh=true`）。
+
+---
+
+## 第二轮（2026-10-30，按平台上的审批结果继续）
+
+- **基线分支**：仍在 `feat/metrics-audit` 上接着做。它没有合并 main，按分支规则在原分支接续，也没有把 main 合进来（main 已前进到 `12b3e91`，合并时需要处理 `web/modules/review.js`、`app/main.py` 等可能的冲突）。
+- **审批结果与处理**：
+
+| 事项 | 结果 | 处理 |
+|---|---|---|
+| 合并 main | 不批准 | 不合并；改动只留在功能分支 |
+| 时区填 `Asia/Shanghai` | 不批准 | 不改 `data/settings.json`；代码默认继续跟随系统时区，「大部分交互落在工作时间外 → 检查时区」的提示保留，只提示、不自动改 |
+| D5–D8 | 都需要 | 已全部实现，见下表 |
+
+| # | 实现 | 位置 | 测试 |
+|---|---|---|---|
+| D5 | 平台对话面板对应的 Claude / Codex 会话（`chat_sessions.engine_session`）里的 sdk 提示改按人工交互算：计入人工交互次数、等你时长，会话不再算自动会话。看板和复盘都生效 | `_review_sessions.promote_platform_chat`、`chat.engine_sessions`、`_utilization.analyze(chat_ids)`、`review.scan_efficiency` | `test_platform_chat_session_counts_as_human` |
+| D6 | 排程到点自动派发：auto + Claude/Codex 子任务，满足「到了排程开始时间、依赖都已完成、还没派过、没超过 Agent 并发度」就派出去。每 60 秒检查一次，某个任务完成时也立即检查一次。设置 `plan_auto_dispatch` 默认开启，设置页可以关；派发时在事项备注写「[自动派发 HH:MM]」 | `plan.due_tasks / auto_dispatch / on_startup`，`main._startup` 调用各板块的 `on_startup`，`settings`、`web/app.js` | `test_auto_dispatch_due_tasks_respects_deps_time_and_concurrency` |
+| D7 | 复盘「AI 检查完成情况」结束后，自动把有证据、且让事项往前走的建议写回事项（done，或进度高于当前的 partial）。无证据、会让进度倒退、todo 的建议，仍然留给人点「采用」。复盘页显示「自动写回 N 条」 | `review.auto_apply / _apply` | `test_check_auto_applies_evidence_backed_progress` |
+| D8 | 等待统一成一个口径：单段等待 ≤3 小时全额计入，更长视为人离开了。复盘不再单次封顶 30 分钟，`WAIT_MAX` 两边共用。复盘新增墙钟等待 `wait_wall_min`，和看板同一算法；页面和知识库都显示「等你（墙钟）」。口径版本升级，旧快照自动重扫 | `_review_sessions.WAIT_MAX / VERSION`、`review.scan_efficiency`、`web/modules/review.js`、`app/kb.py` | `test_wait_definition_matches_board` |
+
+**验证**：`uv run pytest -q`，86 个测试全部通过。用真实数据的副本、在 8797 端口启动服务做了冒烟测试：`on_startup` 正常；10-30 复盘的「等你 400 分（墙钟）」和看板 `wait_wall_min=400` 一致。
+
+**合并后会发生的事（需要合并时再确认）**：自动派发默认开启，到点会直接启动 Claude / Codex 任务，会花钱、会占并发；如果不想要，可以在设置里关掉。时间利用口径升到 v3、复盘口径升到 v2，近 7 天的快照会在后台重算。
