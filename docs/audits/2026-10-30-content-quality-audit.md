@@ -101,3 +101,34 @@
 
 - 功能分支：`feat/content-quality-audit`；基线 `1fa3023`；改动提交 `4aa6393`（本行所在的文档补记提交在其后）。
 - 回滚：如果合并后需要撤销，`git revert <本分支的合并提交>`；不合并就没有影响。数据没有变更，无需回滚。
+
+---
+
+## 6. 审批后执行记录（2026-10-30 平台审批：D1、合并 main、明天继续 全部批准）
+
+| 审批项 | 执行 | 证据 / 回滚 |
+|---|---|---|
+| D1 换 RSS 列表 | 通过 `PUT /api/settings` 写入 12 个源（feed 下其它键不变）；立即只刷 RSS：+94 条，0 错误，blog 库存 142 → 206 | 原文件备份在 scratchpad `settings.before-d1.json`。回滚：把 `feed.rss` PUT 回旧的 4 个 URL |
+| 合并 main | `origin/feat/content-quality-audit` `--no-ff` 合入 main，合并提交 `12b3e91`（合并前 main = `21eda27`），测试 76 passed，已 push | 回滚：`git revert -m 1 12b3e91` |
+| 明天继续 #1–#4、#6 | 在新分支 `feat/content-quality-followup`（基于 `12b3e91`）实现，**未合并 main**，等你验收 | 见下表 |
+| 明天继续 #5 双引擎调研 | 平台这时有 3 个任务在跑，main 的新代码要等它们结束才会重启生效（reload pending）。为了让调研用上新的 prompt，等重启后再发起，见回复 | — |
+
+### 明天继续的实现（分支 `feat/content-quality-followup`）
+
+| # | 改动 | 实测（真实数据副本） |
+|---|---|---|
+| 1 定时刷新 | `feed.on_startup` 起一个后台线程，每 10 分钟检查一次，数据比 `feed.auto_refresh_hours`（默认 6，设 0 关闭）旧就后台刷新；`main.py` 启动时调用各板块的 `on_startup`。`/api/feed/status` 增加 `sources`：每个来源的最新日期，最新条目超过 7 天标为停更（页面「刷新」浮层显示「停更」） | 停更来源识别正确：twitter / producthunt / podcast / openrouter（均来自 learn_evolve，最新 06-24 ~ 06-27）；其余 6 个来源正常 |
+| 2 排序 | 发布超过 14 天的 −0.8，理由写「N 天前」；默认视图前 30 条里同一类型最多 12 条（40%）；GitHub 直连仓库如果在最近一次抓取里没再出现、发布还在抓取窗口内，−1.5，标「可能已删除或掉出搜索前列」 | top30 构成：repo 16 → 12、论文 3 → 6、超过 14 天的旧条目 4 → 0。被标记的 3 个仓库里 2 个确认 404（capri-ai 从第 3 名掉到第 84 名），1 个仍然存活，只是掉出了搜索前列（准确率 2/3） |
+| 3 点击埋点 | `feed_feedback` 加 `clicks` 和 `last_click`（老库自动迁移）；`POST /api/feed/click`；点标题或按 `o` 时上报；`feedback_stats` 增加 clicks、clicked_items、deep_reads（推荐进了深读的条目数）。点击只做统计，不参与排序 | 真实数据：deep_reads = 1（EAT）；clicks 从今天开始累计 |
+| 4 学习计划接入规划 | `plan._learning_next`：每个进行中的计划取下一步（今天已排的跳过）。规划对话的上下文直接列出；拆解 prompt 只在 `questions` 里问要不要排进今天（默认放非专注时间），不擅自加进事项 | 真实数据给出「计划 1 进度 0/16，下一步 step 1：底层逻辑…（约 3 小时）」 |
+| 6 日期格式 | 入库时统一成 ISO UTC（`2026-06-10` → `2026-06-10T00:00:00+00:00`） | 单测覆盖 |
+
+测试：`uv run pytest -q`，82 passed（新增 feed 5 个、plan 1 个）。
+
+### 新的决策点
+
+| # | 决策点 | 采用的默认 | 改选的返工量 |
+|---|---|---|---|
+| D6 | 点击要不要算作弱正反馈参与排序 | 不算，只统计（避免标题党自我强化） | 在 `_examples` 里加 1 行，权重 0.3 |
+| D7 | 「掉出搜索」的仓库是直接隐藏还是降权 | 降权 −1.5，不隐藏（有 1/3 是误判） | 改 1 个常量 |
+| D8 | 自动刷新间隔 | 6 小时 | 改 `feed.auto_refresh_hours` |
