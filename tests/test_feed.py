@@ -129,3 +129,9 @@ def test_affinity_leave_one_out():
     items = [_it("a", "Unique zebra title", pop=50)]
     out = rk.rank(items, now=NOW, examples=[{"id": "a", "title": "Unique zebra title", "source": "hn", "polarity": 1}])
     assert "你赞过相似内容" not in out[0]["why"]
+
+
+def test_hn_link_summary_is_factual():
+    s = src.hn_link_summary({"url": "https://www.example.com/post", "points": 120, "num_comments": 45})
+    assert s == "链接到 example.com · 120 分 · 45 条评论"
+    assert src.hn_link_summary({"points": 3}) == "HN 讨论帖 · 3 分"

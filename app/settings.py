@@ -45,9 +45,19 @@ DEFAULTS: dict = {
     "feed": {
         "learn_evolve_db": str(ROOT.parent / "learn_evolve/.news.db"),
         "interests": ["agent", "llm", "claude code", "codex", "reasoning", "rl", "eval", "coding agent", "mcp"],
+        # 厂商博客 + 一线实践者；anthropic.com 无官方 RSS，用社区镜像（Olshansk/rss-feeds）
         "rss": [
             "https://openai.com/news/rss.xml",
+            "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml",
+            "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_engineering.xml",
+            "https://deepmind.google/blog/rss.xml",
+            "https://huggingface.co/blog/feed.xml",
             "https://simonwillison.net/atom/everything/",
+            "https://www.latent.space/feed",
+            "https://www.interconnects.ai/feed",
+            "https://hamel.dev/index.xml",
+            "https://eugeneyan.com/rss/",
+            "https://magazine.sebastianraschka.com/feed",
             "https://lilianweng.github.io/index.xml",
         ],
     },
