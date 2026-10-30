@@ -44,7 +44,6 @@ DEFAULTS: dict = {
         "learn_evolve_db": str(ROOT.parent / "learn_evolve/.news.db"),
         "interests": ["agent", "llm", "claude code", "codex", "reasoning", "rl", "eval", "coding agent", "mcp"],
         "rss": [
-            "https://www.anthropic.com/news/rss.xml",
             "https://openai.com/news/rss.xml",
             "https://simonwillison.net/atom/everything/",
             "https://lilianweng.github.io/index.xml",

@@ -137,6 +137,7 @@ def _run(engine: str, cmd: list[str], cwd: str) -> Iterator[dict]:
         yield {"type": "error", "text": f"{engine} 未安装: {e}", "fatal": True}
         return
     texts: list[str] = []
+    final = ""  # Claude 的 result 只含最终回答，不含过程中的旁白
     errored = False
     assert proc.stdout
     for line in proc.stdout:
@@ -153,6 +154,7 @@ def _run(engine: str, cmd: list[str], cwd: str) -> Iterator[dict]:
             if ev["type"] == "error":
                 errored = True
             if ev["type"] == "result":
+                final = ev["text"]
                 continue
             yield ev
     proc.wait()
@@ -160,7 +162,10 @@ def _run(engine: str, cmd: list[str], cwd: str) -> Iterator[dict]:
         err = (proc.stderr.read() if proc.stderr else "")[-1500:]
         yield {"type": "error", "text": f"{engine} 退出码 {proc.returncode}: {err}", "fatal": True}
         return
-    yield {"type": "done", "text": "\n\n".join(texts), "engine": engine, "errored": errored and not texts}
+    if not final and texts:
+        # Codex 的最后一条 agent_message 是最终回答
+        final = texts[-1] if engine == "codex" else "\n\n".join(texts)
+    yield {"type": "done", "text": final, "engine": engine, "errored": errored and not texts}
 
 
 def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str = "",
