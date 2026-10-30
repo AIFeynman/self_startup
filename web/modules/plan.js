@@ -104,6 +104,15 @@ input.pl-pill { width: 64px; cursor: text; text-align: center; }
 .pl-live-row .t { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-live-row .now { grid-column: 2 / 4; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-live-row .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pl-ready { margin: 8px 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--auto); }
+.pl-ready-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pl-ready-h b { font-size: 14px; color: var(--ok); }
+.pl-ready-h .muted { font-size: 12px; }
+.pl-ready-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13px; }
+.pl-ready-row:first-of-type { border-top: 0; }
+.pl-ready-row .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-ready-row .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pl-blocked { font-size: 12px; margin-top: 6px; }
 .pl-live-log { margin: 6px 0 0 20px; font: 11px/1.6 var(--mono); color: var(--muted); max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all;
   background: var(--bg-2); border-radius: 8px; padding: 6px 10px; }
 
@@ -358,7 +367,14 @@ export default {
       const seen = new Set();
       const list = d.runs.filter((r) => !seen.has(r.task_id) && seen.add(r.task_id))
         .filter((r) => r.status === 'running' || (today0 && (r.finished_at || '').startsWith(state.date)));
-      if (!list.length) return [];
+      // 可以开跑：自动任务、依赖都完成了、还没在跑
+      const st = Object.fromEntries(d.tasks.map((t) => [t.id, t.status]));
+      const parents = new Set(d.tasks.map((t) => t.parent_id).filter(Boolean));
+      const busy = new Set(d.runs.filter((r) => r.status === 'running').map((r) => r.task_id));
+      const auto = d.tasks.filter((t) => !parents.has(t.id) && t.human_level === 'auto' && ['todo', 'partial'].includes(t.status) && !busy.has(t.id));
+      const ready = auto.filter((t) => (t.depends_on || []).every((x) => st[x] === 'done'));
+      const blocked = auto.filter((t) => !ready.includes(t));
+      if (!list.length && !ready.length) return [];
       const rows = list.map((r) => {
         const now = h('div.now', {}, '读取中…');
         const meta = h('span.meta');
@@ -389,9 +405,28 @@ export default {
         if (finished) load();
       };
       const running = list.filter((r) => r.status === 'running').length;
+      const cap = +d.config.max_agent_concurrency || 3;
+      const launch = async (ts) => {
+        for (const t of ts) {
+          try { await api.post(`/api/plan/tasks/${t.id}/launch`, {}); } catch (e) { toast(`「${t.title}」派发失败：${e.message}`, true); }
+        }
+        toast(`已派发 ${ts.length} 个任务给 Agent`); load();
+      };
+      const free = Math.max(0, cap - running);
+      const readyBox = ready.length ? h('div.pl-ready', {}, [
+        h('div.pl-ready-h', {}, [h('b', {}, `可以开跑（${ready.length}）`),
+          h('span.muted', {}, `依赖都已完成 · 空闲车道 ${free}/${cap}`),
+          free ? h('button.sm.primary', { onclick: () => launch(ready.slice(0, free)) }, ready.length > free ? `开跑前 ${free} 个` : '全部开跑') : null]),
+        ...ready.map((t) => h('div.pl-ready-row', {}, [
+          h('span.t', { title: t.goal || '' }, t.title),
+          h('span.meta', {}, `${EXEC[t.executor] || t.executor} · ${t.est_minutes}m${t.start_time ? ' · 原定 ' + t.start_time : ''}`),
+          h('button.sm.outline', { onclick: () => launch([t]) }, '开跑'),
+        ])),
+        blocked.length ? h('div.muted.pl-blocked', {}, `还在等依赖：${blocked.map((t) => t.title.slice(0, 18)).join('、')}`) : null,
+      ]) : null;
       const box = h('div.card.pl-live', {}, [
         h('div.pl-live-h', {}, [h('b', {}, '正在执行'), h('span.muted', {}, `${running} 个 Agent 在跑${list.length > running ? ` · 今天已结束 ${list.length - running} 个` : ''} · 每 10 秒刷新 · 点开看日志 · 结束后结果也会回帖到发起的对话`)]),
-        ...rows.map((x) => x.row)]);
+        readyBox, ...rows.map((x) => x.row)]);
       tick();
       if (running) liveTimer = setInterval(tick, 10000);
       return [box];
