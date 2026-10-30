@@ -11,6 +11,7 @@ import re
 import shlex
 import subprocess
 import threading
+import time
 from datetime import date as Date, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS agent_util (
 );
 """
 COLUMNS = [("running", "运行中"), ("attention", "等你处理"), ("review", "待验收"), ("done", "已验收")]
+OUT_STATUS = {"delivered": "已交付", "changed_after": "交付后仍在改", "committed": "已提交未推送"}
 router = APIRouter()
 
 
@@ -65,12 +67,36 @@ def _job_cards(hours: float) -> list[dict]:
     return out
 
 
+_OUT_CACHE: dict = {"at": 0.0, "days": (), "map": {}}
+
+
+def _card_outputs(days: tuple[str, ...]) -> dict[str, dict]:
+    """会话 key → 产出（推送 / PR / 部署 / 提交 / 文档）。扫描较慢，缓存 60 秒；同一会话取最近一天。"""
+    if _OUT_CACHE["days"] == days and time.time() - _OUT_CACHE["at"] < 60:
+        return _OUT_CACHE["map"]
+    out: dict[str, dict] = {}
+    for day in sorted(days):
+        try:
+            items = deliv.scan(settings.get("session_dirs", {}), Date.fromisoformat(day), skip_cwd=str(db.DATA_DIR)) + _job_deliveries(day)
+        except Exception:  # noqa: BLE001
+            continue
+        for x in items:
+            out[x["key"]] = {"status": x["status"], "labels": x["labels"], "at": x["at"], "day": day,
+                             "docs_total": x.get("docs_total", 0), "dirty": x.get("dirty"), "link": x.get("link", "")}
+    _OUT_CACHE.update(at=time.time(), days=days, map=out)
+    return out
+
+
 def board(hours: float = 24, automated: bool = False) -> dict:
     cards = scanner.scan(settings.get("session_dirs", {}), hours) + _job_cards(hours)
     marks = {r["key"]: r for r in db.rows("SELECT * FROM agent_board")}
+    now = datetime.now()
+    days = tuple(sorted({(now - timedelta(hours=h)).date().isoformat() for h in (0, min(hours, 24))}))
+    outputs = _card_outputs(days)
     hidden_auto, archived = 0, 0
     cols: dict[str, list] = {c: [] for c, _ in COLUMNS}
     for c in cards:
+        c["output"] = outputs.get(c["key"])
         m = marks.get(c["key"])
         col = c["state"]
         if m:
@@ -161,6 +187,8 @@ def agent_context(ref: str) -> str:
         lines.append(f"\n## {col['title']}（{len(col['cards'])}）")
         for c in col["cards"][:15]:
             plan = f" · 计划 {c['plan_done']}/{len(c['plan'])} 当前：{c['plan_current']}" if c["plan"] else ""
+            o = c.get("output")
+            plan += f" · 产出：{OUT_STATUS.get(o['status'], o['status'])} {'/'.join(o['labels'])} {o['at']}" if o else " · 产出：暂无"
             lines.append(f"- [{c['engine']}] {c['project']} · {c['title']} · {c['reason']} · {c['idle_min']} 分钟前{plan}"
                          f" · key={c['key']}\n  最近要求：{c['last_human'][:120]}\n  最近回复：{c['last_agent'][:160]}")
     try:

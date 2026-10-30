@@ -19,6 +19,7 @@ export default {
     const deliveryBox = h('div');
     deliveries(ctx).then((n) => deliveryBox.replaceChildren(n));
     const boardBox = h('div.ag-board');
+    const overviewBox = h('div');
     const meta = h('span.muted');
 
     const pills = (items, cur, on) => h('div.row', {}, items.map(([v, label]) =>
@@ -64,7 +65,7 @@ export default {
         { label: '卡住的怎么处理', icon: 'bolt', onClick: () => ask('看板里「可能卡住」「等待批准」「已中断」的会话，分别可能是什么原因，怎么处理最快？') },
         { label: '今天交付了什么', icon: 'check', onClick: () => ask('今天已经交付了哪几件事（有推送/部署/PR/发布或文档材料，之后没再改的）？每件一句话说清交付物；再列出交付后仍在改、或只提交没推送的。') },
       ], { left: true }),
-      deliveryBox, statsBox, filters, boardBox,
+      deliveryBox, statsBox, overviewBox, filters, boardBox,
     );
 
     async function renderUtil() {
@@ -116,7 +117,26 @@ export default {
       ]));
       const shown = cols.reduce((a, c) => a + c.cards.length, 0);
       meta.textContent = `${filter ? `筛选「${filter}」${shown ? ` · ${shown} 张` : ' · 无匹配，回车问 Agent'} · ` : ''}更新于 ${data.generated_at.slice(11, 19)}${data.archived ? ` · 已归档 ${data.archived}` : ''}`;
+      overviewBox.replaceChildren(overview(cols));
       boardBox.replaceChildren(...cols.map((col) => column(col)));
+    }
+
+    // 进展一览：运行中 / 等你处理 / 待验收各一行，看计划进度和产出，不用进会话问「进度怎样」
+    function overview(cols) {
+      const rows = ['running', 'attention', 'review'].flatMap((id) => cols.find((c) => c.id === id).cards.map((c) => ({ ...c, column: id })));
+      if (!rows.length) return h('span');
+      const withOut = rows.filter((c) => c.output).length;
+      return h('div.ag-ov', {}, [
+        h('div.ag-ov-head', {}, [h('b', {}, '进展一览'), h('span.muted', {}, `${rows.length} 个会话 · ${withOut} 个有产出 · ${rows.length - withOut} 个暂无产出`)]),
+        ...rows.map((c) => h('div.ag-ov-row', { title: c.last_agent || '' }, [
+          h('span.ag-dot.ag-' + c.column),
+          h('span.ag-proj', {}, c.project),
+          h('span.ag-ov-title', {}, c.title),
+          h('span.muted', {}, c.plan.length ? `计划 ${c.plan_done}/${c.plan.length}${c.plan_current ? ' · ' + c.plan_current : ''}` : c.reason),
+          output(c, true) || h('span.ag-out.none', {}, '暂无产出'),
+          h('span.muted', {}, ago(c.idle_min)),
+        ])),
+      ]);
     }
 
     function column(col) {
@@ -152,6 +172,7 @@ export default {
         h('div.ag-title', { title: c.title }, c.title),
         c.plan.length ? h('div.ag-prog', {}, [ui.progress(pct), h('span.muted', {}, `${c.plan_done}/${c.plan.length}`)]) : null,
         c.plan_current ? h('div.ag-cur', {}, ['▸ ', c.plan_current]) : null,
+        output(c),
         c.last_human ? h('div.ag-ask.clamp2', { title: c.last_human }, ['你：', c.last_human]) : null,
         !c.plan_current && c.last_agent ? h('div.ag-last.clamp2', {}, c.last_agent.replace(/[#*`>]/g, '')) : null,
         c.error ? h('div.ag-err.clamp2', {}, c.error) : null,
@@ -200,6 +221,16 @@ export default {
     timer = setInterval(() => { if (!el.isConnected) return stop(); if (!document.hidden) refresh(); }, 10000);
   },
 };
+
+const OUT = { delivered: '已交付', changed_after: '交付后仍在改', committed: '已提交未推送' };
+function output(c, compact = false) {
+  const o = c.output;
+  if (!o) return null;
+  const docs = o.docs_total ? ` · 文档 ${o.docs_total}` : '';
+  const dirty = o.dirty ? ` · 未提交 ${o.dirty}` : '';
+  const text = compact ? `${o.labels.join('/')}${docs}` : `📦 ${OUT[o.status] || o.status} · ${o.labels.join('/')}${docs}${dirty} · ${o.at}`;
+  return h('span.ag-out.' + o.status, { title: `${OUT[o.status] || o.status} ${o.day} ${o.at}` }, text);
+}
 
 function ago(min) {
   if (min < 1) return '刚刚';
@@ -250,6 +281,17 @@ function injectStyle() {
   .ag-ask { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .ag-last { font-size: 12px; color: var(--text); margin-top: 4px; opacity: .85; }
   .ag-err { font-size: 12px; color: var(--err); margin-top: 4px; }
+  .ag-out { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 99px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .ag-out.delivered { background: var(--ok-soft); color: var(--ok); }
+  .ag-out.changed_after, .ag-out.committed { background: var(--accent-soft); color: var(--accent); }
+  .ag-out.none { background: var(--bg-2); color: var(--muted); }
+  .ag-ov { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; }
+  .ag-ov-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
+  .ag-ov-row { display: grid; grid-template-columns: 10px minmax(80px, 140px) minmax(0, 2fr) minmax(0, 1.4fr) auto 70px; gap: 10px; align-items: center; font-size: 12px; padding: 4px 0; border-top: 1px dashed var(--line); }
+  .ag-ov-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .ag-ov-row .ag-out { margin-top: 0; }
+  .ag-ov-row .ag-dot.ag-running { background: var(--accent); } .ag-ov-row .ag-dot.ag-attention { background: var(--err); } .ag-ov-row .ag-dot.ag-review { background: var(--ok); }
+  @media (max-width: 720px) { .ag-ov-row { grid-template-columns: 10px minmax(0, 1fr) auto; } .ag-ov-row > span:nth-child(3), .ag-ov-row > span:nth-child(4), .ag-ov-row > span:nth-child(6) { display: none; } }
   .ag-foot { display: flex; align-items: center; gap: 4px; margin-top: 8px; font-size: 11px; white-space: nowrap; flex-wrap: wrap; }
   .ag-foot .tag { flex: none; }
   .ag-foot button.icon { padding: 3px; } .ag-foot svg.i { width: 16px; height: 16px; }
