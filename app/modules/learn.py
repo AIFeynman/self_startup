@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS learn_items (
     summary     TEXT DEFAULT '',            -- TL;DR
     my_notes    TEXT DEFAULT '',
     rating      INTEGER DEFAULT 0,          -- 0-5
+    depth       TEXT DEFAULT 'quick',       -- quick 速读笔记 / full 完整教程（GitHub）
     created_at  TEXT,
     updated_at  TEXT
 );
@@ -162,10 +163,43 @@ def _known_knowledge(exclude_id: int = 0, limit: int = 20, exclude_plan: int = 0
 
 # ---------- A. 条目深读 ----------
 
+_FILLER = re.compile(r"(帮我|请|把|这个|这篇|这份|一下|加入到?|加到|放到|放进|深度学习|深读|解读|解析|学习|看看|分析|里面?|中|吧|。|，|,|\s)+")
+
+
+def normalize_target(text: str) -> tuple[str, str]:
+    """从用户输入里抽出真正的链接/标识，剩下有意义的文字作为关注点。
+    「https://github.com/a/b 这个加入到深度学习里」→ ("https://github.com/a/b", "")"""
+    t = (text or "").strip()
+    pats = [r"https?://github\.com/[\w.-]+/[\w.-]+(?:/(?:tree|blob)/[^\s，。]+)?",
+            r"https?://[^\s，。、）)]+", r"\b10\.\d{4,9}/[^\s，。]+", r"(?<![\w/])(?:arxiv:)?\d{4}\.\d{4,5}(?:v\d+)?\b",
+            r"(?<![\w/.])[A-Za-z][\w.-]*/[\w.-]+(?![\w/])", r"(?:^|\s)(~?/[^\s]+)"]
+    for pat in pats:
+        m = re.search(pat, t)
+        if m:
+            url = (m.group(1) if m.lastindex else m.group(0)).strip().rstrip(".")
+            if url.startswith("arxiv:"):
+                url = url[6:]
+            if re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", url):
+                url = f"https://arxiv.org/abs/{url}"
+            if re.search(r"github\.com/", url):
+                url = re.sub(r"\.git$", "", url)
+            rest = (t[:m.start()] + " " + t[m.end():]).strip()
+            rest = rest if len(_FILLER.sub("", rest)) >= 2 else ""
+            return url, rest
+    return t, ""
+
+
 class ItemIn(BaseModel):
     url: str
     kind: str = ""
     focus: str = ""
+    depth: str = ""      # quick / full；空 = 论文 full、GitHub quick
+
+
+def _ensure_depth_col() -> None:
+    cols = {r["name"] for r in db.rows("PRAGMA table_info(learn_items)")}
+    if "depth" not in cols:
+        db.execute("ALTER TABLE learn_items ADD COLUMN depth TEXT DEFAULT 'quick'")
 
 
 class ItemPatch(BaseModel):
@@ -186,8 +220,41 @@ def _item_dir(it: dict) -> Path:
     return _out_root() / f"{it['id']}-{slugify(it['url'])}"
 
 
+QUICK_GITHUB = """任务：GitHub 项目速读（目标 5 分钟内完成，不追求面面俱到）
+对象：{url}
+{focus}
+做法：
+- `git clone --depth 1` 到 {out}/src（已存在就直接用）。只读 README、包清单/入口文件和最关键的 10–20 个文件；不安装依赖、不运行代码、不写生成器或 HTML。
+- 先判断类型：**代码项目**写「架构速读」；**文档 / 书籍 / 教程 / awesome 列表**（大部分是 .md）写「阅读指南」。
+- 用户已学过的内容（用于「与我已有知识的联系」）：
+{known}
+
+写 {out}/note.md（中文，markdown，控制在 1500 字以内），结构：
+## TL;DR
+正好 3 条 `- `：做什么、给谁用 / 核心机制或全书主线 / 最值得学的一点
+## 是什么
+代码项目：入口 → 核心模块 → 产物的一条主链路，列关键文件（相对路径），必要时附 GitHub permalink。
+文档项目：全书 / 全库结构（每章或每部分一句话），核心概念之间的关系。
+## 最值得看的部分
+3–5 个文件或章节，每个说明为什么值得看、带着什么问题去看。
+## 与我已有知识的联系
+## 可迁移结论
+2–4 条。
+## 最小上手实验
+代码项目写 3–8 步命令和预期观察；文档项目写一个读完后可以动手做的小练习。只写步骤，不要实际运行。
+## 追问清单
+5 个可以直接复制到对话里的问题。
+
+完成后，最终回复末尾附一个 ```json 代码块：
+{{"title": "项目名 · 一句话", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
+"""
+
+
 def item_prompt(it: dict, out: Path) -> str:
     kind = it["kind"]
+    if kind == "github" and (it.get("depth") or "quick") == "quick":
+        return QUICK_GITHUB.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
+                                   out=out, known=_known_knowledge(it["id"]))
     skill = settings.get("learn.paper_skill" if kind == "paper" else "learn.github_skill")
     main = "note.md" if kind == "paper" else "index.html"
     obsidian = "允许按 paper-library 格式同时归档到其 config.json 指定的 Obsidian 库。" \
@@ -208,6 +275,8 @@ def item_prompt(it: dict, out: Path) -> str:
 
 5. 完成后，最终回复末尾附一个 ```json 代码块：
 {{"title": "论文/项目标题", "tldr": ["第1行", "第2行", "第3行"], "output": "{main}"}}
+
+{'若仓库主要是文档 / 书籍 / 教程（大部分是 .md）而非代码，不要硬套代码架构讲解：改为「阅读指南」式 HTML，包括全书结构、每章一句话、概念关系图、推荐阅读顺序和最值得读的章节，不写实验脚本。' if kind == 'github' else ''}
 
 ---- 本平台增补 ----
 {_ref_text(kind + '.md')}
@@ -230,11 +299,14 @@ def list_items():
 
 @router.post("/items")
 def create_item(body: ItemIn):
-    url = body.url.strip()
+    _ensure_depth_col()
+    url, extra = normalize_target(body.url)
     if not url:
         raise HTTPException(400, "url required")
     kind = body.kind if body.kind in ("paper", "github") else detect_kind(url)
-    iid = db.insert("learn_items", {"kind": kind, "url": url, "focus": body.focus, "status": "queued",
+    depth = body.depth if body.depth in ("quick", "full") else ("quick" if kind == "github" else "full")
+    focus = "；".join(x for x in (body.focus.strip(), extra) if x)
+    iid = db.insert("learn_items", {"kind": kind, "url": url, "focus": focus, "depth": depth, "status": "queued",
                                     "created_at": db.now(), "updated_at": db.now()})
     start_item_job(_item(iid))
     return _item(iid)
@@ -258,9 +330,18 @@ def patch_item(iid: int, body: ItemPatch):
 
 @router.post("/items/{iid}/rerun")
 def rerun_item(iid: int, body: dict | None = None):
+    _ensure_depth_col()
     it = _item(iid)
+    upd = {}
     if body and body.get("focus") is not None:
-        db.update("learn_items", iid, {"focus": body["focus"]})
+        upd["focus"] = body["focus"]
+    if body and body.get("depth") in ("quick", "full"):
+        upd["depth"] = body["depth"]
+    url, _ = normalize_target(it["url"])  # 旧数据里混进了说明文字的链接，顺手修正
+    if url != it["url"]:
+        upd["url"] = url
+    if upd:
+        db.update("learn_items", iid, upd)
         it = _item(iid)
     start_item_job(it)
     return _item(iid)
@@ -313,8 +394,9 @@ def _finish_item(iid: int, job: dict) -> None:
         cand = cand if cand.is_absolute() else out / cand
         main = cand if cand.is_file() else None
     if not main:
-        names = ["note.md"] if it["kind"] == "paper" else ["index.html"]
-        globs = ["*.md"] if it["kind"] == "paper" else ["*.html", "*.md"]
+        quick = it["kind"] == "github" and (it.get("depth") or "quick") == "quick"
+        names = ["note.md"] if it["kind"] == "paper" or quick else ["index.html"]
+        globs = ["*.md"] if it["kind"] == "paper" or quick else ["*.html", "*.md"]
         found = [out / n for n in names if (out / n).is_file()]
         for g in globs:
             found += sorted(p for p in out.glob(g) if p.name != "summary.md")

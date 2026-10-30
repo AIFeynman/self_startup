@@ -157,3 +157,24 @@ def test_item_failed_job(client, fake_submit):
     learn.on_job_done(_job(fake_submit[-1]["id"], "", status="failed"))
     assert client.get(f"/api/learn/items/{it['id']}").json()["status"] == "failed"
     assert "深读条目" in learn.agent_context("")
+
+
+def test_normalize_target_strips_instructions():
+    from app.modules.learn import normalize_target
+    assert normalize_target("https://github.com/aliyun/ai-agent-handbook 这个加入到深度学习里") == ("https://github.com/aliyun/ai-agent-handbook", "")
+    assert normalize_target("深读 2210.03629") == ("https://arxiv.org/abs/2210.03629", "")
+    assert normalize_target("https://arxiv.org/abs/2303.11366 重点看反思机制") == ("https://arxiv.org/abs/2303.11366", "重点看反思机制")
+    assert normalize_target("https://github.com/a/b.git") == ("https://github.com/a/b", "")
+
+
+def test_github_defaults_to_quick_read(client, monkeypatch):
+    from app.modules import learn
+    sent = {}
+    monkeypatch.setattr(learn.jobs, "submit", lambda module, prompt, **kw: sent.setdefault("prompt", prompt) and 999)
+    it = client.post("/api/learn/items", json={"url": "https://github.com/foo/bar 帮我解析一下"}).json()
+    assert it["url"] == "https://github.com/foo/bar" and it["kind"] == "github" and it["depth"] == "quick"
+    assert "速读" in sent["prompt"] and "note.md" in sent["prompt"] and "阅读指南" in sent["prompt"]
+    sent.clear()
+    client.post(f"/api/learn/items/{it['id']}/rerun", json={"depth": "full"})
+    assert client.get(f"/api/learn/items/{it['id']}").json()["depth"] == "full"
+    assert "github-code-walkthrough" in sent["prompt"] or "代码解读" in sent["prompt"]

@@ -25,6 +25,9 @@ const CSS = `
 .ln-icard .foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .ln-badge { font-size: 11px; padding: 0 8px; border-radius: 6px; line-height: 20px; font-weight: 600; letter-spacing: .03em; }
 .ln-badge.paper { background: var(--accent-soft); color: var(--accent); }
+.ln-steps { margin-top: 10px; display: flex; flex-direction: column; gap: 3px; }
+.ln-step { font: 12px/1.5 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ln-step:last-child { color: var(--accent); }
 .ln-badge.github { background: var(--dark); color: var(--bg); }
 .ln-stars { display: inline-flex; gap: 0; }
 .ln-stars button { border: none; background: none; padding: 1px; color: var(--line-2); border-radius: 4px; }
@@ -165,15 +168,19 @@ function detectIntent(text) {
   if (!t) return null;
   let m;
   if ((m = t.match(/arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})/i)) || (m = t.match(/^(?:arxiv:)?(\d{4}\.\d{4,5})(v\d+)?$/i))) {
-    return { kind: 'paper', label: `论文 arXiv ${m[1]}`, url: /^\d/.test(t) || /^arxiv:/i.test(t) ? `https://arxiv.org/abs/${m[1]}` : t };
+    return { kind: 'paper', label: `论文 arXiv ${m[1]}`, url: `https://arxiv.org/abs/${m[1]}` };
   }
   if ((m = t.match(/(10\.\d{4,9}\/\S+)/)) && !/\s/.test(t)) return { kind: 'paper', label: `论文 DOI ${m[1]}`, url: t };
-  if ((m = t.match(/github\.com\/([\w.-]+)\/([\w.-]+)/i))) return { kind: 'github', label: `仓库 ${m[1]}/${m[2].replace(/\.git$/, '')}`, url: t };
-  if (/^https?:\/\/\S+$/i.test(t)) {
-    const u = new URL(t);
-    const pdf = /\.pdf($|\?)/i.test(t);
+  if ((m = t.match(/github\.com\/([\w.-]+)\/([\w.-]+)/i))) {
+    const repo = `${m[1]}/${m[2].replace(/\.git$/, '')}`;
+    return { kind: 'github', label: `仓库 ${repo}`, url: `https://github.com/${repo}` };
+  }
+  if ((m = t.match(/https?:\/\/[^\s，。、）)]+/i))) {
+    const link = m[0];
+    const u = new URL(link);
+    const pdf = /\.pdf($|\?)/i.test(link);
     const name = pdf ? u.pathname.split('/').pop() : u.hostname.replace(/^www\./, '') + (u.pathname.length > 1 ? u.pathname.slice(0, 30) : '');
-    return { kind: u.hostname.includes('openreview') || pdf ? 'paper' : '', label: (pdf ? '论文 PDF ' : '链接 ') + name, url: t };
+    return { kind: u.hostname.includes('openreview') || pdf ? 'paper' : '', label: (pdf ? '论文 PDF ' : '链接 ') + name, url: link };
   }
   if (/^[\w.-]+\/[\w.-]+$/.test(t) && !/^\d/.test(t)) return { kind: 'github', label: `仓库 ${t}`, url: t };
   if (/^[~/]\S*$/.test(t)) return { kind: 'github', label: `本地目录 ${t}`, url: t };
@@ -189,7 +196,7 @@ async function renderHome(el, ctx, scrollToPlans) {
   const latestPlan = [...plans].filter((p) => p.status !== 'failed').sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0];
 
   const defs = loadDefaults();
-  const opt = { background: defs.background, goal: '', hours: defs.hours, focus: '', kind: '' };
+  const opt = { background: defs.background, goal: '', hours: defs.hours, focus: '', kind: '', depth: 'quick' };
   let intent = 'plan';
   let target = null; // 识别出的链接
   const optsRow = h('div.ln-opts');
@@ -207,7 +214,7 @@ async function renderHome(el, ctx, scrollToPlans) {
         if (intent === 'open') { location.hash = `#learn/item/${target.existing.id}`; return; }
         if (intent === 'item') {
           const url = target?.url || text;
-          const it = await api.post('/api/learn/items', { url, kind: opt.kind || target?.kind || '', focus: opt.focus.trim() });
+          const it = await api.post('/api/learn/items', { url, kind: opt.kind || target?.kind || '', focus: opt.focus.trim(), depth: (opt.kind || target?.kind) === 'github' ? opt.depth : '' });
           toast('已开始后台深读，完成后自动刷新');
           opt.focus = ''; location.hash = `#learn/item/${it.id}`;
           return;
@@ -261,7 +268,7 @@ async function renderHome(el, ctx, scrollToPlans) {
       : '链接 → 深读 · 主题 → 学习计划 · 问句 → 问 Agent';
     else if (intent === 'ask') hint = 'Enter → 问学习 Agent';
     else if (intent === 'open') hint = `已深读过「${(existing.title || existing.url).slice(0, 30)}」，Enter 打开笔记`;
-    else if (intent === 'item') hint = `Enter → 将深读${det ? det.label : '：' + text.slice(0, 40)}`;
+    else if (intent === 'item') hint = `Enter → 将${(opt.kind || det?.kind) === 'github' && opt.depth !== 'full' ? '速读' : '深读'}${det ? det.label : '：' + text.slice(0, 40)}`;
     else hint = `Enter → 将生成「${text.slice(0, 24)}${text.length > 24 ? '…' : ''}」学习计划 · 每周 ${opt.hours}h`;
     box.setHint(hint);
     if (editing === 'focus' && intent !== 'item') editing = null;
@@ -272,7 +279,11 @@ async function renderHome(el, ctx, scrollToPlans) {
       h('button.ln-pill' + (editing === 'hours' ? '.on' : ''), { onclick: () => { editing = editing === 'hours' ? null : 'hours'; update(); } }, [ui.icon('clock'), h('span', {}, `每周 ${opt.hours}h`)])]
       : intent === 'item' ? [h('span.lbl', {}, '深读选项'), pill('focus', 'search', '关注点', opt.focus, '关注点'),
         h('button.ln-pill', { title: '点击切换类型', onclick: () => { opt.kind = { '': 'paper', paper: 'github', github: '' }[opt.kind]; update(); } },
-          [ui.icon('box'), h('span', {}, '类型：' + (opt.kind ? kindTxt[opt.kind] : det?.kind ? kindTxt[det.kind] + '（自动）' : '自动识别'))])]
+          [ui.icon('box'), h('span', {}, '类型：' + (opt.kind ? kindTxt[opt.kind] : det?.kind ? kindTxt[det.kind] + '（自动）' : '自动识别'))]),
+        (opt.kind || det?.kind) === 'github' ? h('button.ln-pill' + (opt.depth === 'full' ? '.on' : ''), {
+          title: '速读：几分钟出一份 markdown 笔记；完整教程：离线 HTML + 流程图 + 函数级讲解，通常 10–20 分钟',
+          onclick: () => { opt.depth = opt.depth === 'full' ? 'quick' : 'full'; update(); } },
+        [ui.icon('clock'), h('span', {}, opt.depth === 'full' ? '完整 HTML 教程（较慢）' : '速读笔记（几分钟）')]) : null]
         : []));
     editRow.replaceChildren(...[editor()].filter(Boolean));
   };
@@ -355,6 +366,8 @@ async function renderItem(el, ctx, iid) {
   el.append(h('div.row', { style: { marginBottom: '16px' } }, [
     isHtml ? h('button.outline', { onclick: () => window.open(`/api/learn/items/${it.id}/out/${encodeURIComponent(fileName)}`, '_blank') }, [ui.icon('doc'), '打开 HTML 教程']) : null,
     it.kind === 'github' && it.output_path ? h('button', { onclick: () => window.open(`/api/learn/items/${it.id}/out/summary.md`, '_blank') }, 'summary.md') : null,
+    it.kind === 'github' && !busy && it.output_path && !isHtml ? h('button.outline', { title: '离线 HTML + 流程图 + 函数级讲解，通常 10–20 分钟',
+      onclick: async () => { await api.post(`/api/learn/items/${it.id}/rerun`, { depth: 'full' }); toast('已开始生成完整教程'); softRefresh(); } }, [ui.icon('doc'), '生成完整 HTML 教程']) : null,
     h('span.grow'),
     it.job_id ? h('a.muted', { href: `/api/jobs/${it.job_id}`, target: '_blank' }, `job ${it.job_id}`) : null,
     h('button.ghost', { disabled: busy, onclick: async () => { if (!confirm('重新生成会覆盖产物，继续？')) return; await api.post(`/api/learn/items/${it.id}/rerun`, {}); toast('已重新开始深读'); softRefresh(); } }, [ui.icon('refresh'), '重新生成']),
@@ -367,7 +380,23 @@ async function renderItem(el, ctx, iid) {
   const tldrBox = lines.length ? h('div.ln-tldr', {}, [h('span.card-label', {}, 'TL;DR'), h('ul', {}, lines.map((l) => h('li', {}, l)))]) : null;
 
   if (busy || it.status === 'failed' || !it.output_path) { if (tldrBox) reader.append(tldrBox); }
-  if (busy) reader.append(h('div.card', {}, ui.empty('后台深读中', h('span.dots', {}, '完成后页面会自动刷新'))));
+  if (busy) {
+    // 实时进度：已用时 + Agent 最近几步（读了哪些文件、跑了什么命令）
+    const steps = h('div.ln-steps');
+    const head = h('div.serif', {}, '后台深读中');
+    reader.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, (it.depth || 'quick') === 'quick' && it.kind === 'github' ? '速读 · 通常几分钟' : it.kind === 'github' ? '完整教程 · 通常 10–20 分钟' : '论文深读 · 通常 2–5 分钟')]), steps]));
+    const tick = async () => {
+      if (!steps.isConnected) return;
+      const j = await api.get(`/api/jobs/${it.job_id}`).catch(() => null);
+      if (!j) return;
+      const mins = ((Date.now() - new Date(j.started_at || j.created_at).getTime()) / 60000).toFixed(1);
+      head.textContent = `后台深读中 · 已用 ${mins} 分钟`;
+      const lines = (j.log || '').split('\n').filter(Boolean).slice(-6).map((l) => l.replace(/^\[tool\]\s*/, '').replace(/\/Users\/[^ ]*\/data\/learn\/[^/]+\//g, ''));
+      steps.replaceChildren(...(lines.length ? lines.map((l) => h('div.ln-step', { title: l }, l)) : [h('div.muted', {}, h('span.dots', {}, '准备中'))]));
+      if (['queued', 'running'].includes(j.status)) setTimeout(tick, 4000);
+    };
+    tick();
+  }
   else if (it.status === 'failed') reader.append(h('div.card', {}, ui.empty('深读失败', '点「重新生成」再试一次，或看 job 日志')));
   else if (it.output_path) {
     let text = null;
