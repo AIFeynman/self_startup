@@ -43,3 +43,11 @@ def agent_context(ref: str) -> str:
         return kb.read("INDEX.md")[:6000]
     except FileNotFoundError:
         return "知识库还没生成，可调用 POST /api/kb/sync。"
+
+
+@router.get("/list")
+def list_docs(type: str = "", limit: int = 200):
+    """按类型列出（统计卡片点击筛选用），最新的在前。"""
+    docs = [d for d in kb.build() if not type or d["type"] == type]
+    docs.sort(key=lambda d: d["date"] or d["updated"] or "", reverse=True)
+    return [{k: d[k] for k in ("path", "type", "title", "date", "summary")} for d in docs[:limit]]

@@ -4,6 +4,9 @@ export default {
     const st = await api.get('/api/kb/stats');
     const results = h('div');
     const reader = h('div');
+    const statsBox = h('div');
+    const listBox = h('div');
+    let type = '';
 
     const show = async (path) => {
       const text = await api.get(`/api/kb/doc?path=${encodeURIComponent(path)}`);
@@ -19,8 +22,8 @@ export default {
       d.snippet ? h('div.muted.clamp2', { html: esc(d.snippet).replace(/«/g, '<mark>').replace(/»/g, '</mark>') }) : h('div.muted.clamp2', {}, d.summary || ''),
     ]);
     const search = async (q) => {
-      const rs = await api.get(`/api/kb/search?q=${encodeURIComponent(q)}&limit=30`);
-      results.replaceChildren(ui.section(`「${q}」`, `${rs.length} 条`),
+      const rs = await api.get(`/api/kb/search?q=${encodeURIComponent(q)}&type=${type}&limit=30`);
+      results.replaceChildren(ui.section(`「${q}」${type ? ' · ' + (st.names[type] || type) : ''}`, `${rs.length} 条`),
         rs.length ? h('div.card', {}, h('div.list', {}, rs.map(row))) : ui.empty('没找到', '换个说法，或直接问 Agent'));
     };
 
@@ -35,11 +38,28 @@ export default {
         hint: '目录 ' + st.dir,
         onSubmit: (t, mode) => (mode === 'ask' ? ask(t) : search(t)),
       }),
-      ui.stats(Object.entries(st.by_type).map(([k, v]) => ({ k: st.names[k] || k, v }))),
-      results, reader,
-      ui.section('最近更新'),
-      st.recent.length ? h('div.card', {}, h('div.list', {}, st.recent.map(row))) : ui.empty('还没有知识', '在各板块记录、调研、学习后会自动出现在这里'),
+      statsBox, results, reader, listBox,
     );
+    drawStats();
+    drawList();
+
+    // 点统计卡片按类型筛选，再点一次取消；筛选时列出该类型全部条目
+    function drawStats() {
+      statsBox.replaceChildren(ui.stats(Object.entries(st.by_type).map(([k, v]) => ({
+        k: st.names[k] || k, v, active: type === k,
+        onClick: () => { type = type === k ? '' : k; drawStats(); drawList(); },
+      }))));
+    }
+    async function drawList() {
+      if (!type) {
+        listBox.replaceChildren(ui.section('最近更新'),
+          st.recent.length ? h('div.card', {}, h('div.list', {}, st.recent.map(row))) : ui.empty('还没有知识', '在各板块记录、调研、学习后会自动出现在这里'));
+        return;
+      }
+      const ds = await api.get(`/api/kb/list?type=${encodeURIComponent(type)}`);
+      listBox.replaceChildren(ui.section(st.names[type] || type, [`${ds.length} 份 · `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); type = ''; drawStats(); drawList(); } }, '显示全部')]),
+        ds.length ? h('div.card', {}, h('div.list', {}, ds.map(row))) : ui.empty('这一类还没有内容'));
+    }
   },
 };
 

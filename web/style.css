@@ -78,6 +78,8 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .num { font: 700 30px var(--serif); color: var(--accent); line-height: 1; }
 .stat { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
 .stat .v { font: 700 26px var(--serif); line-height: 1.1; } .stat .k { font-size: 12px; color: var(--muted); }
+.stat.click { cursor: pointer; transition: border-color .12s, box-shadow .12s; } .stat.click:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
+.stat.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); } .stat.on .k { color: var(--accent); }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 9px; border-radius: 999px; font-size: 12px; line-height: 20px;
   background: var(--accent-soft); color: var(--accent); margin-right: 4px; white-space: nowrap; }

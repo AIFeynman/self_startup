@@ -108,7 +108,9 @@ export function pageHead(title, sub = '', actions = []) {
 export const section = (title, extra = '') => h('div.section-title', {}, [title, extra ? h('span.extra', {}, extra) : null]);
 
 // 统计块：[{k:'完成', v:'3/5'}]
-export const stats = (items) => h('div.stats', {}, items.map((s) => h('div.stat', {}, [h('span.v', {}, s.v), h('span.k', {}, s.k)])));
+// stats([{k, v, onClick?, active?}])：带 onClick 的卡片可点击（用于筛选）
+export const stats = (items) => h('div.stats', {}, items.map((s) => h('div.stat' + (s.onClick ? '.click' : '') + (s.active ? '.on' : ''),
+  s.onClick ? { onclick: s.onClick, title: s.title || '点击筛选', role: 'button' } : {}, [h('span.v', {}, s.v), h('span.k', {}, s.k)])));
 
 export const empty = (title, sub = '') => h('div.empty', {}, [h('div.serif', {}, title), sub ? h('div', {}, sub) : null]);
 
