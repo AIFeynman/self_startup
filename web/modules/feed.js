@@ -168,9 +168,10 @@ export default {
           const errs = r?.errors || [];
           return h('div.fd-src', { title: errs.join('\n') }, [h('span', {}, k),
             h('span', {}, [r ? h('span.' + (errs.length ? 'err' : 'ok'), {}, `+${r.count}${errs.length ? ` ⚠ ${errs.length}` : ''}  `) : null,
-              h('span.muted', {}, `库内 ${s.by_source?.[k] || 0}`)])]);
+              h('span.muted', {}, `库内 ${s.by_source?.[k] || 0}`),
+              s.sources?.[k]?.stale ? h('span.err', { title: `最新条目 ${s.sources[k].latest || '无日期'}` }, ' 停更') : null])]);
         }),
-        h('div.muted', { style: { marginTop: '6px' } }, `反馈：👍 ${s.feedback?.likes || 0} · ★ ${s.feedback?.saved || 0} · 隐藏 ${s.feedback?.hidden || 0}`));
+        h('div.muted', { style: { marginTop: '6px' } }, `反馈：👍 ${s.feedback?.likes || 0} · ★ ${s.feedback?.saved || 0} · 隐藏 ${s.feedback?.hidden || 0} · 打开 ${s.feedback?.clicks || 0} · 进深读 ${s.feedback?.deep_reads || 0}`));
     }
     async function doRefresh() {
       status = await api.post('/api/feed/refresh', {});
@@ -226,7 +227,9 @@ export default {
         h('button.fd-deep', { title: '深读 (d)', onclick: () => deep(x) }, ['深读', ui.icon('arrow')]),
       ]);
     };
-    const titleLink = (x) => h('a.fd-t', { href: x.url, target: '_blank', rel: 'noopener' }, x.title);
+    // 打开原文只做统计（推荐 → 点击 → 深读的转化），失败不打扰
+    const logClick = (x) => { api.post('/api/feed/click', { id: x.id }).catch(() => {}); };
+    const titleLink = (x) => h('a.fd-t', { href: x.url, target: '_blank', rel: 'noopener', onclick: () => logClick(x), onauxclick: () => logClick(x) }, x.title);
     const why = (x) => (x.why ? h('div.fd-why', { title: x.why }, [h('b', {}, '推荐理由'), x.why]) : null);
 
     function build(entry) {
@@ -317,7 +320,7 @@ export default {
         j: () => move(1), k: () => move(-1),
         l: () => cur && fb(cur, { vote: f.vote > 0 ? 0 : 1 }),
         s: () => cur && fb(cur, { saved: !f.saved }),
-        o: () => cur && window.open(cur.x.url, '_blank', 'noopener'),
+        o: () => { if (cur) { logClick(cur.x); window.open(cur.x.url, '_blank', 'noopener'); } },
         d: () => cur && deep(cur.x),
         x: () => cur && fb(cur, { hidden: !f.hidden }),
       }[e.key];

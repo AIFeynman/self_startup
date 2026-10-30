@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -47,6 +49,8 @@ CREATE TABLE IF NOT EXISTS feed_feedback (
 # settings.feed 之外的旋钮的缺省值（可在 data/settings.json 的 feed 下覆盖）
 CFG_DEFAULTS = {
     "half_life_hours": 72,
+    "auto_refresh_hours": 6,      # 数据超过这么久自动后台刷新；0 = 关闭
+    "stale_source_days": 7,       # 某来源最新条目早于这么多天，status 里标为停更
     "learn_evolve_days": 30,
     "hn_queries": ["LLM", "AI agent", "Claude", "OpenAI", "GPT", "coding agent"],
     "github_queries": ["llm", "ai agent", "mcp", "claude code"],
@@ -67,6 +71,31 @@ def cfg(key: str):
 
 # ---------- 存储 ----------
 
+_cols_ok = False
+
+
+def _ensure_cols() -> None:
+    """feed_feedback 后加的点击列（老库迁移）。"""
+    global _cols_ok
+    if _cols_ok:
+        return
+    cols = {r["name"] for r in db.rows("PRAGMA table_info(feed_feedback)")}
+    if "clicks" not in cols:
+        db.execute("ALTER TABLE feed_feedback ADD COLUMN clicks INTEGER DEFAULT 0")
+    if "last_click" not in cols:
+        db.execute("ALTER TABLE feed_feedback ADD COLUMN last_click TEXT DEFAULT ''")
+    _cols_ok = True
+
+
+def norm_date(s: str) -> str:
+    """各来源日期格式不一（2026-06-10 / ...000Z / +00:00），统一成 ISO UTC 秒级；解析不了原样保留。"""
+    d = rk._parse_dt(s or "")
+    return _iso(d) if d else (s or "")
+
+
+def _iso(d: datetime) -> str:
+    return d.astimezone(timezone.utc).isoformat(timespec="seconds")
+
 def upsert(items: list[dict]) -> int:
     """写入/合并：新值非空才覆盖；extra 合并（保留 learn_evolve 评分等）。"""
     n = 0
@@ -75,6 +104,7 @@ def upsert(items: list[dict]) -> int:
         if not it.get("id") or not it.get("title"):
             continue
         old = db.row("SELECT * FROM feed_items WHERE id=?", [it["id"]])
+        it = {**it, "date": norm_date(it.get("date") or "")}
         extra = dict(it.get("extra") or {})
         if old:
             merged = {**_extra(old), **{k: v for k, v in extra.items() if v not in ("", None, [], {})}}
@@ -126,8 +156,23 @@ def _examples(items: list[dict], fb: dict[str, dict]) -> list[dict]:
     return ex
 
 
+def _mark_gone(items: list[dict]) -> None:
+    """直连 GitHub 来源：最近一次抓取里没再出现、但仍在抓取窗口内的仓库，多半已删除或刷星后掉榜。"""
+    gh = [it for it in items if it["source"] == "github" and it["extra"].get("query")]
+    if not gh:
+        return
+    last = max(it["fetched_at"] or "" for it in gh)
+    cutoff = (rk._parse_dt(last) or datetime.now(timezone.utc)).timestamp() - 3600
+    window = datetime.now(timezone.utc).timestamp() - 13 * 86400   # 抓取窗口 14 天，留 1 天余量：过窗口的只是变旧
+    for it in gh:
+        d, pub = rk._parse_dt(it["fetched_at"] or ""), rk._parse_dt(it.get("date") or "")
+        if d and d.timestamp() < cutoff and pub and pub.timestamp() > window:
+            it["extra"]["gone"] = True
+
+
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None) -> list[dict]:
     items = _load_items()
+    _mark_gone(items)
     fb = _feedback()
     out = rk.rank(items, now=now or datetime.now(timezone.utc), half_life_h=float(cfg("half_life_hours")),
                   interests=list(cfg("interests") or []), feedback=fb, examples=_examples(items, fb),
@@ -139,6 +184,8 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     if q:
         ql = q.lower()
         out = [x for x in out if ql in f"{x['title']} {x['summary']}".lower()]
+    if not (type_ or saved or q):
+        out = rk.diversify(out)
     return out
 
 
@@ -214,8 +261,22 @@ def status():
     st["total"] = (db.row("SELECT count(*) n FROM feed_items") or {}).get("n", 0)
     st["by_source"] = {r["source"]: r["n"] for r in db.rows("SELECT source, count(*) n FROM feed_items GROUP BY source")}
     st["last_fetched"] = (db.row("SELECT max(fetched_at) t FROM feed_items") or {}).get("t") or ""
+    st["sources"] = source_health()
+    st["auto_refresh_hours"] = cfg("auto_refresh_hours")
     st["feedback"] = feedback_stats()
     return st
+
+
+def source_health() -> dict:
+    """各来源：条数、最新发布日期、最近抓取时间、是否停更（最新条目早于 stale_source_days 天）。"""
+    now = datetime.now(timezone.utc)
+    out = {}
+    for r in db.rows("SELECT source, count(*) n, max(date) latest, max(fetched_at) fetched FROM feed_items GROUP BY source"):
+        d = rk._parse_dt(r["latest"] or "")
+        age = (now - d).days if d else None
+        out[r["source"]] = {"count": r["n"], "latest": r["latest"] or "", "fetched": r["fetched"] or "",
+                            "latest_age_days": age, "stale": age is None or age > int(cfg("stale_source_days"))}
+    return out
 
 
 # ---------- 列表与反馈 ----------
@@ -253,9 +314,41 @@ def feedback(body: FeedbackIn):
     return {"id": body.id, **new}
 
 
+class ClickIn(BaseModel):
+    id: str
+
+
+@router.post("/click")
+def click(body: ClickIn):
+    """打开原文链接时前端上报一次；只做统计（转化漏斗），不参与排序。"""
+    _ensure_cols()
+    if not db.row("SELECT id FROM feed_items WHERE id=?", [body.id]):
+        raise HTTPException(404, "条目不存在")
+    db.execute("INSERT INTO feed_feedback (item_id, clicks, last_click, updated_at) VALUES (?,1,?,?) "
+               "ON CONFLICT(item_id) DO UPDATE SET clicks=coalesce(clicks,0)+1, last_click=excluded.last_click",
+               [body.id, db.now(), db.now()])
+    return {"id": body.id, "ok": True}
+
+
 def feedback_stats() -> dict:
-    r = db.row("SELECT sum(vote>0) likes, sum(vote<0) dislikes, sum(saved) saved, sum(hidden) hidden FROM feed_feedback") or {}
-    return {k: int(r.get(k) or 0) for k in ("likes", "dislikes", "saved", "hidden")}
+    _ensure_cols()
+    r = db.row("SELECT sum(vote>0) likes, sum(vote<0) dislikes, sum(saved) saved, sum(hidden) hidden, "
+               "sum(coalesce(clicks,0)) clicks, sum(coalesce(clicks,0)>0) clicked_items FROM feed_feedback") or {}
+    out = {k: int(r.get(k) or 0) for k in ("likes", "dislikes", "saved", "hidden", "clicks", "clicked_items")}
+    out["deep_reads"] = deep_reads()
+    return out
+
+
+def deep_reads() -> int:
+    """从推荐进了深读的条目数：learn_items 的 url 与 feed 条目（或其 arXiv id）一致。"""
+    try:
+        urls = {rk.norm_url(r["url"]) for r in db.rows("SELECT url FROM learn_items")}
+    except Exception:  # noqa: BLE001  学习模块不存在
+        return 0
+    urls.discard("")
+    if not urls:
+        return 0
+    return sum(1 for r in db.rows("SELECT url FROM feed_items") if rk.norm_url(r["url"]) in urls)
 
 
 @router.get("/config")
@@ -264,12 +357,58 @@ def config():
                                 "reddit", "sources")} | {"rss": settings.get("feed.rss", []), "types": TYPES}
 
 
+# ---------- 定时刷新 ----------
+
+def _stale_hours() -> float:
+    """距上次抓取的小时数；fetched_at 是 db.now() 写的本地时间（不带时区）。"""
+    last = (db.row("SELECT max(fetched_at) t FROM feed_items") or {}).get("t") or ""
+    try:
+        d = datetime.fromisoformat(last)
+    except ValueError:
+        return float("inf")
+    now = datetime.now(d.tzinfo) if d.tzinfo else datetime.now()
+    return (now - d).total_seconds() / 3600
+
+
+def maybe_auto_refresh() -> bool:
+    """数据超过 auto_refresh_hours 就起一次后台刷新；返回是否启动了。"""
+    hours = float(cfg("auto_refresh_hours") or 0)
+    if hours <= 0 or _stale_hours() < hours:
+        return False
+    with _state_lock:
+        if _state["running"]:
+            return False
+        _state.update(running=True, started_at=db.now(), results={})
+    threading.Thread(target=_bg, args=(None,), daemon=True).start()
+    log.info("feed auto refresh started (data older than %sh)", hours)
+    return True
+
+
+def _auto_loop():
+    time.sleep(90)  # 启动后先等一会儿，别和服务启动抢资源
+    while True:
+        try:
+            maybe_auto_refresh()
+        except Exception as e:  # noqa: BLE001
+            log.warning("feed auto refresh check failed: %s", e)
+        time.sleep(600)
+
+
+def on_startup():
+    if os.environ.get("SELF_STARTUP_NO_AUTOREFRESH"):
+        return
+    threading.Thread(target=_auto_loop, daemon=True, name="feed-auto-refresh").start()
+
+
 # ---------- Agent ----------
 
 def agent_context(ref: str) -> str:
     top = ranked()[:30]
     lines = [f"兴趣词：{', '.join(cfg('interests') or [])}",
-             f"反馈统计：{json.dumps(feedback_stats(), ensure_ascii=False)}；库内共 {status()['total']} 条",
+             f"反馈统计（clicks=打开原文次数，deep_reads=进了深读的条目）：{json.dumps(feedback_stats(), ensure_ascii=False)}；"
+             f"库内共 {status()['total']} 条",
+             "停更的来源：" + ("、".join(f"{k}（最新 {v['latest'][:10] or '无日期'}）" for k, v in source_health().items()
+                                     if v["stale"]) or "无"),
              "", "## 当前排序前 30（标题 | 类型 | 推荐理由 | 链接 | 简介）"]
     for i, x in enumerate(top, 1):
         lines.append(f"{i}. [{x['id']}] {x['title']} | {TYPES.get(x['type'], x['type'])} | {x['why'] or '-'} | "

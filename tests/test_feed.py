@@ -135,3 +135,55 @@ def test_hn_link_summary_is_factual():
     s = src.hn_link_summary({"url": "https://www.example.com/post", "points": 120, "num_comments": 45})
     assert s == "链接到 example.com · 120 分 · 45 条评论"
     assert src.hn_link_summary({"points": 3}) == "HN 讨论帖 · 3 分"
+
+
+def test_stale_items_downweighted_and_marked():
+    now = datetime(2026, 10, 30, tzinfo=timezone.utc)
+    items = [{"id": "x:old", "source": "x", "type": "blog", "title": "old", "date": "2026-06-01", "popularity": 0, "extra": {}},
+             {"id": "x:new", "source": "x", "type": "blog", "title": "new", "date": "2026-10-28", "popularity": 0, "extra": {}},
+             {"id": "x:gone", "source": "x", "type": "blog", "title": "gone", "date": "2026-10-28", "popularity": 0,
+              "extra": {"gone": True}}]
+    out = {x["id"]: x for x in rk.rank(items, now=now)}
+    assert "天前" in out["x:old"]["why"] and out["x:old"]["score"] < out["x:new"]["score"]
+    assert "可能已删除" in out["x:gone"]["why"] and out["x:gone"]["score"] < out["x:new"]["score"]
+
+
+def test_diversify_caps_type_share():
+    items = [{"id": f"r{i}", "type": "repo"} for i in range(10)] + [{"id": "p", "type": "paper"}, {"id": "b", "type": "blog"}]
+    out = rk.diversify(items, top=5, max_share=0.4)
+    assert [x["id"] for x in out[:5]] == ["r0", "r1", "p", "b", "r2"]
+    assert len(out) == len(items)
+
+
+def test_norm_date():
+    from app.modules import feed
+    assert feed.norm_date("2026-10-28T00:00:00.000Z") == "2026-10-28T00:00:00+00:00"
+    assert feed.norm_date("2026-06-10") == "2026-06-10T00:00:00+00:00"
+    assert feed.norm_date("bad") == "bad" and feed.norm_date("") == ""
+
+
+def test_click_counts_and_funnel(client):
+    from app.modules import feed
+    feed.upsert([{"id": "hn:click1", "source": "hn", "type": "discussion", "title": "clicky", "url": "https://e.x/c"}])
+    for _ in range(2):
+        assert client.post("/api/feed/click", json={"id": "hn:click1"}).status_code == 200
+    assert client.post("/api/feed/click", json={"id": "nope"}).status_code == 404
+    fbk = client.get("/api/feed/status").json()["feedback"]
+    assert fbk["clicks"] >= 2 and fbk["clicked_items"] >= 1 and "deep_reads" in fbk
+    # 点击不改变赞踩
+    client.post("/api/feed/feedback", json={"id": "hn:click1", "vote": 1})
+    row = feed.db.row("SELECT * FROM feed_feedback WHERE item_id='hn:click1'")
+    assert row["clicks"] == 2 and row["vote"] == 1
+
+
+def test_auto_refresh_respects_threshold(client, monkeypatch):
+    from app.modules import feed
+    calls = []
+    monkeypatch.setattr(feed, "_bg", lambda only: calls.append(only) or feed._state.update(running=False))
+    monkeypatch.setattr(feed, "_stale_hours", lambda: 1.0)
+    assert feed.maybe_auto_refresh() is False
+    monkeypatch.setattr(feed, "_stale_hours", lambda: 100.0)
+    assert feed.maybe_auto_refresh() is True
+    import time as _t
+    _t.sleep(0.1)
+    assert calls == [None]

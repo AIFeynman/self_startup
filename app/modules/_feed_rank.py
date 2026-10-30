@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
-     "source": 0.6, "self_like": 1.0, "self_dislike": -2.0}
+     "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5}
+STALE_DAYS = 14             # 发布超过这么多天算「旧」：在推荐里降权，避免几个月前的高赞条目霸榜
+TYPE_SHARE = 0.4            # diversify：前 N 条里同一类型最多占的比例
 NO_POP_BASE = 0.35          # 整个来源都没有热度数据（博客 RSS 等）时的中性热度分
 LE_PRIOR = {"star": 0.5, "good": 0.3, "skip": -0.3, "bad": -0.6}
 LE_LABEL = {"star": "learn_evolve 标星", "good": "learn_evolve 好评", "skip": "learn_evolve 跳过", "bad": "learn_evolve 差评"}
@@ -120,6 +122,12 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     s += W["fresh"] * fresh
     if age_h < 24:
         why.append("24 小时内")
+    elif age_h > STALE_DAYS * 24:
+        s += W["stale"]
+        why.append(f"{int(age_h // 24)} 天前")
+    if (it.get("extra") or {}).get("gone"):
+        s += W["gone"]
+        why.append("最近一次抓取未再出现（可能已删除或掉出搜索前列）")
 
     text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
     hits = [t for t in interests if t and _interest_re(t).search(text)]
@@ -202,3 +210,16 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
         if it["also"]:
             it["why"] = (it["why"] + " · " if it["why"] else "") + "也见于 " + "、".join(it["also"])
     return out
+
+
+def diversify(items: list[dict], top: int = 30, max_share: float = TYPE_SHARE) -> list[dict]:
+    """前 top 条里同一类型不超过 max_share（至少 2 条）；超出的顺延到 top 之后，相对顺序不变。"""
+    cap = max(2, int(top * max_share))
+    head, rest, n = [], [], Counter()
+    for it in items:
+        if len(head) < top and n[it.get("type")] < cap:
+            head.append(it)
+            n[it.get("type")] += 1
+        else:
+            rest.append(it)
+    return head + rest

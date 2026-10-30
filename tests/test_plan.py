@@ -226,3 +226,16 @@ def test_draft_discuss_flow(client):
     client.post(f"/api/plan/drafts/{d2['id']}/discard")
     assert client.get("/api/plan/drafts?date=2030-03-01").json()["draft"] is None
     assert not [t for t in client.get("/api/tasks?date=2030-03-01").json() if t["parent_id"]]
+
+
+def test_learning_next_suggests_unscheduled_step(client):
+    from app import db
+    from app.modules import plan
+    pid = db.insert("learn_plans", {"topic": "测试主题", "status": "active", "created_at": db.now(), "updated_at": db.now()})
+    sid = db.insert("learn_steps", {"plan_id": pid, "stage": 1, "ord": 0, "title": "第一步", "est_hours": 1})
+    db.insert("learn_steps", {"plan_id": pid, "stage": 2, "ord": 0, "title": "第二步", "est_hours": 1})
+    s = plan._learning_next(db.today())
+    assert f"step {sid}" in s and "测试主题" in s and "0/2" in s
+    client.post(f"/api/learn/steps/{sid}/today", json={})
+    s2 = plan._learning_next(db.today())
+    assert f"step {sid}" not in s2   # 已排进今天（且变成 doing）就不再建议

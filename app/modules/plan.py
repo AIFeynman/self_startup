@@ -391,6 +391,10 @@ def decompose(body: DecomposeIn):
     les = _lessons(date)
     if les:
         prompt += f"\n\n## 复盘沉淀的规划经验（拆解时照做：完成标准、何时跑、怎么验收、哪些要人）\n{les}"
+    lrn = _learning_next(date)
+    if lrn:
+        prompt += (f"\n\n## 学习计划的下一步（供参考，不是待拆解事项）\n{lrn}\n"
+                   "预算有余时，在 questions 里问一句要不要把它排进今天（默认：放非专注时间），不要擅自加进 items。")
     if body.hint:
         prompt += f"\n\n## 用户补充要求\n{body.hint}"
     # 拆解只需要读：工作目录放在数据目录，事项关联的代码库作为额外可读目录
@@ -780,6 +784,29 @@ def _lessons(date: str, days: int = 30) -> str:
     return "\n".join(lines)
 
 
+def _learning_next(date: str) -> str:
+    """进行中的学习计划各自的下一步（还没加入今天的事项时），给拆解 / 对话当候选的学习块（学习模块缺失时为空）。"""
+    try:
+        plans = db.rows("SELECT id, topic FROM learn_plans WHERE status='active' ORDER BY updated_at DESC LIMIT 3")
+        today = " ".join(t.get("notes") or "" for t in tasks.list_for(date))
+        lines = []
+        for p in plans:
+            s = db.row("SELECT * FROM learn_steps WHERE plan_id=? AND status IN ('doing','todo') "
+                       "ORDER BY status='doing' DESC, stage, ord, id LIMIT 1", [p["id"]])
+            if not s or f"step:{s['id']}" in today:
+                continue
+            n = db.row("SELECT count(*) total, sum(status IN ('done','skipped')) done FROM learn_steps WHERE plan_id=?",
+                       [p["id"]]) or {}
+            lines.append(f"- 计划{p['id']}「{p['topic']}」进度 {int(n.get('done') or 0)}/{n.get('total') or 0}，下一步 "
+                         f"step {s['id']}（阶段 {s['stage']}，约 {s['est_hours']} 小时，{s['status']}）：{s['title']}")
+    except Exception:  # noqa: BLE001
+        return ""
+    if not lines:
+        return ""
+    return "\n".join(lines) + ("\n用户要排学习时，用 POST /api/learn/steps/<step_id>/today 加入今日事项（kind=learning），"
+                               "默认放非专注时间的 medium 学习块，学完提醒在学习板块给这一步打理解度和反馈。")
+
+
 def agent_context(ref: str) -> str:
     m = re.search(r"\d{4}-\d{2}-\d{2}", ref or "")
     date = m.group(0) if m else db.today()
@@ -808,6 +835,9 @@ def agent_context(ref: str) -> str:
     les = _lessons(date)
     if les:
         lines.append("复盘沉淀的规划经验（拆解 / 排程 / 验收时参考）：\n" + les)
+    lrn = _learning_next(date)
+    if lrn:
+        lines.append("学习计划的下一步（还没排进今天）：\n" + lrn)
     d = get_draft(date)
     if d:
         data = {**d["data"], "items": [{k: v for k, v in it.items() if k != "title"} for it in d["data"]["items"]]}
