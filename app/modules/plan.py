@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from .. import db, jobs, settings, tasks
 
 TITLE = "规划"
-ORDER = 20
+ORDER = 5
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS plan_runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

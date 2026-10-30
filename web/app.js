@@ -8,7 +8,7 @@ import { api, h, md, toast, field } from './api.js';
 import { initChat, openChat } from './chat.js';
 import * as ui from './ui.js';
 
-const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb' };
+const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot' };
 let meta;
 const page = document.getElementById('page');
 
