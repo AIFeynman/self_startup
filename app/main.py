@@ -14,6 +14,7 @@ from . import agent, chat, db, jobs, kb, modules, settings, tasks
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 app = FastAPI(title="本地学习平台", version="0.1.0")
+settings.apply_timezone()
 
 mods = modules.discover()
 db.init(getattr(m, "SCHEMA", "") for m in mods.values())
@@ -30,7 +31,7 @@ for name, m in mods.items():
 def _startup():
     jobs._mark_interrupted()  # 只在真正启动服务时清理上次中断的任务
     kb.schedule_sync(0.5)
-    for m in mods.values():  # 板块自己的后台任务（如信息推荐的定时刷新）
+    for m in mods.values():  # 板块自己的后台任务（信息推荐的定时刷新、规划的到点自动派发、看板的时区推断）
         if hasattr(m, "on_startup"):
             m.on_startup()
 
@@ -81,7 +82,7 @@ def meta():
 
 @app.get("/api/settings")
 def get_settings():
-    return settings.load()
+    return {**settings.load(), "timezone_effective": time.tzname[0]}
 
 
 @app.put("/api/settings")

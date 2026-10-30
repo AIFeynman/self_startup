@@ -124,5 +124,13 @@ def link_jobs(sid: int, after_id: int) -> list[int]:
     return [j["id"] for j in js]
 
 
+def engine_sessions() -> set[str]:
+    """对话面板对应的 Claude / Codex 会话 id：日志里像 claude -p 脚本会话，但提示是人打的字（效率统计按人工交互算）。"""
+    try:
+        return {r["engine_session"] for r in db.rows("SELECT engine_session FROM chat_sessions WHERE engine_session<>''")}
+    except Exception:  # noqa: BLE001 —— 表还没建
+        return set()
+
+
 def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"

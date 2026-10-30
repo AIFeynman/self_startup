@@ -285,7 +285,7 @@ export default {
             `全部采纳（${pending.length}）`) : null,
         ]) : sugg.length || rec.ai_analysis
           ? h('div', {}, [h('h3', {}, sugg.length ? '建议都处理完了' : '检查完成'),
-            h('div.muted', {}, `采纳 ${sugg.filter((s) => s.applied).length} 条 · 忽略 ${sugg.filter((s) => s.dismissed).length} 条`)])
+            h('div.muted', {}, `采纳 ${sugg.filter((s) => s.applied).length} 条（其中有证据、自动写回 ${sugg.filter((s) => s.auto).length} 条）· 忽略 ${sugg.filter((s) => s.dismissed).length} 条`)])
           : h('div', {}, [h('h3', {}, '今天做完了吗？让 AI 对照证据看看'),
             h('div.muted', { style: { margin: '-2px 0 12px' } }, '对照目标看当天 git 提交、改动文件和文档，给出每件事的完成度建议。'), runBtn]),
         status,
@@ -433,7 +433,7 @@ export default {
         ui.stats([
           { k: '交互 + 自动会话', v: `${a.interactive || 0}+${a.automated || 0}` }, { k: '人工介入', v: a.human_turns ?? 0 },
           { k: `Agent 活跃（含自动 ${hours(a.active_min)}）`, v: hours(a.active_min_interactive ?? a.active_min) },
-          { k: '人工响应（单次封顶30分）', v: `${a.wait_total_min ?? 0}分` }, { k: '等待中位', v: `${a.wait_median_min ?? 0}分` },
+          { k: `Agent 等你（墙钟，同看板 · 各会话累加 ${a.wait_total_min ?? 0}分）`, v: `${a.wait_wall_min ?? a.wait_total_min ?? 0}分` }, { k: '等待中位', v: `${a.wait_median_min ?? 0}分` },
           { k: '峰值并行', v: a.peak_parallel ?? 0 }, { k: `工具错误 / 调用 · 权限拒绝 ${a.denials ?? 0}`, v: `${a.tool_errors ?? 0}/${a.tool_calls ?? 0}` },
           { k: '平台任务失败 / 总', v: `${a.platform_jobs_failed || 0}/${a.platform_jobs || 0}` },
         ]),

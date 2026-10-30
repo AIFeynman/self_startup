@@ -90,7 +90,8 @@ export default {
       const max = Math.max(1, ...p.hourly.map((x) => x.agents));
       const maxH = Math.max(1, ...p.hourly.map((x) => x.humans));
       return h('div.card.flat', {}, [
-        ui.stats([{ k: '平均覆盖', v: p.avg.coverage_pct + '%' }, { k: '平均容量使用', v: p.avg.capacity_pct + '%' },
+        ui.stats([{ k: `平均覆盖 · 工作时间内 ${p.avg.coverage_work_pct}%`, v: p.avg.coverage_pct + '%' }, { k: '平均容量使用', v: p.avg.capacity_pct + '%' },
+          { k: 'Agent 等你/天（墙钟）', v: p.avg.wait_wall_min + 'm' },
           { k: '平均空档/天', v: p.avg.idle_min + 'm' }, { k: '人工交互/天 · 专注外', v: `${p.avg.human_total} · ${p.avg.human_out_focus}` }]),
         h('div.ag-hours', {}, p.hourly.map((x) => h('div.ag-hour', { title: `${x.hour}点：平均 ${x.agents} 个 Agent·小时，人工交互 ${x.humans} 次，等你 ${x.waiting}` }, [
           h('i.a', { style: { height: (x.agents / max) * 60 + 'px' } }), h('i.h', { style: { height: (x.humans / maxH) * 24 + 'px' } }),

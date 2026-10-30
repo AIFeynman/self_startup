@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from app.modules import _review_sessions as rs
 
@@ -100,6 +100,21 @@ def test_codex_session_parse(tmp_path):
     assert s["tool_calls"] == 1 and s["tool_errors"] == 2
 
 
+def test_codex_injected_developer_message_does_not_hide_wait(tmp_path):
+    """Codex Desktop 每轮开头注入 developer 上下文消息，和人的消息同一时刻；不能当成 Agent 活动把等待清零。"""
+    f = _write(tmp_path / "rollout-d.jsonl", [
+        _cx("09:00:00", "session_meta", {"id": "d1", "cwd": "/w/p", "originator": "Codex Desktop", "source": "vscode"}),
+        _cx("09:00:00", "event_msg", {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "做 A"}]}}),
+        _cx("09:00:05", "response_item", {"type": "message", "role": "assistant", "content": []}),
+        _cx("09:01:00", "event_msg", {"type": "task_complete", "last_agent_message": "做好了"}),
+        _cx("09:41:00", "response_item", {"type": "message", "role": "developer", "content": []}),
+        _cx("09:41:00", "response_item", {"type": "message", "role": "user", "content": []}),
+        _cx("09:41:00", "event_msg", {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "再做 B"}]}}),
+    ])
+    s = rs.summarize(*rs.read_codex(f), DAY)
+    assert s["messages"][1]["wait_min"] == 40.0
+
+
 def test_codex_exec_automated_and_scan(tmp_path):
     d = tmp_path / "codex" / "2026" / "10" / "29"
     d.mkdir(parents=True)
@@ -193,3 +208,63 @@ def test_quick_capture_api(client):
     r = client.post(f"/api/review/day/{d}/append", json={"text": "又一条", "field": "problems"}).json()
     assert r["record"]["problems"] == "等太久\n又一条"
     assert client.post(f"/api/review/suggestions/{d}/0/dismiss").status_code == 404
+
+
+def test_efficiency_snapshot_taken_during_the_day_is_rescanned(monkeypatch):
+    from datetime import datetime, timedelta
+    from app import db
+    from app.modules import review
+    db.init([review.SCHEMA])
+    assert review._stale("2020-01-01", "2020-01-01T19:41:00")            # 当天扫的：过了那天要重扫
+    assert not review._stale("2020-01-01", "2020-01-02T00:05:00")        # 那天结束后扫的：定稿
+    today = db.today()
+    assert not review._stale(today, datetime.now().isoformat(timespec="seconds"))
+    assert review._stale(today, (datetime.now() - timedelta(minutes=30)).isoformat(timespec="seconds"))
+    calls = []
+    monkeypatch.setattr(review.rs, "scan", lambda d, *a: calls.append(d) or [])
+    review._upsert_stats("2020-01-05", {"summary": json.dumps({"v": review.rs.VERSION}), "sessions": "[]", "scanned_at": "2020-01-05T19:00:00"})
+    review.get_efficiency("2020-01-05")
+    review.get_efficiency("2020-01-05")                                   # 第二次已定稿，不再扫
+    assert len(calls) == 1
+
+
+def test_platform_chat_session_counts_as_human():
+    """平台对话面板走 claude -p：日志里是 sdk 提示（auto），但提示是人在面板里打的字。"""
+    t = datetime(2026, 10, 29, 10, 0)
+    ev = [{"kind": "auto", "ts": t, "text": "帮我排一下今天"}, {"kind": "agent", "ts": t + timedelta(minutes=1), "end": True},
+          {"kind": "auto", "ts": t + timedelta(minutes=21), "text": "把 3 号挪到下午"}]
+    meta = {"engine": "claude", "session_id": "chat-1", "file": "/x/p/chat-1.jsonl", "cwd": "/w/data", "automated": True}
+    assert rs.promote_platform_chat(meta, ev, {"other"}) == (meta, ev)
+    m2, ev2 = rs.promote_platform_chat(meta, ev, {"chat-1"})
+    s = rs.summarize(m2, ev2, DAY)
+    assert not s["automated"] and s["human_turns"] == 2 and s["messages"][1]["wait_min"] == 20.0
+    assert ev[0]["kind"] == "auto"            # 不改缓存里的原事件
+
+
+def test_wait_definition_matches_board():
+    """复盘的等待和看板同一口径：≤3 小时的等待全额计入（不再单次封顶 30 分钟），更长视为离开。"""
+    t = datetime(2026, 10, 29, 9, 0)
+    ev = [{"kind": "human", "ts": t, "text": "做 A"}, {"kind": "agent", "ts": t + timedelta(minutes=1)},
+          {"kind": "human", "ts": t + timedelta(minutes=61), "text": "做 B"}, {"kind": "agent", "ts": t + timedelta(minutes=62)},
+          {"kind": "human", "ts": t + timedelta(hours=6), "text": "做 C"}]
+    s = rs.summarize({"engine": "claude", "session_id": "s", "file": "/x/p/s.jsonl", "cwd": "/w/p"}, ev, DAY)
+    assert s["wait_total_min"] == 60.0
+
+
+def test_check_auto_applies_evidence_backed_progress(client):
+    from app import tasks
+    from app.modules import review
+    d = "2020-02-03"
+    a = tasks.create({"date": d, "title": "A"})["id"]
+    b = tasks.create({"date": d, "title": "B"})["id"]
+    c = tasks.create({"date": d, "title": "C", "progress": 80, "status": "doing"})["id"]
+    e = tasks.create({"date": d, "title": "E"})["id"]
+    review.upsert_record(d, {"task_suggestions": [
+        {"task_id": a, "status": "done", "progress": 100, "evidence": "commit abc123 已 push"},
+        {"task_id": b, "status": "partial", "progress": 40, "evidence": "无证据：仓库里没有脚本"},
+        {"task_id": c, "status": "partial", "progress": 50, "evidence": "只完成一半"},          # 会让进度倒退：留给人
+        {"task_id": e, "status": "todo", "progress": 0, "evidence": "没开始"}]})
+    assert review.auto_apply(d) == [0]
+    assert tasks.get(a)["status"] == "done" and tasks.get(b)["status"] == "todo" and tasks.get(c)["progress"] == 80
+    s = review.get_record(d)["task_suggestions"]
+    assert s[0]["applied"] and s[0]["auto"] and not s[1].get("applied")

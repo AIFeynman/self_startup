@@ -239,3 +239,30 @@ def test_learning_next_suggests_unscheduled_step(client):
     client.post(f"/api/learn/steps/{sid}/today", json={})
     s2 = plan._learning_next(db.today())
     assert f"step {sid}" not in s2   # 已排进今天（且变成 doing）就不再建议
+
+
+def test_auto_dispatch_due_tasks_respects_deps_time_and_concurrency(client, monkeypatch):
+    from datetime import datetime
+    from app import db, jobs, settings, tasks
+    d = "2020-03-02"
+    submitted = []
+    monkeypatch.setattr(jobs, "submit", lambda module, prompt, **kw: submitted.append(kw["ref"]) or
+                        db.insert("jobs", {"module": module, "ref": kw["ref"], "engine": "claude", "prompt": prompt, "status": "running", "created_at": db.now()}))
+    monkeypatch.setattr(settings, "load", lambda: {**settings.DEFAULTS, "max_agent_concurrency": 2})
+    top = tasks.create({"date": d, "title": "事项"})["id"]
+    mk = lambda **kw: tasks.create({"date": d, "parent_id": top, "human_level": "auto", "executor": "claude", **kw})["id"]  # noqa: E731
+    a = mk(title="a", start_time="09:00")
+    b = mk(title="b 依赖 a", start_time="09:00", depends_on=[a])
+    c = mk(title="c 还没到点", start_time="15:00")
+    h = tasks.create({"date": d, "parent_id": top, "title": "人做", "human_level": "heavy", "executor": "human", "start_time": "09:00"})["id"]
+    e = mk(title="e", start_time="09:30")
+    f = mk(title="f 超出并发", start_time="09:40")
+    assert plan.auto_dispatch(datetime(2020, 3, 2, 10, 0)) == [a, e]           # 并发 2：a、e；b 等 a，c 没到点，h 是人做
+    assert plan.auto_dispatch(datetime(2020, 3, 2, 10, 1)) == []               # 槽满，且已派过的不重复派
+    db.execute("UPDATE jobs SET status='done' WHERE ref=?", [f"plan:run:{a}"])
+    tasks.patch(a, {"status": "done"})
+    assert plan.auto_dispatch(datetime(2020, 3, 2, 10, 2)) == [b]              # a 完成后 b 解锁；f 排在 b 后面（开始时间更晚）
+    assert tasks.get(b)["status"] == "doing" and "自动派发" in tasks.get(b)["notes"]
+    monkeypatch.setattr(settings, "load", lambda: {**settings.DEFAULTS, "plan_auto_dispatch": False})
+    assert plan.auto_dispatch(datetime(2020, 3, 2, 16, 0)) == []
+    assert {c, h, f}.isdisjoint({int(r.rsplit(":", 1)[1]) for r in submitted})
