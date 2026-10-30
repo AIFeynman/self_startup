@@ -103,7 +103,25 @@ function bubble(role, content) {
   if (role === 'tool') return h('div.msg.tool', { title: content }, '⚙ ' + content);
   if (role === 'user') return h('div.msg.user', {}, content);
   if (role === 'error') return h('div.msg.error', {}, content);
-  return h('div.msg.assistant', {}, [h('div.avatar', {}, icon('leaf')), h('div.body', {}, md(content))]);
+  const long = (content || '').length > 600;
+  return h('div.msg.assistant' + (long ? '.long' : ''), {}, [h('div.avatar', {}, icon('leaf')), h('div.body', {}, [
+    long ? h('button.sm.ghost.read-btn', { title: '在大窗口里阅读', onclick: () => openReader(content) }, [icon('expand'), '阅读']) : null,
+    md(content)])]);
+}
+
+// 长回复（深读结果、调研结论…）是要读的内容：在页面中间的大窗口里排版阅读，Esc 关闭
+function openReader(content) {
+  const close = () => { ov.remove(); document.removeEventListener('keydown', esc); window.removeEventListener('hashchange', close); };
+  const esc = (e) => { if (e.key === 'Escape') close(); };
+  const ov = h('div.reader', { onclick: (e) => { if (e.target === ov) close(); } }, h('article.reader-doc', {}, [
+    h('div.reader-bar', {}, [h('span.muted', {}, `${state.title} · Agent 回复`), h('span.grow'),
+      h('button.sm.ghost', { onclick: () => navigator.clipboard?.writeText(content) }, '复制'),
+      h('button.icon', { title: '关闭 (Esc)', onclick: close }, icon('x'))]),
+    h('div.reader-body', {}, md(content)),
+  ]));
+  document.addEventListener('keydown', esc);
+  window.addEventListener('hashchange', close); // 点了站内链接就关掉
+  document.body.append(ov);
 }
 
 async function submit(text) {

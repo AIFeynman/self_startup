@@ -57,7 +57,8 @@ export function md(text) {
   const div = document.createElement('div');
   div.className = 'md';
   div.innerHTML = window.marked ? window.marked.parse(text || '') : (text || '').replace(/</g, '&lt;').replace(/\n/g, '<br>');
-  div.querySelectorAll('a').forEach((a) => { a.target = '_blank'; a.rel = 'noopener'; });
+  // 站外链接新标签打开；#learn/... 这类站内链接在当前页跳转
+  div.querySelectorAll('a').forEach((a) => { if (!a.getAttribute('href')?.startsWith('#')) { a.target = '_blank'; a.rel = 'noopener'; } });
   return div;
 }
 

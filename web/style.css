@@ -162,6 +162,16 @@ body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { 
 .msg.assistant .body { min-width: 0; overflow-x: auto; }
 .msg.assistant .body pre { overflow-x: auto; max-width: 100%; }
 .msg.assistant .body table { display: block; overflow-x: auto; max-width: 100%; }
+.msg.assistant .body { position: relative; }
+.read-btn { float: right; margin: 0 0 4px 8px; font-size: 12px; padding: 2px 8px; gap: 4px; }
+.read-btn svg.i { width: 13px; height: 13px; }
+.reader { position: fixed; inset: 0; z-index: 90; background: rgba(40, 30, 20, .35); display: flex; justify-content: center; padding: 32px 16px; overflow-y: auto; }
+.reader-doc { background: var(--panel); border-radius: 18px; box-shadow: var(--shadow); width: min(880px, 100%); height: max-content; min-height: 60vh; }
+.reader-bar { position: sticky; top: 0; display: flex; align-items: center; gap: 8px; padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--line); border-radius: 18px 18px 0 0; }
+.reader-body .md h1 { font-size: 26px; } .reader-body .md h2 { font-size: 20px; margin-top: 1.4em; }
+.reader-body { padding: 20px 40px 48px; font-size: 15px; line-height: 1.8; }
+.reader-body pre, .reader-body table { overflow-x: auto; max-width: 100%; display: block; }
+@media (max-width: 720px) { .reader { padding: 0; } .reader-doc { border-radius: 0; } .reader-body { padding: 16px 18px 40px; } }
 .chat.collapsed { width: 0; overflow: hidden; border: none; }
 .chat-head { display: flex; gap: 8px; align-items: center; padding: 14px 14px 12px; border-bottom: 1px solid var(--line); }
 .chat-head b { font: 700 16px var(--serif); white-space: nowrap; flex: 1; }
@@ -180,6 +190,8 @@ body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { 
 .chat-tips .chip { padding: 5px 12px; font-size: 13px; }
 .chat .composer { margin: 10px 12px 12px; padding: 10px 12px 8px; border-radius: 14px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .chat .composer .send { width: 34px; height: 34px; }
+.chat .composer textarea { max-height: 160px; min-height: 24px; height: auto; font-size: 14px; }
+.chat .composer { flex: none; }
 .dots::after { content: '…'; animation: dots 1.2s steps(4) infinite; display: inline-block; width: 1em; overflow: hidden; vertical-align: bottom; }
 @keyframes dots { 0% { width: 0; } 100% { width: 1em; } }
 
