@@ -1,0 +1,82 @@
+/* 通用样式。板块页面优先用这些类：.card .row .grid .tag .muted .primary .ghost .list .item .field .tabs */
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1d2129; --muted: #6b7280; --line: #e5e7eb;
+  --accent: #3b5bdb; --accent-soft: #e7ecff; --ok: #2f9e44; --warn: #e67700; --err: #c92a2a;
+  --focus: #fff3bf; --auto: #e6fcf5;
+  --radius: 8px; --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #15171c; --panel: #1e2128; --text: #e6e8ec; --muted: #9aa1ad; --line: #2e323b;
+    --accent: #7c95ff; --accent-soft: #263055; --focus: #3d3517; --auto: #173a30; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.6 var(--font); color: var(--text); background: var(--bg);
+  display: grid; grid-template-columns: 180px 1fr auto; height: 100vh; overflow: hidden; }
+a { color: var(--accent); text-decoration: none; }
+#nav { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 16px 10px; }
+.brand { font-weight: 700; font-size: 16px; padding: 0 8px 14px; }
+#nav-links { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+#nav a { padding: 7px 10px; border-radius: 6px; color: var(--text); }
+#nav a.active, #nav a:hover { background: var(--accent-soft); color: var(--accent); }
+.nav-foot { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+#page { overflow-y: auto; padding: 20px 28px 60px; min-width: 0; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.page-head h1 { font-size: 20px; margin: 0; flex: 1; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
+.card h3 { margin: 0 0 8px; font-size: 15px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.muted { color: var(--muted); font-size: 12px; }
+.tag { display: inline-block; padding: 0 7px; border-radius: 10px; font-size: 12px; background: var(--accent-soft); color: var(--accent); margin-right: 4px; }
+.tag.ok { background: #d3f9d8; color: var(--ok); } .tag.warn { background: #fff4e6; color: var(--warn); } .tag.err { background: #ffe3e3; color: var(--err); }
+.list { display: flex; flex-direction: column; gap: 6px; }
+.item { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.item.focus { background: var(--focus); } .item.auto { background: var(--auto); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.tabs button { border: none; background: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 12px; }
+.tabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.ghost { background: transparent; }
+button.icon { border: none; background: none; font-size: 18px; padding: 0 6px; }
+button:disabled { opacity: .5; cursor: default; }
+input, textarea, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%; }
+input[type=checkbox] { width: auto; }
+textarea.mono, pre, code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.field > span { font-size: 12px; color: var(--muted); }
+pre { white-space: pre-wrap; background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; }
+pre.error { color: var(--err); }
+.md { overflow-wrap: anywhere; } .md p { margin: .4em 0; } .md pre { margin: .4em 0; }
+.md table { border-collapse: collapse; } .md td, .md th { border: 1px solid var(--line); padding: 3px 6px; }
+
+/* 时间线 / 日程条 */
+.timeline { position: relative; border-left: 2px solid var(--line); margin-left: 8px; padding-left: 16px; }
+.timeline .tl-item { position: relative; margin-bottom: 12px; }
+.timeline .tl-item::before { content: ''; position: absolute; left: -22px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+
+/* 对话面板 */
+.chat { width: 400px; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; height: 100vh; }
+.chat.collapsed { width: 0; overflow: hidden; border: none; }
+.chat-head { display: flex; gap: 6px; align-items: center; padding: 10px; border-bottom: 1px solid var(--line); }
+.chat-head b { white-space: nowrap; } .chat-head select { width: auto; max-width: 120px; font-size: 12px; }
+.chat-log { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 7px 10px; border-radius: 8px; max-width: 100%; }
+.msg.user { background: var(--accent-soft); align-self: flex-end; white-space: pre-wrap; }
+.msg.assistant { background: var(--bg); }
+.msg.pending { color: var(--muted); }
+.msg.tool { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; padding: 0 4px; }
+.msg.error { color: var(--err); font-size: 12px; }
+.chat-input { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); align-items: flex-end; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 6px; z-index: 99; }
+.toast.err { background: var(--err); color: #fff; }
+
+@media (max-width: 900px) {
+  body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  #nav { flex-direction: row; padding: 8px; overflow-x: auto; } #nav-links { flex-direction: row; } .brand, .nav-foot { display: none; }
+  #page { padding: 16px; }
+  .chat { position: fixed; inset: 0; width: 100%; z-index: 50; } .chat.collapsed { width: 0; }
+}

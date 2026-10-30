@@ -1,0 +1,9 @@
+[project]
+name = "self-startup"
+version = "0.1.0"
+description = "轻量本地学习平台：复盘 / 规划 / 信息推荐 / 调研 / 深度学习，每个板块都有可对话的 Agent（本地 Claude Code，Codex 备选）"
+requires-python = ">=3.10"
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27", "feedparser>=6.0"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
