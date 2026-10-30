@@ -351,7 +351,7 @@ export default {
         ]));
     }
 
-    // 审批接口还没上线（平台等后台任务跑完才重启）时，从今天结束的执行结果里解析出来只读展示
+    // 审批接口还没上线（平台还没重启）时，从今天结束的执行结果里解析出来只读展示
     async function parsedNeeds(d) {
       const done = d.runs.filter((r) => r.status !== 'running');
       const out = [];

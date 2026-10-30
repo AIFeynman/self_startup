@@ -1,10 +1,18 @@
-"""后台 Agent 任务：长时间运行的调研/解析放到线程里跑，结果写 jobs 表，完成后回调板块的 on_job_done。"""
+"""后台 Agent 任务：长时间运行的调研/解析，结果写 jobs 表，完成后回调板块的 on_job_done。
+
+每个任务在自己的 runner 进程里跑（python -m app.jobrun <id>，独立会话），不在服务进程里：
+服务重启（改代码后 supervisor 自动重启）不用等任务，也不会杀掉任务。
+排队 → kick() 有空位就起 runner；runner 跑完再 kick() 一次接下一个；暂停 = 给 runner 发 SIGTERM。
+"""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+import signal
+import subprocess
+import sys
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
@@ -13,11 +21,16 @@ from pydantic import BaseModel
 from . import agent, db, kb, modules, settings
 
 log = logging.getLogger(__name__)
-# 各板块共享；比 Agent 并发度留些余量，避免长调研任务堵住短任务（拆解等）
-_pool = ThreadPoolExecutor(max_workers=max(4, 2 * int(settings.get("max_agent_concurrency", 3))))
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
-_procs: dict[int, object] = {}  # job id → 正在跑的 CLI 子进程
-_paused: set[int] = set()       # 用户要求暂停、还没收尾的 job
+_procs: dict[int, object] = {}  # job id → 正在跑的 CLI 子进程（runner 进程内）
+_paused: set[int] = set()       # 用户要求暂停、还没收尾的 job（runner 进程内）
+_children: list[subprocess.Popen] = []  # 本进程起的 runner，poll 一下回收僵尸进程
+STARTING_GRACE = 60  # 秒：刚认领、runner 还没写 pid 的任务不当成已中断
+
+
+def _cap() -> int:
+    # 各板块共享；比 Agent 并发度留些余量，避免长调研任务堵住短任务（拆解等）
+    return max(4, 2 * int(settings.get("max_agent_concurrency", 3)))
 
 
 def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system: str = "",
@@ -27,16 +40,70 @@ def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system:
     有 chat_session_id 时再把结果回帖到那个对话（对话里让 Agent 提交的任务，见 chat.link_jobs）。"""
     engine = engine or settings.get("engines.default", "claude")
     jid = db.insert("jobs", {"module": module, "ref": ref, "engine": engine, "prompt": prompt,
-                             "status": "queued", "created_at": db.now(), "chat_session_id": chat_session_id, "cwd": cwd or ""})
-    _pool.submit(_run, jid, module, prompt, engine, system, cwd, [*(add_dirs or []), str(kb.KB_DIR)], session)
+                             "status": "queued", "created_at": db.now(), "chat_session_id": chat_session_id, "cwd": cwd or "",
+                             "system": system, "add_dirs": json.dumps([*(add_dirs or []), str(kb.KB_DIR)]), "session_in": session})
+    kick()
     return jid
+
+
+def _alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def reap() -> list[int]:
+    """runner 进程已经不在、状态却还是 running 的任务（机器重启、进程被杀）记为失败。"""
+    _children[:] = [p for p in _children if p.poll() is None]
+    grace = (datetime.now() - timedelta(seconds=STARTING_GRACE)).isoformat(timespec="seconds")
+    dead = [j["id"] for j in db.rows("SELECT id,pid,started_at FROM jobs WHERE status='running'")
+            if not _alive(j["pid"]) and (j["pid"] or (j["started_at"] or "") < grace)]
+    for jid in dead:
+        db.execute("UPDATE jobs SET status='failed', log=log||?, finished_at=? WHERE id=? AND status='running'",
+                   ["\n[runner 进程已退出，任务中断]", db.now(), jid])
+    return dead
+
+
+def kick() -> list[int]:
+    """有空位就把排队的任务交给 runner 进程。返回这次启动的 job id。"""
+    reap()
+    busy = db.row("SELECT count(*) n FROM jobs WHERE status='running'")["n"]
+    started = []
+    for j in db.rows("SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT ?", [max(0, _cap() - busy)]):
+        # 先认领再起进程：服务和各个 runner 可能同时 kick
+        if db.execute("UPDATE jobs SET status='running', started_at=?, pid=NULL WHERE id=? AND status='queued'",
+                      [db.now(), j["id"]]) != 1:
+            continue
+        try:
+            _spawn(j["id"])
+            started.append(j["id"])
+        except Exception as e:  # noqa: BLE001
+            log.exception("启动 runner 失败 job %s", j["id"])
+            db.execute("UPDATE jobs SET status='failed', log=log||?, finished_at=? WHERE id=?",
+                       [f"\n[runner 启动失败] {e}", db.now(), j["id"]])
+    return started
+
+
+def _spawn(jid: int) -> None:
+    logs = db.DATA_DIR / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    with open(logs / "jobs.log", "ab") as out:
+        _children.append(subprocess.Popen([sys.executable, "-m", "app.jobrun", str(jid)], cwd=str(db.ROOT),
+                                          stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                          start_new_session=True))  # 独立会话：服务进程退出不连带它
 
 
 def _on_proc(jid: int):
     def track(proc) -> None:
         _procs[jid] = proc
         if jid in _paused:
-            proc.terminate()
+            agent.stop(proc)
     return track
 
 
@@ -311,12 +378,16 @@ def pause(jid: int) -> bool:
     j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
     if not j or j["status"] not in ("queued", "running"):
         return False
-    _paused.add(jid)
-    if proc := _procs.get(jid):
-        proc.terminate()
-    elif j["status"] == "queued":  # 还没开始：_run 起来时会直接跳过
-        db.update("jobs", jid, {"status": "paused", "log": (j["log"] or "") + "\n[paused] 排队中被暂停", "finished_at": db.now()})
+    if db.execute("UPDATE jobs SET status='paused', log=log||?, finished_at=? WHERE id=? AND status='queued'",
+                  ["\n[paused] 排队中被暂停", db.now(), jid]) == 1:  # 还没开始
         _hook(j["module"], "on_job_done", db.row("SELECT * FROM jobs WHERE id=?", [jid]))
+        return True
+    if _alive(j["pid"]) and j["pid"] != os.getpid():  # runner 收到 SIGTERM 后停掉 CLI，记为已暂停（见 jobrun）
+        os.kill(j["pid"], signal.SIGTERM)
+        return True
+    _paused.add(jid)  # 在本进程里跑的（runner 自己 / 测试）
+    if proc := _procs.get(jid):
+        agent.stop(proc)
     return True
 
 
@@ -378,8 +449,3 @@ def get_job(jid: int):
     if not j:
         raise HTTPException(404)
     return j
-
-
-def _mark_interrupted() -> None:
-    """进程重启时，把未完成的任务标记失败。"""
-    db.execute("UPDATE jobs SET status='failed', log=log||'\n[interrupted by restart]' WHERE status IN ('queued','running')")

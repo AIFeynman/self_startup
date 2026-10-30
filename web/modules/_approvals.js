@@ -15,7 +15,7 @@ export function approvals(ctx, { fallback, onChange } = {}) {
       const fb = (await fallback?.()) || [];
       box.hidden = !fb.length;
       return box.replaceChildren(h('b.ap-h', {}, `⚠ 待你审批 / 决策（${fb.length}）`),
-        h('div.ap-warn', {}, '审批按钮在平台下次自动重启后可用（正在等后台任务跑完，不会打断它们）。'),
+        h('div.ap-warn', {}, '审批按钮在平台下次自动重启后可用。'),
         h('ul.ap-ro', {}, fb.map(([t, x]) => h('li', {}, [x, h('span.ap-from', {}, '— ' + t)]))));
     }
     box.hidden = !list.length;

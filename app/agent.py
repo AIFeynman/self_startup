@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 from typing import Iterator
@@ -137,7 +138,7 @@ def _run(engine: str, cmd: list[str], cwd: str, on_proc=None) -> Iterator[dict]:
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, bufsize=1,
-                                env=_child_env())
+                                env=_child_env(), start_new_session=True)  # 自成进程组，停的时候连它起的子进程一起停
     except FileNotFoundError as e:
         yield {"type": "error", "text": f"{engine} 未安装: {e}", "fatal": True}
         return
@@ -146,8 +147,19 @@ def _run(engine: str, cmd: list[str], cwd: str, on_proc=None) -> Iterator[dict]:
     try:
         yield from _read(engine, proc, parse)
     finally:  # 调用方提前停止（如任务被暂停）时不留下子进程
-        if proc.poll() is None:
-            proc.terminate()
+        stop(proc)
+
+
+def stop(proc) -> None:
+    """停掉 CLI 和它起的子进程（工具调用里的 shell、渲染…），否则它们占着输出管道，读不到结束。"""
+    if proc.poll() is not None:
+        return
+    try:
+        if proc.pid <= 1:
+            raise ProcessLookupError
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        proc.terminate()
 
 
 def _read(engine: str, proc, parse) -> Iterator[dict]:

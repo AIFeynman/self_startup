@@ -8,7 +8,7 @@
 ./run.sh stop       # 停止后台服务
 ```
 
-改动自动生效：`web/` 改了打开的页面会自动刷新（正在输入或对话中时改为提示条）；`app/` 改了由 supervisor 等后台任务和对话都结束后自动重启，不会打断任务。
+改动自动生效：`web/` 改了打开的页面会自动刷新（正在输入或对话中时改为提示条）；`app/` 改了由 supervisor 等对话结束后自动重启；后台任务各在独立的 runner 进程里跑（`app/jobrun.py`），重启不等它们、也不会打断。
 
 依赖：`uv`、`claude`（或 `codex`）。数据全部在 `data/`（SQLite `app.db` + markdown/HTML 产物），已 gitignore。
 
@@ -58,7 +58,8 @@ app/
   main.py        入口：核心接口 + 自动挂载 app/modules/*.py
   agent.py       调用 claude / codex CLI（stream-json），统一事件流，失败自动回退
   chat.py        /api/chat/<module>：每个板块的对话 Agent（SSE，可续聊）
-  jobs.py        后台 Agent 任务（调研、解析、拆解等长任务），完成回调板块 on_job_done
+  jobs.py        后台 Agent 任务（调研、解析、拆解等长任务）：排队、暂停 / 继续、审批，完成回调板块 on_job_done
+  jobrun.py      单个任务的 runner 进程（独立会话，服务重启不影响）
   tasks.py       每日事项 CRUD（规划写、复盘读）
   db.py settings.py
   modules/       一个文件一个板块：router / SCHEMA / agent_context / agent_dirs / on_job_done
