@@ -32,8 +32,8 @@ export const api = {
 
 // h('div.card', {onclick}, [children]) —— 极简 DOM 构造
 export function h(tag, attrs = {}, children = []) {
-  const [head, ...classes] = tag.split('.');
-  const [name, id] = head.split('#');
+  const id = (tag.match(/#([\w-]+)/) || [])[1];
+  const [name, ...classes] = tag.replace(/#[\w-]+/, '').split('.');
   const el = document.createElement(name || 'div');
   if (id) el.id = id;
   if (classes.length) el.className = classes.join(' ');
