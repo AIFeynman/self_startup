@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import shutil
+import time
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .db import DATA_DIR, ROOT
 
@@ -14,6 +17,9 @@ DEFAULTS: dict = {
     # 人重度干预时间窗（专注时间）；其余时间放可自动跑 / 低干预的任务
     "focus_windows": [{"start": "10:00", "end": "11:40"}, {"start": "13:30", "end": "16:50"}],
     "day_start": "08:30",
+    # 你所在的时区（IANA 名，如 Asia/Shanghai）；留空 = 跟随系统。所有「几点 / 哪一天」都按它算：
+    # 系统时区和你实际作息不一致时（比如系统是 America/Los_Angeles），专注时间窗、工作时间、日期边界都会整体错位
+    "timezone": "",
     "day_end": "23:00",
     # 同一时刻最多并行的自动任务数（Claude Code / Codex 并发度）
     "max_agent_concurrency": 3,
@@ -81,7 +87,29 @@ def save(new: dict) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     merged = _merge(load(), new)
     SETTINGS_PATH.write_text(json.dumps(merged, ensure_ascii=False, indent=2), "utf-8")
+    apply_timezone(merged.get("timezone", ""))
     return merged
+
+
+_SYSTEM_TZ = os.environ.get("TZ")
+
+
+def apply_timezone(tz: str | None = None) -> str:
+    """把进程的本地时区设成设置里的 timezone（datetime.now()、日期边界、会话日志时间都跟着变）；留空恢复系统时区。"""
+    tz = load().get("timezone", "") if tz is None else tz
+    if tz:
+        try:
+            ZoneInfo(tz)
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = ""  # 写错了就跟随系统，不要静默变成 UTC
+    if tz:
+        os.environ["TZ"] = tz
+    elif _SYSTEM_TZ is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = _SYSTEM_TZ
+    time.tzset()
+    return time.tzname[0]
 
 
 def get(path: str, default=None):

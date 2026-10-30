@@ -7,9 +7,18 @@
     active：相邻两个 Agent 事件间隔 ≤ WORK_GAP 视为在干活；上一个事件是工具调用时放宽到 TOOL_GAP（长命令/构建）
     wait：Agent 回合结束（或最后一个 Agent 事件）到下一条人工消息之间，≤ WAIT_MAX 计为「等你」
     human：人工消息，按 classify 分类（新任务 / 纠正 / 确认 / 中断 / 回答 / 询问进度）
+
+汇总口径（用精确区间算，不用 10 分钟时间片取整；时间片只用于画图和找空档）：
+    统计时段 = 已过去的工作时间（day_start–day_end）∪ Agent 在干活 ∪ Agent 在等你 ∪ 人工交互后的一个时间片
+               ——凌晨 / 工作时间前后真实在用的时间也算进来，否则会出现「覆盖 0% 却等你 400 分钟」
+    coverage_pct       统计时段里至少有一个 Agent 在干活的比例（coverage_work_pct：只看工作时间）
+    capacity_pct       ∫min(在跑的 Agent 数, 并发上限) / (并发上限 × 统计时段)
+    wait_wall_min      至少有一个 Agent 在等你的墙钟分钟（人真正拖住 Agent 的时长）
+    wait_total_min     按会话累加的等待（Agent·分钟；多个会话同时等会叠加，可能超过墙钟时长）
 """
 from __future__ import annotations
 
+import time
 from datetime import date as Date, datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +28,7 @@ SLOT_MIN = 10
 WORK_GAP = 10 * 60
 TOOL_GAP = 45 * 60
 WAIT_MAX = 3 * 3600
+VERSION = 2               # 口径版本：改了算法就 +1，旧快照会被重算
 IDLE_MIN_GAP = 30          # 分钟：工作时间里连续这么久没有 Agent 在跑，算「空档」
 _cache: dict[str, tuple[tuple, tuple]] = {}
 
@@ -96,6 +106,36 @@ def _overlap(a0, a1, b0, b1) -> float:
     return max(0.0, (min(a1, b1) - max(a0, b0)).total_seconds())
 
 
+def _union(iv) -> list[tuple]:
+    out: list[list] = []
+    for s, e in sorted(iv):
+        if e <= s:
+            continue
+        if out and s <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return [(s, e) for s, e in out]
+
+
+def _minutes(iv, lo=None, hi=None) -> float:
+    return sum(max(0.0, ((min(b, hi) if hi else b) - (max(a, lo) if lo else a)).total_seconds()) for a, b in iv) / 60
+
+
+def _sweep(per_session: list[list[tuple]], cap: int) -> tuple[float, int]:
+    """各会话（已合并）的活跃区间 → (∫min(并发, cap) 分钟, 峰值并发)。"""
+    pts = sorted([(a, 1) for iv in per_session for a, _ in iv] + [(b, -1) for iv in per_session for _, b in iv],
+                 key=lambda x: (x[0], x[1]))
+    used, cur, peak, last = 0.0, 0, 0, None
+    for t, d in pts:
+        if last is not None and cur:
+            used += min(cur, cap) * (t - last).total_seconds() / 60
+        cur += d
+        peak = max(peak, cur)
+        last = t
+    return used, peak
+
+
 def analyze(day: Date, session_dirs: dict, focus_windows: list[dict], day_start: str = "08:30",
             day_end: str = "23:00", concurrency: int = 3, now: datetime | None = None) -> dict:
     now = now or datetime.now()
@@ -135,8 +175,6 @@ def analyze(day: Date, session_dirs: dict, focus_windows: list[dict], day_start:
 
     elapsed = [s for s in slots if not s["future"] and s["work"]]
     run = lambda s: s["interactive"] + s["automated"]  # noqa: E731
-    covered = sum(1 for s in elapsed if run(s) > 0)
-    cap_used = sum(min(run(s), concurrency) for s in elapsed)
 
     # 空档：工作时间内连续无 Agent 在跑
     gaps, cur = [], []
@@ -160,18 +198,33 @@ def analyze(day: Date, session_dirs: dict, focus_windows: list[dict], day_start:
     waits = sorted([{"project": x["project"], "title": x["title"], "start": a, "end": b, "minutes": (b - a).total_seconds() / 60,
                      "focus": in_focus(a)} for x in sessions if not x["automated"] for a, b in x["waits"]], key=lambda w: -w["minutes"])
     wait_total = sum(w["minutes"] for w in waits)
-    wait_focus = sum(w["minutes"] for w in waits if w["focus"])
 
-    active_min = sum((b - a).total_seconds() for x in sessions for a, b in x["active"]) / 60
+    # 精确区间口径（见模块说明）
+    lo, hi = base, min(base + timedelta(days=1), now)
+    clip = lambda iv: [(max(a, lo), min(b, hi)) for a, b in iv if b > lo and a < hi]  # noqa: E731
+    act_by = [clip(x["active"]) for x in sessions]
+    act_u = _union([iv for a in act_by for iv in a])
+    wait_u = _union(clip([iv for x in sessions if not x["automated"] for iv in x["waits"]]))
+    w0, w1 = base + timedelta(minutes=_hm(day_start)), min(base + timedelta(minutes=_hm(day_end)), hi)
+    work_iv = [(w0, w1)] if w1 > w0 else []
+    human_iv = clip([(h["ts"], h["ts"] + step) for h in humans])
+    span = _union(work_iv + act_u + wait_u + human_iv)
+    span_min, work_min = _minutes(span), _minutes(work_iv)
+    cap_used, peak = _sweep(act_by, concurrency)
+    focus_wait = sum(_minutes(wait_u, a, b) for a, b in focus)
+
     summary = {
-        "day": day.isoformat(), "sessions": len(sessions), "interactive": sum(not x["automated"] for x in sessions),
-        "elapsed_min": len(elapsed) * SLOT_MIN, "coverage_pct": round(100 * covered / len(elapsed)) if elapsed else 0,
-        "capacity_pct": round(100 * cap_used / (concurrency * len(elapsed))) if elapsed else 0, "concurrency": concurrency,
-        "agent_active_min": round(active_min), "idle_min": sum(g["minutes"] for g in gaps),
-        "idle_focus_min": sum(g["in_focus"] for g in gaps),
+        "v": VERSION, "day": day.isoformat(), "sessions": len(sessions), "interactive": sum(not x["automated"] for x in sessions),
+        "elapsed_min": round(span_min), "work_elapsed_min": round(work_min),
+        "coverage_pct": round(100 * _minutes(act_u) / span_min) if span_min else 0,
+        "coverage_work_pct": round(100 * sum(_minutes(act_u, a, b) for a, b in work_iv) / work_min) if work_min else 0,
+        "capacity_pct": round(100 * cap_used / (concurrency * span_min)) if span_min else 0, "concurrency": concurrency,
+        "agent_active_min": round(sum(_minutes(a) for a in act_by)), "agent_active_wall_min": round(_minutes(act_u)),
+        "idle_min": sum(g["minutes"] for g in gaps), "idle_focus_min": sum(g["in_focus"] for g in gaps),
         "human_total": len(humans), "human_out_focus": len(out_focus), "human_kinds": by_kind,
-        "wait_total_min": round(wait_total), "wait_focus_min": round(wait_focus),
-        "peak_parallel": max((run(s) for s in slots), default=0),
+        "human_in_work": sum(1 for h in humans if _hm(day_start) <= h["ts"].hour * 60 + h["ts"].minute < _hm(day_end)),
+        "tz": time.tzname[0], "wait_total_min": round(wait_total), "wait_wall_min": round(_minutes(wait_u)), "wait_focus_min": round(focus_wait),
+        "peak_parallel": peak,
     }
     return {"summary": summary, "slots": slots, "gaps": gaps, "focus": focus_windows,
             "humans": [{"t": h["ts"].strftime("%H:%M"), "kind": h["kind"], "label": rs.KIND_LABELS.get(h["kind"], h["kind"]),
@@ -192,6 +245,9 @@ def _hours(hs: list[dict]) -> str:
 def advice(s: dict, gaps: list[dict], humans: list[dict], waits: list[dict], slots: list[dict]) -> list[str]:
     """确定性的改进建议（可直接喂给规划）。"""
     out = []
+    if s["human_total"] >= 20 and s.get("human_in_work", s["human_total"]) / s["human_total"] < 0.5:
+        out.append(f"只有 {round(100 * s['human_in_work'] / s['human_total'])}% 的人工交互落在工作时间内（按 {s.get('tz', '系统')} 时区算）。"
+                   "如果你不在这个时区，专注时间、空档和日期边界都会整体错位：在「设置」里把时区改成你所在的时区（如 Asia/Shanghai）。")
     if gaps:
         big = sorted(gaps, key=lambda g: -g["minutes"])[:3]
         out.append("Agent 空档：" + "、".join(f"{g['start']}–{g['end']}（{g['minutes']} 分钟）" for g in big)
@@ -212,7 +268,7 @@ def advice(s: dict, gaps: list[dict], humans: list[dict], waits: list[dict], slo
     long_waits = [w for w in waits if w["minutes"] >= 30]
     if long_waits:
         w = long_waits[0]
-        out.append(f"Agent 等你的时间累计 {s['wait_total_min']} 分钟，其中 {len(long_waits)} 次超过 30 分钟（最长：{w['project']} 在 "
+        out.append(f"Agent 等你 {s.get('wait_wall_min', s['wait_total_min'])} 分钟（墙钟；各会话累加 {s['wait_total_min']} Agent·分钟），其中 {len(long_waits)} 次超过 30 分钟（最长：{w['project']} 在 "
                    f"{w['start']:%H:%M} 等了 {round(w['minutes'])} 分钟）。离开前给长任务留足指令，或改成在专注时间集中回复。")
     if s["idle_focus_min"] >= 30:
         out.append(f"专注时间里有 {s['idle_focus_min']} 分钟没有 Agent 在跑。人专注时，可以在后台并行跑一个自动任务。")

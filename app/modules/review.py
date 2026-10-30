@@ -582,6 +582,13 @@ def platform_runs(date: str) -> dict:
     return out
 
 
+def _stale(date: str, scanned_at: str, minutes: int = 10) -> bool:
+    """当天扫描的快照只有半天数据：那天还没结束时超过 10 分钟就重扫，那天结束后重扫一次定稿。"""
+    if scanned_at >= (Date.fromisoformat(date) + timedelta(days=1)).isoformat():
+        return False
+    return date != db.today() or scanned_at < (datetime.now() - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+
+
 def scan_efficiency(date: str) -> dict:
     sessions = rs.scan(Date.fromisoformat(date), settings.get("session_dirs", {}) or {})
     summary = rs.aggregate(sessions)
@@ -594,8 +601,10 @@ def scan_efficiency(date: str) -> dict:
 
 def get_efficiency(date: str, scan_if_missing: bool = True) -> dict | None:
     r = db.row("SELECT * FROM review_agent_stats WHERE date=?", [date])
+    if scan_if_missing and (not r or not r.get("scanned_at") or _stale(date, r["scanned_at"])):
+        return scan_efficiency(date)
     if not r or not r.get("scanned_at"):
-        return scan_efficiency(date) if scan_if_missing else None
+        return None
     r["summary"] = _loads(r["summary"], {})
     r["sessions"] = _loads(r["sessions"], [])
     r["kind_labels"] = rs.KIND_LABELS

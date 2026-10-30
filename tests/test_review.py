@@ -100,6 +100,21 @@ def test_codex_session_parse(tmp_path):
     assert s["tool_calls"] == 1 and s["tool_errors"] == 2
 
 
+def test_codex_injected_developer_message_does_not_hide_wait(tmp_path):
+    """Codex Desktop 每轮开头注入 developer 上下文消息，和人的消息同一时刻；不能当成 Agent 活动把等待清零。"""
+    f = _write(tmp_path / "rollout-d.jsonl", [
+        _cx("09:00:00", "session_meta", {"id": "d1", "cwd": "/w/p", "originator": "Codex Desktop", "source": "vscode"}),
+        _cx("09:00:00", "event_msg", {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "做 A"}]}}),
+        _cx("09:00:05", "response_item", {"type": "message", "role": "assistant", "content": []}),
+        _cx("09:01:00", "event_msg", {"type": "task_complete", "last_agent_message": "做好了"}),
+        _cx("09:41:00", "response_item", {"type": "message", "role": "developer", "content": []}),
+        _cx("09:41:00", "response_item", {"type": "message", "role": "user", "content": []}),
+        _cx("09:41:00", "event_msg", {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "再做 B"}]}}),
+    ])
+    s = rs.summarize(*rs.read_codex(f), DAY)
+    assert s["messages"][1]["wait_min"] == 40.0
+
+
 def test_codex_exec_automated_and_scan(tmp_path):
     d = tmp_path / "codex" / "2026" / "10" / "29"
     d.mkdir(parents=True)
@@ -193,3 +208,21 @@ def test_quick_capture_api(client):
     r = client.post(f"/api/review/day/{d}/append", json={"text": "又一条", "field": "problems"}).json()
     assert r["record"]["problems"] == "等太久\n又一条"
     assert client.post(f"/api/review/suggestions/{d}/0/dismiss").status_code == 404
+
+
+def test_efficiency_snapshot_taken_during_the_day_is_rescanned(monkeypatch):
+    from datetime import datetime, timedelta
+    from app import db
+    from app.modules import review
+    db.init([review.SCHEMA])
+    assert review._stale("2020-01-01", "2020-01-01T19:41:00")            # 当天扫的：过了那天要重扫
+    assert not review._stale("2020-01-01", "2020-01-02T00:05:00")        # 那天结束后扫的：定稿
+    today = db.today()
+    assert not review._stale(today, datetime.now().isoformat(timespec="seconds"))
+    assert review._stale(today, (datetime.now() - timedelta(minutes=30)).isoformat(timespec="seconds"))
+    calls = []
+    monkeypatch.setattr(review.rs, "scan", lambda d, dirs: calls.append(d) or [])
+    review._upsert_stats("2020-01-05", {"summary": "{}", "sessions": "[]", "scanned_at": "2020-01-05T19:00:00"})
+    review.get_efficiency("2020-01-05")
+    review.get_efficiency("2020-01-05")                                   # 第二次已定稿，不再扫
+    assert len(calls) == 1

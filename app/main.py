@@ -14,6 +14,7 @@ from . import agent, chat, db, jobs, kb, modules, settings, tasks
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 app = FastAPI(title="本地学习平台", version="0.1.0")
+settings.apply_timezone()
 
 mods = modules.discover()
 db.init(getattr(m, "SCHEMA", "") for m in mods.values())

@@ -279,9 +279,9 @@ def _daily(docs: list[dict]) -> list[dict]:
         ut = db.row("SELECT * FROM agent_util WHERE date=?", [date]) if _has("agent_util") else None
         if ut:
             u, ud = json.loads(ut["summary"] or "{}"), json.loads(ut["data"] or "{}")
-            body.append(f"\n## 时间利用\n- Agent 覆盖 {u.get('coverage_pct')}%，并发容量 {u.get('capacity_pct')}%，空档 {u.get('idle_min')} 分钟"
+            body.append(f"\n## 时间利用\n- Agent 覆盖 {u.get('coverage_pct')}%（工作时间内 {u.get('coverage_work_pct', '-')}%），并发容量 {u.get('capacity_pct')}%，空档 {u.get('idle_min')} 分钟"
                         f"（专注时间内 {u.get('idle_focus_min')}）\n- 人工交互 {u.get('human_total')} 次，专注时间外 {u.get('human_out_focus')} 次；"
-                        f"Agent 等你累计 {u.get('wait_total_min')} 分钟")
+                        f"Agent 等你 {u.get('wait_wall_min', u.get('wait_total_min'))} 分钟（各会话累加 {u.get('wait_total_min')} Agent·分钟）")
             body += [f"- 建议：{a}" for a in ud.get("advice", [])[:5]]
         dl = db.row("SELECT data FROM agent_delivery WHERE date=?", [date]) if _has("agent_delivery") else None
         if dl:

@@ -17,11 +17,11 @@ export async function utilization(ctx, { date = '', compact = false } = {}) {
   function view(d) {
     const s = d.summary;
     const tiles = ui.stats([
-      { k: 'Agent 覆盖（工作时间有 Agent 在跑）', v: s.coverage_pct + '%' },
+      { k: `Agent 覆盖（统计 ${fmtMin(s.elapsed_min)} 里有 Agent 在跑 · 工作时间内 ${s.coverage_work_pct ?? '-'}%）`, v: s.coverage_pct + '%' },
       { k: `并发容量使用（上限 ${s.concurrency}）`, v: s.capacity_pct + '%' },
       { k: '空档（无 Agent 在跑）', v: fmtMin(s.idle_min) },
       { k: '人工交互 · 专注时间外', v: `${s.human_total} · ${s.human_out_focus}` },
-      { k: 'Agent 等你（累计）', v: fmtMin(s.wait_total_min) },
+      { k: `Agent 等你（墙钟 · 各会话累加 ${fmtMin(s.wait_total_min)}）`, v: fmtMin(s.wait_wall_min ?? s.wait_total_min) },
     ]);
     const parts = [tiles, chart(d)];
     if (!compact) {

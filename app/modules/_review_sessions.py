@@ -207,7 +207,8 @@ def read_codex(path: Path) -> tuple[dict, list[dict]]:
             if typ == "response_item":
                 if pt in ("function_call", "custom_tool_call", "local_shell_call", "web_search_call"):
                     events.append(_ev("agent", ts, tool=p.get("name") or pt))
-                elif pt in ("function_call_output", "custom_tool_call_output", "message") and p.get("role") != "user":
+                elif pt in ("function_call_output", "custom_tool_call_output") or (pt == "message" and p.get("role") == "assistant"):
+                    # developer / system 消息是每轮开头注入的上下文（和人的消息同一时刻），不是 Agent 在干活
                     events.append(_ev("agent", ts))
                 continue
             if typ != "event_msg":

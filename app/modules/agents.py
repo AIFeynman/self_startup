@@ -257,11 +257,17 @@ def get_deliveries(date: str = "", automated: bool = False):
 
 # ---------- 时间利用 ----------
 
+def _final(row: dict | None) -> bool:
+    """快照是在那天结束之后、用当前口径算的（当天算的快照只是半天的数据；旧口径的快照也要重算）。"""
+    return (bool(row) and (row["updated_at"] or "") >= (Date.fromisoformat(row["date"]) + timedelta(days=1)).isoformat()
+            and json.loads(row["summary"] or "{}").get("v") == util.VERSION)
+
+
 def utilization(day: str = "", refresh: bool = False) -> dict:
-    """某天的时间利用分析。今天每次重算（有缓存，很快）；过去的日子算一次存下来。"""
+    """某天的时间利用分析。今天每次重算（有缓存，很快）；过去的日子在当天结束后算一次存下来。"""
     day = day or db.today()
     row = db.row("SELECT * FROM agent_util WHERE date=?", [day])
-    if row and not refresh and day != db.today():
+    if not refresh and day != db.today() and _final(row):
         return {**json.loads(row["data"]), "summary": json.loads(row["summary"]), "cached": True}
     cfg = settings.load()
     r = util.analyze(Date.fromisoformat(day), cfg.get("session_dirs", {}), cfg["focus_windows"], cfg["day_start"],
@@ -294,7 +300,7 @@ def patterns(days: int = 7) -> dict:
     today = datetime.now().date()
     want = [(today - timedelta(days=i)).isoformat() for i in range(1, days + 1)]
     have = {r["date"]: r for r in db.rows(f"SELECT * FROM agent_util WHERE date IN ({','.join('?' * len(want))})", want)}
-    missing = [d for d in want if d not in have]
+    missing = [d for d in want if not _final(have.get(d))]
     if missing:  # 过去的日子在后台补算，不阻塞页面
         threading.Thread(target=_fill, args=(missing,), daemon=True).start()
     hours = {h: {"agents": 0.0, "humans": 0, "waiting": 0.0, "days": 0} for h in range(24)}
@@ -323,7 +329,8 @@ def patterns(days: int = 7) -> dict:
     avg = lambda k: round(sum(s.get(k, 0) for s in sums) / n, 1) if sums else 0  # noqa: E731
     return {"days": len(sums), "filling": bool(missing), "hourly": hourly,
             "recurring_idle_hours": sorted(h for h, c in idle_hours.items() if c >= max(2, len(sums) // 2)),
-            "avg": {k: avg(k) for k in ("coverage_pct", "capacity_pct", "idle_min", "human_total", "human_out_focus", "wait_total_min")}}
+            "avg": {k: avg(k) for k in ("coverage_pct", "coverage_work_pct", "capacity_pct", "idle_min", "human_total",
+                                        "human_out_focus", "wait_total_min", "wait_wall_min")}}
 
 
 def planning_insights() -> str:
@@ -332,8 +339,10 @@ def planning_insights() -> str:
     try:
         t = utilization()
         s = t["summary"]
-        lines.append(f"今天到目前：Agent 覆盖 {s['coverage_pct']}%、并发容量使用 {s['capacity_pct']}%、空档 {s['idle_min']} 分钟；"
-                     f"人工交互 {s['human_total']} 次（专注外 {s['human_out_focus']}）；Agent 等你累计 {s['wait_total_min']} 分钟。")
+        lines.append(f"今天到目前（统计 {s['elapsed_min']} 分钟，其中工作时间 {s.get('work_elapsed_min', 0)} 分钟）："
+                     f"Agent 覆盖 {s['coverage_pct']}%（工作时间内 {s.get('coverage_work_pct', 0)}%）、并发容量使用 {s['capacity_pct']}%、"
+                     f"空档 {s['idle_min']} 分钟；人工交互 {s['human_total']} 次（专注外 {s['human_out_focus']}）；"
+                     f"Agent 等你 {s.get('wait_wall_min', s['wait_total_min'])} 分钟（各会话累加 {s['wait_total_min']} Agent·分钟）。")
         lines += [f"- {a}" for a in t["advice"][:4]]
     except Exception:  # noqa: BLE001
         pass
@@ -341,7 +350,8 @@ def planning_insights() -> str:
     if p["days"]:
         a = p["avg"]
         busy_h = sorted(p["hourly"], key=lambda x: -x["humans"])[:3]
-        lines.append(f"近 {p['days']} 天平均：覆盖 {a['coverage_pct']}%、容量 {a['capacity_pct']}%、空档 {a['idle_min']} 分钟/天、"
+        lines.append(f"近 {p['days']} 天平均：覆盖 {a['coverage_pct']}%（工作时间内 {a['coverage_work_pct']}%）、容量 {a['capacity_pct']}%、"
+                     f"空档 {a['idle_min']} 分钟/天、Agent 等你 {a['wait_wall_min']} 分钟/天、"
                      f"人工交互 {a['human_total']} 次/天（专注外 {a['human_out_focus']}）。人工交互最多的时段："
                      + "、".join(f"{x['hour']}点" for x in busy_h if x["humans"])
                      + ("；经常空着的时段：" + "、".join(f"{h}点" for h in p["recurring_idle_hours"]) if p["recurring_idle_hours"] else ""))
