@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {"name": "platform", "runtimeExecutable": "./run.sh", "runtimeArgs": [], "port": 8780}
+  ]
+}

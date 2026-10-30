@@ -15,7 +15,6 @@ app = FastAPI(title="本地学习平台", version="0.1.0")
 
 mods = modules.discover()
 db.init(getattr(m, "SCHEMA", "") for m in mods.values())
-jobs._mark_interrupted()
 
 app.include_router(chat.router)
 app.include_router(jobs.router)
@@ -23,6 +22,11 @@ app.include_router(tasks.router)
 for name, m in mods.items():
     if hasattr(m, "router"):
         app.include_router(m.router, prefix=f"/api/{name}", tags=[name])
+
+
+@app.on_event("startup")
+def _startup():
+    jobs._mark_interrupted()  # 只在真正启动服务时清理上次中断的任务
 
 
 @app.get("/api/meta")

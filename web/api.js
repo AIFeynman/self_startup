@@ -40,6 +40,7 @@ export function h(tag, attrs = {}, children = []) {
     if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
     else if (k === 'html') el.innerHTML = v;
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'value') el.value = v;
     else if (k in el && typeof v !== 'string') el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
   }

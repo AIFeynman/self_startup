@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException
 from . import agent, db, modules, settings
 
 log = logging.getLogger(__name__)
-_pool = ThreadPoolExecutor(max_workers=max(1, int(settings.get("max_agent_concurrency", 3))))
+# 各板块共享；比 Agent 并发度留些余量，避免长调研任务堵住短任务（拆解等）
+_pool = ThreadPoolExecutor(max_workers=max(4, 2 * int(settings.get("max_agent_concurrency", 3))))
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 

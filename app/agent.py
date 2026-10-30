@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Iterator
 
 from . import settings
-from .db import ROOT
+from .db import DATA_DIR, ROOT
 
-API_BASE = os.environ.get("SELF_STARTUP_API") or f"http://127.0.0.1:{os.environ.get('PORT', '8765')}"
+API_BASE = os.environ.get("SELF_STARTUP_API") or f"http://127.0.0.1:{os.environ.get('PORT', '8780')}"
 
 PLATFORM_GUIDE = f"""
 你运行在「本地学习平台」中，作为某个板块的对话 Agent。平台 HTTP API：{API_BASE}
@@ -120,12 +120,19 @@ def _parse_codex(obj: dict) -> list[dict]:
     return []
 
 
+def _child_env() -> dict:
+    # 子进程不继承数据目录，避免 Agent 在项目里跑测试/服务时写进真实数据库
+    env = {k: v for k, v in os.environ.items() if k != "SELF_STARTUP_DATA"}
+    env["SELF_STARTUP_API"] = API_BASE
+    return env
+
+
 def _run(engine: str, cmd: list[str], cwd: str) -> Iterator[dict]:
     parse = _parse_claude if engine == "claude" else _parse_codex
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, bufsize=1,
-                                env={**os.environ, "SELF_STARTUP_API": API_BASE})
+                                env=_child_env())
     except FileNotFoundError as e:
         yield {"type": "error", "text": f"{engine} 未安装: {e}", "fatal": True}
         return
@@ -160,7 +167,11 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
                cwd: str | None = None, add_dirs: list[str] | None = None,
                fallback: bool = True) -> Iterator[dict]:
     engine = engine or settings.get("engines.default", "claude")
-    cwd = cwd or str(ROOT)
+    # 默认不在项目目录里跑（acceptEdits 下可写文件），放到 data/workspace
+    if not cwd:
+        ws = DATA_DIR / "workspace"
+        ws.mkdir(parents=True, exist_ok=True)
+        cwd = str(ws)
     add_dirs = [d for d in (add_dirs or []) if d and Path(d).expanduser().exists()]
     order = [engine]
     if fallback and not session:

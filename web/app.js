@@ -25,14 +25,16 @@ async function route() {
   if (id === 'settings') return renderSettings();
   const m = meta.modules.find((x) => x.id === id);
   if (!m) { page.append(h('p', {}, '未知页面')); return; }
-  const refresh = () => route();
+  const body = h('div.page-body');
+  // 只重绘页面主体，不重置右侧（可能绑定了某个对象的）对话
+  const refresh = async () => { body.innerHTML = ''; await mod.default.render(body, ctx); };
   const ctx = { api, h, md, toast, openChat, refresh, field, module: id, sub: location.hash.slice(1).split('/').slice(1) };
+  let mod;
   try {
-    const mod = await import(`./modules/${id}.js?v=${Date.now()}`);
+    mod = await import(`./modules/${id}.js?v=${Date.now()}`);
     openChat({ module: id, title: m.title, expand: false });
     page.append(h('div.page-head', {}, [h('h1', {}, m.title),
       h('button.ghost', { onclick: () => openChat({ module: id, title: m.title }) }, '💬 和 Agent 对话')]));
-    const body = h('div.page-body');
     page.append(body);
     await mod.default.render(body, ctx);
   } catch (e) {

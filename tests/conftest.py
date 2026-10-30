@@ -2,7 +2,8 @@
 import os
 import tempfile
 
-os.environ.setdefault("SELF_STARTUP_DATA", tempfile.mkdtemp(prefix="ss-test-"))
+# 总是用新的临时目录：即便从平台的 Agent 子进程里跑测试，也不会写到真实数据
+os.environ["SELF_STARTUP_DATA"] = tempfile.mkdtemp(prefix="ss-test-")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
