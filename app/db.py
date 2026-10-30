@@ -75,9 +75,24 @@ CREATE TABLE IF NOT EXISTS jobs (
     log           TEXT DEFAULT '',
     engine_session TEXT DEFAULT '',
     chat_session_id INTEGER,                 -- 由哪个对话发起；完成后把结果回帖到这个对话
+    cwd           TEXT DEFAULT '',           -- 运行目录（审批后续接同一会话要在同一目录）
     created_at    TEXT,
     started_at    TEXT,
     finished_at   TEXT
+);
+
+-- 待人审批 / 决策：从 Agent 执行结果里提取（NEEDS_YOU: 行或「需要你做」小节）。
+-- 一个任务的事项都决定完后，平台续接那个 Agent 会话把决定发过去（followup_job_id）。
+CREATE TABLE IF NOT EXISTS approvals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id        INTEGER NOT NULL,
+    item          TEXT NOT NULL,
+    status        TEXT DEFAULT 'pending',    -- pending / approved / rejected / replied / dismissed
+    note          TEXT DEFAULT '',
+    followup_job_id INTEGER,
+    created_at    TEXT,
+    decided_at    TEXT,
+    UNIQUE(job_id, item)
 );
 """
 
@@ -118,8 +133,11 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
         for s in extra_schemas:
             if s:
                 c.executescript(s)
-        if "chat_session_id" not in {r[1] for r in c.execute("PRAGMA table_info(jobs)")}:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(jobs)")}
+        if "chat_session_id" not in cols:
             c.execute("ALTER TABLE jobs ADD COLUMN chat_session_id INTEGER")
+        if "cwd" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN cwd TEXT DEFAULT ''")
         c.commit()
 
 

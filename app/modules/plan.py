@@ -639,7 +639,8 @@ RUN_PROMPT = """你是被「规划」板块派发的自动执行 Agent，请独�
 任务：{title}
 完成标准：{goal}
 {parent}{repo}
-完成后在回复最后单独一行输出 `STATUS: done` 或 `STATUS: partial`（未完全达成），再用 3-5 行中文总结做了什么、产出在哪、还需要人做什么。"""
+完成后在回复最后单独一行输出 `STATUS: done` 或 `STATUS: partial`（未完全达成），再用 3-5 行中文总结做了什么、产出在哪、还需要人做什么。
+需要人审批或决策的事项（合并 main、发布、改用户数据、产品取舍…）每条单独一行，以 `NEEDS_YOU:` 开头，写清要决定什么、你的建议和在哪看材料。"""
 
 
 class LaunchIn(BaseModel):

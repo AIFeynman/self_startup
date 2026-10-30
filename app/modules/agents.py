@@ -52,15 +52,24 @@ router = APIRouter()
 def _job_cards(hours: float) -> list[dict]:
     since = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
     out = []
-    for j in db.rows("SELECT id,module,ref,engine,status,prompt,output,created_at,started_at,finished_at FROM jobs "
+    for j in db.rows("SELECT id,module,ref,engine,status,prompt,output,log,created_at,started_at,finished_at FROM jobs "
                      "WHERE created_at>=? ORDER BY id DESC LIMIT 100", [since]):
         last = j["finished_at"] or j["started_at"] or j["created_at"]
         state, reason = {"queued": ("running", "排队中"), "running": ("running", "执行中"),
                          "done": ("review", "已完成"), "failed": ("attention", "失败")}.get(j["status"], ("review", j["status"]))
-        first = next((ln.strip() for ln in (j["prompt"] or "").splitlines() if ln.strip()), "")
+        title, link, kind = jobs.describe(j)
+        # 跑的过程中 output 还是空的：拿日志最后几步当进展
+        steps = [ln.strip() for ln in (j["log"] or "").splitlines() if ln.strip().startswith("[tool]")]
+        doing = scanner._clip(steps[-1].removeprefix("[tool]").strip(), 120) if steps else ""
+        if j["status"] in ("queued", "running"):
+            reason += f" · 已执行 {len(steps)} 步" if steps else ""
+        need = jobs.needs_you(j["output"]) if j["status"] == "done" else []
+        if need:
+            state, reason = "attention", f"待你审批 {len(need)} 项：{need[0][:60]}"
         out.append({"key": f"job:{j['id']}", "engine": "platform", "session_id": str(j["id"]), "project": j["module"],
-                    "cwd": "", "branch": "", "title": scanner._clip(f"{j['ref'] or j['module']} · {first}", 80),
-                    "last_human": "", "last_agent": scanner._clip(j["output"] or ""), "plan": [], "plan_done": 0, "plan_current": "",
+                    "cwd": "", "branch": "", "title": scanner._clip(f"{kind} · {title}", 80), "link": link,
+                    "last_human": "", "last_agent": scanner._clip(j["output"] or "") or (f"正在：{doing}" if doing else ""),
+                    "plan": [], "plan_done": 0, "plan_current": doing if j["status"] in ("queued", "running") else "", "needs": need,
                     "humans": 0, "tools": 0, "automated": False, "start": j["created_at"], "last": last,
                     "idle_min": round((datetime.now() - datetime.fromisoformat(last)).total_seconds() / 60, 1),
                     "state": state, "reason": reason, "error": "", "file": ""})

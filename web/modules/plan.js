@@ -1,6 +1,7 @@
 // 规划：每日事项录入 → AI 拆解 → 排程（专注窗 / 人车道 / Agent 车道）→ 可选让 Agent 自动执行
 // 输入：一个大 composer，每行一个顶层事项，支持轻量行内语法（见 parseLine）。
 import { today } from '../api.js';
+import { approvals } from './_approvals.js';
 
 const CSS = `
 .pl-head { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
@@ -89,6 +90,23 @@ input.pl-pill { width: 64px; cursor: text; text-align: center; }
 .pl-draft-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
 .pl-draft-acts .muted { font-size: 12px; }
 
+.pl-live { padding: 14px 18px; margin-bottom: 14px; }
+.pl-live-h { display: flex; align-items: baseline; gap: 10px; }
+.pl-live-h b { font: 700 16px var(--serif); }
+.pl-live-h .muted { font-size: 12px; }
+.pl-live-row { border-top: 1px dashed var(--line); padding: 8px 0; }
+.pl-live-row:first-of-type { border-top: 0; }
+.pl-live-row > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.pl-live-row > summary::-webkit-details-marker { display: none; }
+.pl-live-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pl-pulse 1.4s infinite; }
+.pl-live-row.done .dot { animation: none; } .pl-live-row.failed .dot { background: var(--warn); animation: none; }
+@keyframes pl-pulse { 50% { opacity: .3; } }
+.pl-live-row .t { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-live-row .now { grid-column: 2 / 4; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-live-row .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pl-live-log { margin: 6px 0 0 20px; font: 11px/1.6 var(--mono); color: var(--muted); max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  background: var(--bg-2); border-radius: 8px; padding: 6px 10px; }
+
 .pl-tl-card { padding: 16px 16px 18px; }
 .pl-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
 .pl-legend i { display: inline-block; width: 14px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
@@ -124,6 +142,30 @@ const AT_ALIAS = { auto: ['human_level', 'auto'], 自动: ['human_level', 'auto'
   中: ['human_level', 'medium'], medium: ['human_level', 'medium'], 轻: ['human_level', 'light'], light: ['human_level', 'light'],
   claude: ['executor', 'claude'], codex: ['executor', 'codex'], 人: ['executor', 'human'], human: ['executor', 'human'], mixed: ['executor', 'mixed'] };
 
+// 与 app/jobs.py needs_you 同口径：`NEEDS_YOU:` 行、「需要你做」小节下的条目、「- 需要你做：…」
+const NEED_HEAD = /需要你|待你|要你(?:决定|确认|拍板)|人工(?:确认|决策|审批)|NEEDS_YOU/;
+export function needsYou(text) {
+  const tagged = [...(text || '').matchAll(/NEEDS_YOU[:：]\s*(.+)/g)].map((m) => m[1].trim());
+  if (tagged.length) return [...new Set(tagged)].slice(0, 8);
+  const out = []; let inSec = false;
+  for (const raw of (text || '').split('\n')) {
+    const ln = raw.trim();
+    if (!ln) continue;
+    const b = ln.match(/^(?:[-*•]|\d+[.、)])\s+/);
+    const body = (b ? ln.slice(b[0].length) : ln).replaceAll('**', '').replace(/^#+\s*/, '').trim();
+    let m;
+    if ((m = body.match(/^NEEDS_YOU[:：]\s*(.+)/))) out.push(m[1].trim());
+    else if (!b && NEED_HEAD.test(body)) {
+      const rest = body.split(/[:：]/).slice(1).join('：').trim();
+      if (rest) out.push(rest);
+      inSec = true; continue;
+    } else if (b && inSec) { out.push(body); continue; }
+    else if (b && /^(?:需要你|待你)[^:：]{0,8}[:：]/.test(body)) out.push(body.split(/[:：]/).slice(1).join('：').trim());
+    inSec = false;
+  }
+  return [...new Set(out.filter(Boolean))].slice(0, 8);
+}
+
 const mins = (s) => { const [a, b] = (s || '0:0').split(':').map(Number); return a * 60 + b; };
 const pad2 = (n) => String(n).padStart(2, '0');
 
@@ -152,6 +194,7 @@ export function parseLine(line) {
 }
 
 let onAgentDone;
+let liveTimer; // 「正在执行」面板的轮询
 const collapsed = new Set(); // 折叠的父事项 id（跨重绘保留）
 const watching = new Set(); // 已在轮询的 job id
 
@@ -267,7 +310,8 @@ export default {
       const d = await api.get(`/api/plan/day?date=${state.date}`);
       state.runs = d.runs; state.data = d;
       head.replaceChildren(pageHead(d));
-      body.replaceChildren(...(d.draft ? [draftCard(d.draft)] : []), ...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
+      body.replaceChildren(...(d.draft ? [draftCard(d.draft)] : []), approvals(ctx, { fallback: () => parsedNeeds(d), onChange: load }),
+        ...liveCard(d), ...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
         items(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
         timeline(d));
       for (const j of d.jobs) watch(j.id, 'AI 拆解');
@@ -293,6 +337,64 @@ export default {
             h('button.ghost', { onclick: () => shift(1), title: '后一天' }, '›'),
             isToday ? null : h('button.outline', { onclick: () => setDate(today()) }, '回到今天')]),
         ]));
+    }
+
+    // 审批接口还没上线（平台等后台任务跑完才重启）时，从今天结束的执行结果里解析出来只读展示
+    async function parsedNeeds(d) {
+      const done = d.runs.filter((r) => r.status !== 'running');
+      const out = [];
+      for (const r of done) {
+        const j = await api.get(`/api/jobs/${r.job_id}`).catch(() => null);
+        needsYou(j?.output).forEach((x) => out.push([r.title, x]));
+      }
+      return out;
+    }
+
+    // ---------- 正在执行：派给 Agent 的子任务，每 10 秒读一次 job 日志看到哪一步 ----------
+    function liveCard(d) {
+      clearInterval(liveTimer);
+      const today0 = state.date === today();
+      // 每个任务只看最近一次执行；今天的显示进行中 + 今天结束的
+      const seen = new Set();
+      const list = d.runs.filter((r) => !seen.has(r.task_id) && seen.add(r.task_id))
+        .filter((r) => r.status === 'running' || (today0 && (r.finished_at || '').startsWith(state.date)));
+      if (!list.length) return [];
+      const rows = list.map((r) => {
+        const now = h('div.now', {}, '读取中…');
+        const meta = h('span.meta');
+        const log = h('div.pl-live-log');
+        const row = h(`details.pl-live-row.${r.status}`, {}, [
+          h('summary', {}, [h('span.dot'), h('span.t', { title: r.title }, r.title), meta, now]), log]);
+        return { r, row, now, meta, log };
+      });
+      const elapsed = (a, b) => { const m = Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`; };
+      const tick = async () => {
+        if (!box.isConnected) return clearInterval(liveTimer);
+        let finished = false;
+        await Promise.all(rows.map(async (x) => {
+          try {
+            const j = await api.get(`/api/jobs/${x.r.job_id}`);
+            const steps = (j.log || '').split('\n').filter((l) => l.startsWith('[tool]'));
+            const last = (steps.at(-1) || '').replace('[tool] ', '');
+            const status = { queued: '排队中', running: '执行中', done: '完成', failed: '失败' }[j.status] || j.status;
+            x.meta.textContent = `${status} · ${elapsed(j.started_at || j.created_at, j.finished_at)} · ${steps.length} 步`;
+            x.now.textContent = j.status === 'running' || j.status === 'queued' ? (last ? '正在：' + last : '启动中…')
+              : (j.output || '').trim().split('\n').filter(Boolean).slice(-1)[0] || status;
+            x.log.textContent = j.status === 'done' ? j.output : (j.log || '').split('\n').slice(-40).join('\n');
+            const n = j.status === 'done' ? needsYou(j.output) : [];
+            x.meta.replaceChildren(x.meta.textContent, n.length ? h('span.tag.warn', { style: 'margin-left:6px' }, `待审批 ${n.length}`) : '');
+            if (x.r.status === 'running' && j.status !== 'running' && j.status !== 'queued') finished = true;
+          } catch (e) { x.now.textContent = '读取失败：' + e.message; }
+        }));
+        if (finished) load();
+      };
+      const running = list.filter((r) => r.status === 'running').length;
+      const box = h('div.card.pl-live', {}, [
+        h('div.pl-live-h', {}, [h('b', {}, '正在执行'), h('span.muted', {}, `${running} 个 Agent 在跑${list.length > running ? ` · 今天已结束 ${list.length - running} 个` : ''} · 每 10 秒刷新 · 点开看日志 · 结束后结果也会回帖到发起的对话`)]),
+        ...rows.map((x) => x.row)]);
+      tick();
+      if (running) liveTimer = setInterval(tick, 10000);
+      return [box];
     }
 
     // ---------- 拆解草稿：先讨论，确认后才写成子任务 ----------

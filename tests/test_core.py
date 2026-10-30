@@ -30,3 +30,37 @@ def test_chat_jobs_post_back(client):
     assert "失败" in last and "boom" in last
     fin = client.get("/api/jobs/finished", params={"since": "2000-01-01T00:00:00"}).json()
     assert {j["id"] for j in fin} >= {done, run} and all(j["link"] for j in fin)
+
+
+def test_needs_you_parses_approvals():
+    from app.jobs import needs_you
+    out = ("做完了。\n\n**需要你做的**\n- **决策 D1**：要不要换 RSS 列表\n- 确认是否合并 main\n\n产出：\n- 文档 a.md\n"
+           "NEEDS_YOU: 发布 dev？建议先合并\n- 需要你做：看一眼报告")
+    assert needs_you(out) == ["发布 dev？建议先合并"]  # 写了 NEEDS_YOU 就只认它
+    assert needs_you(out.replace("NEEDS_YOU: 发布 dev？建议先合并\n", "")) == ["决策 D1：要不要换 RSS 列表", "确认是否合并 main", "看一眼报告"]
+    assert needs_you("## 总结\n- 改了 A\n- 测试通过") == []
+
+
+def test_approvals_decide_and_followup(client, monkeypatch):
+    from app import db, jobs
+    sent = []
+    monkeypatch.setattr(jobs, "submit", lambda *a, **kw: sent.append((a, kw)) or 999)
+    jid = db.insert("jobs", {"module": "plan", "ref": "plan:run:1", "engine": "claude", "prompt": "p", "status": "done",
+                             "engine_session": "sess-1", "cwd": "/tmp/repo", "created_at": db.now(), "finished_at": db.now(),
+                             "output": "做完了\nNEEDS_YOU: 合并 main？建议合\nNEEDS_YOU: 换 RSS 列表？"})
+    db.insert("jobs", {"module": "learn", "ref": "learn:item:1", "engine": "claude", "prompt": "p", "status": "done",
+                       "created_at": db.now(), "finished_at": db.now(), "output": "NEEDS_YOU: 深读正文里的字样不算"})
+    items = client.get("/api/jobs/approvals").json()
+    assert [a["item"] for a in items] == ["换 RSS 列表？", "合并 main？建议合"]
+    assert len(client.get("/api/jobs/approvals").json()) == 2  # 幂等
+
+    by = {a["item"]: a["id"] for a in items}
+    r = client.post(f"/api/jobs/approvals/{by['合并 main？建议合']}/decide", json={"decision": "approved", "note": "合完发 dev 前停下"}).json()
+    assert r == {"ok": True, "left": 1, "followup_job_id": None} and not sent
+    assert client.post(f"/api/jobs/approvals/{by['合并 main？建议合']}/decide", json={"decision": "approved"}).status_code == 400
+    r = client.post(f"/api/jobs/approvals/{by['换 RSS 列表？']}/decide", json={"decision": "replied", "note": "换成新默认列表"}).json()
+    assert r["followup_job_id"] == 999
+    (args, kw), = sent
+    assert kw["session"] == "sess-1" and kw["cwd"] == "/tmp/repo" and kw["ref"] == f"approval:{jid}"
+    assert "批准：合完发 dev 前停下" in args[1] and "回复：换成新默认列表" in args[1]
+    assert client.get("/api/jobs/approvals").json() == []

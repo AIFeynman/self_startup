@@ -30,6 +30,7 @@ async function boot() {
   await route();
   loadRecent();
   watchJobs();
+  watchApprovals();
   watchUpdates();
   restoreChat();
 }
@@ -90,6 +91,24 @@ function watchJobs() {
     }
     loadRecent();
   }, 6000);
+}
+
+// 侧栏「规划」「Agent 看板」上的待审批数
+function watchApprovals() {
+  const paint = async () => {
+    if (document.hidden) return;
+    const list = await api.get('/api/jobs/approvals').catch(() => null);
+    if (!list) return;
+    for (const id of ['plan', 'agents']) {
+      const a = document.querySelector(`#nav-links a[data-id="${id}"]`);
+      if (!a) continue;
+      a.querySelector('.nav-badge')?.remove();
+      if (list.length) a.append(h('span.nav-badge', { title: `${list.length} 项待你审批` }, String(list.length)));
+    }
+  };
+  paint();
+  setInterval(paint, 15000);
+  document.addEventListener('job-done', paint);
 }
 
 function notice(j) {

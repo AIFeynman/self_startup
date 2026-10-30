@@ -228,3 +228,4 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
   transition: transform .2s; max-width: calc(100vw - 32px); }
 .update-bar.on { transform: translate(-50%, 0); }
 .update-bar svg.i { width: 15px; height: 15px; color: var(--accent); } .update-bar a { color: var(--accent); }
+.nav-badge { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--warn); color: #fff; font: 600 11px/18px var(--font); text-align: center; }

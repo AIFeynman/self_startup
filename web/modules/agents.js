@@ -2,6 +2,7 @@
 // 每 10 秒自动刷新；卡片可拖到「已验收」，或用按钮 验收 / 归档 / 续接 / 关联事项 / 备注。
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
+import { approvals } from './_approvals.js';
 
 const ENGINE = { claude: 'Claude', codex: 'Codex', platform: '平台' };
 const prefs = load();
@@ -65,7 +66,7 @@ export default {
         { label: '卡住的怎么处理', icon: 'bolt', onClick: () => ask('看板里「可能卡住」「等待批准」「已中断」的会话，分别可能是什么原因，怎么处理最快？') },
         { label: '今天交付了什么', icon: 'check', onClick: () => ask('今天已经交付了哪几件事（有推送/部署/PR/发布或文档材料，之后没再改的）？每件一句话说清交付物；再列出交付后仍在改、或只提交没推送的。') },
       ], { left: true }),
-      deliveryBox, statsBox, overviewBox, filters, boardBox,
+      approvals(ctx), deliveryBox, statsBox, overviewBox, filters, boardBox,
     );
 
     async function renderUtil() {
