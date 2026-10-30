@@ -39,6 +39,14 @@ def test_needs_you_parses_approvals():
     assert needs_you(out) == ["发布 dev？建议先合并"]  # 写了 NEEDS_YOU 就只认它
     assert needs_you(out.replace("NEEDS_YOU: 发布 dev？建议先合并\n", "")) == ["决策 D1：要不要换 RSS 列表", "确认是否合并 main", "看一眼报告"]
     assert needs_you("## 总结\n- 改了 A\n- 测试通过") == []
+    # 「没有需要你决定的事」不是小节标题，后面的总结条目不能变成审批项（审批后续里出现过）
+    done = "这次没有新的需要你决定的事。不用再回复这条：每回复一次都会新开任务。\n\n- 做了什么：查了状态\n- 产出在哪：log\n- 版本：76b10d6"
+    assert needs_you(done) == []
+    assert needs_you("需要你做：看报告\n- 做了什么：x", tagged_only=True) == []   # 审批后续只认 NEEDS_YOU 行
+    assert needs_you("NEEDS_YOU: 合并？\n需要你做：看报告", tagged_only=True) == ["合并？"]
+    # 句子里提到标记不算；行首（含列表符号、加粗）才算
+    talk = "平台只认 `NEEDS_YOU:` 行，没写就是没有。\n- 审批后续只认 `NEEDS_YOU:` 行\n- **NEEDS_YOU:** 合并 fix\n2. NEEDS_YOU: 发布 dev"
+    assert needs_you(talk, tagged_only=True) == ["合并 fix", "发布 dev"]
     assert needs_you("**需要你知道的**\n- 借用了另一个环境\n\n需要你拍板的有：\n- 选 A 还是 B") == ["选 A 还是 B"]
 
 
