@@ -213,6 +213,7 @@ def status():
         st = json.loads(json.dumps(_state))
     st["total"] = (db.row("SELECT count(*) n FROM feed_items") or {}).get("n", 0)
     st["by_source"] = {r["source"]: r["n"] for r in db.rows("SELECT source, count(*) n FROM feed_items GROUP BY source")}
+    st["last_fetched"] = (db.row("SELECT max(fetched_at) t FROM feed_items") or {}).get("t") or ""
     st["feedback"] = feedback_stats()
     return st
 

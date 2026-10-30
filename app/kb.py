@@ -133,7 +133,7 @@ def _notes() -> list[dict]:
     return [_doc("note", n["id"], n["title"] or _first_lines(n["content"], 1)[:40],
                  f"类型：{kinds.get(n['kind'], n['kind'])} · 日期：{n['date']}\n\n{n['content']}",
                  date=n["date"], updated=n.get("updated_at") or "", tags=_tags(n["tags"]) + [kinds.get(n["kind"], n["kind"])],
-                 status=n["kind"], summary=_first_lines(n["content"]),
+                 status=n["kind"], summary=_first_lines(n["content"]) or n["title"],
                  path=f"notes/{n['date']}-{n['id']}-{_slug(n['title'] or n['content'][:20])}.md")
             for n in db.rows("SELECT * FROM review_notes ORDER BY id")]
 

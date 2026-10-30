@@ -440,8 +440,14 @@ def list_research(q: str = "", limit: int = 50):
     if q:
         sql, args = sql + " AND (topic LIKE ? OR context LIKE ?)", args + [f"%{q}%"] * 2
     out = db.rows(sql + " ORDER BY id DESC LIMIT ?", args + [limit])
+    prog: dict[int, list[dict]] = {}
+    if out:
+        ids = [r["id"] for r in out]
+        for x in db.rows(f"SELECT research_id,engine,status FROM research_results WHERE research_id IN ({','.join('?' * len(ids))}) ORDER BY id", ids):
+            prog.setdefault(x["research_id"], []).append({"engine": x["engine"], "status": x["status"]})
     for r in out:
         r["angles"], r["engines"] = _j(r["angles"], []), _j(r["engines"], [])
+        r["progress"] = prog.get(r["id"], [])
     return out
 
 
@@ -670,6 +676,49 @@ def list_products(q: str = "", category: str = "", tag: str = ""):
 def create_product(body: ProductIn):
     pid = db.insert("products", {**_product_data(body), "created_at": db.now(), "updated_at": db.now()})
     return _product(pid)
+
+
+class QuickIn(BaseModel):
+    text: str
+
+
+def parse_quick_product(text: str) -> dict:
+    """一句话记产品体验：`Cursor 4星 补全快但贵 #AI编程` → 产品名 / 评分 / 体验 / 标签。
+    也认：★★★★、4/5、4分；链接 http(s)://…；「优：…」「缺：…」分段。"""
+    s = text.strip()
+    tags = re.findall(r"[#＃]([^\s#＃,，]+)", s)
+    s = re.sub(r"[#＃][^\s#＃,，]+", " ", s)
+    url = ""
+    m = re.search(r"https?://\S+", s)
+    if m:
+        url, s = m.group(0), s.replace(m.group(0), " ")
+    rating = 0
+    m = re.search(r"(★{1,5})|(?<![\d.])([0-5])\s*(?:星|颗星|分|/\s*5)", s)
+    if m:
+        rating = len(m.group(1)) if m.group(1) else int(m.group(2))
+        s = s[:m.start()] + " " + s[m.end():]
+    pros = cons = ""
+    m = re.search(r"(?:缺点|缺)[:：]\s*(.+)$", s)
+    if m:
+        cons, s = m.group(1).strip(), s[:m.start()]
+    m = re.search(r"(?:优点|优)[:：]\s*(.+)$", s)
+    if m:
+        pros, s = m.group(1).strip(), s[:m.start()]
+    s = s.strip()
+    name, _, rest = s.partition(" ")
+    if not name and url:
+        name = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+    return {"name": name.strip(), "url": url, "rating": rating, "experience": re.sub(r"\s+", " ", rest).strip(" ，,"),
+            "pros": pros, "cons": cons, "tags": tags, "used_at": db.now()[:10]}
+
+
+@router.post("/products/quick")
+def quick_product(body: QuickIn):
+    """一句话记录产品体验，立即保存。"""
+    d = parse_quick_product(body.text)
+    if not d["name"]:
+        raise HTTPException(400, "没识别出产品名：第一个词应为产品名，如「Cursor 4星 补全快 #AI编程」")
+    return create_product(ProductIn(**d))
 
 
 @router.get("/products/{pid}")

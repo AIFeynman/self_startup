@@ -115,6 +115,7 @@ def test_api_flow(client, monkeypatch):
     st = client.post("/api/feed/refresh", json={"sources": ["hn", "rss", "bad"], "wait": True}).json()
     assert st["results"]["hn"]["count"] == 2 and st["results"]["rss"]["errors"] == ["x: boom"]
     assert "ZeroDivisionError" in st["results"]["bad"]["errors"][0]
+    assert st["last_fetched"] and st["by_source"]["hn"] == 2
     items = client.get("/api/feed/items?type=discussion").json()["items"]
     assert items[0]["id"] == "hn:9" and items[0]["why"]
     assert client.post("/api/feed/feedback", json={"id": "hn:8", "hidden": True, "saved": True}).json()["hidden"] == 1

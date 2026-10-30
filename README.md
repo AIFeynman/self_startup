@@ -16,9 +16,35 @@
 | 规划 | 每天列几件事 → AI 拆解（优先级 / 并行组 / 依赖 / 人干预度 / 执行者）→ 确定性排程：重度干预放进专注时间窗，自动任务放非专注时间并按并发度分 Agent 泳道；可一键把自动任务交给 Claude Code/Codex 跑 |
 | 信息推荐 | 汇集 learn_evolve 已抓取的数据 + HN / HF Papers / GitHub / Reddit / RSS 博客；按热度、新鲜度、兴趣词、你的点赞反馈排序；只给标题、简介、链接 |
 | 调研 | 给定主题 + 关注角度，并行调用 Claude Code / Codex / GrokBot（webhook）/ Muse（桌面 App，复制粘贴桥接），可综合成一篇；调研文档库；产品体验记录 |
+| 知识库 | 检索 / 阅读自动同步的本地知识（见下） |
 | 深度学习 | 单篇论文 / GitHub 项目深度解析（复用 codex 的 paper-library、github-code-walkthrough 格式并补充）；主题学习计划（领域综述 → 核心人物观点 → 关键书籍/经典 → 机制精学 → 前沿进展 → 实践），按反馈调整 |
 
 全局设置（页面「设置」或 `data/settings.json`）：人重度干预时间窗（默认 10:00–11:40、13:30–16:50）、Agent 并发度、默认引擎、Claude/Codex 模型、复盘分析目录等。
+
+## 本地知识库（data/kb）
+
+SQLite 管应用状态；每次写操作后，平台自动把内容同步成一棵适合大模型检索阅读的 markdown 树（可随时重建，勿手改）：
+
+```
+data/kb/
+  README.md            结构与检索说明（给大模型）
+  INDEX.md             入口：分类计数、最近更新、全部标签
+  daily/YYYY-MM-DD.md  一天的事项与完成、复盘、问题与经验、Agent 效率、当天产出链接（时间线）
+  notes/               问题 / 经验 / 洞察 / 想法，一条一个文件
+  research/  products/ 调研文档、产品体验
+  learn/papers|repos|plans/  论文/项目深读（TL;DR + 笔记 + 全文内嵌）、学习计划（阶段/步骤/理解度/反馈）
+  feed/saved.md        点赞 / 收藏的信息
+  tags/<标签>.md       按标签的反向索引
+```
+
+- 每个文件带 YAML frontmatter：`id type title date updated tags status url summary`，先看 `summary` 判断相关性再读正文，省上下文。
+- 全文检索：SQLite FTS5（trigram，中文可用），`GET /api/kb/search?q=`；也可直接 `rg data/kb`。
+- 所有板块 Agent 都能只读访问 `data/kb`，并被告知先查知识库；全局 skill `ss-kb` 让普通 Claude Code / Codex 会话也能用。
+
+## 便捷输入
+
+- 每个页面顶部一个大输入框：Enter 发送、Shift+Enter 换行，按 `/` 随时聚焦；可切换模式（如「记一条 / 问 Agent」「加事项 / 问 Agent」）。
+- 输入框下的快捷 chip 一键发常用指令；右侧对话面板随时可开（侧栏「新对话」或最近对话）。
 
 ## 结构
 

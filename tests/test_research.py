@@ -139,3 +139,17 @@ def test_products(client):
     assert draft["topic"] == "Cursor" and draft["angles"] == ["用户口碑与体验"] and "补全很快" in draft["context"]
     client.delete(f"/api/research/products/{p['id']}")
     assert client.get(f"/api/research/products/{p['id']}").status_code == 404
+
+
+def test_quick_product_and_progress(client, fakes):
+    d = R.parse_quick_product("Cursor 4星 补全快但贵 #AI编程 #IDE")
+    assert (d["name"], d["rating"], d["experience"], d["tags"]) == ("Cursor", 4, "补全快但贵", ["AI编程", "IDE"])
+    d = R.parse_quick_product("Raycast ★★★★★ https://raycast.com 启动器 优：快 缺：插件少")
+    assert d["rating"] == 5 and d["url"] == "https://raycast.com" and d["experience"] == "启动器" and d["pros"] == "快" and d["cons"] == "插件少"
+    assert R.parse_quick_product("Notion")["rating"] == 0
+    p = client.post("/api/research/products/quick", json={"text": "Cursor 4星 补全快但贵 #AI编程"}).json()
+    assert p["name"] == "Cursor" and p["rating"] == 4 and p["tags"] == ["AI编程"]
+    assert client.post("/api/research/products/quick", json={"text": "#只有标签"}).status_code == 400
+    r = client.post("/api/research", json={"topic": "进度点", "engines": ["claude", "codex"]}).json()
+    row = next(x for x in client.get("/api/research").json() if x["id"] == r["id"])
+    assert [x["engine"] for x in row["progress"]] == ["claude", "codex"] and row["progress"][0]["status"] == "running"

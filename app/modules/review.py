@@ -143,7 +143,8 @@ def day_data(date: str) -> dict:
         "stats": {"work": _stats(work), "learning": _stats(learning)},
         "record": get_record(date),
         "notes": list_notes(date=date),
-        "efficiency": {"headline": eff["summary"].get("headline", ""), "scanned_at": eff.get("scanned_at")} if eff else None,
+        "efficiency": {"headline": eff["summary"].get("headline", ""), "scanned_at": eff.get("scanned_at"),
+                       "summary": {k: v for k, v in eff["summary"].items() if k != "by_project"}} if eff else None,
         "jobs": db.rows("SELECT id, ref, status, created_at, finished_at FROM jobs WHERE module='review' AND ref IN (?,?) "
                         "ORDER BY id DESC LIMIT 4", [f"check:{date}", f"reflect:{date}"]),
     }
@@ -168,6 +169,36 @@ def api_day(date: str = ""):
 @router.put("/day/{date}")
 def api_put_day(date: str, body: RecordIn):
     return upsert_record(_day(date), {k: v for k, v in body.model_dump().items() if v is not None})
+
+
+class AppendIn(BaseModel):
+    field: str = "summary"
+    text: str
+
+
+RECORD_FIELDS = ("summary", "wins", "problems", "next_actions")
+_REC_PREFIX = {"总结": "summary", "收获": "wins", "做成": "wins", "问题": "problems", "下一步": "next_actions",
+               "明天": "next_actions", "next": "next_actions"}
+
+
+def parse_record_line(text: str, default: str = "summary") -> tuple[str, str]:
+    """「问题：xxx」→ (problems, xxx)；无前缀 → (default, 原文)。"""
+    m = re.match(r"\s*([^\s:：]{1,4})\s*[:：]\s*(.+)", text or "", re.S)
+    if m and m.group(1).lower() in _REC_PREFIX:
+        return _REC_PREFIX[m.group(1).lower()], m.group(2).strip()
+    return (default if default in RECORD_FIELDS else "summary"), (text or "").strip()
+
+
+@router.post("/day/{date}/append")
+def api_append_day(date: str, body: AppendIn):
+    """往当天复盘的某一栏追加一行（快捷输入用，可带「问题：」等前缀自动分栏）。"""
+    date = _day(date)
+    field, text = parse_record_line(body.text, body.field)
+    if not text:
+        raise HTTPException(400, "text required")
+    cur = (get_record(date).get(field) or "").rstrip()
+    rec = upsert_record(date, {field: (cur + "\n" + text).strip()})
+    return {"field": field, "text": text, "record": rec}
 
 
 # ---------- 证据包：git / 文档 ----------
@@ -377,6 +408,17 @@ def api_apply(date: str, idx: int):
     return {"task": task, "suggestion": s}
 
 
+@router.post("/suggestions/{date}/{idx}/dismiss")
+def api_dismiss(date: str, idx: int):
+    rec = get_record(date)
+    sugg = rec["task_suggestions"]
+    if idx < 0 or idx >= len(sugg):
+        raise HTTPException(404, "suggestion not found")
+    sugg[idx]["dismissed"] = True
+    upsert_record(date, {"task_suggestions": sugg})
+    return {"suggestion": sugg[idx]}
+
+
 # ---------- 问题与经验 ----------
 
 class NoteIn(BaseModel):
@@ -419,6 +461,38 @@ def api_add_note(body: NoteIn):
     d["created_at"] = d["updated_at"] = db.now()
     nid = db.insert("review_notes", d)
     return db.row("SELECT * FROM review_notes WHERE id=?", [nid])
+
+
+_KIND_PREFIX = {"问题": "problem", "坑": "problem", "经验": "lesson", "教训": "lesson", "洞察": "insight",
+                "发现": "insight", "想法": "idea", "点子": "idea", "idea": "idea", "problem": "problem",
+                "lesson": "lesson", "insight": "insight"}
+
+
+def parse_quick_note(text: str) -> dict:
+    """一句话快记：「问题：xxx #标签」→ {kind, title, content, tags}。首行为标题，其余为内容。"""
+    text = (text or "").strip()
+    kind = "lesson"
+    m = re.match(r"([^\s:：]{1,7})\s*[:：]\s*", text)
+    if m and m.group(1).lower() in _KIND_PREFIX:
+        kind, text = _KIND_PREFIX[m.group(1).lower()], text[m.end():]
+    tags = []
+    for t in re.findall(r"(?:^|\s)#([^\s#,，]+)", text):
+        if t not in tags:
+            tags.append(t)
+    text = re.sub(r"(?:^|\s)#[^\s#,，]+", " ", text)
+    lines = [ln.strip() for ln in text.strip().splitlines()]
+    title = re.sub(r"\s{2,}", " ", lines[0]) if lines else ""
+    return {"kind": kind, "title": title, "content": "\n".join(lines[1:]).strip(), "tags": ",".join(tags)}
+
+
+class QuickIn(BaseModel):
+    text: str
+    date: str | None = None
+
+
+@router.post("/notes/quick")
+def api_quick_note(body: QuickIn):
+    return api_add_note(NoteIn(date=body.date, **parse_quick_note(body.text)))
 
 
 @router.patch("/notes/{nid}")
