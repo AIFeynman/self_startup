@@ -12,7 +12,7 @@ description: 深度学习板块：A. 单篇论文 / GitHub 项目深读（沿用
 - 论文：遵循 `~/.codex/skills/paper-library/SKILL.md`（深读按其 `references/deep-reading.md`），再按本目录 [paper.md](paper.md) 增补。产物 `note.md`。
 - GitHub：遵循 `~/.codex/skills/github-code-walkthrough/SKILL.md`，再按 [github.md](github.md) 增补。产物离线 `index.html` + 短 `summary.md`。
 - 产物写到 `<数据目录>/learn/<id>-<slug>/`；不写入 Obsidian（除非设置 `learn.write_obsidian=true`）。
-- 增补要点：顶部 3 行 TL;DR；与用户已学条目/计划的具体联系；可迁移结论（注明边界）；5–8 条可直接继续问的追问清单；GitHub 额外给「最小上手实验」。
+- 增补要点：顶部 3 行 TL;DR；与用户已学条目/计划的具体联系；可迁移结论（注明边界）；5–8 条可直接继续问的追问清单；「最小上手实验」（论文写 30–90 分钟的机制验证实验，GitHub 写上手命令）。
 
 追问某个条目时（对话 ref `learn:item:<id>`）：先读产物文件再回答，引用原文定位；用户的新认识可写回 `my_notes`。
 

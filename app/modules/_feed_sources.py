@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import feedparser
 import httpx
@@ -130,6 +131,15 @@ def fetch_learn_evolve(db_path: str, days: int = 30, limit: int = 400) -> list[d
 
 # ---------- 直连抓取 ----------
 
+def hn_link_summary(h: dict) -> str:
+    """链接帖没有正文：给出原文站点和讨论热度，不编造内容。"""
+    host = re.sub(r"^www\.", "", urlsplit(h.get("url") or "").netloc)
+    parts = [f"链接到 {host}" if host else "HN 讨论帖", f"{h.get('points') or 0} 分"]
+    if h.get("num_comments"):
+        parts.append(f"{h['num_comments']} 条评论")
+    return " · ".join(parts)
+
+
 def fetch_hn(queries: list[str], days: int = 7, min_points: int = 30, per_query: int = 30) -> list[dict]:
     since = int(_days_ago(days).timestamp())
     out: dict[str, dict] = {}
@@ -146,7 +156,7 @@ def fetch_hn(queries: list[str], days: int = 7, min_points: int = 30, per_query:
                 hn_url = f"https://news.ycombinator.com/item?id={oid}"
                 out[oid] = {
                     "id": f"hn:{oid}", "source": "hn", "type": "discussion", "title": clean(h["title"], 200),
-                    "summary": clean(h.get("story_text") or ""), "url": h.get("url") or hn_url,
+                    "summary": clean(h.get("story_text") or "") or hn_link_summary(h), "url": h.get("url") or hn_url,
                     "date": h.get("created_at", ""), "popularity": float(h.get("points") or 0),
                     "extra": {"hn_url": hn_url, "comments": h.get("num_comments") or 0, "query": q}}
     return list(out.values())
