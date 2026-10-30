@@ -28,6 +28,7 @@ const P = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0',
   robot: 'M12 3v3 M6 8h12v11H6z M9 13h.01 M15 13h.01 M3 12v3 M21 12v3',
   x: 'M6 6l12 12 M18 6 6 18',
+  expand: 'M14 4h6v6 M20 4l-7 7 M10 20H4v-6 M4 20l7-7',
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M20 20l-4-4',
   arrow: 'M5 12h14 M13 6l6 6-6 6',
   tag: 'M3 12V4h8l10 10-8 8z M7.5 7.5h.01',
@@ -66,7 +67,8 @@ export function composer(opts = {}) {
   const hint = h('span.hint', {}, opts.hint ?? '');
   const el = h('div.composer', {}, [ta, h('div.bar', {}, [modeBtns.length ? h('div.modes', {}, modeBtns) : null, hint, send])]);
   el.mode = mode;
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 240) + 'px'; send.disabled = !ta.value.trim(); };
+  // 空的或还不可见（如收起的对话面板，宽度 0 时 scrollHeight 会很大）时不撑高
+  const grow = () => { ta.style.height = 'auto'; if (ta.value && ta.offsetWidth) ta.style.height = Math.min(ta.scrollHeight, 240) + 'px'; send.disabled = !ta.value.trim(); };
   let busy = false;
   const submit = async () => {
     const text = ta.value.trim();

@@ -155,7 +155,13 @@ details > summary { cursor: pointer; color: var(--muted); }
 .timeline .tl-item.dim::before { background: var(--panel); border: 1.5px solid var(--line-2); }
 
 /* ---------- 对话面板 ---------- */
-.chat { width: 420px; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; height: 100vh; }
+.chat { width: var(--chat-w, 420px); background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; height: 100vh; position: relative; }
+.chat-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; }
+.chat-resize:hover, .chat-resize.on { background: linear-gradient(90deg, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); }
+body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { pointer-events: none; }
+.msg.assistant .body { min-width: 0; overflow-x: auto; }
+.msg.assistant .body pre { overflow-x: auto; max-width: 100%; }
+.msg.assistant .body table { display: block; overflow-x: auto; max-width: 100%; }
 .chat.collapsed { width: 0; overflow: hidden; border: none; }
 .chat-head { display: flex; gap: 8px; align-items: center; padding: 14px 14px 12px; border-bottom: 1px solid var(--line); }
 .chat-head b { font: 700 16px var(--serif); white-space: nowrap; flex: 1; }
@@ -192,9 +198,9 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-2);
   #nav-links { flex-direction: row; } #nav-links a span { display: none; }
   .brand, .nav-sec, .new-chat, #engine-status { display: none; } .nav-foot { margin: 0; border: none; padding: 0; }
   .page-wrap { padding: 18px 16px 60px; } .page-head h1 { font-size: 24px; } .hero h1 { font-size: 26px; }
-  .chat { position: fixed; inset: 0; width: 100%; z-index: 50; } .chat.collapsed { width: 0; }
+  .chat { position: fixed; inset: 0; width: 100%; z-index: 50; } .chat.collapsed { width: 0; } .chat-resize, .chat-wide { display: none; }
 }
 .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .clamp3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 2px; }
-@media (max-width: 1000px) and (min-width: 721px) { body { grid-template-columns: 200px minmax(0, 1fr) auto; } .page-wrap { padding: 24px 24px 60px; } .chat { width: 360px; } }
+@media (max-width: 1000px) and (min-width: 721px) { body { grid-template-columns: 200px minmax(0, 1fr) auto; } .page-wrap { padding: 24px 24px 60px; } .chat { width: min(var(--chat-w, 360px), 70vw); } }

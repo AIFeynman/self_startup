@@ -49,11 +49,40 @@ function render(sessions) {
   engineSel = h('select', { title: '引擎' }, [h('option', { value: '' }, '默认引擎'), h('option', { value: 'claude' }, 'Claude Code'), h('option', { value: 'codex' }, 'Codex')]);
   log = h('div.chat-log');
   box = composer({ placeholder: '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', onSubmit: (t) => submit(t) });
+  const wideBtn = h('button.icon.chat-wide', { title: '加宽 / 还原（也可以拖左边缘调宽度）', onclick: () => toggleWide(wideBtn) }, icon('expand'));
   root.append(
-    h('div.chat-head', {}, [h('b', {}, `${state.title} · Agent`), sessSel, engineSel,
+    h('div.chat-resize', { title: '拖动调整宽度，双击还原', onmousedown: startResize, ondblclick: () => setWidth(420) }),
+    h('div.chat-head', {}, [h('b', {}, `${state.title} · Agent`), sessSel, engineSel, wideBtn,
       h('button.icon', { title: '收起', onclick: closeChat }, icon('x'))]),
     log, box);
 }
+
+// ---------- 面板宽度：拖左边缘调整，或一键加宽；记在本机 ----------
+const MIN_W = 340;
+const maxW = () => Math.max(MIN_W, window.innerWidth - 248 - 360); // 给侧边栏和页面主体留位置
+function setWidth(w, save = true) {
+  w = Math.round(Math.min(Math.max(w, MIN_W), maxW()));
+  document.documentElement.style.setProperty('--chat-w', w + 'px');
+  if (save) { try { localStorage.setItem('chat-w', w); } catch { /* 无痕模式 */ } }
+  return w;
+}
+function toggleWide() {
+  const cur = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--chat-w')) || 420;
+  setWidth(cur < maxW() * 0.9 ? maxW() : 420);
+}
+function startResize(e) {
+  e.preventDefault();
+  const handle = e.currentTarget;
+  handle.classList.add('on'); document.body.classList.add('resizing');
+  const move = (ev) => setWidth(window.innerWidth - ev.clientX, false);
+  const up = (ev) => {
+    setWidth(window.innerWidth - ev.clientX);
+    handle.classList.remove('on'); document.body.classList.remove('resizing');
+    window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+}
+try { const w = +localStorage.getItem('chat-w'); if (w) setWidth(w, false); } catch { /* 无痕模式 */ }
 
 function tips() {
   return h('div.chat-tips', {}, [
