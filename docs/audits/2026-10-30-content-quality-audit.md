@@ -132,3 +132,19 @@
 | D6 | 点击要不要算作弱正反馈参与排序 | 不算，只统计（避免标题党自我强化） | 在 `_examples` 里加 1 行，权重 0.3 |
 | D7 | 「掉出搜索」的仓库是直接隐藏还是降权 | 降权 −1.5，不隐藏（有 1/3 是误判） | 改 1 个常量 |
 | D8 | 自动刷新间隔 | 6 小时 | 改 `feed.auto_refresh_hours` |
+
+---
+
+## 7. Codex 链路与回退标注（2026-10-30 晚）
+
+**Codex 为什么跑不通：是 CLI 版本问题，不是账号问题。**
+- 平台调用的是 Homebrew 的 `/opt/homebrew/bin/codex`，版本 0.144.1。这个版本用 `~/.codex/config.toml` 里的 `gpt-6.1-sol` 会报 `model_not_found`（"not supported when using Codex with a ChatGPT account"）。
+- ChatGPT 桌面版自带的 `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` 是 0.164.0-alpha。同一个模型、同一个账号，用它跑 `codex exec "只回复 OK"` 正常返回 OK；本机 10-29 ~ 10-30 有 20 多个 Codex Desktop 会话，也都是 0.164 + gpt-6.1-sol，全部成功。
+- 两种修法：① 平台设置 `engines.codex.bin` 指向桌面版自带的 codex（立刻生效，只影响平台；桌面版更新后路径一般不变）；② `brew upgrade codex` 升到 0.166.0（影响整台机器上所有终端里的 codex）。
+
+**回退标注（分支 `feat/engine-fallback-visible`）**
+- `jobs.fallback_from`：请求的引擎没跑通、由备选引擎代跑时，记下原来请求的引擎。`jobs.engine` 仍记实际引擎，续接会话要用它。
+- `research_results.engine` 保留用户选的引擎，新增 `used_engine` 记实际引擎。调研页显示「由 Claude Code 代跑」标签；文档标题写「Codex（未跑通，由 Claude Code 代跑）」；综合 prompt 提醒模型不要把同一引擎的两份结果当成两方印证。
+- Agent 看板上，平台任务卡片的理由里追加「codex 未跑通，已由 claude 代跑」。
+- 测试：101 passed（新增 2 个）。在真实数据副本上验证过看板文案。
+- 历史数据没改：调研 #3 的第 6 条结果在旧逻辑下已经被记成 claude。

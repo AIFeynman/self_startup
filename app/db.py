@@ -138,6 +138,8 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
             c.execute("ALTER TABLE jobs ADD COLUMN chat_session_id INTEGER")
         if "cwd" not in cols:
             c.execute("ALTER TABLE jobs ADD COLUMN cwd TEXT DEFAULT ''")
+        if "fallback_from" not in cols:  # 请求的引擎没跑通、由备选引擎代跑时，记下原来请求的引擎
+            c.execute("ALTER TABLE jobs ADD COLUMN fallback_from TEXT DEFAULT ''")
         c.commit()
 
 

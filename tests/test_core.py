@@ -65,3 +65,18 @@ def test_approvals_decide_and_followup(client, monkeypatch):
     assert kw["session"] == "sess-1" and kw["cwd"] == "/tmp/repo" and kw["ref"] == f"approval:{jid}"
     assert "批准：合完发 dev 前停下" in args[1] and "回复：换成新默认列表" in args[1]
     assert client.get("/api/jobs/approvals").json() == []
+
+
+def test_job_records_engine_fallback(client, monkeypatch):
+    from app import agent, db, jobs
+
+    def fake_stream(prompt, **kw):
+        yield {"type": "error", "text": "model_not_found；回退到备选引擎"}
+        yield {"type": "engine", "text": "切换到 claude"}
+        yield {"type": "done", "text": "ok", "engine": "claude"}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+    jid = db.insert("jobs", {"module": "nomod", "ref": "", "engine": "codex", "prompt": "p", "status": "queued", "created_at": db.now()})
+    jobs._run(jid, "nomod", "p", "codex", "", None, [])
+    j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
+    assert j["engine"] == "claude" and j["fallback_from"] == "codex" and j["status"] == "done"

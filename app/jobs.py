@@ -50,6 +50,7 @@ def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_
         log_lines.append(f"[exception] {e}")
         status = "failed"
     db.update("jobs", jid, {"status": status, "output": text, "engine": used, "engine_session": session,
+                            "fallback_from": engine if used and used != engine else "",
                             "log": "\n".join(log_lines[-200:]), "finished_at": db.now()})
     mod = modules.get(module)
     hook = getattr(mod, "on_job_done", None) if mod else None
