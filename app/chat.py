@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, db, modules
+from . import agent, db, kb, modules
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -34,7 +34,12 @@ def _context(module: str, ref: str) -> tuple[str, list[str]]:
             dirs = mod.agent_dirs(ref) or []
         except Exception:  # noqa: BLE001
             log.exception("agent_dirs %s", module)
-    return ctx, dirs
+    return ctx, [*dirs, str(kb.KB_DIR)]
+
+
+@router.get("/recent")
+def recent(limit: int = 8):
+    return db.rows("SELECT id,module,ref,title,engine,updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ?", [limit])
 
 
 @router.get("/{module}/sessions")

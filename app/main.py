@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, chat, db, jobs, modules, settings, tasks
+from . import agent, chat, db, jobs, kb, modules, settings, tasks
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -27,6 +27,18 @@ for name, m in mods.items():
 @app.on_event("startup")
 def _startup():
     jobs._mark_interrupted()  # 只在真正启动服务时清理上次中断的任务
+    kb.schedule_sync(0.5)
+
+
+@app.middleware("http")
+async def _kb_sync_after_write(request: Request, call_next):
+    """任何写接口之后，防抖同步一次知识库（data/kb）。"""
+    resp = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"  # 本地开发：前端改动立即生效
+    if request.method != "GET" and request.url.path.startswith("/api/") and not request.url.path.startswith(("/api/chat", "/api/kb")):
+        kb.schedule_sync()
+    return resp
 
 
 @app.get("/api/meta")

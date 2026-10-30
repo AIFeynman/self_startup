@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 
-from . import agent, db, modules, settings
+from . import agent, db, kb, modules, settings
 
 log = logging.getLogger(__name__)
 # 各板块共享；比 Agent 并发度留些余量，避免长调研任务堵住短任务（拆解等）
@@ -20,7 +20,7 @@ def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system:
     engine = engine or settings.get("engines.default", "claude")
     jid = db.insert("jobs", {"module": module, "ref": ref, "engine": engine, "prompt": prompt,
                              "status": "queued", "created_at": db.now()})
-    _pool.submit(_run, jid, module, prompt, engine, system, cwd, add_dirs or [])
+    _pool.submit(_run, jid, module, prompt, engine, system, cwd, [*(add_dirs or []), str(kb.KB_DIR)])
     return jid
 
 
@@ -51,6 +51,7 @@ def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_
             hook(db.row("SELECT * FROM jobs WHERE id=?", [jid]))
         except Exception:  # noqa: BLE001
             log.exception("on_job_done %s/%s failed", module, jid)
+    kb.schedule_sync()
 
 
 @router.get("")

@@ -27,6 +27,9 @@ PLATFORM_GUIDE = f"""
 - 读写平台数据用 curl 调 API（JSON），例如：curl -s {API_BASE}/api/plan/day
 - 所有接口列表：curl -s {API_BASE}/openapi.json | python3 -c 'import json,sys;[print(m.upper(),p) for p,v in json.load(sys.stdin)["paths"].items() for m in v]'
 - 用户要求修改数据时直接调用接口完成并简述结果；只是讨论时不要写数据。
+- 本地知识库（只读 markdown，自动同步）：{DATA_DIR / "kb"}。先读 INDEX.md；按日期看 daily/、按主题看 tags/；
+  关键词检索用 curl -s "{API_BASE}/api/kb/search?q=关键词" 或 rg；先看 frontmatter 的 summary 再决定读哪几个文件，引用时给路径。
+  回答涉及用户过往记录、学习、调研时，先查知识库。
 - 默认中文回答，简洁、具体，不要过度设计。
 """.strip()
 
