@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     output        TEXT DEFAULT '',
     log           TEXT DEFAULT '',
     engine_session TEXT DEFAULT '',
+    chat_session_id INTEGER,                 -- 由哪个对话发起；完成后把结果回帖到这个对话
     created_at    TEXT,
     started_at    TEXT,
     finished_at   TEXT
@@ -117,6 +118,8 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
         for s in extra_schemas:
             if s:
                 c.executescript(s)
+        if "chat_session_id" not in {r[1] for r in c.execute("PRAGMA table_info(jobs)")}:
+            c.execute("ALTER TABLE jobs ADD COLUMN chat_session_id INTEGER")
         c.commit()
 
 

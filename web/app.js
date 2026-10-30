@@ -29,6 +29,35 @@ async function boot() {
   document.addEventListener('agent-done', loadRecent);
   route();
   loadRecent();
+  watchJobs();
+}
+
+// 后台任务结束 → 弹通知（点击打开结果）、刷新最近对话；chat.js 收到 job-done 会刷新正在看的那个对话
+function watchJobs() {
+  let since = new Date(Date.now() - 5000).toLocaleString('sv-SE').replace(' ', 'T');
+  setInterval(async () => {
+    if (document.hidden) return;
+    const js = await api.get(`/api/jobs/finished?since=${encodeURIComponent(since)}`).catch(() => null);
+    if (!js?.length) return;
+    since = js[js.length - 1].finished_at;
+    for (const j of js) {
+      document.dispatchEvent(new CustomEvent('job-done', { detail: j }));
+      notice(j);
+    }
+    loadRecent();
+  }, 6000);
+}
+
+function notice(j) {
+  const ok = j.status === 'done';
+  const t = h('div.toast.notice' + (ok ? '' : '.err'), {}, [
+    h('b', {}, `${j.kind}${ok ? '完成' : '失败'}`), h('span', {}, j.title),
+    h('a', { href: j.link, onclick: () => t.remove() }, '查看 →'),
+    j.chat_session_id ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); t.remove(); openChat({ module: j.module, sessionId: j.chat_session_id, title: titleOf(j.module) }); } }, '看对话') : null,
+    h('button.icon', { onclick: () => t.remove(), title: '关闭' }, ui.icon('x')),
+  ]);
+  document.body.append(t);
+  setTimeout(() => t.remove(), 15000);
 }
 
 const currentId = () => location.hash.slice(1).split('/')[0] || meta.modules[0]?.id || 'settings';

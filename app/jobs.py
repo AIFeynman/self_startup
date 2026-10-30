@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
@@ -15,11 +16,12 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
 def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system: str = "",
-           cwd: str | None = None, add_dirs: list[str] | None = None) -> int:
-    """提交后台 Agent 任务，返回 job id。完成后调用 modules.<module>.on_job_done(job)。"""
+           cwd: str | None = None, add_dirs: list[str] | None = None, chat_session_id: int | None = None) -> int:
+    """提交后台 Agent 任务，返回 job id。完成后调用 modules.<module>.on_job_done(job)，
+    有 chat_session_id 时再把结果回帖到那个对话（对话里让 Agent 提交的任务，见 chat.link_jobs）。"""
     engine = engine or settings.get("engines.default", "claude")
     jid = db.insert("jobs", {"module": module, "ref": ref, "engine": engine, "prompt": prompt,
-                             "status": "queued", "created_at": db.now()})
+                             "status": "queued", "created_at": db.now(), "chat_session_id": chat_session_id})
     _pool.submit(_run, jid, module, prompt, engine, system, cwd, [*(add_dirs or []), str(kb.KB_DIR)])
     return jid
 
@@ -51,7 +53,59 @@ def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_
             hook(db.row("SELECT * FROM jobs WHERE id=?", [jid]))
         except Exception:  # noqa: BLE001
             log.exception("on_job_done %s/%s failed", module, jid)
+    notify_chat(db.row("SELECT * FROM jobs WHERE id=?", [jid]))
     kb.schedule_sync()
+
+
+def describe(job: dict) -> tuple[str, str, str]:
+    """(标题, 页面链接, 类型) —— 给回帖、通知、交付列表用。"""
+    ref, module = job.get("ref") or "", job["module"]
+
+    def one(sql, *a):
+        try:
+            return db.row(sql, a) or {}
+        except Exception:  # noqa: BLE001 —— 板块表可能不存在
+            return {}
+    if m := re.fullmatch(r"learn:item:(\d+)", ref):
+        r = one("SELECT title,url FROM learn_items WHERE id=?", int(m[1]))
+        return r.get("title") or r.get("url") or ref, f"#learn/item/{m[1]}", "深读笔记"
+    if m := re.fullmatch(r"learn:plan:(\d+)", ref):
+        return one("SELECT topic FROM learn_plans WHERE id=?", int(m[1])).get("topic") or ref, f"#learn/plan/{m[1]}", "学习计划"
+    if m := re.fullmatch(r"research:(\d+):(r\d+|synth)", ref):
+        topic = one("SELECT topic FROM research WHERE id=?", int(m[1])).get("topic") or ref
+        return topic, f"#research/r/{m[1]}", "调研综合报告" if m[2] == "synth" else "调研结果"
+    first = next((ln.strip("# ").strip() for ln in (job.get("prompt") or "").splitlines() if ln.strip()), "")
+    return (first[:60] or ref or module), f"#{module}", "后台任务"
+
+
+def notify_chat(job: dict | None) -> None:
+    """任务结束后在发起它的对话里补一条 Agent 消息（完成 → 结果摘要 + 链接；失败 → 日志末尾）。"""
+    if not job or not job.get("chat_session_id") or job["status"] not in ("done", "failed"):
+        return
+    sid = job["chat_session_id"]
+    if not db.row("SELECT id FROM chat_sessions WHERE id=?", [sid]):
+        return
+    title, link, kind = describe(job)
+    if job["status"] == "done":
+        out = (job.get("output") or "").strip()
+        body = out if len(out) <= 2500 else out[:2500] + "…"
+        text = f"**{kind}完成** · [{title}]({link})\n\n{body}\n\n[打开查看 →]({link})"
+    else:
+        tail = "\n".join((job.get("log") or "").splitlines()[-8:])
+        text = f"**{kind}失败** · [{title}]({link})\n\n```\n{tail or '（无日志）'}\n```\n可以在页面上点「重跑」，或告诉我怎么调整。"
+    db.insert("chat_messages", {"session_id": sid, "role": "assistant", "content": text, "created_at": db.now()})
+    db.update("chat_sessions", sid, {"updated_at": db.now()})
+
+
+@router.get("/finished")
+def finished(since: str):
+    """since 之后结束的任务，前端轮询用来弹通知、刷新对话。"""
+    out = []
+    for j in db.rows("SELECT id,module,ref,status,prompt,chat_session_id,finished_at FROM jobs WHERE finished_at>? ORDER BY finished_at", [since]):
+        title, link, kind = describe(j)
+        j.pop("prompt")
+        out.append({**j, "title": title, "link": link, "kind": kind})
+    return out
 
 
 @router.get("")

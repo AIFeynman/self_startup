@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, db, kb, modules
+from . import agent, db, jobs, kb, modules
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -82,6 +82,7 @@ def chat(module: str, body: ChatIn):
     engine = sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"])
 
     def stream():
+        last_job = (db.row("SELECT max(id) AS m FROM jobs") or {}).get("m") or 0
         yield _sse({"type": "meta", "session_id": sid})
         final, eng_session, used = "", sess["engine_session"], engine
         for ev in agent.run_stream(body.message, engine=engine, system=system,
@@ -96,10 +97,22 @@ def chat(module: str, body: ChatIn):
         db.insert("chat_messages", {"session_id": sid, "role": "assistant" if final else "error",
                                     "content": final or "（无回复，见上方错误）", "created_at": db.now()})
         db.update("chat_sessions", sid, {"engine": used, "engine_session": eng_session, "updated_at": db.now()})
-        yield _sse({"type": "end"})
+        linked = link_jobs(sid, last_job)
+        yield _sse({"type": "end", "jobs": linked})
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def link_jobs(sid: int, after_id: int) -> list[int]:
+    """这一轮对话里 Agent 通过 API 提交的后台任务（id > 本轮开始时的最大 id），挂到这个对话上：任务结束时结果会回帖过来。
+    （Agent 用 curl 调接口，带不上会话 id，所以按本轮期间新建的任务认领；已经结束的立即回帖。）"""
+    js = db.rows("SELECT * FROM jobs WHERE id>? AND chat_session_id IS NULL", [after_id])
+    for j in js:
+        db.execute("UPDATE jobs SET chat_session_id=? WHERE id=? AND chat_session_id IS NULL", [sid, j["id"]])
+        if j["status"] in ("done", "failed"):
+            jobs.notify_chat({**j, "chat_session_id": sid})
+    return [j["id"] for j in js]
 
 
 def _sse(obj: dict) -> str:

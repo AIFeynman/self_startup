@@ -30,6 +30,8 @@ PLATFORM_GUIDE = f"""
 - 本地知识库（只读 markdown，自动同步）：{DATA_DIR / "kb"}。先读 INDEX.md；按日期看 daily/、按主题看 tags/；
   关键词检索用 curl -s "{API_BASE}/api/kb/search?q=关键词" 或 rg；先看 frontmatter 的 summary 再决定读哪几个文件，引用时给路径。
   回答涉及用户过往记录、学习、调研时，先查知识库。
+- 提交后台任务（深读、学习计划、调研等）后不要 sleep / 轮询等结果：说明已提交、大概多久、在哪看，然后结束本轮。
+  任务完成后平台会自动把结果回帖到这个对话并通知用户。
 - 默认中文回答，简洁、具体，不要过度设计。
 """.strip()
 

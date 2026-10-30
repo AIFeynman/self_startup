@@ -16,7 +16,7 @@ from datetime import date as Date, datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db, settings, tasks
+from .. import db, jobs, settings, tasks
 from . import _agents_scan as scanner, _deliveries as deliv, _utilization as util
 
 TITLE = "Agent 看板"
@@ -178,31 +178,18 @@ def agent_context(ref: str) -> str:
 
 def _job_deliveries(day: str) -> list[dict]:
     """平台后台任务里有交付物的：深读笔记、学习计划、调研报告（完成即交付）。"""
-    out = []
-    for j in db.rows("SELECT id,module,ref,finished_at FROM jobs WHERE status='done' AND substr(finished_at,1,10)=? ORDER BY id DESC", [day]):
-        ref, title, link, label = j["ref"] or "", "", "", ""
-        if m := re.fullmatch(r"learn:item:(\d+)", ref):
-            r = db.row("SELECT title,url FROM learn_items WHERE id=?", [int(m[1])]) if _table("learn_items") else None
-            title, link, label = (r or {}).get("title") or (r or {}).get("url") or ref, f"#learn/item/{m[1]}", "深读笔记"
-        elif m := re.fullmatch(r"learn:plan:(\d+)", ref):
-            r = db.row("SELECT topic FROM learn_plans WHERE id=?", [int(m[1])]) if _table("learn_plans") else None
-            title, link, label = (r or {}).get("topic") or ref, f"#learn/plan/{m[1]}", "学习计划"
-        elif m := re.fullmatch(r"research:(\d+):(?:r\d+|synth)", ref):
-            if not ref.endswith("synth") and any(x["ref"] == f"research:{m[1]}:synth" for x in out if "ref" in x):
-                continue
-            r = db.row("SELECT topic FROM research WHERE id=?", [int(m[1])]) if _table("research") else None
-            title, link, label = (r or {}).get("topic") or ref, f"#research/r/{m[1]}", "调研综合报告" if ref.endswith("synth") else "调研结果"
-        else:
-            continue
-        out.append({"key": f"job:{j['id']}", "ref": ref, "engine": "platform", "status": "delivered", "kind": "doc",
+    out, synth = [], set()
+    for j in db.rows("SELECT id,module,ref,prompt,finished_at FROM jobs WHERE status='done' AND substr(finished_at,1,10)=? "
+                     "AND (ref LIKE 'learn:%' OR ref LIKE 'research:%') ORDER BY id DESC", [day]):
+        rid = (re.match(r"research:(\d+):", j["ref"]) or [None, None])[1]
+        if rid and (rid in synth or j["ref"].endswith("synth") and synth.add(rid)):
+            continue  # 同一调研有综合报告时，只列综合报告
+        title, link, label = jobs.describe(j)
+        out.append({"key": f"job:{j['id']}", "engine": "platform", "status": "delivered", "kind": "doc",
                     "kinds": [], "labels": [label], "at": (j["finished_at"] or "")[11:16], "project": "学习平台 · " + j["module"],
                     "title": scanner._clip(title, 80), "link": link, "summary": "", "docs": [], "docs_total": 0,
                     "commands": [], "automated": False, "cwd": "", "branch": ""})
     return out
-
-
-def _table(name: str) -> bool:
-    return bool(db.row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", [name]))
 
 
 def deliveries(day: str = "", automated: bool = False) -> dict:

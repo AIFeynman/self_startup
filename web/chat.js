@@ -17,7 +17,13 @@ const TIPS = {
 const state = { module: '', ref: '', title: '', sessionId: null, busy: false };
 let root, box, log, sessSel, engineSel;
 
-export function initChat(el) { root = el; }
+export function initChat(el) {
+  root = el;
+  // 对话里提交的后台任务结束时，平台已把结果回帖到那个对话；正在看它就刷新
+  document.addEventListener('job-done', (e) => {
+    if (e.detail.chat_session_id && e.detail.chat_session_id === state.sessionId && !state.busy) loadMessages();
+  });
+}
 
 export async function openChat({ module, ref = '', prefill = '', send = '', title = '', expand = true, fresh = false, sessionId = null } = {}) {
   const changed = module !== state.module || ref !== state.ref || fresh || sessionId;
@@ -89,7 +95,7 @@ async function submit(text) {
     });
     const reader = r.body.getReader();
     const dec = new TextDecoder();
-    let buf = ''; const texts = [];
+    let buf = ''; const texts = []; let linked = [];
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -100,6 +106,7 @@ async function submit(text) {
         if (!line.startsWith('data: ')) continue;
         const ev = JSON.parse(line.slice(6));
         if (ev.type === 'meta') state.sessionId = ev.session_id;
+        else if (ev.type === 'end' && ev.jobs?.length) linked = ev.jobs;
         else if (ev.type === 'tool') log.insertBefore(bubble('tool', ev.text), pending);
         else if (ev.type === 'error' || ev.type === 'engine') log.insertBefore(bubble('error', ev.text), pending);
         else if (ev.type === 'text') { texts.push(ev.text); pending.classList.remove('pending'); body.replaceChildren(md(texts.join('\n\n'))); }
@@ -108,6 +115,11 @@ async function submit(text) {
       }
     }
     if (!texts.length && body.querySelector('.dots')) pending.remove();
+    if (linked.length) {
+      await loadMessages(); // 已经跑完的任务此时已回帖
+      log.append(h('div.msg.tool', {}, `⏳ 这轮提交了 ${linked.length} 个后台任务，完成后结果会自动发到这个对话`));
+      log.scrollTop = log.scrollHeight;
+    }
     document.dispatchEvent(new CustomEvent('agent-done', { detail: { module: state.module, ref: state.ref } }));
   } catch (e) {
     body.replaceChildren('出错：' + e.message);
