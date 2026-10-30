@@ -16,6 +16,8 @@ log = logging.getLogger(__name__)
 # 各板块共享；比 Agent 并发度留些余量，避免长调研任务堵住短任务（拆解等）
 _pool = ThreadPoolExecutor(max_workers=max(4, 2 * int(settings.get("max_agent_concurrency", 3))))
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+_procs: dict[int, object] = {}  # job id → 正在跑的 CLI 子进程
+_paused: set[int] = set()       # 用户要求暂停、还没收尾的 job
 
 
 def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system: str = "",
@@ -30,13 +32,26 @@ def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system:
     return jid
 
 
+def _on_proc(jid: int):
+    def track(proc) -> None:
+        _procs[jid] = proc
+        if jid in _paused:
+            proc.terminate()
+    return track
+
+
 def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_dirs, session_in: str = "") -> None:
+    if jid in _paused:  # 排队时就被暂停了
+        _paused.discard(jid)
+        return
     db.update("jobs", jid, {"status": "running", "started_at": db.now()})
     log_lines: list[str] = []
     text, session, used = "", "", engine
     try:
         for ev in agent.run_stream(prompt, engine=engine, system=system, session=session_in, cwd=cwd, add_dirs=add_dirs,
-                                   fallback=not session_in):
+                                   fallback=not session_in, on_proc=_on_proc(jid)):
+            if jid in _paused:
+                break
             if ev["type"] == "session":
                 session = ev["id"]
             elif ev["type"] == "done":
@@ -49,19 +64,32 @@ def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_
         log.exception("job %s failed", jid)
         log_lines.append(f"[exception] {e}")
         status = "failed"
+    finally:
+        _procs.pop(jid, None)
+    if jid in _paused:  # 暂停：留下会话 id 以便续接；不提取审批、不回帖
+        _paused.discard(jid)
+        log_lines.append("[paused] 用户暂停，会话已保存，可在平台上「继续」")
+        db.update("jobs", jid, {"status": "paused", "output": text, "engine_session": session or session_in,
+                                "log": "\n".join(log_lines[-200:]), "finished_at": db.now()})
+        _hook(module, "on_job_done", db.row("SELECT * FROM jobs WHERE id=?", [jid]))
+        return
     db.update("jobs", jid, {"status": status, "output": text, "engine": used, "engine_session": session,
                             "fallback_from": engine if used and used != engine else "",
                             "log": "\n".join(log_lines[-200:]), "finished_at": db.now()})
-    mod = modules.get(module)
-    hook = getattr(mod, "on_job_done", None) if mod else None
-    if hook:
-        try:
-            hook(db.row("SELECT * FROM jobs WHERE id=?", [jid]))
-        except Exception:  # noqa: BLE001
-            log.exception("on_job_done %s/%s failed", module, jid)
+    _hook(module, "on_job_done", db.row("SELECT * FROM jobs WHERE id=?", [jid]))
     notify_chat(db.row("SELECT * FROM jobs WHERE id=?", [jid]))
     record_approvals(db.row("SELECT * FROM jobs WHERE id=?", [jid]))
     kb.schedule_sync()
+
+
+def _hook(module: str, name: str, *args) -> None:
+    mod = modules.get(module)
+    fn = getattr(mod, name, None) if mod else None
+    if fn:
+        try:
+            fn(*args)
+        except Exception:  # noqa: BLE001
+            log.exception("%s %s failed", name, module)
 
 
 def describe(job: dict) -> tuple[str, str, str]:
@@ -147,19 +175,58 @@ def notify_chat(job: dict | None) -> None:
 # ---------------------------------------------------------------- 审批
 APPROVAL_REFS = re.compile(r"plan:run:\d+|approval:\d+")  # 只从「执行类」任务里提取，深读 / 调研的正文里也会出现「需要你」
 DECISION = {"approved": "批准", "rejected": "不批准", "replied": "回复", "dismissed": "忽略（不用处理）"}
+# 执行类 Agent 什么时候才问人（规划派发、审批续接共用）：一个任务汇总问一次，别每轮追问
+ASK_RULE = """只有**之前没问过**、且不可逆的决定（合并 main、发布 dev / 线上、删改用户数据、对外发送、花钱或大量 token）才问人：
+每条单独一行以 `NEEDS_YOU:` 开头，写清要决定什么、你的建议和在哪看材料，最多 3 条，一次问全。
+其余可逆的选择按你的建议默认继续，在总结里列「我按默认做的决定」；已经决定过的事不要再问。"""
 FOLLOWUP_PROMPT = """用户在学习平台上对你上次列出的待审批 / 待决策事项做了决定：
 
 {decisions}
 
 请按这些决定继续：批准的照做（合并 main / 发布 dev / 发布线上：按仓库流程执行，完成后汇报版本、改动和回滚方式）；
 不批准的不要执行，说明你会怎么调整；回复的按附言处理；忽略的不用管。
-还有需要人审批或决策的，每条单独一行以 `NEEDS_YOU:` 开头。最后用 3-5 行中文总结做了什么、产出在哪。"""
+""" + ASK_RULE + "\n最后用 3-5 行中文总结做了什么、产出在哪。"
+
+
+def lineage(job_id: int) -> list[int]:
+    """这个 job 往上追溯到最初的执行任务：[最初, …, 自己]（审批续接的 ref 是 approval:<上一轮 job>）。"""
+    out, jid = [], job_id
+    while jid and jid not in out:
+        out.append(jid)
+        r = db.row("SELECT ref FROM jobs WHERE id=?", [jid]) or {}
+        m = re.fullmatch(r"approval:(\d+)", r.get("ref") or "")
+        jid = int(m[1]) if m else 0
+    return out[::-1]
+
+
+def chain_tip(job_id: int) -> tuple[dict | None, int]:
+    """最初任务 → 最新一轮（审批续接 / 继续执行都挂在上一轮下面）。返回 (最新 job, 第几轮)。"""
+    tip, rnd = db.row("SELECT * FROM jobs WHERE id=?", [job_id]), 1
+    while tip and (nxt := db.row("SELECT * FROM jobs WHERE ref=? ORDER BY id DESC LIMIT 1", [f"approval:{tip['id']}"])):
+        tip, rnd = nxt, rnd + 1
+    return tip, rnd
+
+
+def _grams(t: str) -> set[str]:
+    t = re.sub(r"[\s`*_，。、：:；;,.()（）「」“”\"'-]+", "", t.lower())
+    return {t[i:i + 2] for i in range(len(t) - 1)}
+
+
+def _asked_before(item: str, prev: list[str]) -> bool:
+    g = _grams(item)
+    return any(len(g & (p := _grams(x))) / max(1, len(g | p)) >= 0.5 for x in prev)
 
 
 def record_approvals(job: dict | None) -> None:
     if not job or job.get("status") != "done" or not APPROVAL_REFS.fullmatch(job.get("ref") or ""):
         return
+    if db.row("SELECT id FROM approvals WHERE job_id=?", [job["id"]]):  # 已经提取过（含被去重全部跳过的情况见下）
+        return
+    ups = lineage(job["id"])[:-1]
+    prev = [r["item"] for r in db.rows(f"SELECT item FROM approvals WHERE job_id IN ({','.join('?' * len(ups))})", ups)] if ups else []
     for item in needs_you(job.get("output") or ""):
+        if _asked_before(item, prev):  # 前几轮问过的同一件事，不再问一遍
+            continue
         db.execute("INSERT OR IGNORE INTO approvals(job_id,item,status,created_at) VALUES (?,?, 'pending', ?)",
                    [job["id"], item[:1000], db.now()])
 
@@ -184,8 +251,9 @@ def approvals(status: str = "pending") -> list[dict]:
         j = db.row("SELECT id,module,ref,prompt,status,finished_at FROM jobs WHERE id=?", [a["job_id"]]) or {}
         title, link, kind = describe(j) if j else ("（任务已删除）", "", "")
         f = db.row("SELECT status FROM jobs WHERE id=?", [a["followup_job_id"]]) if a["followup_job_id"] else None
+        line = lineage(a["job_id"])
         out.append({**a, "title": title, "link": link, "kind": kind, "finished_at": j.get("finished_at"),
-                    "followup_status": f["status"] if f else ""})
+                    "followup_status": f["status"] if f else "", "root_job_id": line[0], "round": len(line)})
     return out
 
 
@@ -229,6 +297,55 @@ def _followup(job_id: int) -> int | None:
                  session=job.get("engine_session") or "")
     db.execute(f"UPDATE approvals SET followup_job_id=? WHERE id IN ({','.join('?' * len(items))})", [fid, *[i["id"] for i in items]])
     return fid
+
+
+# ---------------------------------------------------------------- 暂停 / 继续
+RESUME_PROMPT = """你上次的执行被用户在学习平台上暂停了，现在继续：先确认已经做到哪一步，从停下的地方接着把原来的任务做完，不要重复已完成的部分。
+结束时照原来的要求输出（STATUS 行、总结等）。""" + "\n" + ASK_RULE
+
+
+def pause(jid: int) -> bool:
+    j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
+    if not j or j["status"] not in ("queued", "running"):
+        return False
+    _paused.add(jid)
+    if proc := _procs.get(jid):
+        proc.terminate()
+    elif j["status"] == "queued":  # 还没开始：_run 起来时会直接跳过
+        db.update("jobs", jid, {"status": "paused", "log": (j["log"] or "") + "\n[paused] 排队中被暂停", "finished_at": db.now()})
+        _hook(j["module"], "on_job_done", db.row("SELECT * FROM jobs WHERE id=?", [jid]))
+    return True
+
+
+@router.post("/pause_all")
+def pause_all():
+    """暂停所有执行类任务（规划派发 + 审批续接），并关掉规划的到点自动派发。调研、深读等不受影响。"""
+    settings.save({"plan_auto_dispatch": False})
+    ids = [j["id"] for j in db.rows("SELECT id,ref FROM jobs WHERE status IN ('queued','running')")
+           if APPROVAL_REFS.fullmatch(j["ref"] or "") and pause(j["id"])]
+    return {"paused": ids, "auto_dispatch": False}
+
+
+@router.post("/{jid}/pause")
+def pause_job(jid: int):
+    if not pause(jid):
+        raise HTTPException(400, "只有排队中或执行中的任务能暂停")
+    return {"ok": True}
+
+
+@router.post("/{jid}/resume")
+def resume_job(jid: int):
+    """续接被暂停的会话继续做；新 job 挂在原 job 下（approval:<原 job>），审批、看板都按同一条链显示。"""
+    j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
+    if not j or j["status"] != "paused":
+        raise HTTPException(400, "只有已暂停的任务能继续")
+    if db.row("SELECT id FROM jobs WHERE ref=?", [f"approval:{jid}"]):
+        raise HTTPException(400, "这个任务已经继续过了")
+    sess, cwd = j.get("engine_session") or "", _job_cwd(j)
+    nid = submit(j["module"], RESUME_PROMPT if sess else j["prompt"], ref=f"approval:{jid}", engine=j["engine"],
+                 cwd=cwd, add_dirs=[cwd] if cwd else [], chat_session_id=j.get("chat_session_id"), session=sess)
+    _hook(j["module"], "on_job_resumed", j, nid)
+    return {"ok": True, "job_id": nid}
 
 
 @router.get("/finished")

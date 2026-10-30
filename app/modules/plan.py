@@ -287,7 +287,7 @@ def schedule_day(items: list[dict], cfg: dict, from_time: str = "") -> dict:
 
 def _cfg() -> dict:
     s = settings.load()
-    return {k: s.get(k) for k in ("focus_windows", "day_start", "day_end", "max_agent_concurrency")}
+    return {k: s.get(k) for k in ("focus_windows", "day_start", "day_end", "max_agent_concurrency", "plan_auto_dispatch")}
 
 
 def _children_map(ts: list[dict]) -> dict[int, list[dict]]:
@@ -636,8 +636,15 @@ def on_job_done(job: dict) -> None:
         did = save_draft(ref.split(":", 2)[2], data, job["id"])
         n = sum(len(it["subtasks"]) for it in _norm_draft(data)["items"])
         db.update("jobs", job["id"], {"log": (job.get("log") or "") + f"\n[plan] 拆解草稿 #{did}：{n} 个子任务，讨论 / 确认后生效"})
-    elif ref.startswith("plan:run:"):
+    elif ref.startswith(("plan:run:", "approval:")):  # 审批续接 / 暂停后继续也回写到最初那次执行
         _finish_run(job)
+
+
+def on_job_resumed(old: dict, new_jid: int) -> None:
+    run = db.row("SELECT * FROM plan_runs WHERE job_id=?", [jobs.lineage(old["id"])[0]])
+    if run:
+        db.update("plan_runs", run["id"], {"status": "running", "finished_at": None})
+        tasks.patch(run["task_id"], {"status": "doing"})
 
 
 # ---------------------------------------------------------------- 让 Agent 执行
@@ -646,7 +653,7 @@ RUN_PROMPT = """你是被「规划」板块派发的自动执行 Agent，请独�
 完成标准：{goal}
 {parent}{repo}
 完成后在回复最后单独一行输出 `STATUS: done` 或 `STATUS: partial`（未完全达成），再用 3-5 行中文总结做了什么、产出在哪、还需要人做什么。
-需要人审批或决策的事项（合并 main、发布、改用户数据、产品取舍…）每条单独一行，以 `NEEDS_YOU:` 开头，写清要决定什么、你的建议和在哪看材料。"""
+""" + jobs.ASK_RULE
 
 
 class LaunchIn(BaseModel):
@@ -671,11 +678,19 @@ def launch(tid: int, body: LaunchIn | None = None):
 
 
 def _finish_run(job: dict) -> None:
-    run = db.row("SELECT * FROM plan_runs WHERE job_id=?", [job["id"]])
+    root = jobs.lineage(job["id"])[0]
+    run = db.row("SELECT * FROM plan_runs WHERE job_id=?", [root])
     if not run:
         return
     out = job.get("output") or ""
     m = re.findall(r"STATUS:\s*(done|partial)", out, re.I)
+    if job.get("status") == "paused":  # 用户暂停：不算失败，也不触发下一个任务
+        db.update("plan_runs", run["id"], {"status": "paused", "finished_at": db.now()})
+        if (t := db.row("SELECT status FROM tasks WHERE id=?", [run["task_id"]])) and t["status"] == "doing":
+            tasks.patch(run["task_id"], {"status": "todo"})
+        return
+    if root != job["id"] and job.get("status") == "done" and not m:  # 续接这一轮没给新结论，保持原状态
+        return
     if job.get("status") != "done":
         st = "failed"
     else:
@@ -718,7 +733,7 @@ def auto_dispatch(now: datetime | None = None) -> list[int]:
     if not cfg.get("plan_auto_dispatch", True):
         return []
     now = now or datetime.now()
-    busy = db.row("SELECT count(*) AS n FROM plan_runs r JOIN jobs j ON j.id=r.job_id WHERE j.status IN ('queued','running')")["n"]
+    busy = db.row("SELECT count(*) AS n FROM jobs WHERE status IN ('queued','running') AND (ref LIKE 'plan:run:%' OR ref LIKE 'approval:%')")["n"]
     free = int(cfg.get("max_agent_concurrency", 3)) - busy
     sent = []
     for t in due_tasks(now.date().isoformat(), now.strftime("%H:%M"))[:max(0, free)]:
@@ -749,7 +764,11 @@ def runs(date: str = "", task_id: int = 0):
         sql, args = sql + " AND t.date=?", args + [date]
     if task_id:
         sql, args = sql + " AND r.task_id=?", args + [task_id]
-    return db.rows(sql + " ORDER BY r.id DESC LIMIT 200", args)
+    out = db.rows(sql + " ORDER BY r.id DESC LIMIT 200", args)
+    for r in out:  # 审批续接 / 继续执行之后，看最新一轮
+        tip, rnd = jobs.chain_tip(r["job_id"])
+        r.update(tip_job_id=tip["id"] if tip else r["job_id"], tip_status=tip["status"] if tip else "", round=rnd)
+    return out
 
 
 # ---------------------------------------------------------------- 日视图 / 顺延 / 排程

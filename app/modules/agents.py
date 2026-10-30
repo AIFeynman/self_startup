@@ -57,14 +57,15 @@ def _job_cards(hours: float) -> list[dict]:
                      "WHERE created_at>=? ORDER BY id DESC LIMIT 100", [since]):
         last = j["finished_at"] or j["started_at"] or j["created_at"]
         state, reason = {"queued": ("running", "排队中"), "running": ("running", "执行中"),
-                         "done": ("review", "已完成"), "failed": ("attention", "失败")}.get(j["status"], ("review", j["status"]))
+                         "done": ("review", "已完成"), "failed": ("attention", "失败"),
+                         "paused": ("attention", "已暂停，可在规划页继续")}.get(j["status"], ("review", j["status"]))
         title, link, kind = jobs.describe(j)
         # 跑的过程中 output 还是空的：拿日志最后几步当进展
         steps = [ln.strip() for ln in (j["log"] or "").splitlines() if ln.strip().startswith("[tool]")]
         doing = scanner._clip(steps[-1].removeprefix("[tool]").strip(), 120) if steps else ""
         if j["status"] in ("queued", "running"):
             reason += f" · 已执行 {len(steps)} 步" if steps else ""
-        need = jobs.needs_you(j["output"]) if j["status"] == "done" else []
+        need = [a["item"] for a in db.rows("SELECT item FROM approvals WHERE job_id=? AND status='pending' ORDER BY id", [j["id"]])]
         if need:
             state, reason = "attention", f"待你审批 {len(need)} 项：{need[0][:60]}"
         if j.get("fallback_from"):
