@@ -111,7 +111,7 @@
 | D1 换 RSS 列表 | 通过 `PUT /api/settings` 写入 12 个源（feed 下其它键不变）；立即只刷 RSS：+94 条，0 错误，blog 库存 142 → 206 | 原文件备份在 scratchpad `settings.before-d1.json`。回滚：把 `feed.rss` PUT 回旧的 4 个 URL |
 | 合并 main | `origin/feat/content-quality-audit` `--no-ff` 合入 main，合并提交 `12b3e91`（合并前 main = `21eda27`），测试 76 passed，已 push | 回滚：`git revert -m 1 12b3e91` |
 | 明天继续 #1–#4、#6 | 在新分支 `feat/content-quality-followup`（基于 `12b3e91`）实现，**未合并 main**，等你验收 | 见下表 |
-| 明天继续 #5 双引擎调研 | 平台这时有 3 个任务在跑，main 的新代码要等它们结束才会重启生效（reload pending）。为了让调研用上新的 prompt，等重启后再发起，见回复 | — |
+| 明天继续 #5 双引擎调研 | **没有执行**。平台上有 3 个 `plan approval` 任务在跑（job 15–17，其中一个就是本会话），main 的新代码要等它们结束才会重启生效（`reload_pending`）。现在发起的话，调研用的还是旧 prompt，验证不了新规则。本会话结束、平台重启后再发起（命令见右侧） | `curl -s -X POST $API/api/research -H 'Content-Type: application/json' -d '{"topic":"AI Agent 评测方法与工具（2026）","angles":["技术原理","关键玩家与竞品","最新进展","对我的启发"],"engines":["claude","codex"],"context":"配合学习计划 1（Agent 评测）"}'`，两个引擎都 done 后执行 `POST $API/api/research/<id>/synthesize` |
 
 ### 明天继续的实现（分支 `feat/content-quality-followup`）
 
