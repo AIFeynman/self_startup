@@ -80,3 +80,76 @@ def test_job_records_engine_fallback(client, monkeypatch):
     jobs._run(jid, "nomod", "p", "codex", "", None, [])
     j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
     assert j["engine"] == "claude" and j["fallback_from"] == "codex" and j["status"] == "done"
+
+
+def test_pause_and_resume_job(client, monkeypatch):
+    """暂停：杀掉子进程、留下会话，不提取审批、不回写成失败；继续：续接会话，挂在原 job 下，规划事项跟着变。"""
+    from app import agent, db, jobs, tasks
+
+    class Proc:
+        killed = False
+        def terminate(self): Proc.killed = True
+        def poll(self): return None
+
+    def fake_stream(prompt, on_proc=None, **kw):
+        yield {"type": "session", "id": "sess-9"}
+        on_proc(Proc())
+        jobs.pause(jid)  # 用户在执行中点了暂停
+        yield {"type": "text", "text": "做了一半"}
+        yield {"type": "done", "text": "做了一半\nNEEDS_YOU: 合并 main？", "engine": "claude"}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+    tid = tasks.create({"date": "2026-10-30", "title": "跑评测", "executor": "claude", "human_level": "auto"})["id"]
+    jid = db.insert("jobs", {"module": "plan", "ref": f"plan:run:{tid}", "engine": "claude", "prompt": "p", "status": "queued",
+                             "created_at": db.now()})
+    rid = db.insert("plan_runs", {"task_id": tid, "job_id": jid, "engine": "claude", "status": "running", "started_at": db.now()})
+    tasks.patch(tid, {"status": "doing"})
+    jobs._run(jid, "plan", "p", "claude", "", None, [])
+    j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
+    assert Proc.killed and j["status"] == "paused" and j["engine_session"] == "sess-9"
+    assert client.get("/api/jobs/approvals").json() == []
+    assert db.row("SELECT status FROM plan_runs WHERE id=?", [rid])["status"] == "paused"
+    assert tasks.get(tid)["status"] == "todo"
+    assert client.post(f"/api/jobs/{jid}/pause").status_code == 400
+
+    sent = []
+    monkeypatch.setattr(jobs, "submit", lambda *a, **kw: sent.append((a, kw)) or db.insert(
+        "jobs", {"module": "plan", "ref": kw["ref"], "engine": "claude", "prompt": a[1], "status": "running", "created_at": db.now()}))
+    nid = client.post(f"/api/jobs/{jid}/resume").json()["job_id"]
+    (args, kw), = sent
+    assert kw["session"] == "sess-9" and kw["ref"] == f"approval:{jid}" and "暂停" in args[1]
+    assert db.row("SELECT status FROM plan_runs WHERE id=?", [rid])["status"] == "running" and tasks.get(tid)["status"] == "doing"
+    assert client.post(f"/api/jobs/{jid}/resume").status_code == 400  # 不重复继续
+    run = next(r for r in client.get("/api/plan/runs?date=2026-10-30").json() if r["id"] == rid)
+    assert run["tip_job_id"] == nid and run["round"] == 2 and run["tip_status"] == "running"
+
+    # 续接这一轮做完：结论回写到最初那次执行
+    db.update("jobs", nid, {"status": "done", "output": "STATUS: done\n收尾了"})
+    from app.modules import plan
+    plan.on_job_done(db.row("SELECT * FROM jobs WHERE id=?", [nid]))
+    assert db.row("SELECT status FROM plan_runs WHERE id=?", [rid])["status"] == "done" and tasks.get(tid)["status"] == "done"
+
+
+def test_pause_all_and_approval_dedupe(client, monkeypatch):
+    from app import db, jobs, settings
+    q = db.insert("jobs", {"module": "plan", "ref": "approval:1", "engine": "claude", "prompt": "p", "status": "queued", "created_at": db.now()})
+    other = db.insert("jobs", {"module": "research", "ref": "research:1:r1", "engine": "claude", "prompt": "p", "status": "queued", "created_at": db.now()})
+    r = client.post("/api/jobs/pause_all").json()
+    assert r["paused"] == [q] and settings.load()["plan_auto_dispatch"] is False
+    assert db.row("SELECT status FROM jobs WHERE id=?", [other])["status"] == "queued"
+    jobs._paused.discard(q)
+    settings.save({"plan_auto_dispatch": True})
+    db.execute("UPDATE jobs SET status='done' WHERE id=?", [other])
+
+    # 第二轮又问了上一轮问过的同一件事：不再列出来；新问题照常列出，并带上所属的最初任务和轮次
+    first = db.insert("jobs", {"module": "plan", "ref": "plan:run:7", "engine": "claude", "prompt": "p", "status": "done",
+                               "created_at": db.now(), "finished_at": db.now(), "output": "NEEDS_YOU: 确认把 `feat/x` 合并到 main，回滚用 revert"})
+    a = client.get("/api/jobs/approvals").json()[0]
+    monkeypatch.setattr(jobs, "submit", lambda *a, **kw: 0)
+    client.post(f"/api/jobs/approvals/{a['id']}/decide", json={"decision": "rejected"})
+    db.insert("jobs", {"module": "plan", "ref": f"approval:{first}", "engine": "claude", "prompt": "p", "status": "done",
+                       "created_at": db.now(), "finished_at": db.now(),
+                       "output": "NEEDS_YOU: 确认把 feat/x 合并到 main（回滚用 revert）\nNEEDS_YOU: 要不要发布 dev？"})
+    items = client.get("/api/jobs/approvals").json()
+    assert [i["item"] for i in items] == ["要不要发布 dev？"]
+    assert items[0]["root_job_id"] == first and items[0]["round"] == 2

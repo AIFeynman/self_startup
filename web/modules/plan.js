@@ -100,6 +100,9 @@ input.pl-pill { width: 64px; cursor: text; text-align: center; }
 .pl-live-row > summary::-webkit-details-marker { display: none; }
 .pl-live-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pl-pulse 1.4s infinite; }
 .pl-live-row.done .dot { animation: none; } .pl-live-row.failed .dot { background: var(--warn); animation: none; }
+.pl-live-row.paused .dot { background: var(--muted); animation: none; }
+.pl-live-row .acts { display: inline-flex; gap: 4px; margin-left: 6px; }
+.pl-live-h .sp { flex: 1; } .pl-live-h button { white-space: nowrap; }
 @keyframes pl-pulse { 50% { opacity: .3; } }
 .pl-live-row .t { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-live-row .now { grid-column: 2 / 4; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -363,14 +366,16 @@ export default {
     function liveCard(d) {
       clearInterval(liveTimer);
       const today0 = state.date === today();
-      // 每个任务只看最近一次执行；今天的显示进行中 + 今天结束的
+      // 每个任务只看最近一次执行（审批续接、暂停后继续都算同一次，看最新一轮）；今天的显示进行中 + 暂停的 + 今天结束的
+      const live = (r) => ['queued', 'running'].includes(r.tip_status);
+      const paused = (r) => r.tip_status === 'paused';
       const seen = new Set();
-      const list = d.runs.filter((r) => !seen.has(r.task_id) && seen.add(r.task_id))
-        .filter((r) => r.status === 'running' || (today0 && (r.finished_at || '').startsWith(state.date)));
+      const latest = d.runs.filter((r) => !seen.has(r.task_id) && seen.add(r.task_id));
+      const list = latest.filter((r) => live(r) || paused(r) || (today0 && (r.finished_at || '').startsWith(state.date)));
       // 可以开跑：自动任务、依赖都完成了、还没在跑
       const st = Object.fromEntries(d.tasks.map((t) => [t.id, t.status]));
       const parents = new Set(d.tasks.map((t) => t.parent_id).filter(Boolean));
-      const busy = new Set(d.runs.filter((r) => r.status === 'running').map((r) => r.task_id));
+      const busy = new Set(latest.filter((r) => live(r) || paused(r)).map((r) => r.task_id)); // 暂停的用「继续」，不重新开跑
       const auto = d.tasks.filter((t) => !parents.has(t.id) && t.human_level === 'auto' && ['todo', 'partial'].includes(t.status) && !busy.has(t.id));
       const ready = auto.filter((t) => (t.depends_on || []).every((x) => st[x] === 'done'));
       const blocked = auto.filter((t) => !ready.includes(t));
@@ -378,10 +383,11 @@ export default {
       const rows = list.map((r) => {
         const now = h('div.now', {}, '读取中…');
         const meta = h('span.meta');
+        const acts = h('span.acts');
         const log = h('div.pl-live-log');
-        const row = h(`details.pl-live-row.${r.status}`, {}, [
-          h('summary', {}, [h('span.dot'), h('span.t', { title: r.title }, r.title), meta, now]), log]);
-        return { r, row, now, meta, log };
+        const row = h(`details.pl-live-row.${live(r) ? 'running' : r.tip_status || r.status}`, {}, [
+          h('summary', {}, [h('span.dot'), h('span.t', { title: r.title }, r.title), h('span', {}, [meta, acts]), now]), log]);
+        return { r, row, now, meta, acts, log };
       });
       const elapsed = (a, b) => { const m = Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`; };
       const tick = async () => {
@@ -389,22 +395,38 @@ export default {
         let finished = false;
         await Promise.all(rows.map(async (x) => {
           try {
-            const j = await api.get(`/api/jobs/${x.r.job_id}`);
+            const j = await api.get(`/api/jobs/${x.r.tip_job_id || x.r.job_id}`);
             const steps = (j.log || '').split('\n').filter((l) => l.startsWith('[tool]'));
             const last = (steps.at(-1) || '').replace('[tool] ', '');
-            const status = { queued: '排队中', running: '执行中', done: '完成', failed: '失败' }[j.status] || j.status;
-            x.meta.textContent = `${status} · ${elapsed(j.started_at || j.created_at, j.finished_at)} · ${steps.length} 步`;
+            const status = { queued: '排队中', running: '执行中', done: '完成', failed: '失败', paused: '已暂停' }[j.status] || j.status;
+            const rnd = x.r.round > 1 ? ` · 第 ${x.r.round} 轮` : '';
+            x.meta.textContent = `${status}${rnd} · ${elapsed(j.started_at || j.created_at, j.finished_at)} · ${steps.length} 步`;
+            x.row.className = `pl-live-row ${j.status === 'queued' ? 'running' : j.status}`;
+            x.acts.replaceChildren(
+              ['queued', 'running'].includes(j.status) ? h('button.sm.outline', { onclick: (e) => act(e, `/api/jobs/${j.id}/pause`, '已暂停，会话已保存') }, '暂停') : '',
+              j.status === 'paused' ? h('button.sm.primary', { onclick: (e) => act(e, `/api/jobs/${j.id}/resume`, '已续接原会话继续执行') }, '继续') : '');
             x.now.textContent = j.status === 'running' || j.status === 'queued' ? (last ? '正在：' + last : '启动中…')
               : (j.output || '').trim().split('\n').filter(Boolean).slice(-1)[0] || status;
             x.log.textContent = j.status === 'done' ? j.output : (j.log || '').split('\n').slice(-40).join('\n');
-            const n = j.status === 'done' ? needsYou(j.output) : [];
-            x.meta.replaceChildren(x.meta.textContent, n.length ? h('span.tag.warn', { style: 'margin-left:6px' }, `待审批 ${n.length}`) : '');
-            if (x.r.status === 'running' && j.status !== 'running' && j.status !== 'queued') finished = true;
+            if (live(x.r) && j.status !== 'running' && j.status !== 'queued') finished = true;
           } catch (e) { x.now.textContent = '读取失败：' + e.message; }
         }));
         if (finished) load();
       };
-      const running = list.filter((r) => r.status === 'running').length;
+      const act = async (e, url, msg) => {
+        e.preventDefault(); e.stopPropagation(); // 按钮在 summary 里，别顺手展开日志
+        try { await api.post(url, {}); toast(msg); load(); } catch (err) { toast(err.message, true); }
+      };
+      const running = list.filter(live).length;
+      const nPaused = list.filter(paused).length;
+      const autoOn = d.config.plan_auto_dispatch !== false;
+      const pauseAll = async () => {
+        if (!confirm(`暂停全部 ${running} 个执行中的 Agent，并关掉到点自动派发？会话都会保存，之后可逐个「继续」。`)) return;
+        try { const r = await api.post('/api/jobs/pause_all', {}); toast(`已暂停 ${r.paused.length} 个，自动派发已关`); load(); } catch (e) { toast(e.message, true); }
+      };
+      const setAuto = async (on) => {
+        try { await api.put('/api/settings', { plan_auto_dispatch: on }); toast(on ? '到点自动派发已打开' : '到点自动派发已关闭'); load(); } catch (e) { toast(e.message, true); }
+      };
       const cap = +d.config.max_agent_concurrency || 3;
       const launch = async (ts) => {
         for (const t of ts) {
@@ -425,9 +447,13 @@ export default {
         blocked.length ? h('div.muted.pl-blocked', {}, `还在等依赖：${blocked.map((t) => t.title.slice(0, 18)).join('、')}`) : null,
       ]) : null;
       const box = h('div.card.pl-live', {}, [
-        h('div.pl-live-h', {}, [h('b', {}, '正在执行'), h('span.muted', {}, `${running} 个 Agent 在跑${list.length > running ? ` · 今天已结束 ${list.length - running} 个` : ''} · 每 10 秒刷新 · 点开看日志 · 结束后结果也会回帖到发起的对话`)]),
+        h('div.pl-live-h', {}, [h('b', {}, '正在执行'),
+          h('span.muted', {}, `${running} 个 Agent 在跑${nPaused ? ` · 已暂停 ${nPaused} 个` : ''}${list.length > running + nPaused ? ` · 今天已结束 ${list.length - running - nPaused} 个` : ''} · 每 10 秒刷新 · 点开看日志`),
+          h('span.sp'),
+          h('button.sm.ghost', { onclick: () => setAuto(!autoOn), title: '到排程时间且依赖完成的自动任务，是否自动派给 Agent' }, autoOn ? '自动派发：开' : '自动派发：已关'),
+          running ? h('button.sm.outline', { onclick: pauseAll }, '全部暂停') : null]),
         readyBox, ...rows.map((x) => x.row)]);
-      tick();
+      setTimeout(tick); // 等面板挂到页面上再读，否则 tick 以为面板已移除
       if (running) liveTimer = setInterval(tick, 10000);
       return [box];
     }

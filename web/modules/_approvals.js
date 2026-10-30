@@ -19,12 +19,13 @@ export function approvals(ctx, { fallback, onChange } = {}) {
         h('ul.ap-ro', {}, fb.map(([t, x]) => h('li', {}, [x, h('span.ap-from', {}, '— ' + t)]))));
     }
     box.hidden = !list.length;
-    // 按来源任务分组：一组决定完才一起发给 Agent
+    // 按最初的执行任务分组（审批续接的几轮算同一个任务）：一组决定完才一起发给 Agent
     const groups = new Map();
-    for (const a of list) (groups.get(a.job_id) || groups.set(a.job_id, []).get(a.job_id)).push(a);
+    for (const a of list) { const k = a.root_job_id || a.job_id; (groups.get(k) || groups.set(k, []).get(k)).push(a); }
     box.replaceChildren(h('b.ap-h', {}, `⚠ 待你审批 / 决策（${list.length}）`),
+      h('div.ap-warn', {}, 'Agent 只在不可逆的事（合并 main、发布、删数据、对外发送、花钱）上问你，问过的不会重复问；其余按它的建议默认继续。'),
       ...[...groups.values()].map((items) => h('div.ap-group', {}, [
-        h('div.ap-src', {}, [h('span.tag.warn', {}, items[0].kind || '任务'),
+        h('div.ap-src', {}, [h('span.tag.warn', {}, items[0].round > 1 ? `第 ${items[0].round} 轮` : (items[0].kind || '任务')),
           items[0].link ? h('a', { href: items[0].link }, items[0].title) : h('span', {}, items[0].title),
           h('span.ap-from', {}, items.length > 1 ? `${items.length} 项都决定后一起发给 Agent` : '决定后发给 Agent 继续')]),
         ...items.map(row),

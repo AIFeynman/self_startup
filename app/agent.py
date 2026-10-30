@@ -132,7 +132,7 @@ def _child_env() -> dict:
     return env
 
 
-def _run(engine: str, cmd: list[str], cwd: str) -> Iterator[dict]:
+def _run(engine: str, cmd: list[str], cwd: str, on_proc=None) -> Iterator[dict]:
     parse = _parse_claude if engine == "claude" else _parse_codex
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -141,6 +141,16 @@ def _run(engine: str, cmd: list[str], cwd: str) -> Iterator[dict]:
     except FileNotFoundError as e:
         yield {"type": "error", "text": f"{engine} 未安装: {e}", "fatal": True}
         return
+    if on_proc:
+        on_proc(proc)
+    try:
+        yield from _read(engine, proc, parse)
+    finally:  # 调用方提前停止（如任务被暂停）时不留下子进程
+        if proc.poll() is None:
+            proc.terminate()
+
+
+def _read(engine: str, proc, parse) -> Iterator[dict]:
     texts: list[str] = []
     final = ""  # Claude 的 result 只含最终回答，不含过程中的旁白
     errored = False
@@ -175,7 +185,8 @@ def _run(engine: str, cmd: list[str], cwd: str) -> Iterator[dict]:
 
 def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str = "",
                cwd: str | None = None, add_dirs: list[str] | None = None,
-               fallback: bool = True) -> Iterator[dict]:
+               fallback: bool = True, on_proc=None) -> Iterator[dict]:
+    """on_proc(proc)：每启动一个 CLI 子进程回调一次（后台任务用它来暂停）。"""
     engine = engine or settings.get("engines.default", "claude")
     # 默认不在项目目录里跑（acceptEdits 下可写文件），放到 data/workspace
     if not cwd:
@@ -193,7 +204,7 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
         cmd = _claude_cmd(prompt, system, session, add_dirs) if eng == "claude" \
             else _codex_cmd(prompt, system, session, add_dirs, cwd)
         failed = False
-        for ev in _run(eng, cmd, cwd):
+        for ev in _run(eng, cmd, cwd, on_proc):
             if ev["type"] == "done" and ev.get("errored") and i + 1 < len(order):
                 failed = True
                 break
