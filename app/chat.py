@@ -12,6 +12,7 @@ from . import agent, db, jobs, kb, modules
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+active = 0  # 正在进行的对话轮数；自动重启会等它归零
 
 
 class ChatIn(BaseModel):
@@ -82,6 +83,14 @@ def chat(module: str, body: ChatIn):
     engine = sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"])
 
     def stream():
+        global active
+        active += 1
+        try:
+            yield from _stream()
+        finally:
+            active -= 1
+
+    def _stream():
         last_job = (db.row("SELECT max(id) AS m FROM jobs") or {}).get("m") or 0
         yield _sse({"type": "meta", "session_id": sid})
         final, eng_session, used = "", sess["engine_session"], engine

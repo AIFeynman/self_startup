@@ -5,7 +5,7 @@
 //   - refresh()：只重绘页面主体；Agent 回复结束会触发 document 'agent-done' 事件
 //   - 页面自己用 ui.pageHead() 渲染标题，用 ui.composer() 提供便捷输入
 import { api, h, md, toast, field } from './api.js';
-import { initChat, openChat } from './chat.js';
+import { initChat, openChat, chatBusy, chatSnapshot } from './chat.js';
 import * as ui from './ui.js';
 
 const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot' };
@@ -27,9 +27,53 @@ async function boot() {
   );
   window.addEventListener('hashchange', route);
   document.addEventListener('agent-done', loadRecent);
-  route();
+  await route();
   loadRecent();
   watchJobs();
+  watchUpdates();
+  restoreChat();
+}
+
+// ---------- 改动自动生效 ----------
+// 前端文件变了 / 后端重启过 → 自动刷新页面（正在输入或对话进行中时改为提示条）；
+// 后端改动在等任务结束才重启（supervisor）→ 显示等待提示。
+function watchUpdates() {
+  let base = null;
+  const bar = h('div.update-bar');
+  document.body.append(bar);
+  const typing = () => [...document.querySelectorAll('textarea, input[type=text], input:not([type])')]
+    .some((e) => e.value && e.value.trim() && !e.closest('.chat-head')) || chatBusy();
+  const reload = () => {
+    try { sessionStorage.setItem('chat-restore', JSON.stringify(chatSnapshot())); } catch { /* 无痕模式 */ }
+    location.reload();
+  };
+  const show = (html, act) => { bar.replaceChildren(...html); bar.classList.toggle('on', !!html.length); if (act) bar.onclick = act; };
+  setInterval(async () => {
+    if (document.hidden) return;
+    const s = await api.get('/api/dev/status').catch(() => null);
+    if (!s) { show([h('span', {}, '服务重启中…')]); return; }
+    if (!base) base = s;
+    const updated = s.static_version !== base.static_version || s.started !== base.started;
+    if (updated) {
+      if (!typing()) return reload();
+      return show([ui.icon('refresh'), h('span', {}, '平台已更新，'), h('a', { href: '#' }, '点此刷新'), h('span.muted', {}, '（正在输入 / 对话中，没有自动刷新）')], (e) => { e.preventDefault(); reload(); });
+    }
+    const p = s.reload_pending;
+    if (p) {
+      const b = p.busy || s.busy;
+      const wait = [b.jobs ? `${b.jobs} 个后台任务` : '', b.chats ? `${b.chats} 个对话` : ''].filter(Boolean).join('、');
+      return show([ui.icon('clock'), h('span', {}, `后端有更新（${(p.files || []).length} 个文件），${wait ? `等 ${wait} 结束后` : '即将'}自动重启`),
+        h('span.muted', {}, '任务不会被打断')]);
+    }
+    show([]);
+  }, 3000);
+}
+
+function restoreChat() {
+  let c;
+  try { c = JSON.parse(sessionStorage.getItem('chat-restore') || 'null'); sessionStorage.removeItem('chat-restore'); } catch { return; }
+  if (!c?.module || !(c.open || c.sessionId)) return;
+  openChat({ module: c.module, ref: c.ref, title: c.title, sessionId: c.sessionId, expand: c.open, prefill: c.draft });
 }
 
 // 后台任务结束 → 弹通知（点击打开结果）、刷新最近对话；chat.js 收到 job-done 会刷新正在看的那个对话

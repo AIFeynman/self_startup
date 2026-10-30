@@ -42,6 +42,13 @@ export async function openChat({ module, ref = '', prefill = '', send = '', titl
 
 export const closeChat = () => root.classList.add('collapsed');
 
+// 自动刷新页面时用：对话进行中不刷新；刷新前记下打开的对话，刷新后恢复
+export const chatBusy = () => state.busy;
+export function chatSnapshot() {
+  return { module: state.module, ref: state.ref, title: state.title, sessionId: state.sessionId,
+    open: root && !root.classList.contains('collapsed'), draft: box?.querySelector('textarea')?.value || '' };
+}
+
 function render(sessions) {
   root.innerHTML = '';
   sessSel = h('select', { title: '历史对话', onchange: async (e) => { state.sessionId = e.target.value ? +e.target.value : null; await loadMessages(); } },

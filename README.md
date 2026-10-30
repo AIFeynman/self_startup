@@ -3,8 +3,12 @@
 轻量、纯本地的个人工作与学习平台：**规划（默认首页）/ Agent 看板 / 复盘 / 信息推荐 / 调研 / 深度学习 / 知识库**，每个板块都有一个可对话的 Agent，直接调用本地 **Claude Code**（`claude -p`），**Codex**（`codex exec`）作为备选。
 
 ```bash
-./run.sh            # http://127.0.0.1:8780
+./run.sh            # 前台运行：http://127.0.0.1:8780
+./run.sh -d         # 后台常驻（日志 data/logs/server.log）
+./run.sh stop       # 停止后台服务
 ```
+
+改动自动生效：`web/` 改了打开的页面会自动刷新（正在输入或对话中时改为提示条）；`app/` 改了由 supervisor 等后台任务和对话都结束后自动重启，不会打断任务。
 
 依赖：`uv`、`claude`（或 `codex`）。数据全部在 `data/`（SQLite `app.db` + markdown/HTML 产物），已 gitignore。
 

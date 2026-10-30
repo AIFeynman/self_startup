@@ -221,3 +221,10 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-2);
 .clamp3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 2px; }
 @media (max-width: 1000px) and (min-width: 721px) { body { grid-template-columns: 200px minmax(0, 1fr) auto; } .page-wrap { padding: 24px 24px 60px; } .chat { width: min(var(--chat-w, 360px), 70vw); } }
+
+/* 改动自动生效：等待重启 / 需手动刷新的提示条 */
+.update-bar { position: fixed; top: 12px; left: 50%; transform: translate(-50%, -80px); z-index: 95; display: flex; align-items: center; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line-2); box-shadow: var(--shadow); border-radius: 999px; padding: 7px 16px; font-size: 13px;
+  transition: transform .2s; max-width: calc(100vw - 32px); }
+.update-bar.on { transform: translate(-50%, 0); }
+.update-bar svg.i { width: 15px; height: 15px; color: var(--accent); } .update-bar a { color: var(--accent); }

@@ -1,7 +1,9 @@
 """FastAPI 入口：挂载核心接口 + 自动发现的板块 + 静态前端。"""
 from __future__ import annotations
 
+import json
 import logging
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
@@ -39,6 +41,33 @@ async def _kb_sync_after_write(request: Request, call_next):
     if request.method != "GET" and request.url.path.startswith("/api/") and not request.url.path.startswith(("/api/chat", "/api/kb")):
         kb.schedule_sync()
     return resp
+
+
+STARTED = time.time()
+RELOAD_FLAG = db.DATA_DIR / ".reload_pending"  # supervisor 写：后端有改动、等任务结束后重启
+
+
+def busy() -> dict:
+    """正在跑的后台任务和对话；supervisor 只在都为 0 时重启，避免杀掉任务。"""
+    n = (db.row("SELECT count(*) AS n FROM jobs WHERE status IN ('queued','running')") or {}).get("n", 0)
+    return {"jobs": n, "chats": chat.active}
+
+
+def static_version() -> float:
+    web = db.ROOT / "web"
+    return max((p.stat().st_mtime for p in web.rglob("*") if p.is_file()), default=0)
+
+
+@app.get("/api/dev/status")
+def dev_status():
+    """前端轮询：前端文件变了就自动刷新；后端等重启时显示提示。"""
+    pending = None
+    if RELOAD_FLAG.exists():
+        try:
+            pending = json.loads(RELOAD_FLAG.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pending = {}
+    return {"started": STARTED, "static_version": static_version(), "busy": busy(), "reload_pending": pending}
 
 
 @app.get("/api/meta")
