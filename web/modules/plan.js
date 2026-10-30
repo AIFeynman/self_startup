@@ -155,7 +155,7 @@ export function needsYou(text) {
     const body = (b ? ln.slice(b[0].length) : ln).replaceAll('**', '').replace(/^#+\s*/, '').trim();
     let m;
     if ((m = body.match(/^NEEDS_YOU[:：]\s*(.+)/))) out.push(m[1].trim());
-    else if (!b && NEED_HEAD.test(body)) {
+    else if (!b && NEED_HEAD.test(body) && !/需要你(?:知道|了解|注意)|供你参考/.test(body)) {
       const rest = body.split(/[:：]/).slice(1).join('：').trim();
       if (rest) out.push(rest);
       inSec = true; continue;

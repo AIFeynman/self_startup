@@ -39,6 +39,7 @@ def test_needs_you_parses_approvals():
     assert needs_you(out) == ["发布 dev？建议先合并"]  # 写了 NEEDS_YOU 就只认它
     assert needs_you(out.replace("NEEDS_YOU: 发布 dev？建议先合并\n", "")) == ["决策 D1：要不要换 RSS 列表", "确认是否合并 main", "看一眼报告"]
     assert needs_you("## 总结\n- 改了 A\n- 测试通过") == []
+    assert needs_you("**需要你知道的**\n- 借用了另一个环境\n\n需要你拍板的有：\n- 选 A 还是 B") == ["选 A 还是 B"]
 
 
 def test_approvals_decide_and_followup(client, monkeypatch):

@@ -91,6 +91,7 @@ def describe(job: dict) -> tuple[str, str, str]:
     return (first[:60] or ref or module), f"#{module}", "后台任务"
 
 
+_FYI = re.compile(r"需要你(?:知道|了解|注意)|供你参考")  # 告知类小节，不是要审批的
 _NEED_HEAD = re.compile(r"需要你|待你|要你(?:决定|确认|拍板)|人工(?:确认|决策|审批)|NEEDS_YOU")
 
 
@@ -108,7 +109,7 @@ def needs_you(text: str) -> list[str]:
         body = (ln[bullet.end():] if bullet else ln).replace("**", "").strip("# ").strip()
         if m := re.match(r"NEEDS_YOU[:：]\s*(.+)", body):
             out.append(m[1].strip())
-        elif not bullet and _NEED_HEAD.search(body):  # 小节标题，可能自带内容「需要你做：xxx」
+        elif not bullet and _NEED_HEAD.search(body) and not _FYI.search(body):  # 小节标题，可能自带内容「需要你做：xxx」
             rest = re.split(r"[:：]", body, 1)[1:]
             if rest and rest[0].strip():
                 out.append(rest[0].strip())
