@@ -67,6 +67,28 @@ input.pl-pill { width: 64px; cursor: text; text-align: center; }
 .pl-notes { margin-top: 6px; font-size: 12px; }
 .pl-notes pre { margin: 4px 0 0; }
 
+.pl-draft { padding: 16px 18px; margin-bottom: 14px; border: 1.5px dashed var(--accent); }
+.pl-draft-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.pl-draft-h b { font: 700 17px var(--serif); }
+.pl-draft-h .muted { font-size: 12px; }
+.pl-draft h5 { margin: 12px 0 4px; font: 600 12px var(--font); color: var(--muted); }
+.pl-draft ul, .pl-draft ol { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.6; }
+.pl-draft .dft { color: var(--muted); font-size: 12px; }
+.pl-draft-q li { margin-bottom: 2px; }
+.pl-draft-item { margin-top: 12px; }
+.pl-draft-item > .t { font: 600 14px var(--serif); }
+.pl-draft-item > .note { font-size: 12px; color: var(--muted); margin: 2px 0 4px; }
+.pl-draft-sub { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; padding: 6px 4px 6px 8px; border-left: 1.5px solid var(--line-2); }
+.pl-draft-sub.auto { background: var(--auto); }
+.pl-draft-sub .n { font: 13px var(--serif); color: var(--muted); }
+.pl-draft-sub .st { font-size: 13px; font-weight: 600; }
+.pl-draft-sub .st .tag { margin-left: 6px; font-weight: 400; }
+.pl-draft-sub .g { font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.pl-draft-sub .g.open { display: block; }
+.pl-draft-sub button { padding: 0 6px; font-size: 12px; align-self: start; }
+.pl-draft-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.pl-draft-acts .muted { font-size: 12px; }
+
 .pl-tl-card { padding: 16px 16px 18px; }
 .pl-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
 .pl-legend i { display: inline-block; width: 14px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
@@ -188,7 +210,7 @@ export default {
     const decompose = async (taskIds) => {
       try {
         const r = await api.post('/api/plan/decompose', { date: state.date, hint: hint.value, ...(taskIds ? { task_ids: taskIds } : {}) });
-        watch(r.job_id, taskIds ? 'AI 重新拆解' : 'AI 拆解');
+        watch(r.job_id, taskIds ? 'AI 重新拆解（出草稿）' : 'AI 拆解（出草稿）');
       } catch (e) { toast(e.message, true); }
     };
     const schedule = async () => {
@@ -245,7 +267,7 @@ export default {
       const d = await api.get(`/api/plan/day?date=${state.date}`);
       state.runs = d.runs; state.data = d;
       head.replaceChildren(pageHead(d));
-      body.replaceChildren(...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
+      body.replaceChildren(...(d.draft ? [draftCard(d.draft)] : []), ...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
         items(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
         timeline(d));
       for (const j of d.jobs) watch(j.id, 'AI 拆解');
@@ -271,6 +293,65 @@ export default {
             h('button.ghost', { onclick: () => shift(1), title: '后一天' }, '›'),
             isToday ? null : h('button.outline', { onclick: () => setDate(today()) }, '回到今天')]),
         ]));
+    }
+
+    // ---------- 拆解草稿：先讨论，确认后才写成子任务 ----------
+    function draftCard(dr) {
+      const data = dr.data;
+      const subs = data.items.flatMap((it) => it.subtasks);
+      const human = subs.filter((s) => s.human_level !== 'auto').reduce((a, s) => a + (+s.est_minutes || 0), 0);
+      const agent = subs.filter((s) => s.human_level === 'auto').reduce((a, s) => a + (+s.est_minutes || 0), 0);
+      const save = async (next) => {
+        try { await api.put(`/api/plan/drafts/${dr.id}`, { data: next }); load(); } catch (e) { toast(e.message, true); }
+      };
+      const drop = (ii, si) => {
+        const next = structuredClone(data);
+        const list = next.items[ii].subtasks;
+        list.splice(si, 1);
+        // 依赖是下标：删掉一项后修正后面的下标
+        for (const s of list) s.depends_on = (s.depends_on || []).filter((x) => x !== si).map((x) => (x > si ? x - 1 : x));
+        save(next);
+      };
+      const discuss = () => openChat({ module: 'plan', ref: `plan:${state.date}`, title: '讨论拆解草稿',
+        send: '我们来讨论这份拆解草稿：先逐条回答你列的待确认问题（说明默认选择和理由），再指出哪里还能更精简或者有遗漏。' });
+      const apply = async () => {
+        try {
+          const r = await api.post(`/api/plan/drafts/${dr.id}/apply`, {});
+          toast(`已采用：写入 ${r.created.length} 个子任务并重新排程`); load();
+        } catch (e) { toast(e.message, true); }
+      };
+      const discard = async () => {
+        if (!confirm('丢弃这份草稿？已有的子任务不受影响。')) return;
+        await api.post(`/api/plan/drafts/${dr.id}/discard`, {}); load();
+      };
+      return h('div.card.pl-draft', {}, [
+        h('div.pl-draft-h', {}, [h('b', {}, '拆解草稿'), h('span.tag.warn', {}, '未生效'),
+          h('span.muted', {}, `${subs.length} 个子任务 · 人 ${human} 分 · Agent ${agent} 分 · ${(dr.updated_at || dr.created_at).slice(11, 16)} 更新`)]),
+        data.basis.length ? h('h5', {}, '依据的已有进展') : null,
+        data.basis.length ? h('ul', {}, data.basis.map((b) => h('li', {}, b))) : null,
+        data.questions.length ? h('h5', {}, '需要你拍板') : null,
+        data.questions.length ? h('ol.pl-draft-q', {}, data.questions.map((q) => h('li', {}, [q.q, q.default ? h('div.dft', {}, '默认：' + q.default) : null]))) : null,
+        ...data.items.map((it, ii) => h('div.pl-draft-item', {}, [
+          h('div.t', {}, it.title),
+          it.note ? h('div.note', {}, it.note) : null,
+          ...it.subtasks.map((s, si) => {
+            const g = h('div.g', { onclick: () => g.classList.toggle('open') }, s.goal || '');
+            return h('div.pl-draft-sub' + (s.human_level === 'auto' ? '.auto' : ''), {}, [
+              h('span.n', {}, String(si + 1)),
+              h('div', {}, [h('div.st', {}, [s.title,
+                h('span.tag' + (s.human_level === 'auto' ? '.ok' : s.human_level === 'heavy' ? '' : '.line'), {}, LEVEL[s.human_level] || s.human_level),
+                h('span.tag.line', {}, `${EXEC[s.executor] || s.executor || '人'} · ${s.est_minutes || 30}m`)]), g]),
+              h('button.ghost', { title: '从草稿里去掉这一步', onclick: () => drop(ii, si) }, '×'),
+            ]);
+          }),
+        ])),
+        h('div.pl-draft-acts', {}, [
+          h('button.primary', { onclick: discuss }, [ui.icon('chat'), '在对话里讨论']),
+          h('button.outline', { onclick: apply }, '采用此方案'),
+          h('button.ghost', { onclick: discard }, '丢弃'),
+          h('span.muted', {}, '采用后替换这些事项下还没开始的子任务，并重新排程'),
+        ]),
+      ]);
     }
 
     function summary(d) {

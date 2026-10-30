@@ -17,6 +17,17 @@ def in_focus(start, end):
     return any(m(w["start"]) <= m(start) and m(end) <= m(w["end"]) for w in CFG["focus_windows"])
 
 
+def test_lessons_feed_planning(client):
+    d = "2026-03-10"
+    client.post("/api/review/notes", json={"date": d, "kind": "lesson", "title": "先写完成标准", "content": "目标/标准/约束", "tags": "plan,agent"})
+    client.post("/api/review/notes", json={"date": d, "kind": "lesson", "title": "不相关", "tags": "planning"})
+    client.post("/api/review/notes", json={"date": "2026-01-01", "kind": "lesson", "title": "太久以前", "tags": "plan"})
+    client.put(f"/api/review/day/{d}", json={"next_actions": "09-15 点跑低干预长任务"})
+    s = plan._lessons("2026-03-11")
+    assert "先写完成标准" in s and "09-15 点" in s
+    assert "不相关" not in s and "太久以前" not in s
+
+
 def test_heavy_into_focus_by_priority():
     r = plan.schedule_day([T(1, prio=3, est=90), T(2, prio=1, est=90), T(3, "medium", est=60, prio=2)], CFG)
     p = r["placements"]
@@ -103,6 +114,10 @@ def test_on_job_done_decompose_and_schedule(client):
 ]}]}
 ```""" % parent["id"]
     plan.on_job_done({"id": 0, "ref": "plan:decompose:2030-01-02", "status": "done", "output": out, "log": ""})
+    assert not [t for t in client.get("/api/tasks?date=2030-01-02").json() if t["parent_id"]]  # 先是草稿，不写子任务
+    dr = client.get("/api/plan/drafts?date=2030-01-02").json()["draft"]
+    assert dr["data"]["items"][0]["title"] == "做报告" and len(dr["data"]["items"][0]["subtasks"]) == 3
+    client.post(f"/api/plan/drafts/{dr['id']}/apply")
     kids = [t for t in client.get("/api/tasks?date=2030-01-02").json() if t["parent_id"] == parent["id"]]
     by = {k["title"]: k for k in kids}
     assert set(by) == {"收集数据", "写结论", "发邮件"}
@@ -114,6 +129,7 @@ def test_on_job_done_decompose_and_schedule(client):
     # 重新拆解替换 todo 子任务
     out2 = '```json\n{"items":[{"task_id": %d, "subtasks":[{"title":"一步到位","human_level":"light"}]}]}\n```' % parent["id"]
     plan.on_job_done({"id": 0, "ref": "plan:decompose:2030-01-02", "status": "done", "output": out2, "log": ""})
+    client.post(f"/api/plan/drafts/{client.get('/api/plan/drafts?date=2030-01-02').json()['draft']['id']}/apply")
     day = client.get("/api/plan/day?date=2030-01-02").json()
     assert [c["title"] for c in day["tree"][0]["children"]] == ["一步到位"]
 
@@ -151,3 +167,62 @@ def test_short_kickoff_does_not_wait_hours():
                           {**CFG, "day_start": "13:30"})
     kick = next(b for b in r["blocks"] if b["type"] == "kickoff")
     assert kick["start"] == "14:00"                 # 不会等到 16:50 才启动
+
+
+def _card(key, project, title, column="review", **kw):
+    return {"key": key, "engine": "claude", "project": project, "title": title, "last_human": "", "last_agent": kw.get("reply", ""),
+            "reason": "已停", "last": "2026-03-10T09:00:00", "plan": [], "plan_current": "", "output": kw.get("output"),
+            "cwd": "", "column": column}
+
+
+def test_progress_finds_related_sessions(monkeypatch):
+    from app.modules import agents
+    cards = [_card("a", "feynman_claw", "分析 viral 链路怎么压缩到1分钟以内生成1分钟视频", reply="提速分支已合并 main",
+                   output={"status": "delivered", "labels": ["推送"], "at": "06:09"}),
+             _card("b", "wealth", "yfinance 有哪些有价值的信息"),
+             _card("c", "self_startup", "学习平台看板", column="running"),
+             _card("d", "other", "跑着的无关会话", column="running")]
+    monkeypatch.setattr(agents, "board", lambda hours: {"columns": [{"cards": cards}]})
+    monkeypatch.setattr(agents, "deliveries_text", lambda d: "无")
+    tops = [{"id": 1, "title": "优化viral模板链路的速度，1分钟以内生成1分钟左右视频", "goal": "", "repo": ""},
+            {"id": 2, "title": "优化self-startup的规划和看板", "goal": "", "repo": ""}]
+    text, _ = plan._progress("2026-03-10", tops)
+    one, two = text.split("### task_id=2")[0], text.split("### task_id=2")[1].split("### 其它")[0]
+    assert "提速分支已合并 main" in one and "已交付" in one and "wealth" not in one
+    assert "self_startup" in two and "wealth" not in two
+    assert "跑着的无关会话" in text.split("### 其它")[1]
+
+
+def test_budget_and_prompt_limits(client, monkeypatch):
+    b = plan._budget("2000-01-01", CFG)  # 不是今天：整天可用
+    assert b["focus_left"] == 100 + 200 and b["free_left"] == 870 - 300 and b["agent_left"] == 870 * 2
+    sent = {}
+    monkeypatch.setattr(plan.jobs, "submit", lambda *a, **kw: sent.update(prompt=a[1], kw=kw) or 1)
+    monkeypatch.setattr(plan, "_progress", lambda d, t: ("- 已有会话 X 做完了基线", ["/tmp"]))
+    t = client.post("/api/tasks", json={"date": "2030-02-01", "title": "事项"}).json()
+    client.post("/api/plan/decompose", json={"date": "2030-02-01"})
+    assert f"最多 {plan.MAX_SUBS} 个子任务" in sent["prompt"] and "已有会话 X 做完了基线" in sent["prompt"]
+    assert "/tmp" in sent["kw"]["add_dirs"] and t["id"]
+
+
+def test_draft_discuss_flow(client):
+    p = client.post("/api/tasks", json={"title": "讲解 skill", "date": "2030-03-01"}).json()
+    out = ('```json\n{"basis": ["会话 X 已完成分析"], "questions": [{"q": "今天做到哪？", "default": "做到评测集"}, "只问一句"],'
+           ' "items": [{"task_id": %d, "note": "接着 X", "subtasks": [{"title": "a"}, {"title": "b", "depends_on": [0]}]}]}\n```') % p["id"]
+    plan.on_job_done({"id": 0, "ref": "plan:decompose:2030-03-01", "status": "done", "output": out, "log": ""})
+    d1 = client.get("/api/plan/day?date=2030-03-01").json()["draft"]
+    assert d1["data"]["questions"] == [{"q": "今天做到哪？", "default": "做到评测集"}, {"q": "只问一句", "default": ""}]
+    ctx = plan.agent_context("plan:2030-03-01")
+    assert f"拆解草稿 #{d1['id']}" in ctx and "会话 X 已完成分析" in ctx
+
+    # 讨论后改草稿（对话 Agent 走 PUT），再出一份新草稿会替换旧的
+    data = d1["data"]
+    data["items"][0]["subtasks"] = data["items"][0]["subtasks"][:1]
+    assert len(client.put(f"/api/plan/drafts/{d1['id']}", json={"data": data}).json()["data"]["items"][0]["subtasks"]) == 1
+    plan.on_job_done({"id": 0, "ref": "plan:decompose:2030-03-01", "status": "done", "output": out, "log": ""})
+    d2 = client.get("/api/plan/drafts?date=2030-03-01").json()["draft"]
+    assert d2["id"] != d1["id"] and client.post(f"/api/plan/drafts/{d1['id']}/apply").status_code == 404
+
+    client.post(f"/api/plan/drafts/{d2['id']}/discard")
+    assert client.get("/api/plan/drafts?date=2030-03-01").json()["draft"] is None
+    assert not [t for t in client.get("/api/tasks?date=2030-03-01").json() if t["parent_id"]]

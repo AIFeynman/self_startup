@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+from datetime import date as Date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -40,6 +42,16 @@ CREATE TABLE IF NOT EXISTS plan_schedules (
     created_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_plan_sched_date ON plan_schedules(date);
+CREATE TABLE IF NOT EXISTS plan_drafts (     -- AI 拆解先出草稿，讨论 / 修改后用户确认才写成子任务
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    date        TEXT NOT NULL,
+    job_id      INTEGER,
+    status      TEXT DEFAULT 'pending',     -- pending / applied / discarded / superseded
+    data        TEXT DEFAULT '{}',          -- {basis:[], questions:[{q, default}], items:[{task_id, note, subtasks:[...]}]}
+    created_at  TEXT,
+    updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plan_drafts_date ON plan_drafts(date);
 """
 router = APIRouter()
 
@@ -319,6 +331,13 @@ DECOMPOSE_PROMPT = """请把下面每个顶层事项拆解成可执行的子任�
 - executor：human / claude / codex / mixed。auto 任务的 executor 必须是 claude 或 codex。
 - 尽量把能自动化的部分拆成独立 auto 子任务（目标写清楚、可验收），把需要人判断的部分单独拆出。
 - est_minutes 为该子任务本身耗时（auto 为 Agent 运行时长估计），子任务一般 15-120 分钟。
+
+## 少而精（硬性要求）
+- 每个事项最多 {max_subs} 个子任务，宁可一个 auto 子任务做完「实现+自测+对比报告+commit/push」，也不要拆成一串小步。
+- 人工部分合并：同一事项的验收、取舍、确认合并 main 放进一个人工子任务，不要单列 10 分钟的确认。
+- 今天可用预算：人的专注时间约 {focus_left} 分钟、非专注人时间约 {free_left} 分钟、Agent 车道约 {agent_left} 分钟（{conc} 路并行）。
+  所有事项的人工子任务合计不超过人可用时间的 70%，auto 合计不超过 Agent 车道的 70%；放不下就只拆今天能完成的一段，其余写进最后一个子任务的 goal「明天继续：…」。
+- 先看下面「已有进展」：已经完成或已有产出的步骤（调研、审计、基线、分析报告）不要再拆；还在进行的会话，子任务写成「接着 XX 会话 / 基于 XX 报告继续」，goal 里写明从哪儿接、还差什么。
 - parallel_group：可同时进行的子任务填同一个组名（如 "A"），否则留空。
 - depends_on：依赖本事项内其它子任务的下标（从 0 开始）。
 - priority：1 最高 … 4 最低，一般继承父事项，可微调。
@@ -327,9 +346,13 @@ DECOMPOSE_PROMPT = """请把下面每个顶层事项拆解成可执行的子任�
 {items}
 
 ## 输出格式（严格）
+这是一份给用户讨论的草稿，用户确认后才生效。basis 写 2-4 条你依据的已有进展（哪个会话做到哪、哪份产出），
+questions 写最多 3 个需要用户拍板的取舍（目标范围、今天做到哪一步、质量 vs 速度…），每个给出你的默认选择；
+每个事项的 note 用一句话说明今天做到哪、为什么这样拆。
 只输出一个 ```json 代码块，不要其它解释：
 ```json
-{{"items": [{{"task_id": 12, "subtasks": [
+{{"basis": ["…"], "questions": [{{"q": "…", "default": "…"}}],
+ "items": [{{"task_id": 12, "note": "…", "subtasks": [
   {{"title": "…", "goal": "完成标准", "human_level": "heavy|medium|light|auto", "executor": "human|claude|codex|mixed",
     "est_minutes": 30, "parallel_group": "", "depends_on": [], "priority": 2}}
 ]}}]}}
@@ -358,18 +381,102 @@ def decompose(body: DecomposeIn):
     cfg = _cfg()
     prompt = DECOMPOSE_PROMPT.format(
         date=date, focus="、".join(f"{w['start']}-{w['end']}" for w in cfg["focus_windows"]),
-        conc=cfg["max_agent_concurrency"], items=items)
+        conc=cfg["max_agent_concurrency"], items=items, max_subs=MAX_SUBS, **_budget(date, cfg))
+    prog, dirs = _progress(date, tops)
+    if prog:
+        prompt += f"\n\n## 已有进展（最近 36 小时的 Claude Code / Codex 会话与交付，拆解前先看；相关目录可直接读）\n{prog}"
     ins = _insights()
     if ins:
         prompt += f"\n\n## 时间利用的历史规律（请据此安排 auto / 人工任务）\n{ins}"
+    les = _lessons(date)
+    if les:
+        prompt += f"\n\n## 复盘沉淀的规划经验（拆解时照做：完成标准、何时跑、怎么验收、哪些要人）\n{les}"
     if body.hint:
         prompt += f"\n\n## 用户补充要求\n{body.hint}"
     # 拆解只需要读：工作目录放在数据目录，事项关联的代码库作为额外可读目录
-    repos = sorted({str(Path(t["repo"]).expanduser()) for t in tops if t["repo"]})
+    repos = sorted({str(Path(t["repo"]).expanduser()) for t in tops if t["repo"]} | set(dirs))
     db.DATA_DIR.mkdir(parents=True, exist_ok=True)
     jid = jobs.submit("plan", prompt, ref=f"plan:decompose:{date}", engine=body.engine,
                       cwd=str(db.DATA_DIR), add_dirs=repos)
     return {"job_id": jid, "task_ids": [t["id"] for t in tops]}
+
+
+MAX_SUBS = 4
+
+
+def _budget(date: str, cfg: dict) -> dict:
+    """今天还剩多少：专注时间 / 非专注人时间 / Agent 车道分钟数（规划的是今天就从现在算起）。"""
+    now = datetime.now()
+    cur = now.hour * 60 + now.minute if date == db.today() else 0
+    start, end = max(cur, _m(cfg["day_start"])), _m(cfg["day_end"])
+    focus = sum(max(0, min(_m(w["end"]), end) - max(_m(w["start"]), start)) for w in cfg["focus_windows"])
+    total = max(0, end - start)
+    return {"focus_left": focus, "free_left": max(0, total - focus),
+            "agent_left": total * int(cfg.get("max_agent_concurrency") or 1)}
+
+
+def _words(text: str) -> set[str]:
+    """粗分词做相关性：英文词（self-startup / self_startup 视为同一个）+ 中文二字组。"""
+    text = (text or "").lower()
+    out = {w.replace("-", "").replace("_", "") for w in re.findall(r"[a-z][a-z0-9_-]{2,}", text)}
+    for run in re.findall(r"[\u4e00-\u9fff]+", text):
+        out |= {run[i:i + 2] for i in range(len(run) - 1) if not _FUNC & set(run[i:i + 2])}
+    return {w.rstrip("s") if w.isascii() else w for w in out} - _STOP
+
+
+_FUNC = set("的和里对下是有在了把个这那一以及与或就都也要能")
+
+
+_STOP = {"优化", "分析", "目标", "现在", "需要", "一个", "可以", "是否", "看下", "检查", "这个", "实现", "the", "and", "http", "https"}
+
+
+def _progress(date: str, tops: list[dict], hours: float = 36) -> tuple[str, list[str]]:
+    """和待拆事项相关的最近会话（进度、产出、最后回复）+ 当天与前一天的交付，给拆解用。返回 (文本, 相关目录)。"""
+    try:
+        from . import agents
+        cards = [c for col in agents.board(hours)["columns"] for c in col["cards"]
+                 if c["engine"] != "platform" and c["column"] != "archived"]
+    except Exception:  # noqa: BLE001
+        return "", []
+    parts, dirs = [], []
+    used: set[str] = set()
+    bag = {c["key"]: _words(f"{c['project']} {c['title']} {c['last_human']}") for c in cards}
+    df: dict[str, int] = {}
+    for ws in bag.values():
+        for w in ws:
+            df[w] = df.get(w, 0) + 1
+    for t in tops:
+        want = _words(f"{t['title']} {t['goal']} {Path(t['repo']).name if t['repo'] else ''}")
+        scored = []
+        for c in cards:
+            # 越少会话共有的词越说明相关（idf）；项目名对上直接算相关
+            score = sum(1 / df[w] for w in want & bag[c["key"]])
+            score += 3 if c["project"].lower().replace("-", "").replace("_", "") in want else 0
+            if score >= 1.5:
+                scored.append((score, c))
+        scored.sort(key=lambda x: (x[0], x[1]["last"]), reverse=True)
+        lines = []
+        for _, c in [x for x in scored if x[0] >= scored[0][0] / 2][:4]:
+            used.add(c["key"])
+            o = c.get("output")
+            out = f"{agents.OUT_STATUS.get(o['status'], o['status'])} {'/'.join(o['labels'])} {o['at']}" if o else "暂无产出"
+            plan = f" · 当前步骤：{c['plan_current']}" if c["plan_current"] else ""
+            lines.append(f"- [{c['engine']}] {c['project']} · {c['title']} · {c['reason']}（最后活动 {c['last'][5:16].replace('T', ' ')}）"
+                         f" · 产出：{out}{plan} · key={c['key']}" + (f" · 目录 {c['cwd']}" if c["cwd"] else "")
+                         + f"\n  最后回复：{(c['last_agent'] or '').replace(chr(10), ' ')[:400]}")
+            if c["cwd"] and os.path.isdir(c["cwd"]) and c["cwd"] not in dirs:
+                dirs.append(c["cwd"])
+        parts.append(f"### task_id={t['id']} {t['title'][:40]}\n" + ("\n".join(lines) or "（没找到相关会话，按从零开始拆）"))
+    running = [c for c in cards if c["column"] == "running" and c["key"] not in used]
+    if running:
+        parts.append("### 其它正在跑的会话（占用 Agent 并发）\n" + "\n".join(f"- {c['project']} · {c['title']}" for c in running[:6]))
+    prev = (Date.fromisoformat(date) - timedelta(days=1)).isoformat()
+    for d in (prev, date):
+        try:
+            parts.append(f"### {d} 的交付\n" + agents.deliveries_text(d)[:2000])
+        except Exception:  # noqa: BLE001
+            pass
+    return "\n\n".join(parts), dirs[:4]
 
 
 def extract_json(text: str):
@@ -437,14 +544,92 @@ def apply_decomposition(data) -> list[int]:
     return created
 
 
+# ---------------------------------------------------------------- 拆解草稿
+def _norm_draft(data) -> dict:
+    if isinstance(data, list):
+        data = {"items": data}
+    data = data if isinstance(data, dict) else {}
+    qs = []
+    for q in data.get("questions") or []:
+        if isinstance(q, str):
+            q = {"q": q}
+        if isinstance(q, dict) and q.get("q"):
+            qs.append({"q": str(q["q"]), "default": str(q.get("default") or "")})
+    items = [it for it in data.get("items") or [] if isinstance(it, dict) and isinstance(it.get("subtasks"), list)]
+    return {"basis": [str(b) for b in data.get("basis") or [] if b][:6], "questions": qs[:5], "items": items}
+
+
+def save_draft(date: str, data, job_id: int | None = None) -> int:
+    """新草稿替换当天还在讨论中的旧草稿。"""
+    db.execute("UPDATE plan_drafts SET status='superseded', updated_at=? WHERE date=? AND status='pending'", [db.now(), date])
+    return db.insert("plan_drafts", {"date": date, "job_id": job_id, "status": "pending",
+                                     "data": json.dumps(_norm_draft(data), ensure_ascii=False), "created_at": db.now(), "updated_at": db.now()})
+
+
+def get_draft(date: str = "", did: int | None = None) -> dict | None:
+    r = (db.row("SELECT * FROM plan_drafts WHERE id=?", [did]) if did else
+         db.row("SELECT * FROM plan_drafts WHERE date=? AND status='pending' ORDER BY id DESC LIMIT 1", [date]))
+    if not r:
+        return None
+    d = {**r, "data": json.loads(r["data"] or "{}")}
+    titles = {t["id"]: t["title"] for t in tasks.list_for(r["date"])}
+    for it in d["data"].get("items", []):
+        it["title"] = titles.get(_int(it.get("task_id")), f"（事项 {it.get('task_id')} 不存在）")
+    return d
+
+
+def _int(x):
+    try:
+        return int(x)
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/drafts")
+def draft_for(date: str = ""):
+    return {"draft": get_draft(date or db.today())}
+
+
+class DraftIn(BaseModel):
+    data: dict
+
+
+@router.put("/drafts/{did}")
+def update_draft(did: int, body: DraftIn):
+    d = get_draft(did=did)
+    if not d or d["status"] != "pending":
+        raise HTTPException(404, "草稿不存在或已处理")
+    db.update("plan_drafts", did, {"data": json.dumps(_norm_draft(body.data), ensure_ascii=False), "updated_at": db.now()})
+    return get_draft(did=did)
+
+
+@router.post("/drafts/{did}/apply")
+def apply_draft(did: int):
+    d = get_draft(did=did)
+    if not d or d["status"] != "pending":
+        raise HTTPException(404, "草稿不存在或已处理")
+    ids = apply_decomposition(d["data"])
+    db.update("plan_drafts", did, {"status": "applied", "updated_at": db.now()})
+    return {"created": ids, "schedule": run_schedule(d["date"]) if ids else None}
+
+
+@router.post("/drafts/{did}/discard")
+def discard_draft(did: int):
+    db.update("plan_drafts", did, {"status": "discarded", "updated_at": db.now()})
+    return {"ok": True}
+
+
 def on_job_done(job: dict) -> None:
     ref = job.get("ref") or ""
     if ref.startswith("plan:decompose:"):
         if job.get("status") != "done":
             return
         data = extract_json(job.get("output") or "")
-        n = apply_decomposition(data) if data else []
-        db.update("jobs", job["id"], {"log": (job.get("log") or "") + f"\n[plan] 新建子任务 {len(n)} 个"})
+        if not data:
+            return
+        did = save_draft(ref.split(":", 2)[2], data, job["id"])
+        n = sum(len(it["subtasks"]) for it in _norm_draft(data)["items"])
+        db.update("jobs", job["id"], {"log": (job.get("log") or "") + f"\n[plan] 拆解草稿 #{did}：{n} 个子任务，讨论 / 确认后生效"})
     elif ref.startswith("plan:run:"):
         _finish_run(job)
 
@@ -523,7 +708,8 @@ def day(date: str = ""):
     return {"date": date, "tasks": ts, "tree": _tree(ts), "config": _cfg(), "schedule": last_schedule(date),
             "runs": runs(date=date),
             "jobs": db.rows("SELECT id,ref,status,created_at FROM jobs WHERE module='plan' AND ref=? AND status IN ('queued','running')",
-                            [f"plan:decompose:{date}"])}
+                            [f"plan:decompose:{date}"]),
+            "draft": get_draft(date)}
 
 
 class DateIn(BaseModel):
@@ -576,6 +762,23 @@ def _insights() -> str:
         return ""
 
 
+def _lessons(date: str, days: int = 30) -> str:
+    """复盘里打了 plan 标签的经验 + 最近一次复盘的 next_actions（复盘模块缺失时为空）。"""
+    try:
+        start = (Date.fromisoformat(date) - timedelta(days=days)).isoformat()
+        notes = db.rows("SELECT date, title, content FROM review_notes WHERE kind='lesson' AND date BETWEEN ? AND ? "
+                        "AND (',' || replace(tags, ' ', '') || ',') LIKE '%,plan,%' ORDER BY date DESC, id DESC LIMIT 8",
+                        [start, date])
+        rec = db.row("SELECT date, next_actions FROM review_days WHERE date<=? AND next_actions<>'' "
+                     "ORDER BY date DESC LIMIT 1", [date])
+    except Exception:  # noqa: BLE001
+        return ""
+    lines = [f"- [{n['date']}] {n['title']}：{n['content'][:200]}" for n in notes]
+    if rec:
+        lines.append(f"最近一次复盘（{rec['date']}）的改进行动：\n{rec['next_actions'][:1200]}")
+    return "\n".join(lines)
+
+
 def agent_context(ref: str) -> str:
     m = re.search(r"\d{4}-\d{2}-\d{2}", ref or "")
     date = m.group(0) if m else db.today()
@@ -601,4 +804,14 @@ def agent_context(ref: str) -> str:
     ins = _insights()
     if ins:
         lines.append("时间利用（真实会话事件统计）：\n" + ins)
+    les = _lessons(date)
+    if les:
+        lines.append("复盘沉淀的规划经验（拆解 / 排程 / 验收时参考）：\n" + les)
+    d = get_draft(date)
+    if d:
+        data = {**d["data"], "items": [{k: v for k, v in it.items() if k != "title"} for it in d["data"]["items"]]}
+        lines.append(f"\n## 讨论中的拆解草稿 #{d['id']}（还没生效；用户在和你讨论它）\n"
+                     "按讨论结果改草稿：PUT /api/plan/drafts/{id} 传完整的 {\"data\": {...}}（同下面的结构）；"
+                     "用户明确说「就这样 / 采用 / 写入」时才 POST /api/plan/drafts/{id}/apply（会写成子任务并重新排程）。\n"
+                     "```json\n" + json.dumps(data, ensure_ascii=False) + "\n```")
     return "\n".join(lines)
