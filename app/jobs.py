@@ -99,7 +99,8 @@ _NEED_HEAD = re.compile(r"需要你|待你|要你(?:决定|确认|拍板)|人工
 def needs_you(text: str, tagged_only: bool = False) -> list[str]:
     """Agent 结果里要人审批 / 决策的事项：`NEEDS_YOU:` 行，或「需要你做」小节下的条目、「需要你做：…」这样的行。
     tagged_only：提示里明确要求了 `NEEDS_YOU:`（审批后续），没写就是没有，不再按小节猜。"""
-    tagged = re.findall(r"NEEDS_YOU[:：]\s*(.+)", text or "")
+    # 只认行首（可带列表符号 / 加粗）的标记；句子里提到「`NEEDS_YOU:` 行」不算
+    tagged = re.findall(r"(?m)^[ \t]*(?:[-*•]|\d+[.、)])?[ \t]*\**NEEDS_YOU\**[:：]\**\s*(.+)", text or "")
     if tagged or tagged_only:  # Agent 按约定写了，就只认这些，避免和总结里的复述重复
         return list(dict.fromkeys(x.strip() for x in tagged))[:8]
     out, in_sec = [], False
