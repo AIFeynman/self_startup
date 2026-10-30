@@ -1,6 +1,7 @@
 // 复盘（首页）：问候 + 一句话状态 + 大输入框（记一条 / 写复盘 / 问 Agent）+ 今日三卡（事项 / AI 建议 / Agent 效率）
 // 标签页：当日复盘 / 时间线 / 问题与经验 / Agent 效率。路由：#review/<YYYY-MM-DD>/<tab>
 import { today } from '../api.js';
+import { utilization } from './_utilchart.js';
 
 const CSS = `
 .rv-top { display: flex; justify-content: flex-end; margin-bottom: -8px; }
@@ -462,6 +463,8 @@ export default {
             ...(pr.jobs || []).map((j) => h('tr', {}, [j.id, j.module, j.ref, j.engine, j.status, j.minutes ?? '-'].map((x) => h('td', {}, String(x)))))]),
           ...(pr.plan_runs || []).map((r) => h('div.item', {}, `#${r.task_id} ${r.task_title || ''} · ${r.engine} · ${r.status}`))]));
       }
+      // 时间利用：真实事件铺到时间轴上，看空档、专注外交互、等你的时间
+      nodes.splice(2, 0, ui.section('时间利用', 'Agent 是否跑满 · 人工交互是否在专注时间'), await utilization({ api, h, ui }, { date: state.date }));
       body.replaceChildren(h('div.rv-agent', {}, nodes));
     }
 

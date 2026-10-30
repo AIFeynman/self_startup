@@ -6,15 +6,17 @@
 """
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
-from datetime import datetime, timedelta
+import threading
+from datetime import date as Date, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import db, settings, tasks
-from . import _agents_scan as scanner
+from . import _agents_scan as scanner, _utilization as util
 
 TITLE = "Agent 看板"
 ORDER = 8
@@ -24,6 +26,13 @@ CREATE TABLE IF NOT EXISTS agent_board (
     col         TEXT DEFAULT '',           -- done / archived / ''（自动）
     note        TEXT DEFAULT '',
     task_id     INTEGER,                   -- 关联的规划事项；验收时一并标记完成
+    updated_at  TEXT
+);
+-- 每天的时间利用快照（真实事件 → 时间片），供复盘 / 规划 / 知识库使用
+CREATE TABLE IF NOT EXISTS agent_util (
+    date        TEXT PRIMARY KEY,
+    summary     TEXT DEFAULT '{}',
+    data        TEXT DEFAULT '{}',          -- slots / gaps / humans / top_waits / advice
     updated_at  TEXT
 );
 """
@@ -147,4 +156,116 @@ def agent_context(ref: str) -> str:
             plan = f" · 计划 {c['plan_done']}/{len(c['plan'])} 当前：{c['plan_current']}" if c["plan"] else ""
             lines.append(f"- [{c['engine']}] {c['project']} · {c['title']} · {c['reason']} · {c['idle_min']} 分钟前{plan}"
                          f" · key={c['key']}\n  最近要求：{c['last_human'][:120]}\n  最近回复：{c['last_agent'][:160]}")
+    try:
+        lines.append("\n## 时间利用\n" + planning_insights())
+    except Exception:  # noqa: BLE001
+        pass
     return "\n".join(lines)
+
+
+# ---------- 时间利用 ----------
+
+def utilization(day: str = "", refresh: bool = False) -> dict:
+    """某天的时间利用分析。今天每次重算（有缓存，很快）；过去的日子算一次存下来。"""
+    day = day or db.today()
+    row = db.row("SELECT * FROM agent_util WHERE date=?", [day])
+    if row and not refresh and day != db.today():
+        return {**json.loads(row["data"]), "summary": json.loads(row["summary"]), "cached": True}
+    cfg = settings.load()
+    r = util.analyze(Date.fromisoformat(day), cfg.get("session_dirs", {}), cfg["focus_windows"], cfg["day_start"],
+                     cfg["day_end"], int(cfg.get("max_agent_concurrency", 3)))
+    db.execute("INSERT INTO agent_util(date,summary,data,updated_at) VALUES (?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
+               "summary=excluded.summary, data=excluded.data, updated_at=excluded.updated_at",
+               [day, json.dumps(r["summary"], ensure_ascii=False),
+                json.dumps({k: v for k, v in r.items() if k != "summary"}, ensure_ascii=False), db.now()])
+    return r
+
+
+_filling = threading.Lock()
+
+
+def _fill(days: list[str]) -> None:
+    if not _filling.acquire(blocking=False):
+        return
+    try:
+        for d in days:
+            try:
+                utilization(d)
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        _filling.release()
+
+
+def patterns(days: int = 7) -> dict:
+    """近 N 天的规律：每小时平均有几个 Agent 在跑、人工交互几次、等你几个；反复出现的空档。"""
+    today = datetime.now().date()
+    want = [(today - timedelta(days=i)).isoformat() for i in range(1, days + 1)]
+    have = {r["date"]: r for r in db.rows(f"SELECT * FROM agent_util WHERE date IN ({','.join('?' * len(want))})", want)}
+    missing = [d for d in want if d not in have]
+    if missing:  # 过去的日子在后台补算，不阻塞页面
+        threading.Thread(target=_fill, args=(missing,), daemon=True).start()
+    hours = {h: {"agents": 0.0, "humans": 0, "waiting": 0.0, "days": 0} for h in range(24)}
+    idle_hours: dict[int, int] = {}
+    sums = []
+    for d, r in have.items():
+        data, summ = json.loads(r["data"]), json.loads(r["summary"])
+        if not summ.get("sessions"):
+            continue
+        sums.append(summ)
+        seen = set()
+        for sl in data.get("slots", []):
+            h = int(sl["t"][:2])
+            hours[h]["agents"] += (sl["interactive"] + sl["automated"]) * util.SLOT_MIN / 60
+            hours[h]["humans"] += sl["humans"]
+            hours[h]["waiting"] += sl["waiting"] * util.SLOT_MIN / 60
+            seen.add(h)
+        for h in seen:
+            hours[h]["days"] += 1
+        for g in data.get("gaps", []):
+            for h in range(int(g["start"][:2]), int(g["end"][:2]) + (1 if g["end"][3:] != "00" else 0)):
+                idle_hours[h] = idle_hours.get(h, 0) + 1
+    n = max(1, len(sums))
+    hourly = [{"hour": h, "agents": round(v["agents"] / n, 2), "humans": round(v["humans"] / n, 1), "waiting": round(v["waiting"] / n, 2)}
+              for h, v in hours.items()]
+    avg = lambda k: round(sum(s.get(k, 0) for s in sums) / n, 1) if sums else 0  # noqa: E731
+    return {"days": len(sums), "filling": bool(missing), "hourly": hourly,
+            "recurring_idle_hours": sorted(h for h, c in idle_hours.items() if c >= max(2, len(sums) // 2)),
+            "avg": {k: avg(k) for k in ("coverage_pct", "capacity_pct", "idle_min", "human_total", "human_out_focus", "wait_total_min")}}
+
+
+def planning_insights() -> str:
+    """给规划用的一段话：今天到目前的利用情况 + 近 7 天规律。"""
+    lines = []
+    try:
+        t = utilization()
+        s = t["summary"]
+        lines.append(f"今天到目前：Agent 覆盖 {s['coverage_pct']}%、并发容量使用 {s['capacity_pct']}%、空档 {s['idle_min']} 分钟；"
+                     f"人工交互 {s['human_total']} 次（专注外 {s['human_out_focus']}）；Agent 等你累计 {s['wait_total_min']} 分钟。")
+        lines += [f"- {a}" for a in t["advice"][:4]]
+    except Exception:  # noqa: BLE001
+        pass
+    p = patterns(7)
+    if p["days"]:
+        a = p["avg"]
+        busy_h = sorted(p["hourly"], key=lambda x: -x["humans"])[:3]
+        lines.append(f"近 {p['days']} 天平均：覆盖 {a['coverage_pct']}%、容量 {a['capacity_pct']}%、空档 {a['idle_min']} 分钟/天、"
+                     f"人工交互 {a['human_total']} 次/天（专注外 {a['human_out_focus']}）。人工交互最多的时段："
+                     + "、".join(f"{x['hour']}点" for x in busy_h if x["humans"])
+                     + ("；经常空着的时段：" + "、".join(f"{h}点" for h in p["recurring_idle_hours"]) if p["recurring_idle_hours"] else ""))
+    return "\n".join(lines)
+
+
+@router.get("/utilization")
+def get_utilization(date: str = "", refresh: bool = False):
+    return utilization(date, refresh)
+
+
+@router.get("/patterns")
+def get_patterns(days: int = 7):
+    return patterns(days)
+
+
+@router.get("/insights")
+def get_insights():
+    return {"text": planning_insights()}

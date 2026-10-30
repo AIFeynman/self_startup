@@ -359,6 +359,9 @@ def decompose(body: DecomposeIn):
     prompt = DECOMPOSE_PROMPT.format(
         date=date, focus="、".join(f"{w['start']}-{w['end']}" for w in cfg["focus_windows"]),
         conc=cfg["max_agent_concurrency"], items=items)
+    ins = _insights()
+    if ins:
+        prompt += f"\n\n## 时间利用的历史规律（请据此安排 auto / 人工任务）\n{ins}"
     if body.hint:
         prompt += f"\n\n## 用户补充要求\n{body.hint}"
     # 拆解只需要读：工作目录放在数据目录，事项关联的代码库作为额外可读目录
@@ -564,6 +567,15 @@ def carry(body: DateIn):
 
 
 # ---------------------------------------------------------------- 给对话 Agent 的快照
+def _insights() -> str:
+    """Agent 看板算出的时间利用情况与近 7 天规律（模块缺失时为空）。"""
+    try:
+        from .agents import planning_insights
+        return planning_insights()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def agent_context(ref: str) -> str:
     m = re.search(r"\d{4}-\d{2}-\d{2}", ref or "")
     date = m.group(0) if m else db.today()
@@ -586,4 +598,7 @@ def agent_context(ref: str) -> str:
                      f"并行度 {s.get('parallel_ratio')}，峰值并发 {s.get('agent_peak_concurrency')}")
         for w in s.get("warnings", [])[:10]:
             lines.append(f"  ⚠ {w}")
+    ins = _insights()
+    if ins:
+        lines.append("时间利用（真实会话事件统计）：\n" + ins)
     return "\n".join(lines)

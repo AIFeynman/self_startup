@@ -1,10 +1,13 @@
 // Agent 看板：本地 Claude Code / Codex 会话 + 平台后台任务，按 运行中 → 等你处理 → 待验收 → 已验收 流转。
 // 每 10 秒自动刷新；卡片可拖到「已验收」，或用按钮 验收 / 归档 / 续接 / 关联事项 / 备注。
+import { utilization } from './_utilchart.js';
+
 const ENGINE = { claude: 'Claude', codex: 'Codex', platform: '平台' };
 const prefs = load();
 
 export default {
-  async render(el, { api, h, md, toast, ui, ask }) {
+  async render(el, ctx) {
+    const { api, h, md, toast, ui, ask } = ctx;
     injectStyle();
     el.classList.add('ag-wide'); // 看板需要更宽的画布
     let data = null, filter = '', timer = null;
@@ -37,10 +40,15 @@ export default {
     });
     box.querySelector('textarea').addEventListener('input', (e) => { if (box.mode === 'filter') { filter = e.target.value.trim(); draw(); } });
 
+    const tab = ctx.sub[0] === 'util' ? 'util' : 'board';
+    const tabs = h('div.tabs', {}, [['board', '看板'], ['util', '时间利用']].map(([id, label]) =>
+      h('button' + (tab === id ? '.active' : ''), { onclick: () => { location.hash = id === 'board' ? '#agents' : '#agents/util'; } }, label)));
+    if (tab === 'util') return renderUtil();
     el.append(
       ui.pageHead('Agent 看板', '本地 Claude Code / Codex 会话与平台任务的实时进度，便于盯控和验收', [
         h('button.outline', { onclick: () => refresh() }, [ui.icon('refresh'), '刷新']),
       ]),
+      tabs,
       box,
       ui.chips([
         { label: '哪些在等我？', icon: 'bulb', onClick: () => ask('看一下 Agent 看板：哪些会话在等我处理？按紧急程度列出，每条一句话说明在等什么、建议怎么做。') },
@@ -49,6 +57,37 @@ export default {
       ], { left: true }),
       statsBox, filters, boardBox,
     );
+
+    async function renderUtil() {
+      const day = h('input', { type: 'date', value: ctx.sub[1] || new Date().toLocaleDateString('sv-SE'), style: { width: 'auto' },
+        onchange: (e) => { location.hash = '#agents/util/' + e.target.value; } });
+      el.append(
+        ui.pageHead('时间利用', '从 Claude Code / Codex 会话的真实事件统计：Agent 有没有跑满、人工交互是否落在专注时间、Agent 等你多久', [day]),
+        tabs,
+        ui.chips([
+          { label: '据此优化明天的规划', icon: 'plan', onClick: () => ctx.openChat({ module: 'plan', title: '规划', send: '结合「时间利用」统计和近 7 天规律，帮我调整明天的拆解与排程：需要人来回交互的放进专注时间，能自动跑的填满空档和专注时间外。' }) },
+          { label: '分析今天哪里没利用好', icon: 'bulb', onClick: () => ask('结合时间利用统计，分析今天哪些时间没利用好、哪些人工交互不在高效时间，给出 3 条最有用的改进。') },
+        ], { left: true }),
+        await utilization(ctx, { date: day.value }),
+      );
+      const pat = await api.get('/api/agents/patterns?days=7');
+      el.append(ui.section('近 7 天规律', pat.days ? `${pat.days} 天有数据${pat.filling ? ' · 正在补算更早的日子' : ''}` : (pat.filling ? '正在后台补算，稍后刷新' : '暂无')),
+        pat.days ? patternView(pat) : ui.empty('还没有历史数据', '后台正在补算过去 7 天，稍后刷新本页'));
+    }
+
+    function patternView(p) {
+      const max = Math.max(1, ...p.hourly.map((x) => x.agents));
+      const maxH = Math.max(1, ...p.hourly.map((x) => x.humans));
+      return h('div.card.flat', {}, [
+        ui.stats([{ k: '平均覆盖', v: p.avg.coverage_pct + '%' }, { k: '平均容量使用', v: p.avg.capacity_pct + '%' },
+          { k: '平均空档/天', v: p.avg.idle_min + 'm' }, { k: '人工交互/天 · 专注外', v: `${p.avg.human_total} · ${p.avg.human_out_focus}` }]),
+        h('div.ag-hours', {}, p.hourly.map((x) => h('div.ag-hour', { title: `${x.hour}点：平均 ${x.agents} 个 Agent·小时，人工交互 ${x.humans} 次，等你 ${x.waiting}` }, [
+          h('i.a', { style: { height: (x.agents / max) * 60 + 'px' } }), h('i.h', { style: { height: (x.humans / maxH) * 24 + 'px' } }),
+          h('span', {}, x.hour % 3 === 0 ? x.hour : '')]))),
+        h('div.muted', {}, ['每小时：', h('b', { style: { color: 'var(--accent)' } }, '■'), ' 平均 Agent 工作量　', h('b', { style: { color: 'var(--warn)' } }, '■'), ' 人工交互次数',
+          p.recurring_idle_hours.length ? `　·　经常空着：${p.recurring_idle_hours.map((x) => x + '点').join('、')}` : '']),
+      ]);
+    }
 
     function match(c) {
       if (prefs.engine !== 'all' && c.engine !== prefs.engine) return false;
@@ -168,6 +207,10 @@ function injectStyle() {
   const s = document.createElement('style');
   s.id = 'ag-style';
   s.textContent = `
+  .ag-hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; align-items: end; height: 110px; margin: 10px 0 6px; }
+  .ag-hour { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; height: 100%; }
+  .ag-hour i { display: block; width: 70%; border-radius: 2px; } .ag-hour i.a { background: var(--accent); } .ag-hour i.h { background: var(--warn); opacity: .8; }
+  .ag-hour span { font-size: 10px; color: var(--muted); height: 12px; }
   .ag-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; }
   .ag-sep { width: 1px; height: 18px; background: var(--line-2); }
   .ag-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
