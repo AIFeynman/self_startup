@@ -92,13 +92,15 @@ def describe(job: dict) -> tuple[str, str, str]:
 
 
 _FYI = re.compile(r"需要你(?:知道|了解|注意)|供你参考")  # 告知类小节，不是要审批的
+_NONE = re.compile(r"(?:没有|无|不再|不用|不需要)[^。；;:：]{0,8}(?:需要你|待你|要你)")  # 「这次没有需要你决定的事」不是小节标题
 _NEED_HEAD = re.compile(r"需要你|待你|要你(?:决定|确认|拍板)|人工(?:确认|决策|审批)|NEEDS_YOU")
 
 
-def needs_you(text: str) -> list[str]:
-    """Agent 结果里要人审批 / 决策的事项：`NEEDS_YOU:` 行，或「需要你做」小节下的条目、「需要你做：…」这样的行。"""
+def needs_you(text: str, tagged_only: bool = False) -> list[str]:
+    """Agent 结果里要人审批 / 决策的事项：`NEEDS_YOU:` 行，或「需要你做」小节下的条目、「需要你做：…」这样的行。
+    tagged_only：提示里明确要求了 `NEEDS_YOU:`（审批后续），没写就是没有，不再按小节猜。"""
     tagged = re.findall(r"NEEDS_YOU[:：]\s*(.+)", text or "")
-    if tagged:  # Agent 按约定写了，就只认这些，避免和总结里的复述重复
+    if tagged or tagged_only:  # Agent 按约定写了，就只认这些，避免和总结里的复述重复
         return list(dict.fromkeys(x.strip() for x in tagged))[:8]
     out, in_sec = [], False
     for raw in (text or "").splitlines():
@@ -109,7 +111,7 @@ def needs_you(text: str) -> list[str]:
         body = (ln[bullet.end():] if bullet else ln).replace("**", "").strip("# ").strip()
         if m := re.match(r"NEEDS_YOU[:：]\s*(.+)", body):
             out.append(m[1].strip())
-        elif not bullet and _NEED_HEAD.search(body) and not _FYI.search(body):  # 小节标题，可能自带内容「需要你做：xxx」
+        elif not bullet and _NEED_HEAD.search(body) and not _FYI.search(body) and not _NONE.search(body):  # 小节标题，可能自带内容「需要你做：xxx」
             rest = re.split(r"[:：]", body, 1)[1:]
             if rest and rest[0].strip():
                 out.append(rest[0].strip())
@@ -158,7 +160,7 @@ FOLLOWUP_PROMPT = """用户在学习平台上对你上次列出的待审批 / �
 def record_approvals(job: dict | None) -> None:
     if not job or job.get("status") != "done" or not APPROVAL_REFS.fullmatch(job.get("ref") or ""):
         return
-    for item in needs_you(job.get("output") or ""):
+    for item in needs_you(job.get("output") or "", tagged_only=(job.get("ref") or "").startswith("approval:")):
         db.execute("INSERT OR IGNORE INTO approvals(job_id,item,status,created_at) VALUES (?,?, 'pending', ?)",
                    [job["id"], item[:1000], db.now()])
 
