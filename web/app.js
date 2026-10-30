@@ -146,13 +146,14 @@ async function renderSettings(wrap) {
   const focus = h('input', { value: s.focus_windows.map((w) => `${w.start}-${w.end}`).join(', ') });
   const conc = h('input', { type: 'number', value: s.max_agent_concurrency, min: 1, max: 10 });
   const autoRun = h('input', { type: 'checkbox', checked: s.plan_auto_dispatch !== false });
-  const tz = h('input', { value: s.timezone || '', placeholder: `留空 = 系统时区（${Intl.DateTimeFormat().resolvedOptions().timeZone}）` });
+  const tz = h('input', { value: s.timezone || '', placeholder: `留空 = 按作息自动推断（当前 ${s.timezone_effective || '系统'}）` });
   const eng = h('select', {}, ['claude', 'codex'].map((e) => h('option', { value: e, selected: s.engines.default === e }, e)));
   const codexModel = h('input', { value: s.engines.codex.model || '', placeholder: '留空 = codex 默认模型' });
   const claudeModel = h('input', { value: s.engines.claude.model || '', placeholder: '留空 = claude 默认模型' });
   const claudeBin = h('input', { value: s.engines.claude.bin || 'claude', placeholder: 'reclaude / claude' });
   const repos = h('textarea', { rows: 3, value: (s.repos || []).join('\n'), placeholder: '每行一个目录：复盘时分析的代码库 / 文档' });
-  const raw = h('textarea.mono', { rows: 16, value: JSON.stringify(s, null, 2) });
+  const { timezone_effective: _tzEff, ...stored } = s;
+  const raw = h('textarea.mono', { rows: 16, value: JSON.stringify(stored, null, 2) });
   const save = async (body) => { await api.put('/api/settings', body); toast('已保存'); route(); };
   wrap.append(ui.pageHead('设置', '全局时间窗、引擎和目录；数据都在本地 data/ 下'),
     h('div.card', {}, [

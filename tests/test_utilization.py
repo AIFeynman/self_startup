@@ -105,16 +105,19 @@ def test_snapshot_taken_during_the_day_is_recomputed(monkeypatch):
     db.init([agents.SCHEMA])
     calls = []
     monkeypatch.setattr(agents.util, "analyze", lambda d, *a, **k: calls.append(d) or {"summary": {"v": U.VERSION, "sessions": 1}, "slots": []})
-    put = lambda day, upd, v: db.execute(  # noqa: E731
+    import time as _t
+    put = lambda day, upd, v, tz=None: db.execute(  # noqa: E731
         "INSERT INTO agent_util(date,summary,data,updated_at) VALUES (?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
-        "summary=excluded.summary, updated_at=excluded.updated_at", [day, json.dumps({"v": v}), "{}", upd])
+        "summary=excluded.summary, updated_at=excluded.updated_at", [day, json.dumps({"v": v, "tz": tz or _t.tzname[0]}), "{}", upd])
     put("2020-01-01", "2020-01-01T21:30:00", U.VERSION)       # 当天算的：重算
     agents.utilization("2020-01-01")
     put("2020-01-02", "2020-01-03T08:00:00", U.VERSION - 1)   # 旧口径：重算
     agents.utilization("2020-01-02")
     put("2020-01-03", "2020-01-04T08:00:00", U.VERSION)       # 当天结束后、当前口径：用缓存
     assert agents.utilization("2020-01-03")["cached"]
-    assert [d.isoformat() for d in calls] == ["2020-01-01", "2020-01-02"]
+    put("2020-01-04", "2020-01-05T08:00:00", U.VERSION, "XYZ")  # 别的时区算的：重算
+    agents.utilization("2020-01-04")
+    assert [d.isoformat() for d in calls] == ["2020-01-01", "2020-01-02", "2020-01-04"]
 
 
 def test_timezone_setting_shifts_local_clock_and_bad_name_is_ignored():

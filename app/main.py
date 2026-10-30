@@ -82,7 +82,7 @@ def meta():
 
 @app.get("/api/settings")
 def get_settings():
-    return settings.load()
+    return {**settings.load(), "timezone_effective": time.tzname[0]}
 
 
 @app.put("/api/settings")

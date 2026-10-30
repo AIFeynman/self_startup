@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from datetime import date as Date, datetime, timedelta
 from pathlib import Path
 
@@ -622,6 +623,7 @@ def scan_efficiency(date: str) -> dict:
     ids = chat.engine_sessions()
     sessions = rs.scan(Date.fromisoformat(date), cfg.get("session_dirs", {}) or {}, ids)
     summary = rs.aggregate(sessions)
+    summary["tz"] = time.tzname[0]
     try:  # 墙钟等待与「Agent 看板 · 时间利用」同一算法（多个会话同时等只算一次）
         u = util.analyze(Date.fromisoformat(date), cfg.get("session_dirs", {}) or {}, cfg["focus_windows"], cfg["day_start"],
                          cfg["day_end"], int(cfg.get("max_agent_concurrency", 3)), chat_ids=ids)["summary"]
@@ -639,7 +641,8 @@ def scan_efficiency(date: str) -> dict:
 def get_efficiency(date: str, scan_if_missing: bool = True) -> dict | None:
     r = db.row("SELECT * FROM review_agent_stats WHERE date=?", [date])
     if scan_if_missing and (not r or not r.get("scanned_at") or _stale(date, r["scanned_at"])
-                            or _loads(r["summary"], {}).get("v") != rs.VERSION):
+                            or _loads(r["summary"], {}).get("v") != rs.VERSION
+                            or _loads(r["summary"], {}).get("tz", time.tzname[0]) != time.tzname[0]):
         return scan_efficiency(date)
     if not r or not r.get("scanned_at"):
         return None

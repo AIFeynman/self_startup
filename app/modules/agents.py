@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shlex
 import subprocess
@@ -260,7 +261,8 @@ def get_deliveries(date: str = "", automated: bool = False):
 def _final(row: dict | None) -> bool:
     """快照是在那天结束之后、用当前口径算的（当天算的快照只是半天的数据；旧口径的快照也要重算）。"""
     return (bool(row) and (row["updated_at"] or "") >= (Date.fromisoformat(row["date"]) + timedelta(days=1)).isoformat()
-            and json.loads(row["summary"] or "{}").get("v") == util.VERSION)
+            and json.loads(row["summary"] or "{}").get("v") == util.VERSION
+            and json.loads(row["summary"] or "{}").get("tz") == time.tzname[0])   # 换了时区（含自动推断）要重算
 
 
 def utilization(day: str = "", refresh: bool = False) -> dict:
@@ -356,6 +358,21 @@ def planning_insights() -> str:
                      + "、".join(f"{x['hour']}点" for x in busy_h if x["humans"])
                      + ("；经常空着的时段：" + "、".join(f"{h}点" for h in p["recurring_idle_hours"]) if p["recurring_idle_hours"] else ""))
     return "\n".join(lines)
+
+
+def on_startup() -> None:
+    """设置里没写时区时，按会话作息推断（后台跑，几秒），推断结果变了就切换进程时区。"""
+    from . import _tzinfer
+
+    def run():
+        try:
+            before = time.tzname[0]
+            _tzinfer.refresh()
+            if settings.apply_timezone() != before:
+                logging.getLogger(__name__).info("时区按作息推断为 %s", time.tzname[0])
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("推断时区失败")
+    threading.Thread(target=run, daemon=True, name="tz-infer").start()
 
 
 @router.get("/utilization")
