@@ -275,6 +275,11 @@ def evidence(date: str) -> str:
         if docs:
             sec.append("**当天修改的文档**\n```\n" + "\n".join(docs) + "\n```")
         parts.append("\n".join(sec))
+    try:
+        from . import agents
+        parts.append("### 当天交付（Claude Code / Codex 会话里检测到的推送 / 部署 / PR / 发布 / 文档材料）\n" + agents.deliveries_text(date))
+    except Exception:  # noqa: BLE001
+        pass
     return "\n\n".join(parts) or "（没有配置复盘分析目录：设置 → 复盘分析目录，或给事项填 repo）"
 
 

@@ -1,6 +1,7 @@
 // Agent 看板：本地 Claude Code / Codex 会话 + 平台后台任务，按 运行中 → 等你处理 → 待验收 → 已验收 流转。
 // 每 10 秒自动刷新；卡片可拖到「已验收」，或用按钮 验收 / 归档 / 续接 / 关联事项 / 备注。
 import { utilization } from './_utilchart.js';
+import { deliveries } from './_deliveries.js';
 
 const ENGINE = { claude: 'Claude', codex: 'Codex', platform: '平台' };
 const prefs = load();
@@ -15,6 +16,8 @@ export default {
     const tops = todays.filter((t) => !t.parent_id);
 
     const statsBox = h('div');
+    const deliveryBox = h('div');
+    deliveries(ctx).then((n) => deliveryBox.replaceChildren(n));
     const boardBox = h('div.ag-board');
     const meta = h('span.muted');
 
@@ -32,13 +35,18 @@ export default {
     );
 
     const box = ui.composer({
-      placeholder: '筛选项目 / 标题 / 内容，或切到「问 Agent」…',
-      modes: [{ id: 'filter', label: '筛选', placeholder: '输入即筛选：项目名、标题、最近的要求…' },
+      placeholder: '输入即筛选卡片；回车把这句话发给 Agent…',
+      modes: [{ id: 'filter', label: '筛选', placeholder: '输入即筛选卡片（项目名、标题…）；回车发给 Agent' },
         { id: 'ask', label: '问 Agent', placeholder: '比如：哪些会话在等我？卡住的怎么处理？' }],
       hint: '每 10 秒自动刷新 · 拖动卡片到「已验收」',
-      onSubmit: (t, mode) => { if (mode === 'ask') return ask(t); filter = t; draw(); return false; },
+      // 回车总是发给 Agent；「筛选」模式下边打字边筛卡片，但像问句的输入不筛（免得看板被筛空）
+      onSubmit: (t) => { filter = ''; draw(); return ask(t); },
     });
-    box.querySelector('textarea').addEventListener('input', (e) => { if (box.mode === 'filter') { filter = e.target.value.trim(); draw(); } });
+    const isQuestion = (t) => /[?？吗呢]$|哪|怎么|几件|什么|多少|为什么|总结|帮我/.test(t);
+    box.querySelector('textarea').addEventListener('input', (e) => {
+      const t = e.target.value.trim();
+      filter = box.mode === 'filter' && !isQuestion(t) ? t : ''; draw();
+    });
 
     const tab = ctx.sub[0] === 'util' ? 'util' : 'board';
     const tabs = h('div.tabs', {}, [['board', '看板'], ['util', '时间利用']].map(([id, label]) =>
@@ -54,8 +62,9 @@ export default {
         { label: '哪些在等我？', icon: 'bulb', onClick: () => ask('看一下 Agent 看板：哪些会话在等我处理？按紧急程度列出，每条一句话说明在等什么、建议怎么做。') },
         { label: '总结各 Agent 进展', icon: 'review', onClick: () => ask('总结一下最近 24 小时各个 Agent 会话的进展：运行中的到哪一步了，待验收的做成了什么。') },
         { label: '卡住的怎么处理', icon: 'bolt', onClick: () => ask('看板里「可能卡住」「等待批准」「已中断」的会话，分别可能是什么原因，怎么处理最快？') },
+        { label: '今天交付了什么', icon: 'check', onClick: () => ask('今天已经交付了哪几件事（有推送/部署/PR/发布或文档材料，之后没再改的）？每件一句话说清交付物；再列出交付后仍在改、或只提交没推送的。') },
       ], { left: true }),
-      statsBox, filters, boardBox,
+      deliveryBox, statsBox, filters, boardBox,
     );
 
     async function renderUtil() {
@@ -105,7 +114,8 @@ export default {
         { k: '运行中', v: n('running') }, { k: '等你处理', v: n('attention') },
         { k: '待验收', v: n('review') }, { k: '已验收', v: n('done') },
       ]));
-      meta.textContent = `更新于 ${data.generated_at.slice(11, 19)}${data.archived ? ` · 已归档 ${data.archived}` : ''}`;
+      const shown = cols.reduce((a, c) => a + c.cards.length, 0);
+      meta.textContent = `${filter ? `筛选「${filter}」${shown ? ` · ${shown} 张` : ' · 无匹配，回车问 Agent'} · ` : ''}更新于 ${data.generated_at.slice(11, 19)}${data.archived ? ` · 已归档 ${data.archived}` : ''}`;
       boardBox.replaceChildren(...cols.map((col) => column(col)));
     }
 

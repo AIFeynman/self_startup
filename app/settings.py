@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 from pathlib import Path
 
 from .db import DATA_DIR, ROOT
@@ -19,7 +20,8 @@ DEFAULTS: dict = {
     "engines": {
         "default": "claude",            # claude / codex
         "claude": {
-            "bin": "claude",
+            # reclaude = 绑定了本机账号的 Claude Code 启动器（参数与 claude 一致），没有就用 claude
+            "bin": "reclaude" if shutil.which("reclaude") else "claude",
             "model": "",
             "permission_mode": "acceptEdits",
             "allowed_tools": [

@@ -2,6 +2,7 @@
 // 标签页：当日复盘 / 时间线 / 问题与经验 / Agent 效率。路由：#review/<YYYY-MM-DD>/<tab>
 import { today } from '../api.js';
 import { utilization } from './_utilchart.js';
+import { deliveries } from './_deliveries.js';
 
 const CSS = `
 .rv-top { display: flex; justify-content: flex-end; margin-bottom: -8px; }
@@ -343,6 +344,7 @@ export default {
       const nodes = [
         ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
         h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
+        await deliveries({ api, h, ui }, { date: state.date }),
       ];
       if (d.learning.length || lx.steps.length || lx.items.length) {
         nodes.push(ui.section('学习'), h('div.card', {}, [

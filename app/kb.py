@@ -283,6 +283,14 @@ def _daily(docs: list[dict]) -> list[dict]:
                         f"（专注时间内 {u.get('idle_focus_min')}）\n- 人工交互 {u.get('human_total')} 次，专注时间外 {u.get('human_out_focus')} 次；"
                         f"Agent 等你累计 {u.get('wait_total_min')} 分钟")
             body += [f"- 建议：{a}" for a in ud.get("advice", [])[:5]]
+        dl = db.row("SELECT data FROM agent_delivery WHERE date=?", [date]) if _has("agent_delivery") else None
+        if dl:
+            g = json.loads(dl["data"] or "{}")
+            for k, t in (("delivered", "已交付"), ("changed_after", "交付后仍有改动"), ("committed", "已提交未推送")):
+                if g.get(k):
+                    body.append(f"\n## {t}（{len(g[k])}）" if k == "delivered" else f"\n### {t}（{len(g[k])}）")
+                    body += [f"- {x['at']} [{'/'.join(x['labels'])}] {x['project']} · {x['title']}"
+                             + (f"（文档：{', '.join(x['docs'][:3])}）" if x.get("docs") else "") for x in g[k]]
         related = [d for d in by_date.get(date, []) if d["type"] != "daily"]
         if related:
             body.append("\n## 当天产出与记录")

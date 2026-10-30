@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import threading
@@ -16,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import db, settings, tasks
-from . import _agents_scan as scanner, _utilization as util
+from . import _agents_scan as scanner, _deliveries as deliv, _utilization as util
 
 TITLE = "Agent 看板"
 ORDER = 8
@@ -29,6 +30,12 @@ CREATE TABLE IF NOT EXISTS agent_board (
     updated_at  TEXT
 );
 -- 每天的时间利用快照（真实事件 → 时间片），供复盘 / 规划 / 知识库使用
+-- 每天的交付快照（看板 / 复盘读取时更新），供知识库每日记录使用
+CREATE TABLE IF NOT EXISTS agent_delivery (
+    date        TEXT PRIMARY KEY,
+    data        TEXT DEFAULT '{}',
+    updated_at  TEXT
+);
 CREATE TABLE IF NOT EXISTS agent_util (
     date        TEXT PRIMARY KEY,
     summary     TEXT DEFAULT '{}',
@@ -118,7 +125,7 @@ def resume_command(key: str, cwd: str) -> str:
     engine, sid = key.split(":", 1)
     cd = f"cd {shlex.quote(cwd)} && " if cwd else ""
     if engine == "claude":
-        return f"{cd}claude --resume {sid}"
+        return f"{cd}{settings.get('engines.claude.bin', 'claude')} --resume {sid}"
     if engine == "codex":
         return f"{cd}codex resume {sid}"
     raise HTTPException(400, "只有 Claude Code / Codex 会话可以续接")
@@ -157,10 +164,80 @@ def agent_context(ref: str) -> str:
             lines.append(f"- [{c['engine']}] {c['project']} · {c['title']} · {c['reason']} · {c['idle_min']} 分钟前{plan}"
                          f" · key={c['key']}\n  最近要求：{c['last_human'][:120]}\n  最近回复：{c['last_agent'][:160]}")
     try:
+        lines.append("\n## 今日已交付（推送 / 部署 / PR / 发布 / 文档材料，之后没再改代码）\n" + deliveries_text())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         lines.append("\n## 时间利用\n" + planning_insights())
     except Exception:  # noqa: BLE001
         pass
     return "\n".join(lines)
+
+
+# ---------- 今日已交付 ----------
+
+def _job_deliveries(day: str) -> list[dict]:
+    """平台后台任务里有交付物的：深读笔记、学习计划、调研报告（完成即交付）。"""
+    out = []
+    for j in db.rows("SELECT id,module,ref,finished_at FROM jobs WHERE status='done' AND substr(finished_at,1,10)=? ORDER BY id DESC", [day]):
+        ref, title, link, label = j["ref"] or "", "", "", ""
+        if m := re.fullmatch(r"learn:item:(\d+)", ref):
+            r = db.row("SELECT title,url FROM learn_items WHERE id=?", [int(m[1])]) if _table("learn_items") else None
+            title, link, label = (r or {}).get("title") or (r or {}).get("url") or ref, f"#learn/item/{m[1]}", "深读笔记"
+        elif m := re.fullmatch(r"learn:plan:(\d+)", ref):
+            r = db.row("SELECT topic FROM learn_plans WHERE id=?", [int(m[1])]) if _table("learn_plans") else None
+            title, link, label = (r or {}).get("topic") or ref, f"#learn/plan/{m[1]}", "学习计划"
+        elif m := re.fullmatch(r"research:(\d+):(?:r\d+|synth)", ref):
+            if not ref.endswith("synth") and any(x["ref"] == f"research:{m[1]}:synth" for x in out if "ref" in x):
+                continue
+            r = db.row("SELECT topic FROM research WHERE id=?", [int(m[1])]) if _table("research") else None
+            title, link, label = (r or {}).get("topic") or ref, f"#research/r/{m[1]}", "调研综合报告" if ref.endswith("synth") else "调研结果"
+        else:
+            continue
+        out.append({"key": f"job:{j['id']}", "ref": ref, "engine": "platform", "status": "delivered", "kind": "doc",
+                    "kinds": [], "labels": [label], "at": (j["finished_at"] or "")[11:16], "project": "学习平台 · " + j["module"],
+                    "title": scanner._clip(title, 80), "link": link, "summary": "", "docs": [], "docs_total": 0,
+                    "commands": [], "automated": False, "cwd": "", "branch": ""})
+    return out
+
+
+def _table(name: str) -> bool:
+    return bool(db.row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", [name]))
+
+
+def deliveries(day: str = "", automated: bool = False) -> dict:
+    """某天的交付：delivered 已交付 / changed_after 交付后仍有改动 / committed 已提交未推送。"""
+    day = day or db.today()
+    items = deliv.scan(settings.get("session_dirs", {}), Date.fromisoformat(day), skip_cwd=str(db.DATA_DIR)) + _job_deliveries(day)
+    hidden = sum(1 for x in items if x["automated"]) if not automated else 0
+    items = [x for x in items if automated or not x["automated"]]
+    items.sort(key=lambda x: x["at"], reverse=True)
+    groups = {k: [x for x in items if x["status"] == k] for k in ("delivered", "changed_after", "committed")}
+    out = {"date": day, **groups, "counts": {k: len(v) for k, v in groups.items()}, "hidden_automated": hidden,
+           "generated_at": db.now()}
+    keep = ("at", "labels", "project", "title", "docs", "docs_total", "link", "summary")
+    db.execute("INSERT INTO agent_delivery(date,data,updated_at) VALUES (?,?,?) ON CONFLICT(date) DO UPDATE SET "
+               "data=excluded.data, updated_at=excluded.updated_at",
+               [day, json.dumps({k: [{f: x.get(f) for f in keep} for x in groups[k]] for k in groups}, ensure_ascii=False), db.now()])
+    return out
+
+
+def deliveries_text(day: str = "") -> str:
+    """给复盘 / 规划 / 知识库用的纯文本。"""
+    d = deliveries(day)
+    def line(x):
+        extra = f" · 文档 {x['docs_total']} 份" if x["docs_total"] else ""
+        return f"- {x['at']} [{'/'.join(x['labels'])}] {x['project']} · {x['title']}{extra}"
+    parts = []
+    for k, t in (("delivered", "已交付"), ("changed_after", "交付后仍有改动（未完）"), ("committed", "已提交未推送")):
+        if d[k]:
+            parts.append(f"{t}（{len(d[k])}）：\n" + "\n".join(line(x) for x in d[k]))
+    return "\n".join(parts) or "当天没有检测到交付（推送 / 部署 / PR / 发布 / 文档材料）。"
+
+
+@router.get("/deliveries")
+def get_deliveries(date: str = "", automated: bool = False):
+    return deliveries(date, automated)
 
 
 # ---------- 时间利用 ----------
