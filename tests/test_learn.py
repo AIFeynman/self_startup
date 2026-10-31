@@ -287,3 +287,31 @@ def test_module_model_only_for_learn(monkeypatch):
     assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5"
     cmd = agent._claude_cmd("p", "", "", [], agent.module_model("review"))
     assert cmd[cmd.index("--model") + 1] == "opus"
+
+
+def test_check_answer_and_review(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    s1 = p["steps"][0]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    _write_chapter(client, fake_submit, s1)
+    url = f"/api/learn/steps/{s1['id']}/checks/0"
+    # 不写判断直接看要点：不起任务
+    n = len(fake_submit)
+    assert client.post(url, json={"q": "该上线吗？", "points": "看 pass^k"}).json()["status"] == "viewed"
+    assert len(fake_submit) == n
+    # 写了判断请求点评
+    c = client.post(url, json={"q": "该上线吗？", "points": "看 pass^k", "answer": "80% 够了，上线", "review": True}).json()
+    assert c["status"] == "reviewing" and fake_submit[-1]["ref"] == f"learn:step:{s1['id']}:check:0"
+    assert "80% 够了" in fake_submit[-1]["prompt"] and "看 pass^k" in fake_submit[-1]["prompt"]
+    learn.on_job_done(_job(c["job_id"], '```json\n{"covered": [], "missing": ["没看 pass^k"], "off": ["只看 pass@1"],'
+                                        ' "extra": [], "better": "先算 pass^3", "score": 0.2}\n```'))
+    s = client.get(f"/api/learn/steps/{s1['id']}").json()
+    rv = s["checks"]["0"]["review"]
+    assert s["checks"]["0"]["status"] == "reviewed" and rv["missing"] == ["没看 pass^k"] and rv["score"] == 0.2
+    assert "没看 pass^k" in learn.agent_context(f"learn:step:{s1['id']}")
+    # 答案没改再保存：保留点评；重新生成章节：作答清空
+    assert client.post(url, json={"q": "该上线吗？", "answer": "80% 够了，上线"}).json()["review"]["score"] == 0.2
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={"force": True})
+    _write_chapter(client, fake_submit, s1)
+    assert client.get(f"/api/learn/steps/{s1['id']}").json()["checks"] == {}
+    client.delete(f"/api/learn/plans/{p['id']}")
