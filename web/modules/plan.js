@@ -1,6 +1,6 @@
 // 规划：每日事项录入 → AI 拆解 → 排程（专注窗 / 人车道 / Agent 车道）→ 可选让 Agent 自动执行
 // 输入：一个大 composer，每行一个顶层事项，支持轻量行内语法（见 parseLine）。
-import { today } from '../api.js';
+import { today, nowLocal, toMs } from '../api.js';
 import { approvals } from './_approvals.js';
 
 const CSS = `
@@ -269,8 +269,7 @@ export default {
       } catch (e) { toast(e.message, true); }
     };
     const schedule = async () => {
-      const now = new Date();
-      const from = fromNow.checked ? `${pad2(now.getHours())}:${pad2(now.getMinutes())}` : '';
+      const from = fromNow.checked ? nowLocal().slice(11, 16) : '';
       try { await api.post('/api/plan/schedule', { date: state.date, from_time: from }); toast('已排程'); load(); } catch (e) { toast(e.message, true); }
     };
     const carry = async () => {
@@ -389,7 +388,7 @@ export default {
           h('summary', {}, [h('span.dot'), h('span.t', { title: r.title }, r.title), h('span', {}, [meta, acts]), now]), log]);
         return { r, row, now, meta, acts, log };
       });
-      const elapsed = (a, b) => { const m = Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`; };
+      const elapsed = (a, b) => { const m = Math.max(0, Math.round(((b ? toMs(b) : Date.now()) - toMs(a)) / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h${m % 60}m` : `${m}m`; };
       const tick = async () => {
         if (!box.isConnected) return clearInterval(liveTimer);
         let finished = false;
@@ -627,7 +626,7 @@ export default {
       for (let m = Math.ceil(t0 / 60) * 60; m <= t1; m += 60) axis.append(h('span', { style: { top: (m - t0) * PX + 24 + 'px' } }, `${m / 60}:00`));
       const wrap = h('div.pl-tl', {}, [axis]);
       const isToday = state.date === today();
-      const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+      const nowM = +nowLocal().slice(11, 13) * 60 + +nowLocal().slice(14, 16);
       for (const ln of lanes) {
         const lane = h('div.pl-lane', { style: { height: H + 'px' } }, [h('h4', {}, ln === 'human' ? [ui.icon('user'), '人'] : [ui.icon('robot'), `Agent ${ln.slice(5)}`])]);
         for (const w of cfg.focus_windows) {

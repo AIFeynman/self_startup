@@ -1,6 +1,8 @@
 // 今日已交付（Agent 看板 / 复盘共用）：有交付物（推送、部署、PR、发布、文档材料）且之后没再改代码的事。
 // 另列「交付后仍有改动」「已提交未推送」，默认折叠。
 // 用法：import { deliveries } from './_deliveries.js'; el.append(await deliveries(ctx, { date }))
+import { today } from '../api.js';
+
 const TAG = { 推送: 'ok', 部署: 'ok', PR: 'ok', 发布: 'ok', 发布页面: 'ok', 提交: 'line', 文档材料: 'line' };
 
 export async function deliveries(ctx, { date = '', title = '' } = {}) {
@@ -37,7 +39,7 @@ export async function deliveries(ctx, { date = '', title = '' } = {}) {
   function view(d) {
     const n = d.counts;
     const parts = [h('div.dl-top', {}, [
-      h('b.dl-h', {}, title || (d.date === new Date().toLocaleDateString('sv-SE') ? '今日已交付' : `${d.date} 已交付`)),
+      h('b.dl-h', {}, title || (d.date === today() ? '今日已交付' : `${d.date} 已交付`)),
       h('span.dl-n', {}, n.delivered),
       h('span.muted', {}, '有推送 / 部署 / PR / 发布 / 文档材料，且之后没再改代码'),
       h('span.grow'),

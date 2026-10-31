@@ -4,7 +4,7 @@
 //   - ask(text)：直接把一句话发给本板块 Agent（打开右侧对话并发送）
 //   - refresh()：只重绘页面主体；Agent 回复结束会触发 document 'agent-done' 事件
 //   - 页面自己用 ui.pageHead() 渲染标题，用 ui.composer() 提供便捷输入
-import { api, h, md, toast, field } from './api.js';
+import { api, h, md, toast, field, setTz, nowLocal } from './api.js';
 import { initChat, openChat, chatBusy, chatSnapshot } from './chat.js';
 import * as ui from './ui.js';
 
@@ -15,6 +15,7 @@ const page = document.getElementById('page');
 async function boot() {
   initChat(document.getElementById('chat'));
   meta = await api.get('/api/meta');
+  setTz(meta.tz);
   const nav = document.getElementById('nav');
   nav.innerHTML = '';
   nav.append(
@@ -78,7 +79,7 @@ function restoreChat() {
 
 // 后台任务结束 → 弹通知（点击打开结果）、刷新最近对话；chat.js 收到 job-done 会刷新正在看的那个对话
 function watchJobs() {
-  let since = new Date(Date.now() - 5000).toLocaleString('sv-SE').replace(' ', 'T');
+  let since = nowLocal(Date.now() - 5000);
   setInterval(async () => {
     if (document.hidden) return;
     const js = await api.get(`/api/jobs/finished?since=${encodeURIComponent(since)}`).catch(() => null);

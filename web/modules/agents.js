@@ -3,6 +3,7 @@
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
 import { approvals } from './_approvals.js';
+import { today } from '../api.js';
 
 const ENGINE = { claude: 'Claude', codex: 'Codex', platform: '平台' };
 const prefs = load();
@@ -70,7 +71,7 @@ export default {
     );
 
     async function renderUtil() {
-      const day = h('input', { type: 'date', value: ctx.sub[1] || new Date().toLocaleDateString('sv-SE'), style: { width: 'auto' },
+      const day = h('input', { type: 'date', value: ctx.sub[1] || today(), style: { width: 'auto' },
         onchange: (e) => { location.hash = '#agents/util/' + e.target.value; } });
       el.append(
         ui.pageHead('时间利用', '从 Claude Code / Codex 会话的真实事件统计：Agent 有没有跑满、人工交互是否落在专注时间、Agent 等你多久', [day]),

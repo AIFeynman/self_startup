@@ -1,6 +1,8 @@
 // 信息推荐：按热度/新鲜度/兴趣/反馈排序的 AI 信息流；只展示标题 + 简介 + 链接 + 推荐理由。
 // 页面：今日精选（前 5 条，编号行）+ 分类 pill + 紧凑列表（无限加载）+ 一个多模式输入框（筛选 / 加兴趣 / 问 Agent）。
 // 键盘：j/k 移动选中，l 赞，s 收藏，o 打开，d 深读，x 隐藏。
+import { toMs } from '../api.js';
+
 const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['x_article', 'X 长文'], ['saved', '已收藏']];
 const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论' };
 const PAGE = 40;
@@ -88,7 +90,7 @@ const fmtDate = (s) => {
 const fmtTime = (s) => (s ? s.replace('T', ' ').slice(5, 16) : '');
 const ago = (s) => {
   if (!s) return '';
-  const t = Date.parse(s.endsWith('Z') || /[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z');
+  const t = toMs(s);   // 发布时间带时区；平台自己的时间（刷新完成等）不带，按平台时区
   if (Number.isNaN(t)) return fmtTime(s);
   const m = Math.round((Date.now() - t) / 60000);
   return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : fmtTime(s);
