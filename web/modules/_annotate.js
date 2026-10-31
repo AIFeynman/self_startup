@@ -15,6 +15,36 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   const RAIL_KEY = 'an-rail-off'; // 收起批注栏（全站记住）；收起后只留一条竖排的「批注 N」，点开恢复
   let railOff = !compact && (() => { try { return !!localStorage.getItem(RAIL_KEY); } catch { return false; } })();
   const setRail = (off) => { railOff = off; try { localStorage.setItem(RAIL_KEY, off ? '1' : ''); } catch { /* ignore */ } paint(); };
+  // 批注栏宽度：拖左边线调宽（全站记住），双击边线恢复默认；标题栏「加宽」一键切到正文一半宽
+  const W_KEY = 'an-rail-w';
+  let railW = (() => { try { return +localStorage.getItem(W_KEY) || 0; } catch { return 0; } })();
+  const grip = h('div.an-grip', { title: '拖动调整批注栏宽度 · 双击恢复默认' });
+  const applyW = (save) => {
+    wrap.classList.toggle('has-w', !!railW);
+    if (railW) wrap.style.setProperty('--an-rail-w', `${railW}px`); else wrap.style.removeProperty('--an-rail-w');
+    if (save) { try { localStorage.setItem(W_KEY, railW ? String(railW) : ''); } catch { /* ignore */ } }
+    placeGrip();
+  };
+  const clampW = (w) => Math.round(Math.max(220, Math.min(w, wrap.clientWidth * 0.7)));
+  function placeGrip() {
+    const show = !compact && !railOff && wrap.classList.contains('has-threads') && rail.offsetLeft > 0;
+    grip.hidden = !show;
+    if (show) grip.style.left = `${rail.offsetLeft - 9}px`;
+  }
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    wrap.classList.add('resizing');
+    const right = wrap.getBoundingClientRect().right;
+    const move = (ev) => { railW = clampW(right - ev.clientX); applyW(false); };
+    const up = () => { grip.removeEventListener('pointermove', move); wrap.classList.remove('resizing'); applyW(true); };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up, { once: true });
+  });
+  grip.addEventListener('dblclick', () => { railW = 0; applyW(true); });
+  const wide = () => railW && railW >= wrap.clientWidth * 0.45;
+  const toggleWide = () => { railW = wide() ? 0 : clampW(wrap.clientWidth * 0.5); applyW(true); paint(); };
+  if (!compact) { wrap.append(grip); window.addEventListener('resize', () => grip.isConnected && placeGrip()); }
   let timer;
 
   const load = async () => {
@@ -66,6 +96,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     const sorted = [...shown].sort((a, b) => pos(a) - pos(b));
     wrap.classList.toggle('has-threads', !!threads.length || !!composer);
     wrap.classList.toggle('rail-off', railOff);
+    applyW(false);
     if (railOff) {
       rail.replaceChildren(h('button.an-reopen', { title: '展开批注栏', onclick: () => setRail(false) }, [ui.icon('chat'), threads.length ? `批注 ${open.length}` : '批注']));
       return;
@@ -76,12 +107,14 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
         resolved ? h('button.sm.ghost', { onclick: () => { showResolved = !showResolved; paint(); } }, showResolved ? '隐藏已解决' : `已解决 ${resolved}`) : null,
         h('span.grow'),
         h('button.sm.ghost', { title: '不划线，针对全文问 Claude', onclick: () => startNew({ quote: '', prefix: '', suffix: '', ask: true }) }, [ui.icon('spark'), '问全文']),
+        compact ? null : h('button.sm.ghost.an-close', { title: wide() ? '恢复默认宽度' : '加宽批注栏（也可以拖左边线调宽）', onclick: toggleWide }, ui.icon('expand')),
         compact ? null : h('button.sm.ghost.an-close', { title: '收起批注栏，正文更宽（划线评论时自动展开）', onclick: () => setRail(true) }, ui.icon('x')),
       ]),
       composer ? newCard() : null,
       ...sorted.map((t) => card(t, lost.has(t.id))),
       !threads.length && !composer ? h('div.an-hint', {}, '选中正文里的文字，可以写评论或直接问 Claude；讨论会保存下来，也会同步进知识库。') : null,
     ].filter(Boolean));
+    placeGrip();
   }
 
   function startNew(c) {
@@ -267,6 +300,13 @@ function injectStyle() {
   .an-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
   .an-head .grow { flex: 1; }
   .an-head .an-close { padding: 2px 4px; } .an-head .an-close svg { width: 14px; height: 14px; }
+  .an-wrap { position: relative; }
+  .an-wrap.has-w.has-threads:not(.compact):not(.rail-off) { grid-template-columns: minmax(0, 1fr) var(--an-rail-w); }
+  .an-grip { position: absolute; top: 0; bottom: 0; width: 10px; cursor: col-resize; z-index: 2; }
+  .an-grip::after { content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; border-radius: 1px; background: transparent; transition: background .12s; }
+  .an-grip:hover::after, .an-wrap.resizing .an-grip::after { background: var(--accent-ring); }
+  .an-wrap.resizing { user-select: none; cursor: col-resize; }
+  @media (max-width: 1100px) { .an-wrap.has-w.has-threads:not(.compact):not(.rail-off) { grid-template-columns: minmax(0, 1fr); } .an-grip { display: none; } }
   .an-wrap.rail-off { grid-template-columns: minmax(0, 1fr) 30px; }
   .an-wrap.rail-off .an-rail { border-left: 0; padding-left: 0; overflow: visible; }
   .an-reopen { writing-mode: vertical-rl; display: flex; gap: 6px; align-items: center; padding: 10px 3px; font-size: 12px; letter-spacing: .15em; color: var(--muted); }
