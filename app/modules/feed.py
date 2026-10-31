@@ -54,6 +54,8 @@ CFG_DEFAULTS = {
     "stale_source_days": 7,       # 某来源最新条目早于这么多天，status 里标为停更
     "hn_queries": ["LLM", "AI agent", "Claude", "OpenAI", "GPT", "coding agent"],
     "github_queries": ["llm", "ai agent", "mcp", "claude code"],
+    "github_min_stars": 100,      # 搜索新建仓库时的最低星数（太低全是刚建的小项目）
+    "github_trending_languages": [""],  # 每日 Trending 看哪些语言："" = 全部语言，可加 "python" "typescript"
     "reddit": ["LocalLLaMA", "ClaudeAI", "MachineLearning"],
     "x_days": 3,                  # X：只要最近几天的推文
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
@@ -196,7 +198,9 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
                   include_hidden=saved)
     if saved:
         out = [x for x in out if x["feedback"].get("saved")]
-    if type_:
+    if type_ == "x_article":  # 「X 长文」标签页：自己发的长文 + 引用了长文的推文
+        out = [x for x in out if x["extra"].get("x_article")]
+    elif type_:
         out = [x for x in out if x["type"] == type_]
     if q:
         ql = q.lower()
@@ -217,7 +221,8 @@ def _collectors() -> dict:
         "hn": lambda: src.fetch_hn(list(cfg("hn_queries")), known_ids=_enriched_hn()),
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
-        "github": lambda: src.fetch_github(list(cfg("github_queries"))),
+        "github": lambda: src.fetch_github_all(list(cfg("github_queries")), min_stars=int(cfg("github_min_stars")),
+                                               trending_languages=list(cfg("github_trending_languages"))),
         "rss": lambda: src.fetch_rss(list(fc.get("rss") or [])),
         "sites": lambda: src.fetch_sites(list(fc.get("sites") or []), known_urls=_known_urls("blog")),
         "podcast": lambda: src.fetch_rss(list(fc.get("podcasts") or []), per_feed=5, source="podcast", typ="podcast"),
@@ -426,7 +431,8 @@ def deep_reads() -> int:
 @router.get("/config")
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
-                                "x_min_likes", "x_per_account", "producthunt_days", "sources")} | {
+                                "x_min_likes", "x_per_account", "producthunt_days", "sources", "github_min_stars",
+                                "github_trending_languages")} | {
         k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 

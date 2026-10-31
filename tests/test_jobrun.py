@@ -116,3 +116,9 @@ def test_every_job_prompt_carries_resource_rule(monkeypatch):
 
 def test_free_mem_reads_this_machine():
     assert jobs._free_mem_gb() is None or jobs._free_mem_gb() > 0
+
+
+def test_finished_skips_paused(client):
+    jid = db.insert("jobs", {"module": "nomod", "engine": "claude", "prompt": "p", "status": "paused",
+                             "created_at": db.now(), "finished_at": "2099-01-01T00:00:00"})
+    assert jid not in [j["id"] for j in client.get("/api/jobs/finished", params={"since": "2098-12-31"}).json()]

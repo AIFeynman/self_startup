@@ -153,6 +153,64 @@ def fetch_alphaxiv(days: int = 14, page_size: int = 60) -> list[dict]:
     return out
 
 
+TRENDING_URL = "https://github.com/trending"
+
+
+def parse_trending(page: str, since: str = "daily", day: str = "") -> list[dict]:
+    """GitHub Trending 页面（没有官方 API，解析 HTML）：仓库、描述、语言、总星数、这段时间新增的星。
+    date 记成上榜那天（仓库的创建时间往往是几年前，用它会被当成旧内容）。"""
+    day = day or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    unit = {"daily": "today", "weekly": "this week", "monthly": "this month"}.get(since, "today")
+    out = []
+    for row in page.split('class="Box-row"')[1:]:
+        m = re.search(r'<h2[^>]*>\s*<a[^>]*href="/([^"/]+/[^"/]+)"', row)
+        if not m:
+            continue
+        name = m[1]
+        desc = clean(html.unescape(re.sub(r"<[^>]+>", "", (re.search(r'<p class="[^"]*col-9[^"]*">(.*?)</p>', row, re.S) or [None, ""])[1])))
+        lang = (re.search(r'itemprop="programmingLanguage">([^<]+)<', row) or [None, ""])[1].strip()
+        num = lambda pat: int((re.search(pat, row, re.S) or [None, "0"])[1].replace(",", ""))  # noqa: E731
+        stars = num(r'href="/[^"]+/stargazers"[^>]*>.*?</svg>\s*([\d,]+)')
+        gained = num(rf"([\d,]+)\s+stars {unit}")
+        short = re.split(r"(?<=[.!?。！？])\s", desc, maxsplit=1)[0][:90].rstrip(" .。")
+        out.append({"id": f"github:{name}", "source": "github", "type": "repo",
+                    "title": f"{name.split('/', 1)[1]}：{short}" if short else name,
+                    "summary": desc, "url": f"https://github.com/{name}", "date": day, "popularity": float(stars),
+                    "extra": {"language": lang, "repo": name, "trending": since, "stars_gained": gained,
+                              "trending_rank": len(out) + 1}})
+    return out
+
+
+def fetch_github_trending(since: str = "daily", languages: list[str] | None = None) -> list[dict]:
+    out: dict[str, dict] = {}
+    with _client() as c:
+        for lang in languages or [""]:
+            r = c.get(f"{TRENDING_URL}/{lang}" if lang else TRENDING_URL, params={"since": since},
+                      headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"})
+            r.raise_for_status()
+            for it in parse_trending(r.text, since):
+                out.setdefault(it["id"], it)
+    return list(out.values())
+
+
+def fetch_github_all(queries: list[str], *, min_stars: int = 100, trending_languages: list[str] | None = None) -> tuple[list[dict], list[str]]:
+    """项目：GitHub 每日 Trending（成熟的热门项目）+ 按关键词搜最近新建的仓库（新项目）。两路各自失败不影响另一路。"""
+    items: dict[str, dict] = {}
+    errors = []
+    for name, fn in (("search", lambda: fetch_github(queries, min_stars=min_stars)),
+                     ("trending", lambda: fetch_github_trending("daily", trending_languages))):
+        try:
+            for it in fn():
+                old = items.get(it["id"])
+                # 两路都有：保留搜索的创建时间，叠上 Trending 的标记
+                items[it["id"]] = {**old, "extra": {**old["extra"], **it["extra"]}} if old else it
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"github {name}: {type(e).__name__}: {str(e)[:120]}")
+    if errors and not items:
+        raise RuntimeError(errors[0])
+    return list(items.values()), errors
+
+
 def fetch_github(queries: list[str], days: int = 14, min_stars: int = 30, per_query: int = 20) -> list[dict]:
     since = _days_ago(days).strftime("%Y-%m-%d")
     headers = {"Accept": "application/vnd.github+json"}
