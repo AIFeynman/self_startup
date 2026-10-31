@@ -174,11 +174,15 @@ def _mark_gone(items: list[dict]) -> None:
             it["extra"]["gone"] = True
 
 
-def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None) -> list[dict]:
+def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
+           sort: str = "score") -> list[dict]:
+    """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合 / new 最新 / hot 最热（同源热度百分位）。
+    只有「全部 + 综合 + 不限时间 + 无筛选」时做类型 / 来源多样化（今日精选就取这个列表的前 5 条）。"""
+    now = now or datetime.now(timezone.utc)
     items = _load_items()
     _mark_gone(items)
     fb = _feedback()
-    out = rk.rank(items, now=now or datetime.now(timezone.utc), half_life_h=float(cfg("half_life_hours")),
+    out = rk.rank(items, now=now, half_life_h=float(cfg("half_life_hours")),
                   interests=list(cfg("interests") or []), feedback=fb, examples=_examples(items, fb),
                   include_hidden=saved)
     if saved:
@@ -188,7 +192,10 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     if q:
         ql = q.lower()
         out = [x for x in out if ql in f"{x['title']} {x['summary']}".lower()]
-    if not (type_ or saved or q):
+    out = rk.within_days(out, days, now)
+    if sort in ("new", "hot"):
+        return rk.sort_items(out, sort, now)
+    if not (type_ or saved or q or days):
         out = rk.diversify(out)
     return out
 
@@ -303,8 +310,11 @@ def _public(x: dict) -> dict:
 
 
 @router.get("/items")
-def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0):
-    out = ranked(type, saved, q)
+def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0, days: float = 0,
+          sort: str = "score"):
+    if sort not in ("score", "new", "hot"):
+        raise HTTPException(400, "sort 只能是 score / new / hot")
+    out = ranked(type, saved, q, days=days, sort=sort)
     return {"total": len(out), "items": [_public(x) for x in out[offset: offset + limit]]}
 
 

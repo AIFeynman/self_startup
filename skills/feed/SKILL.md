@@ -29,12 +29,16 @@ description: 信息推荐板块：收集 AI 相关的论文、博客、产品、
 
 ## 排序（确定性、可解释）
 
-score = 热度（同源内 log 归一化，0–1；整源无热度给 0.35）
-      + 2.0 × 新鲜度（`0.5^(小时数/half_life_hours)`，默认半衰期 72h）
+score = 热度（同源最近 30 天条目里的百分位，0–1；整源无热度给 0.35，避免历史爆款压低新条目）
+      + 2.0 × 新鲜度（`0.5^(小时数/半衰期)`；半衰期 = half_life_hours（默认 72h）× 类型系数：讨论 0.5、产品 0.67、
+        博客 1、项目 / 论文 1.67、播客 2.33；只精确到天的日期按当天中午算）
       + 0.45 × 命中兴趣词数（最多 3 个；英文按词边界匹配，标题+简介）
-      + 反馈亲和（你赞过/收藏的标题词 +、踩过的 −；你常赞的来源 +；早先从 learn_evolve 导入的条目，其 star/good/bad 评分也算样本和先验）
+      + 反馈亲和（你赞过/收藏的标题词 +、踩过的 −，常见虚词不算；某来源样本 ≥5 条才算「你常赞 X」；
+        早先从 learn_evolve 导入的条目，其 star/good/bad 评分也算样本和先验）
+      + 0.3 关注账号（X 名单里的账号，搜索来的不加）+ 0.25 × 其它来源也收了同一条（最多 2 个，「也见于」）
       + 本条自己被赞 +1 / 被踩 −2；隐藏的条目不出现
 同一 URL（arXiv/HF 论文统一按 arXiv id）或同一标题只保留分最高的一条，其余记为「也见于」。
+「全部」列表做多样化：前 5 条（今日精选）每个来源最多 1 条、每类最多 2 条；前 30 条每类 ≤40%、每个来源 ≤20%。
 每条带 `why`，例如 `HN 312分 · 24 小时内 · 命中 agent · 你赞过相似内容（memory）`。
 
 ## API
@@ -44,6 +48,7 @@ curl -s "$API/api/feed/items?limit=10"                       # 排序后的推�
 curl -s "$API/api/feed/items?type=paper&limit=5"             # type: paper/blog/podcast/product/repo/discussion/news
 curl -s "$API/api/feed/items?saved=true"                     # 已收藏
 curl -s "$API/api/feed/items?q=memory"                       # 标题/简介筛选
+curl -s "$API/api/feed/items?days=1&sort=hot"                # days: 只要最近 N 天发布的；sort: score 综合（默认）/ new 最新 / hot 最热（同源热度百分位）
 curl -s -X POST $API/api/feed/refresh -H 'Content-Type: application/json' -d '{}'                 # 后台刷新全部来源
 curl -s -X POST $API/api/feed/refresh -H 'Content-Type: application/json' -d '{"sources":["hn","github"],"wait":true}'  # 同步刷新指定来源
 curl -s $API/api/feed/status                                 # 刷新状态、各来源条数/错误、反馈统计

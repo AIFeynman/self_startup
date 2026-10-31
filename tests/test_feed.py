@@ -122,9 +122,22 @@ def test_stale_items_downweighted_and_marked():
 
 
 def test_diversify_caps_type_share():
-    items = [{"id": f"r{i}", "type": "repo"} for i in range(10)] + [{"id": "p", "type": "paper"}, {"id": "b", "type": "blog"}]
-    out = rk.diversify(items, top=5, max_share=0.4)
-    assert [x["id"] for x in out[:5]] == ["r0", "r1", "p", "b", "r2"]
+    items = [{"id": f"r{i}", "type": "repo", "source": f"gh{i}"} for i in range(10)] + [
+        {"id": "p", "type": "paper", "source": "arxiv"}, {"id": "b", "type": "blog", "source": "blog"}]
+    out = rk.diversify(items, top=8, max_share=0.4)
+    assert [x["id"] for x in out[:5]] == ["r0", "r1", "p", "b", "r2"]     # 精选：每类最多 2 条，不够再放宽
+    assert [x["id"] for x in out[5:8]] == ["r3", "r4", "r5"]              # 其余候选不够多样时按原序补上，不丢条目
+    assert len(out) == len(items)
+
+
+def test_diversify_picks_one_per_source():
+    items = ([{"id": f"x{i}", "type": "discussion", "source": "twitter"} for i in range(6)]
+             + [{"id": f"ph{i}", "type": "product", "source": "producthunt"} for i in range(6)]
+             + [{"id": "a", "type": "paper", "source": "arxiv"}, {"id": "h", "type": "discussion", "source": "hn"},
+                {"id": "g", "type": "repo", "source": "github"}])
+    out = rk.diversify(items, top=10, src_share=0.2)
+    assert [x["id"] for x in out[:5]] == ["x0", "ph0", "a", "h", "g"]
+    assert [x["id"] for x in out[5:7]] == ["x1", "ph1"]       # 前 10 条每源 ≤ 2：先各补一条，剩下的原序顺延
     assert len(out) == len(items)
 
 
@@ -322,3 +335,75 @@ def test_xiaoyuzhou_rsshub_fallback(monkeypatch):
     monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(_xyz_handler(False, set()))))
     items, errs = src.fetch_xiaoyuzhou(["https://www.xiaoyuzhoufm.com/podcast/" + "0" * 24], rsshub_bases=["https://hub1.example"])
     assert not items and "RSSHub 也没取到" in errs[0]
+
+
+# ---------- 排序优化：按类型半衰期 / 只到天的日期 / 热度百分位 / 关注账号 / 多源印证 / 时间筛选与排序 ----------
+
+def test_type_half_life():
+    # 同样 3 天前：论文（半衰期 ×1.67）比讨论（×0.5）新鲜度高得多
+    paper = {**_it("p", "zz paper", hours=72, pop=0), "type": "paper", "source": "blog"}
+    disc = {**_it("d", "zz disc", hours=72, pop=0), "source": "blog"}
+    out = {x["id"]: x["score"] for x in rk.rank([paper, disc], now=NOW, half_life_h=72)}
+    assert out["p"] - out["d"] > 0.5
+
+
+def test_date_only_counts_as_noon():
+    it = {"date": "2026-10-29T00:00:00+00:00"}
+    assert rk.item_time(it, NOW).hour == 12
+    assert rk.item_time({"date": "2026-10-29"}, datetime(2026, 10, 29, 3, tzinfo=timezone.utc)).hour == 3   # 不晚于现在
+    assert rk.item_time({"date": "2026-10-29T08:30:00+00:00"}, NOW).hour == 8
+
+
+def test_pop_percentile_ignores_old_outliers():
+    items = [_it("old", "viral old", pop=100000, hours=24 * 90)] + [_it(f"n{i}", f"t{i}", pop=p) for i, p in enumerate([10, 20, 30, 40])]
+    pops = rk.pop_index(items, NOW)
+    assert rk.pop_norm(pops, items[-1]) == 1.0 and rk.pop_norm(pops, items[1]) == 0.25
+    assert rk.pop_norm({"blog": [0, 0]}, {"source": "blog", "popularity": 0}) == rk.NO_POP_BASE
+
+
+def test_follow_and_also_bonus():
+    a = _it("twitter:1", "same tweet text here", source="twitter", extra={"via": "@karpathy"})
+    b = _it("twitter:2", "other tweet text here", source="twitter", extra={"via": "LLM min_faves:500"})
+    out = {x["id"]: x for x in rk.rank([a, b], now=NOW)}
+    assert "关注账号" in out["twitter:1"]["why"] and "关注账号" not in out["twitter:2"]["why"]
+    dup = [_it("hn:1", "A shared article", url="https://e.com/a"), _it("blog:1", "A shared article", source="blog", url="https://e.com/a"),
+           _it("hn:2", "Lonely article", url="https://e.com/b")]
+    out = rk.rank(dup, now=NOW)
+    assert len(out) == 2 and "也见于" in out[0]["why"] and out[0]["score"] > out[1]["score"]
+
+
+def test_source_affinity_needs_enough_examples():
+    ex = [{"id": f"e{i}", "title": f"zz{i}", "source": "producthunt", "polarity": 1} for i in range(3)]
+    out = rk.rank([_it("ph", "Some product", source="producthunt")], now=NOW, examples=ex)
+    assert "你常赞" not in out[0]["why"]
+    ex = [{"id": f"e{i}", "title": f"zz{i}", "source": "producthunt", "polarity": 1} for i in range(8)]
+    out = rk.rank([_it("ph", "Some product", source="producthunt")], now=NOW, examples=ex)
+    assert "你常赞 Product Hunt" in out[0]["why"]
+
+
+def test_affinity_ignores_filler_words():
+    ex = [{"id": "e", "title": "You don't need this today", "source": "hn", "polarity": 1}]
+    out = rk.rank([_it("x", "Why you don't need agents today")], now=NOW, examples=ex)
+    assert "你赞过相似内容" not in out[0]["why"]
+
+
+def test_within_days_and_sort():
+    items = rk.rank([_it("a", "fresh low", hours=2, pop=10), _it("b", "old high", hours=24 * 5, pop=500),
+                     _it("c", "mid", hours=30, pop=100)], now=NOW)
+    assert {x["id"] for x in rk.within_days(items, 1, NOW)} == {"a"}
+    assert {x["id"] for x in rk.within_days(items, 3, NOW)} == {"a", "c"}
+    assert [x["id"] for x in rk.sort_items(items, "new", NOW)] == ["a", "c", "b"]
+    assert [x["id"] for x in rk.sort_items(items, "hot", NOW)] == ["b", "c", "a"]
+
+
+def test_api_days_sort(client, monkeypatch):
+    from app.modules import feed
+    now = datetime.now(timezone.utc)
+    fake = [{**_it("hn:1", "New one", pop=5), "date": (now - timedelta(hours=2)).isoformat()},
+            {**_it("hn:2", "Old big", pop=900), "date": (now - timedelta(days=10)).isoformat()}]
+    monkeypatch.setattr(feed, "_collectors", lambda: {"hn": lambda: fake})
+    client.post("/api/feed/refresh", json={"sources": ["hn"], "wait": True})
+    ids = lambda q: [x["id"] for x in client.get("/api/feed/items?" + q).json()["items"] if x["id"] in ("hn:1", "hn:2")]
+    assert ids("days=1") == ["hn:1"]
+    assert ids("sort=hot")[0] == "hn:2" and ids("sort=new")[0] == "hn:1"
+    assert client.get("/api/feed/items?sort=bogus").status_code == 400
