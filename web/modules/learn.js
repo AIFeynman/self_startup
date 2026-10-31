@@ -1,5 +1,6 @@
 // 深度学习：条目深读（论文 / GitHub）+ 主题学习计划。
-// 路由：#learn（总览 + 智能输入框）、#learn/plans（同总览，滚到计划）、#learn/plan/<id>、#learn/item/<id>（笔记阅读）
+// 路由：#learn（总览 + 智能输入框）、#learn/plans（同总览，滚到计划）、#learn/plan/<id>、
+//       #learn/plan/<id>/step/<sid>（跟着学：一章教程 + 章末测试）、#learn/item/<id>（笔记阅读）
 import { annotate } from './_annotate.js';
 const CSS = `
 .ln-opts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: -4px 0 10px; }
@@ -97,10 +98,70 @@ const CSS = `
 .ln-reader .md pre code { background: none; padding: 0; }
 .ln-tldr { background: var(--focus); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 22px; margin-bottom: 14px; }
 .ln-tldr ul { margin: 6px 0 0; padding-left: 18px; } .ln-tldr li { margin: 3px 0; }
+.ln-purpose { font-size: 13px; color: var(--muted); margin: -6px 0 12px; padding-left: 10px; border-left: 2px solid var(--accent); }
+.ln-purpose b { color: var(--text); font-weight: 500; }
+.ln-goal { font-size: 13px; margin: 0 0 8px; } .ln-goal b { color: var(--accent); font-weight: 500; margin-right: 4px; }
+.ln-cs { font-size: 11px; }
+.ln-continue { display: flex; gap: 14px; align-items: center; padding: 14px 18px; margin-bottom: 16px; border-color: var(--accent); }
+.ln-continue .t { flex: 1; min-width: 0; } .ln-continue .t .k { font-size: 12px; color: var(--muted); } .ln-continue .t .n { font-weight: 600; }
+/* 章节阅读 */
+.ln-chap { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 20px; align-items: start; }
+.ln-chap .an-wrap { grid-template-columns: minmax(0, 1fr) minmax(200px, 240px); }
+.ln-chap .md { font-size: 15px; line-height: 1.85; }
+.ln-chap .md h2 { font-family: var(--serif); font-size: 20px; margin-top: 1.6em; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.ln-toc { position: sticky; top: 16px; font-size: 13px; max-height: calc(100vh - 40px); overflow: auto; }
+.ln-toc .k { font-size: 12px; color: var(--muted); letter-spacing: .03em; margin-bottom: 6px; }
+.ln-toc a { display: block; padding: 4px 8px; border-left: 2px solid var(--line); color: var(--muted); line-height: 1.4; }
+.ln-toc a:hover, .ln-toc a.on { color: var(--accent); border-left-color: var(--accent); }
+.ln-toc a.quiz { margin-top: 8px; color: var(--accent); font-weight: 500; }
+@media (max-width: 1150px) { .ln-chap { grid-template-columns: minmax(0, 1fr); } .ln-toc { display: none; } .ln-chap .an-wrap { grid-template-columns: minmax(0, 1fr); } }
+.ln-chap-head .k { font-size: 13px; color: var(--muted); }
+.ln-chap .md .fact, .ln-chap .md .judge { display: inline-block; font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 7px; border-radius: 5px; margin-right: 6px; vertical-align: 1px; }
+.ln-chap .md .fact { background: var(--accent-soft); color: var(--accent); }
+.ln-chap .md .judge { background: var(--bg-2); color: var(--muted); border: 1px solid var(--line-2); }
+.ln-chap .md details { margin: 10px 0; padding: 8px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.ln-chap .md details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.ln-chap .md blockquote { border-left: 3px solid var(--accent); background: var(--focus); margin: 12px 0; padding: 8px 16px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.ln-chap .md table { border-collapse: collapse; font-size: 14px; display: block; overflow-x: auto; }
+.ln-chap .md th, .ln-chap .md td { border: 1px solid var(--line); padding: 5px 9px; vertical-align: top; min-width: 7em; }
+.ln-chap .md pre { overflow-x: auto; }
+.ln-qz { padding: 16px 20px; margin-bottom: 10px; }
+.ln-qz .qh { display: flex; gap: 10px; align-items: baseline; }
+.ln-qz .qh .no { color: var(--accent); font: 700 15px var(--serif); }
+.ln-qz .qh .q { flex: 1; font-weight: 500; white-space: pre-wrap; }
+.ln-qz .opt { display: flex; gap: 8px; align-items: flex-start; padding: 7px 10px; margin: 4px 0 0 22px; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.ln-qz .opt input { margin-top: 4px; width: auto; }
+.ln-qz .opt.right { border-color: var(--ok); background: var(--ok-soft); }
+.ln-qz .opt.wrong { border-color: var(--err); background: var(--err-soft); }
+.ln-qz textarea { margin: 8px 0 0 22px; width: calc(100% - 22px); }
+.ln-qz .fbk { margin: 10px 0 0 22px; font-size: 14px; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--bg); }
+.ln-qz .fbk .ref { color: var(--muted); margin-top: 6px; white-space: pre-wrap; }
+.ln-qz .sc { font: 700 13px var(--mono); }
+.ln-qz .sc.full { color: var(--ok); } .ln-qz .sc.part { color: var(--warn); } .ln-qz .sc.zero { color: var(--err); }
+.ln-score { display: flex; gap: 18px; align-items: center; padding: 18px 22px; margin-bottom: 12px; }
+.ln-score .big { font: 700 40px var(--serif); line-height: 1; }
+.ln-score.pass .big { color: var(--ok); } .ln-score.fail .big { color: var(--err); }
+.ln-score .t { flex: 1; min-width: 0; font-size: 14px; } .ln-score ul { margin: 6px 0 0; padding-left: 18px; }
+.ln-chap-nav { display: flex; gap: 10px; justify-content: space-between; margin: 22px 0 8px; }
+.ln-chap-nav button { max-width: 48%; } .ln-chap-nav span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
 const STATUS_TAG = { done: 'ok', active: 'ok', failed: 'err', running: 'warn', queued: 'warn', generating: 'warn', adapting: 'warn' };
 const STATUS_TXT = { queued: '排队', running: '解析中', done: '完成', failed: '失败', generating: '生成中', active: '进行中', adapting: '调整中' };
 const STEP_TXT = { todo: '待学', doing: '学习中', done: '已完成', skipped: '跳过' };
+const openedChapters = new Set(); // 本次页面会话里已经「进入」过的章节（避免软刷新时重复触发生成）
+const draftKey = (sid) => `ln-quiz-${sid}`;
+const loadDraft = (sid) => { try { return JSON.parse(localStorage.getItem(draftKey(sid)) || '{}'); } catch { return {}; } };
+const saveDraft = (sid, d) => { try { localStorage.setItem(draftKey(sid), JSON.stringify(d)); } catch { /* ignore */ } };
+const chapterHref = (pid, sid) => `#learn/plan/${pid}/step/${sid}`;
+const quizScore = (s) => (s.quiz_result?.status === 'graded' ? s.quiz_result.score : null);
+function chapterTag(h, s) {
+  const sc = quizScore(s);
+  if (sc !== null) return h('span.tag.ln-cs' + (s.quiz_result.passed ? '.ok' : '.err'), {}, `测试 ${sc} 分`);
+  if (s.quiz_result?.status === 'grading') return h('span.tag.warn.ln-cs', {}, '批改中');
+  if (s.chapter_status === 'generating') return h('span.tag.warn.ln-cs', {}, '章节生成中');
+  if (s.chapter_status === 'ready') return h('span.tag.gray.ln-cs', {}, '章节就绪');
+  return null;
+}
 const BUSY = ['queued', 'running', 'generating', 'adapting'];
 const DEF_KEY = 'ln-defaults';
 let onAgentDone = null;
@@ -128,6 +189,7 @@ const page = {
     document.addEventListener('agent-done', onAgentDone);
 
     const [view, id] = ctx.sub;
+    if (view === 'plan' && id && ctx.sub[2] === 'step' && ctx.sub[3]) return renderChapter(el, ctx, +id, +ctx.sub[3]);
     if (view === 'plan' && id) return renderPlan(el, ctx, +id);
     if (view === 'item' && id) return renderItem(el, ctx, +id);
     return renderHome(el, ctx, view === 'plans');
@@ -390,7 +452,7 @@ async function renderItem(el, ctx, iid) {
       if (!steps.isConnected) return;
       const j = await api.get(`/api/jobs/${it.job_id}`).catch(() => null);
       if (!j) return;
-      const mins = ((Date.now() - new Date(j.started_at || j.created_at).getTime()) / 60000).toFixed(1);
+      const mins = ((j.elapsed_s ?? 0) / 60).toFixed(1);
       head.textContent = `后台深读中 · 已用 ${mins} 分钟`;
       const lines = (j.log || '').split('\n').filter(Boolean).slice(-6).map((l) => l.replace(/^\[tool\]\s*/, '').replace(/\/Users\/[^ ]*\/data\/learn\/[^/]+\//g, ''));
       steps.replaceChildren(...(lines.length ? lines.map((l) => h('div.ln-step', { title: l }, l)) : [h('div.muted', {}, h('span.dots', {}, '准备中'))]));
@@ -486,6 +548,15 @@ async function renderPlan(el, ctx, pid) {
     busy ? h('div.muted.dots', { style: { marginTop: '8px' } }, `job ${p.job_id} 运行中，完成后自动刷新`) : null,
   ]));
   if (ctx.sub[2] === 'adapt') setTimeout(() => { adaptNote.focus(); history.replaceState(null, '', `#learn/plan/${pid}`); }, 30);
+  if (curStep && !busy) {
+    const no = p.steps.filter((s) => s.status !== 'skipped').indexOf(curStep) + 1;
+    el.append(h('div.card.ln-continue', {}, [
+      h('div.t', {}, [h('div.k', {}, `跟着学 · 第 ${no} 章 · 阶段 ${curStep.stage} ${p.stages[curStep.stage]}`), h('div.n', {}, curStep.title),
+        curStep.goal ? h('div.muted', { style: { fontSize: '13px' } }, '学完能：' + curStep.goal) : null]),
+      chapterTag(h, curStep),
+      h('button.primary', { onclick: () => { location.hash = chapterHref(pid, curStep.id); } }, [curStep.chapter_status === 'ready' ? '继续学习' : '开始学习', ui.icon('arrow')]),
+    ]));
+  }
 
   if (p.overview_md) {
     el.append(h('details.card.flat', { open: !p.steps.length }, [h('summary', {}, '计划总览 / 调整记录'),
@@ -494,6 +565,7 @@ async function renderPlan(el, ctx, pid) {
   for (const s of stageInfo) {
     if (!s.ss.length) continue;
     el.append(h('div', { id: `ln-stage-${s.no}`, style: { scrollMarginTop: '16px' } }, ui.section(`阶段 ${s.no} · ${s.name}`, `${s.done}/${s.ss.length} · ${s.hours}h`)));
+    if (p.stage_goals?.[s.no]) el.append(h('div.ln-purpose', {}, [h('b', {}, '本阶段目的：'), p.stage_goals[s.no]]));
     s.ss.forEach((st) => el.append(stepView(st, p, ctx, curStep && st.id === curStep.id)));
   }
 }
@@ -513,6 +585,7 @@ function stepView(s, p, ctx, isCur) {
     Object.entries(STEP_TXT).map(([k, v]) => h('option', { value: k, selected: s.status === k }, v)));
   const expanded = openSteps.has(s.id) || ((isCur || s.status === 'doing') && !closedSteps.has(s.id));
   const body = h('div.ln-st-body', { style: { display: expanded ? '' : 'none' } }, [
+    s.goal ? h('div.ln-goal', {}, [h('b', {}, '能力目标'), s.goal]) : null,
     s.description ? annotate(ctx, md(s.description), { doc: `learn:step:${s.id}`, title: `${p.topic} · ${s.title}`, link: `#learn/plan/${p.id}`, source: s.description, compact: true }) : null,
     s.resources.length ? h('div.ln-st-sub', {}, '资源') : null,
     ...s.resources.map((r) => h('div.ln-res', {}, [ui.icon(r.type === 'code' || /github/.test(r.url || '') ? 'box' : r.type === 'video' ? 'bolt' : 'link'),
@@ -525,6 +598,8 @@ function stepView(s, p, ctx, isCur) {
     h('div.ln-fb', {}, [h('span.muted', {}, '理解度'), stars(h, ui, s.understanding, (v) => quiet({ understanding: v })), fb, saved]),
     h('div', { style: { marginTop: '8px' } }, notes),
     h('div.ln-st-actions', {}, [
+      h('button.primary', { onclick: () => { location.hash = chapterHref(p.id, s.id); } }, [ui.icon('learn'),
+        s.chapter_status === 'ready' ? (quizScore(s) !== null ? '回看本章' : '继续学习本章') : '开始学习本章（教程 + 测试）']),
       h('button.outline', { onclick: async () => { await api.post(`/api/learn/steps/${s.id}/today`, {}); toast('已加入今日计划'); softRefresh(); } }, [ui.icon('plan'), '加入今日计划']),
       h('button', { onclick: () => ctx.openChat({ module: 'learn', ref: `learn:plan:${p.id}`, title: '计划：' + p.topic.slice(0, 16),
         prefill: `关于步骤「${s.title}」（step_id=${s.id}）：` }) }, [ui.icon('chat'), '继续追问']),
@@ -543,6 +618,7 @@ function stepView(s, p, ctx, isCur) {
       h('button.ln-check' + (done ? '.on' : ''), { title: done ? '标记为未完成' : '标记完成', onclick: () => save({ status: done ? 'doing' : 'done' }, done ? '' : '完成一步 ✓') }, ui.icon('check')),
       h('span.ln-st-title', { onclick: toggle }, s.title),
       isCur ? h('span.tag', {}, '当前') : null,
+      chapterTag(h, s),
       s.understanding && !expanded ? stars(h, ui, s.understanding, null, { readonly: true }) : null,
       h('span.muted', {}, `${s.est_hours}h`), status,
       h('button.icon.tg', { title: '展开 / 收起', onclick: toggle }, ui.icon('arrow')),
@@ -551,3 +627,202 @@ function stepView(s, p, ctx, isCur) {
   ]);
   return card;
 }
+
+// ---------- 跟着学：一章教程 + 章末测试 ----------
+async function renderChapter(el, ctx, pid, sid) {
+  const { api, h, md, toast, ui, openChat } = ctx;
+  let p;
+  try { p = await api.get(`/api/learn/plans/${pid}`); } catch { el.append(back(h, ui), ui.empty('计划不存在')); return; }
+  let s = p.steps.find((x) => x.id === sid);
+  if (!s) { el.append(back(h, ui, `#learn/plan/${pid}`, p.topic), ui.empty('这一章不存在')); return; }
+  // 第一次进入：没有章节就开始生成；已有章节就让后台准备下一章
+  if (!openedChapters.has(sid)) {
+    openedChapters.add(sid);
+    if (!['generating'].includes(s.chapter_status)) s = await api.post(`/api/learn/steps/${sid}/open`, {}).catch(() => s);
+  }
+  const seq = p.steps.filter((x) => x.status !== 'skipped' || x.id === sid);
+  const idx = seq.findIndex((x) => x.id === sid);
+  const prev = seq[idx - 1], next = seq[idx + 1];
+  const chat = (prefill) => openChat({ module: 'learn', ref: `learn:step:${sid}`, title: '本章：' + s.title.slice(0, 16), prefill });
+
+  el.append(back(h, ui, `#learn/plan/${pid}`, p.topic));
+  el.append(h('div.ln-head.ln-chap-head', {}, ui.pageHead(s.title,
+    h('span.k', {}, `第 ${idx + 1}/${seq.length} 章 · 阶段 ${s.stage} ${p.stages[s.stage]} · 约 ${s.est_hours}h`), [
+      chapterTag(h, s),
+      h('button.primary', { onclick: () => chat() }, [ui.icon('chat'), '追问本章']),
+    ])));
+  el.append(h('div.ln-purpose', {}, [h('b', {}, '本阶段目的：'), p.stage_goals?.[s.stage] || '']));
+  if (s.goal) el.append(h('div.ln-goal', {}, [h('b', {}, '本章能力目标'), s.goal]));
+
+  const toolbar = h('div.row', { style: { margin: '6px 0 16px' } }, [
+    h('span.grow'),
+    s.chapter_job ? h('a.muted', { href: `/api/jobs/${s.chapter_job}`, target: '_blank' }, `job ${s.chapter_job}`) : null,
+    h('button.ghost', { disabled: s.chapter_status === 'generating', onclick: async () => {
+      const note = prompt('重新生成本章。有什么要求？（如「多讲推导」「换更新的资料」，可留空）', '');
+      if (note === null) return;
+      await api.post(`/api/learn/steps/${sid}/open`, { force: true, note }); toast('正在重新生成本章'); softRefresh();
+    } }, [ui.icon('refresh'), '重新生成本章']),
+  ]);
+  el.append(toolbar);
+
+  if (s.chapter_status === 'generating' || !s.chapter_status) {
+    watchJob(ctx, s.chapter_job, 'generating');
+    const steps = h('div.ln-steps');
+    const head = h('div.serif', {}, 'Agent 正在读资料、写本章教程和测试');
+    el.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, '通常 5–12 分钟，完成后自动刷新')]), steps,
+      s.description ? h('div', { style: { marginTop: '14px' } }, [h('div.ln-st-sub', {}, '本步说明（来自计划）'), md(s.description)]) : null]));
+    const tick = async () => {
+      if (!steps.isConnected || !s.chapter_job) return;
+      const j = await api.get(`/api/jobs/${s.chapter_job}`).catch(() => null);
+      if (!j) return;
+      const mins = ((j.elapsed_s ?? 0) / 60).toFixed(1);
+      head.textContent = j.status === 'queued' ? '排队中（前面还有任务）' : `Agent 正在写本章 · 已用 ${mins} 分钟`;
+      const lines = (j.log || '').split('\n').filter(Boolean).slice(-6).map((l) => l.replace(/^\[tool\]\s*/, '').replace(/\/Users\/[^ ]*\/data\/learn\/plans\/[^ ]*\//g, ''));
+      steps.replaceChildren(...(lines.length ? lines.map((l) => h('div.ln-step', { title: l }, l)) : [h('div.muted', {}, h('span.dots', {}, '准备中'))]));
+      if (['queued', 'running'].includes(j.status)) setTimeout(tick, 4000);
+    };
+    tick();
+    el.append(chapterNav(h, ui, pid, prev, next));
+    return;
+  }
+  if (s.chapter_status === 'failed') {
+    el.append(h('div.card', {}, [ui.empty('本章生成失败', '可以看 job 日志，或点下面重试'),
+      h('div.row', { style: { justifyContent: 'center' } }, h('button.primary', { onclick: async () => { await api.post(`/api/learn/steps/${sid}/open`, {}); softRefresh(); } }, [ui.icon('refresh'), '重试']))]));
+    el.append(chapterNav(h, ui, pid, prev, next));
+    return;
+  }
+
+  // 正文 + 目录
+  const body = md(s.chapter_md);
+  const heads = [...body.querySelectorAll('h2')];
+  heads.forEach((hd, i) => { hd.id = `ln-h-${i}`; hd.style.scrollMarginTop = '16px'; });
+  const toc = h('nav.ln-toc', {}, [h('div.k', {}, '本章目录'),
+    ...heads.map((hd) => h('a', { href: 'javascript:void 0', onclick: () => hd.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, hd.textContent)),
+    s.quiz.length ? h('a.quiz', { href: 'javascript:void 0', onclick: () => document.getElementById('ln-quiz')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, `章末测试 · ${s.quiz.length} 题`) : null]);
+  const main = h('div', { style: { minWidth: 0 } }, [
+    h('div.card.ln-reader-card', { style: { padding: '22px 26px' } },
+      annotate(ctx, body, { doc: `learn:chapter:${sid}`, title: `${p.topic} · ${s.title}`, link: chapterHref(pid, sid), source: s.chapter_md })),
+  ]);
+  el.append(h('div.ln-chap', {}, [toc, main]));
+  // 目录高亮当前小节
+  const links = [...toc.querySelectorAll('a:not(.quiz)')];
+  const spy = () => {
+    if (!toc.isConnected) { window.removeEventListener('scroll', spy, true); return; }
+    let on = -1;
+    heads.forEach((hd, i) => { if (hd.getBoundingClientRect().top < 120) on = i; });
+    links.forEach((a, i) => a.classList.toggle('on', i === on));
+  };
+  window.addEventListener('scroll', spy, true);
+
+  const gotoSection = (name) => {
+    const hd = heads.find((x) => name && (x.textContent.includes(name) || name.includes(x.textContent.trim())));
+    if (hd) hd.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else toast('没找到对应小节，往上翻翻');
+  };
+  main.append(quizView(ctx, p, s, { gotoSection, chat, next }));
+
+  // 我的笔记 / 理解度 / 反馈（与计划页同一份数据）
+  const saved = h('span.ln-saved');
+  const quiet = async (patch) => { await api.patch(`/api/learn/steps/${sid}`, patch); saved.textContent = '已保存 ✓'; setTimeout(() => { saved.textContent = ''; }, 2000); };
+  const fb = h('input', { value: s.feedback || '', placeholder: '一句话反馈：哪里没懂、太难/太简单、讲得好不好…  Enter 保存',
+    onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); quiet({ feedback: fb.value }); } } });
+  const notes = h('textarea', { rows: 3, value: s.notes || '', placeholder: '我的笔记（离开输入框自动保存）', onchange: () => quiet({ notes: notes.value }) });
+  main.append(ui.section('我的笔记与反馈'), h('div.card', {}, [
+    h('div.ln-fb', { style: { marginTop: 0 } }, [h('span.muted', {}, '理解度'), stars(h, ui, s.understanding, (v) => quiet({ understanding: v })), fb, saved]),
+    h('div', { style: { marginTop: '8px' } }, notes)]));
+  main.append(chapterNav(h, ui, pid, prev, next));
+}
+
+function chapterNav(h, ui, pid, prev, next) {
+  return h('div.ln-chap-nav', {}, [
+    prev ? h('button', { onclick: () => { location.hash = chapterHref(pid, prev.id); } }, [h('span', {}, '← 上一章：' + prev.title)]) : h('span'),
+    next ? h('button.outline', { onclick: () => { location.hash = chapterHref(pid, next.id); } }, [h('span', {}, '下一章：' + next.title + ' →')])
+      : h('button.outline', { onclick: () => { location.hash = `#learn/plan/${pid}`; } }, '回到计划'),
+  ]);
+}
+
+function quizView(ctx, p, s, { gotoSection, chat, next }) {
+  const { api, h, toast, ui } = ctx;
+  const wrap = h('div', { id: 'ln-quiz', style: { scrollMarginTop: '16px' } });
+  if (!s.quiz.length) {
+    wrap.append(ui.section('章末测试'), h('div.card', {}, ui.empty('本章没有生成测试', '可以「重新生成本章」，或在追问里让 Agent 出几道题')));
+    return wrap;
+  }
+  const r = s.quiz_result || {};
+  const graded = r.status === 'graded';
+  const grading = r.status === 'grading';
+  const answers = graded || grading || r.status === 'failed' ? { ...(r.answers || {}) } : loadDraft(s.id);
+  wrap.append(ui.section('章末测试', `${s.quiz.length} 题 · ${PASS_TXT}` + (r.attempt ? ` · 第 ${r.attempt + (graded || grading ? 0 : 1)} 次` : '')));
+
+  if (graded) {
+    const pass = r.passed;
+    wrap.append(h('div.card.ln-score.' + (pass ? 'pass' : 'fail'), {}, [
+      h('div.big', {}, String(r.score)),
+      h('div.t', {}, [
+        h('div', {}, h('b', {}, pass ? '通过，本章已标记完成' : '还没过关：建议回看薄弱处再重做')),
+        r.summary ? h('div', { style: { marginTop: '4px' } }, r.summary) : null,
+        r.weak_points?.length ? h('ul', {}, r.weak_points.map((w) => h('li', {}, w))) : null,
+        r.advice ? h('div.muted', { style: { marginTop: '4px' } }, '建议：' + r.advice) : null,
+      ]),
+    ]));
+  } else if (grading) {
+    watchJob(ctx, r.job_id, 'running');
+    wrap.append(h('div.card', {}, h('div.muted.dots', {}, '选择题已判，简答题 Agent 批改中（通常 1–2 分钟），完成后自动刷新')));
+  } else if (r.status === 'failed') {
+    wrap.append(h('div.card', { style: { color: 'var(--err)' } }, '简答题批改失败，可以直接再交一次'));
+  } else if (r.last_score !== undefined && r.last_score !== null) {
+    wrap.append(h('div.muted', { style: { margin: '-4px 0 10px' } }, `上次 ${r.last_score} 分`));
+  }
+
+  const locked = graded || grading;
+  s.quiz.forEach((q, i) => {
+    const it = (r.items || {})[q.id];
+    const scoreCls = it ? (it.score >= 1 ? 'full' : it.score > 0 ? 'part' : 'zero') : '';
+    const card = h('div.card.ln-qz', {}, [h('div.qh', {}, [h('span.no', {}, i + 1), h('span.q', {}, q.q),
+      q.skill ? h('span.tag.gray', {}, q.skill) : null,
+      graded && it ? h('span.sc.' + scoreCls, {}, q.type === 'choice' ? (it.score ? '✓' : '✗') : `${Math.round(it.score * 100)}%`) : null])]);
+    if (q.type === 'choice') {
+      q.options.forEach((o, k) => {
+        const cls = graded ? (k === q.answer ? '.right' : +answers[q.id] === k ? '.wrong' : '') : '';
+        const inp = h('input', { type: 'radio', name: `q-${s.id}-${q.id}`, checked: answers[q.id] !== undefined && answers[q.id] !== null && +answers[q.id] === k, disabled: locked,
+          onchange: () => { answers[q.id] = k; saveDraft(s.id, answers); } });
+        card.append(h('label.opt' + cls, {}, [inp, h('span', {}, `${'ABCDEFG'[k]}. ${o}`)]));
+      });
+    } else {
+      card.append(h('textarea', { rows: 3, value: answers[q.id] || '', disabled: locked, placeholder: '写下你的回答和理由（判断题先给结论，再给依据）',
+        oninput: (e) => { answers[q.id] = e.target.value; saveDraft(s.id, answers); } }));
+    }
+    if (graded && it) {
+      card.append(h('div.fbk', {}, [
+        it.feedback ? h('div', {}, it.feedback) : null,
+        q.type === 'short' && q.reference ? h('div.ref', {}, '参考要点：' + q.reference) : null,
+        it.score < 1 && q.section ? h('a', { href: 'javascript:void 0', style: { fontSize: '13px' }, onclick: () => gotoSection(q.section) }, `回看：${q.section} ↑`) : null,
+      ]));
+    }
+    wrap.append(card);
+  });
+
+  const actions = h('div.row', { style: { marginTop: '12px', flexWrap: 'wrap' } });
+  if (!locked) {
+    actions.append(h('button.primary', { onclick: async (e) => {
+      const empty = s.quiz.filter((q) => answers[q.id] === undefined || answers[q.id] === null || String(answers[q.id]).trim() === '').length;
+      if (empty && !confirm(`还有 ${empty} 题没答，未答按 0 分，交卷？`)) return;
+      e.target.disabled = true;
+      try { await api.post(`/api/learn/steps/${s.id}/quiz`, { answers }); saveDraft(s.id, {}); toast('已交卷'); softRefresh(); }
+      catch (err) { toast('交卷失败：' + err.message, true); e.target.disabled = false; }
+    } }, [ui.icon('check'), '交卷']), h('span.muted', {}, '选择题当场判分，简答题由 Agent 批改；答案自动暂存在本机'));
+  } else if (graded) {
+    if (next) actions.append(h('button.primary', { onclick: () => { location.hash = chapterHref(p.id, next.id); } }, ['下一章', ui.icon('arrow')]));
+    actions.append(
+      h('button', { onclick: () => chat(`我刚做完本章测试（${r.score} 分），薄弱处：${(r.weak_points || []).join('；') || '见批改'}。请针对这些地方换个角度讲透，再出 2 道类似的题考我。`) }, [ui.icon('chat'), '针对薄弱处再讲一遍']),
+      h('button.ghost', { onclick: async () => { await api.post(`/api/learn/steps/${s.id}/quiz/reset`); softRefresh(); } }, [ui.icon('refresh'), '重做测试']),
+      !r.passed ? h('button.ghost', { onclick: async () => {
+        await api.post(`/api/learn/plans/${p.id}/adapt`, { note: `「${s.title}」测试 ${r.score} 分，薄弱：${(r.weak_points || []).join('；')}` });
+        toast('Agent 正在根据测试结果调整计划');
+      } }, '按测试结果调整计划') : null,
+    );
+  }
+  wrap.append(actions);
+  return wrap;
+}
+const PASS_TXT = '70 分及格，及格自动完成本章';

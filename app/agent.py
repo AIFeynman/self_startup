@@ -54,15 +54,22 @@ def available(engine: str) -> bool:
     return bool(shutil.which(cfg.get("bin", engine)))
 
 
-def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str]) -> list[str]:
+def module_model(module: str, engine: str = "claude") -> str:
+    """板块单独指定的模型（设置 module_models.<板块>，只对 Claude 生效）；空 = 用引擎默认模型。"""
+    if engine != "claude":
+        return ""
+    return str((settings.get("module_models", {}) or {}).get(module) or "")
+
+
+def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], model: str = "") -> list[str]:
     cfg = settings.get("engines.claude", {})
     cmd = [cfg.get("bin", "claude"), "-p", prompt, "--output-format", "stream-json", "--verbose"]
     if session:
         cmd += ["--resume", session]
     if system:
         cmd += ["--append-system-prompt", system]
-    if cfg.get("model"):
-        cmd += ["--model", cfg["model"]]
+    if model or cfg.get("model"):
+        cmd += ["--model", model or cfg["model"]]
     if cfg.get("permission_mode"):
         cmd += ["--permission-mode", cfg["permission_mode"]]
     if cfg.get("allowed_tools"):
@@ -197,8 +204,9 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
 
 def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str = "",
                cwd: str | None = None, add_dirs: list[str] | None = None,
-               fallback: bool = True, on_proc=None) -> Iterator[dict]:
-    """on_proc(proc)：每启动一个 CLI 子进程回调一次（后台任务用它来暂停）。"""
+               fallback: bool = True, on_proc=None, model: str = "") -> Iterator[dict]:
+    """on_proc(proc)：每启动一个 CLI 子进程回调一次（后台任务用它来暂停）。
+    model：只覆盖 Claude 的模型（板块级设置，见 module_model）；回退到 Codex 时用 Codex 自己的模型。"""
     engine = engine or settings.get("engines.default", "claude")
     # 默认不在项目目录里跑（acceptEdits 下可写文件），放到 data/workspace
     if not cwd:
@@ -213,7 +221,7 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
         if not available(eng):
             yield {"type": "error", "text": f"{eng} 不可用，尝试备选" if i + 1 < len(order) else f"{eng} 不可用"}
             continue
-        cmd = _claude_cmd(prompt, system, session, add_dirs) if eng == "claude" \
+        cmd = _claude_cmd(prompt, system, session, add_dirs, model) if eng == "claude" \
             else _codex_cmd(prompt, system, session, add_dirs, cwd)
         failed = False
         for ev in _run(eng, cmd, cwd, on_proc):

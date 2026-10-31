@@ -178,3 +178,96 @@ def test_github_defaults_to_quick_read(client, monkeypatch):
     client.post(f"/api/learn/items/{it['id']}/rerun", json={"depth": "full"})
     assert client.get(f"/api/learn/items/{it['id']}").json()["depth"] == "full"
     assert "github-code-walkthrough" in sent["prompt"] or "代码解读" in sent["prompt"]
+
+
+TWO_STEPS = '```json\n{"overview_md": "o", "steps": [{"stage": 1, "title": "领域地图", "goal": "能定位新论文"}, {"stage": 3, "title": "读经典"}]}\n```'
+QUIZ = {"questions": [
+    {"id": "q1", "type": "choice", "q": "哪个是痛点？", "options": ["a", "b", "c", "d"], "answer": 2, "explain": "因为 c", "skill": "痛点识别"},
+    {"id": "q2", "type": "short", "q": "这篇新论文归哪个方向？", "reference": "规划", "rubric": ["说出方向", "说出痛点"], "skill": "分类定位"},
+    {"type": "choice", "q": "坏题", "options": ["x"], "answer": 5},
+]}
+
+
+def _plan_with_steps(client, fake_submit):
+    p = client.post("/api/learn/plans", json={"topic": "Agent 评测"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], TWO_STEPS))
+    return client.get(f"/api/learn/plans/{p['id']}").json()
+
+
+def _write_chapter(client, fake_submit, s, quiz=QUIZ):
+    call = fake_submit[-1]
+    assert call["ref"] == f"learn:step:{s['id']}:chapter"
+    out = learn._step_dir(s)
+    (out / "chapter.md").write_text("# 本章\n" + "正文" * 200, "utf-8")
+    (out / "quiz.json").write_text(json.dumps(quiz, ensure_ascii=False), "utf-8")
+    learn.on_job_done(_job(call["id"], "写完了"))
+
+
+def test_chapter_quiz_flow(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    assert p["stage_goals"]["1"].startswith("建立整体地图")
+    s1, s2 = p["steps"]
+    assert s1["goal"] == "能定位新论文" and s1["chapter_status"] == ""
+    # 打开第一章 → 生成；提示词带阶段目的和能力目标
+    assert client.post(f"/api/learn/steps/{s1['id']}/open", json={}).json()["chapter_status"] == "generating"
+    assert "建立整体地图" in fake_submit[-1]["prompt"] and "能定位新论文" in fake_submit[-1]["prompt"]
+    _write_chapter(client, fake_submit, s1)
+    s = client.get(f"/api/learn/steps/{s1['id']}").json()
+    assert s["chapter_status"] == "ready" and s["chapter_md"].startswith("# 本章")
+    assert [q["id"] for q in s["quiz"]] == ["q1", "q2"]  # 坏题被丢掉
+    assert all("answer" not in q and "reference" not in q for q in s["quiz"])  # 交卷前不给答案
+    # 再次打开 → 预生成下一章
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    assert fake_submit[-1]["ref"] == f"learn:step:{s2['id']}:prefetch"
+    # 交卷：选择题当场判，简答题交给批改任务
+    r = client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {"q1": 2, "q2": "规划方向，痛点是长程"}}).json()
+    assert r["quiz_result"]["status"] == "grading" and r["quiz_result"]["items"]["q1"]["score"] == 1
+    assert fake_submit[-1]["ref"] == f"learn:step:{s1['id']}:grade" and "规划方向" in fake_submit[-1]["prompt"]
+    assert client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {}}).status_code == 409
+    learn.on_job_done(_job(fake_submit[-1]["id"], '```json\n{"items": [{"id": "q2", "score": 0.5, "feedback": "缺痛点依据"}],'
+                                                  ' "summary": "还行", "weak_points": ["痛点识别"], "advice": "回看全景图"}\n```'))
+    s = client.get(f"/api/learn/steps/{s1['id']}").json()
+    qr = s["quiz_result"]
+    assert qr["status"] == "graded" and qr["score"] == 75 and qr["passed"] and qr["weak_points"] == ["痛点识别"]
+    assert s["status"] == "done" and s["understanding"] == 4
+    assert s["quiz"][0]["answer"] == 2  # 批改后给答案
+    assert "测试 75 分" in learn._plan_snapshot(p["id"]) and "痛点识别" in learn.agent_context(f"learn:step:{s1['id']}")
+    # 重做
+    s = client.post(f"/api/learn/steps/{s1['id']}/quiz/reset").json()
+    assert s["quiz_result"]["last_score"] == 75 and "answer" not in s["quiz"][0]
+
+
+def test_quiz_choice_only_and_fail(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    s1 = p["steps"][0]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    _write_chapter(client, fake_submit, s1, {"questions": QUIZ["questions"][:1]})
+    n = len(fake_submit)
+    s = client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {"q1": 0}}).json()
+    assert len(fake_submit) == n  # 全是选择题不起批改任务
+    assert s["quiz_result"]["score"] == 0 and not s["quiz_result"]["passed"] and s["status"] == "doing"
+
+
+def test_chapter_failed_and_grade_failed(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    s1 = p["steps"][0]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    learn.on_job_done(_job(fake_submit[-1]["id"], "", status="failed"))
+    assert client.get(f"/api/learn/steps/{s1['id']}").json()["chapter_status"] == "failed"
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})  # 失败后再打开会重试
+    _write_chapter(client, fake_submit, s1)
+    client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {"q1": 2, "q2": "x"}})
+    learn.on_job_done(_job(fake_submit[-1]["id"], "no json"))
+    assert client.get(f"/api/learn/steps/{s1['id']}").json()["quiz_result"]["status"] == "failed"
+
+
+def test_module_model_only_for_learn(monkeypatch):
+    from app import agent, settings
+    monkeypatch.setattr(settings, "get", lambda k, d=None: {"module_models": {"learn": "claude-sonnet-5-5"},
+                                                             "engines.claude": {"bin": "claude", "model": "opus"}}.get(k, d))
+    assert agent.module_model("learn") == "claude-sonnet-5-5"
+    assert agent.module_model("plan") == "" and agent.module_model("learn", "codex") == ""
+    cmd = agent._claude_cmd("p", "", "", [], agent.module_model("learn"))
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5"
+    cmd = agent._claude_cmd("p", "", "", [], agent.module_model("review"))
+    assert cmd[cmd.index("--model") + 1] == "opus"

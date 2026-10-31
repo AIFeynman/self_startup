@@ -18,7 +18,9 @@ description: 深度学习板块：A. 单篇论文 / GitHub 项目深读（沿用
 
 ## B. 主题学习计划
 
-方法论与 JSON 格式见 [plan.md](plan.md)。六阶段固定编号：1 领域综述、2 核心人物与观点、3 关键书籍/经典论文、4 核心机制/概念精学、5 前沿进展（写日期）、6 实践与输出。每步有资源（真实链接，`verified` 标记是否核对）、检查题、预估小时。
+方法论与 JSON 格式见 [plan.md](plan.md)。深度学习板块的后台任务和对话默认用 Sonnet 5.5（设置 `module_models.learn`，只影响本板块）。六阶段固定编号：1 领域综述、2 核心人物与观点、3 关键书籍/经典论文、4 核心机制/概念精学、5 前沿进展（写日期）、6 实践与输出。每步有资源（真实链接，`verified` 标记是否核对）、检查题、预估小时。
+
+**跟着学（章节 + 测试）**：每一步展开成一章教程（替用户消化资料、按阶段目的组织：综述 → 领域地图与痛点/热点/问题/方案矩阵并核对资料时效；人物 → 判断依据与分歧，练判断力；经典/前沿 → 一句话核心思想、背后逻辑、证据与增量）+ 章末测试（选择题当场判、简答/判断题由 Agent 批改），70 分及格自动完成该步，薄弱点回流到计划调整。写法和测试格式见 [chapter.md](chapter.md)。读某一章时对话 ref 是 `learn:step:<id>`：围绕本章能力目标回答，用户答错的题优先帮他想通。
 
 反馈闭环：每步 `status`(todo/doing/done/skipped)、`understanding`(0–5)、`feedback`、`notes`。对话中（ref `learn:plan:<id>`）可直接按用户要求增删改步骤；只讨论时不写数据。调整原则：理解度低 → 补前置或换更易懂资源；理解度高且快 → 跳过同类或加深；不改已完成步骤。
 
@@ -40,6 +42,11 @@ curl -s -X POST "$API/api/learn/plans/1/steps?after_step_id=12" -H 'Content-Type
 curl -s -X DELETE $API/api/learn/steps/15
 curl -s -X POST $API/api/learn/plans/1/adapt -H 'Content-Type: application/json' -d '{"note":"第4阶段太难"}'   # 后台 Agent 根据反馈调整
 curl -s -X POST $API/api/learn/steps/12/today  # 加入今日计划（tasks，kind=learning）
+# 章节 + 测试
+curl -s -X POST $API/api/learn/steps/12/open -H 'Content-Type: application/json' -d '{}'   # 没有章节就生成（force:true + note 重新生成），并预生成下一章
+curl -s $API/api/learn/steps/12                # 含 chapter_md / quiz（交卷批改前不含答案）/ quiz_result
+curl -s -X POST $API/api/learn/steps/12/quiz -H 'Content-Type: application/json' -d '{"answers":{"q1":2,"q2":"我的判断是…因为…"}}'
+curl -s -X POST $API/api/learn/steps/12/quiz/reset
 ```
 
 后台任务（生成/调整/深读）状态：`curl -s "$API/api/jobs?module=learn"`。

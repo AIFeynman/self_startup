@@ -4,7 +4,9 @@
     learn:item:<id>          条目深读
     learn:plan:<id>          生成学习计划
     learn:plan:<id>:adapt    根据反馈调整计划
-对话 ref：learn:item:<id> / learn:plan:<id> / 空（总览）。
+    learn:step:<id>:chapter  把计划的一步写成章节教程 + 章末测试（:prefetch = 用户读上一章时后台预生成）
+    learn:step:<id>:grade    批改章末测试的简答题
+对话 ref：learn:item:<id> / learn:plan:<id> / learn:step:<id>（读某一章时）/ 空（总览）。
 """
 from __future__ import annotations
 
@@ -64,13 +66,31 @@ CREATE TABLE IF NOT EXISTS learn_steps (
     understanding INTEGER DEFAULT 0,          -- 0-5
     feedback      TEXT DEFAULT '',
     notes         TEXT DEFAULT '',
-    done_at       TEXT DEFAULT ''
+    done_at       TEXT DEFAULT '',
+    goal          TEXT DEFAULT '',            -- 这一步学完要具备的能力（可检验）
+    chapter_md    TEXT DEFAULT '',            -- 章节教程（markdown）
+    chapter_status TEXT DEFAULT '',           -- '' / generating / ready / failed
+    chapter_job   INTEGER,
+    quiz          TEXT DEFAULT '[]',          -- 章末测试 JSON [{id,type:choice|short,q,options,answer,explain,reference,rubric,skill,section}]
+    quiz_result   TEXT DEFAULT ''             -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
 );
 CREATE INDEX IF NOT EXISTS idx_learn_steps_plan ON learn_steps(plan_id);
 """
 
 STAGES = {1: "领域综述", 2: "核心人物与观点", 3: "关键书籍 / 经典论文",
           4: "核心机制 / 概念精学", 5: "前沿进展", 6: "实践与输出"}
+# 每个阶段的目的：写章节、出测试、页面引导都按它来（细则见 skills/learn/chapter.md）
+STAGE_GOALS = {
+    1: "建立整体地图：分类体系，每个方向的痛点、热点、开放问题和主流方案；能把任意一篇新论文定位到地图上",
+    2: "提升判断力：看懂一线人物怎么判断、依据是什么、哪些被验证或推翻；能对新事件做出同样深度的判断",
+    3: "快速吸收核心思想和背后逻辑：10 分钟讲清一篇经典的问题、关键洞察、为什么有效、改变了什么",
+    4: "吃透机制：能推导、能实现最小版本、知道失效条件",
+    5: "快速消化新论文并判断价值：相对已有工作的增量、证据是否可信、代表什么趋势",
+    6: "用产出检验理解：做出来、讲清楚、按验收标准自评",
+}
+PASS_SCORE = 70  # 章末测试及格线：及格自动标记完成
+STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapter_status": "TEXT DEFAULT ''",
+             "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''"}
 SKILL_DIR = ROOT / "skills" / "learn"
 STEP_STATUS = ("todo", "doing", "done", "skipped")
 router = APIRouter()
@@ -194,6 +214,14 @@ class ItemIn(BaseModel):
     kind: str = ""
     focus: str = ""
     depth: str = ""      # quick / full；空 = 论文 full、GitHub quick
+
+
+def _ensure_step_cols() -> None:
+    """老库补上章节 / 测试列。"""
+    cols = {r["name"] for r in db.rows("PRAGMA table_info(learn_steps)")}
+    for k, decl in STEP_COLS.items():
+        if k not in cols:
+            db.execute(f"ALTER TABLE learn_steps ADD COLUMN {k} {decl}")
 
 
 def _ensure_depth_col() -> None:
@@ -441,6 +469,7 @@ class StepIn(BaseModel):
     stage: int | None = None
     ord: int | None = None
     title: str | None = None
+    goal: str | None = None
     description: str | None = None
     resources: list[dict] | None = None
     questions: list[str] | None = None
@@ -461,14 +490,28 @@ def _plan(pid: int) -> dict:
 def _decode_step(s: dict) -> dict:
     s["resources"] = _loads(s.get("resources"), [])
     s["questions"] = _loads(s.get("questions"), [])
+    s["quiz"] = _loads(s.get("quiz"), [])
+    s["quiz_result"] = _loads(s.get("quiz_result"), None)
     return s
 
 
+_ANSWER_KEYS = ("answer", "explain", "reference", "rubric")
+
+
+def public_step(s: dict) -> dict:
+    """给页面的步骤：测试批改完之前不带答案 / 参考答案 / 评分要点。"""
+    if (s.get("quiz_result") or {}).get("status") == "graded":
+        return s
+    return {**s, "quiz": [{k: v for k, v in q.items() if k not in _ANSWER_KEYS} for q in s.get("quiz") or []]}
+
+
 def steps_of(pid: int) -> list[dict]:
+    _ensure_step_cols()
     return [_decode_step(s) for s in db.rows("SELECT * FROM learn_steps WHERE plan_id=? ORDER BY stage, ord, id", [pid])]
 
 
 def _step(sid: int) -> dict:
+    _ensure_step_cols()
     s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
     if not s:
         raise HTTPException(404, "step not found")
@@ -497,6 +540,8 @@ def _step_fields(d: dict) -> dict:
     out = {}
     if d.get("title") is not None:
         out["title"] = str(d["title"])[:300]
+    if d.get("goal") is not None:
+        out["goal"] = str(d["goal"])[:500]
     if d.get("description") is not None:
         out["description"] = str(d["description"])
     if d.get("resources") is not None:
@@ -524,6 +569,7 @@ def _step_fields(d: dict) -> dict:
 
 
 def add_step(pid: int, d: dict, after_step_id: int | None = None) -> int:
+    _ensure_step_cols()
     f = _step_fields(d)
     if not f.get("title"):
         raise HTTPException(400, "title required")
@@ -671,9 +717,11 @@ def create_plan(body: PlanIn):
 @router.get("/plans/{pid}")
 def get_plan(pid: int):
     p = _plan(pid)
-    p["steps"] = steps_of(pid)
-    p["progress"] = _progress(p["steps"])
+    steps = steps_of(pid)
+    p["progress"] = _progress(steps)
+    p["steps"] = [public_step(s) for s in steps]
     p["stages"] = STAGES
+    p["stage_goals"] = STAGE_GOALS
     return p
 
 
@@ -713,7 +761,12 @@ def adapt_plan(pid: int, body: dict | None = None):
 @router.post("/plans/{pid}/steps")
 def create_step(pid: int, body: StepIn, after_step_id: int | None = None):
     _plan(pid)
-    return _step(add_step(pid, body.model_dump(), after_step_id))
+    return public_step(_step(add_step(pid, body.model_dump(), after_step_id)))
+
+
+@router.get("/steps/{sid}")
+def get_step(sid: int):
+    return public_step(_step(sid))
 
 
 @router.patch("/steps/{sid}")
@@ -722,7 +775,7 @@ def patch_step(sid: int, body: StepIn):
     f = _step_fields(body.model_dump())
     if f:
         db.update("learn_steps", sid, f)
-    return _step(sid)
+    return public_step(_step(sid))
 
 
 @router.delete("/steps/{sid}")
@@ -737,7 +790,7 @@ def step_to_today(sid: int, body: dict | None = None):
     s = _step(sid)
     p = _plan(s["plan_id"])
     minutes = int((body or {}).get("est_minutes") or min(180, max(30, round(float(s["est_hours"] or 1) * 60))))
-    goal = "能回答：" + "；".join(s["questions"][:3]) if s["questions"] else s["description"][:200]
+    goal = s["goal"] or ("能回答：" + "；".join(s["questions"][:3]) if s["questions"] else s["description"][:200])
     t = tasks.create({"title": f"[{p['topic']}] {s['title']}", "kind": "learning", "est_minutes": minutes,
                       "goal": goal, "notes": f"learn:plan:{p['id']} step:{sid}"})
     if s["status"] == "todo":
@@ -759,12 +812,273 @@ def _finish_plan(pid: int, job: dict, adapt: bool) -> None:
                                        "overview_md": (p["overview_md"] or "") + f"\n\n> 解析失败（job {job['id']}）：{e}"})
 
 
+# ---------- B2. 章节教程 + 章末测试 ----------
+
+def _step_dir(s: dict) -> Path:
+    return _out_root() / "plans" / str(s["plan_id"]) / f"step-{s['id']}"
+
+
+def _ordered(steps: list[dict]) -> list[dict]:
+    return sorted(steps, key=lambda x: (x["stage"], x["ord"], x["id"]))
+
+
+def _quiz_line(s: dict) -> str:
+    r = s.get("quiz_result") or {}
+    if r.get("status") != "graded":
+        return ""
+    weak = "；".join(r.get("weak_points") or [])[:300]
+    return f"测试 {r.get('score')} 分" + (f"，薄弱：{weak}" if weak else "")
+
+
+def chapter_prompt(s: dict, note: str = "") -> str:
+    p = _plan(s["plan_id"])
+    steps = _ordered(steps_of(p["id"]))
+    before = [x for x in steps if (x["stage"], x["ord"], x["id"]) < (s["stage"], s["ord"], s["id"]) and x["status"] != "skipped"]
+    prev = "\n".join(f"- 第{i}章 [{x['status']}] {x['title']}" + (f"（{_quiz_line(x)}）" if _quiz_line(x) else "")
+                     + (f"；反馈：{x['feedback'][:150]}" if x["feedback"] else "") for i, x in enumerate(before, 1)) or "（这是第一章）"
+    res = "\n".join(f"- {r.get('title')} {r.get('url', '')}（{r.get('type', '')}{'，' + str(r['date']) if r.get('date') else ''}）：{r.get('why', '')}"
+                    for r in s["resources"]) or "（计划未给资源，自己检索）"
+    out = _step_dir(s)
+    return f"""任务：把学习计划里的一步写成「跟着学」的一章教程 + 章末测试。今天是 {db.today()}。
+
+计划主题：{p['topic']}
+我的背景：{p['background'] or '（未说明）'}；学习目标：{p['goal'] or '（未说明）'}
+本章所在阶段：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} —— 本阶段目的：{STAGE_GOALS.get(s['stage'], '')}
+
+本章：{s['title']}
+能力目标：{s['goal'] or '（计划未写，按阶段目的和下面的说明自己定一个具体、可检验的目标）'}
+计划里的说明：
+{s['description'] or '（无）'}
+计划给的资源：
+{res}
+计划里的检查题（测试要能覆盖它们）：
+{chr(10).join('- ' + q for q in s['questions']) or '（无）'}
+
+前面各章（衔接用：不要重复讲已学的；测试暴露的薄弱处在本章相关地方顺带补上）：
+{prev}
+
+用户已学的其他内容（可做联系）：
+{_known_knowledge(exclude_plan=p['id'], limit=10)}
+{('用户对本章的要求：' + note) if note else ''}
+
+做法：
+1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；阶段 1、3、5 必须核对资料时效。
+2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
+   - {out / 'chapter.md'}
+   - {out / 'quiz.json'}
+3. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了，以及资料时效结论。
+
+---- 章节教程规范 ----
+{_ref_text('chapter.md')}
+"""
+
+
+def start_chapter_job(s: dict, note: str = "", prefetch: bool = False) -> int:
+    out = _step_dir(s)
+    out.mkdir(parents=True, exist_ok=True)
+    jid = jobs.submit("learn", chapter_prompt(s, note), ref=f"learn:step:{s['id']}:{'prefetch' if prefetch else 'chapter'}",
+                      cwd=str(out), add_dirs=[str(SKILL_DIR)])
+    db.update("learn_steps", s["id"], {"chapter_status": "generating", "chapter_job": jid})
+    return jid
+
+
+def _prefetch_next(s: dict) -> int | None:
+    """用户在读第 N 章时，后台准备第 N+1 章；同一计划已有章节在生成就不再加。"""
+    steps = _ordered(steps_of(s["plan_id"]))
+    if any(x["chapter_status"] == "generating" for x in steps):
+        return None
+    after = [x for x in steps if (x["stage"], x["ord"], x["id"]) > (s["stage"], s["ord"], s["id"])
+             and x["status"] not in ("done", "skipped")]
+    if after and not after[0]["chapter_status"]:
+        return start_chapter_job(after[0], prefetch=True)
+    return None
+
+
+def _clean_quiz(o) -> list[dict]:
+    qs = o.get("questions") if isinstance(o, dict) else o
+    out = []
+    for i, q in enumerate(qs if isinstance(qs, list) else [], 1):
+        if not isinstance(q, dict) or not str(q.get("q") or "").strip():
+            continue
+        item = {"id": str(q.get("id") or f"q{i}"), "type": "choice" if q.get("type") == "choice" else "short",
+                "q": str(q["q"]), "skill": str(q.get("skill") or ""), "section": str(q.get("section") or "")}
+        if item["type"] == "choice":
+            opts = [str(x) for x in q.get("options") or []]
+            try:
+                ans = int(q.get("answer"))
+            except (TypeError, ValueError):
+                ans = -1
+            if len(opts) < 2 or not 0 <= ans < len(opts):
+                continue
+            item.update(options=opts, answer=ans, explain=str(q.get("explain") or ""))
+        else:
+            rub = q.get("rubric") or []
+            item.update(reference=str(q.get("reference") or ""), rubric=[str(x) for x in (rub if isinstance(rub, list) else [rub])])
+        out.append(item)
+    ids = [q["id"] for q in out]
+    if len(set(ids)) != len(ids):  # id 重复就重新编号
+        for i, q in enumerate(out, 1):
+            q["id"] = f"q{i}"
+    return out
+
+
+def _finish_chapter(sid: int, job: dict) -> None:
+    s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
+    if not s or s.get("chapter_job") not in (None, job.get("id")):
+        return  # 已被更新的一次生成取代
+    out = _step_dir(s)
+    chap = out / "chapter.md"
+    text = chap.read_text("utf-8", errors="replace").strip() if chap.is_file() else ""
+    quiz = []
+    qf = out / "quiz.json"
+    if qf.is_file():
+        quiz = _clean_quiz(_loads(qf.read_text("utf-8", errors="replace"), {}))
+    if not quiz:
+        quiz = _clean_quiz(extract_json(job.get("output") or "", "questions") or {})
+    ok = job.get("status") == "done" and len(text) > 200
+    data = {"chapter_status": "ready" if ok else "failed"}
+    if ok:
+        data.update(chapter_md=text, quiz=quiz)
+        if not quiz:
+            data["quiz"] = []
+    db.update("learn_steps", sid, data)
+
+
+def _finalize_quiz(sid: int, r: dict) -> dict:
+    """汇总分数 → 理解度；及格自动完成这一步。"""
+    s = _step(sid)
+    items = r.get("items") or {}
+    n = len(s["quiz"]) or 1
+    score = round(100 * sum(float((items.get(q["id"]) or {}).get("score") or 0) for q in s["quiz"]) / n)
+    r.update(score=score, status="graded", graded_at=db.now(), passed=score >= PASS_SCORE)
+    upd = {"quiz_result": r, "understanding": max(1, min(5, round(score / 20)))}
+    if score >= PASS_SCORE and s["status"] != "done":
+        upd.update(status="done", done_at=db.now())
+    elif s["status"] == "todo":
+        upd["status"] = "doing"
+    db.update("learn_steps", sid, upd)
+    return r
+
+
+def grade_prompt(s: dict, r: dict) -> str:
+    p = _plan(s["plan_id"])
+    qs = [q for q in s["quiz"] if q["type"] == "short" and str(r["answers"].get(q["id"]) or "").strip()]
+    body = "\n\n".join(f"### {q['id']}（考察：{q['skill'] or '理解'}；对应小节：{q['section'] or '-'}）\n题目：{q['q']}\n"
+                        f"参考答案要点：{q['reference']}\n评分要点：" + "；".join(q["rubric"]) + f"\n用户回答：{r['answers'][q['id']]}"
+                        for q in qs)
+    wrong = "；".join(f"{q['id']}（{q['skill'] or q['section']}）" for q in s["quiz"]
+                      if q["type"] == "choice" and not (r["items"].get(q["id"]) or {}).get("score"))
+    return f"""任务：批改学习测试里的简答题，像一位严格但愿意教的导师。今天是 {db.today()}。
+计划：{p['topic']}；本章：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」
+本阶段目的：{STAGE_GOALS.get(s['stage'], '')}
+（本章正文在 {_step_dir(s) / 'chapter.md'}，需要时可读。）
+选择题答错的：{wrong or '无'}
+
+{body}
+
+评分：每题 score 取 0 / 0.25 / 0.5 / 0.75 / 1，按评分要点给分；意思对、表述不同也给分；只复述概念、没有理由或判断的不给满分。
+feedback 写 2–4 句：哪里对、缺了什么、高手会怎么想（判断类题目要点出代表人物的推理路径和你的依据）。
+不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
+{{"items": [{{"id": "q2", "score": 0.5, "feedback": "..."}}], "summary": "一两句总体评价", "weak_points": ["薄弱点（具体到概念/能力）"], "advice": "下一步怎么补：回看哪一节、做什么练习"}}
+"""
+
+
+class QuizIn(BaseModel):
+    answers: dict[str, str | int | None] = {}
+
+
+@router.post("/steps/{sid}/open")
+def open_chapter(sid: int, body: dict | None = None):
+    """进入某一章：没有章节就开始生成（force 重新生成），同时后台预生成下一章。"""
+    s = _step(sid)
+    note, force = (body or {}).get("note", ""), bool((body or {}).get("force"))
+    if force or s["chapter_status"] in ("", "failed"):
+        start_chapter_job(s, note)
+    elif s["chapter_status"] == "ready":
+        _prefetch_next(s)
+    return public_step(_step(sid))
+
+
+@router.post("/steps/{sid}/quiz")
+def submit_quiz(sid: int, body: QuizIn):
+    """交卷：选择题当场判，简答题交给后台 Agent 批改（status=grading，完成后自动汇总）。"""
+    s = _step(sid)
+    if not s["quiz"]:
+        raise HTTPException(400, "这一章还没有测试")
+    if (s["quiz_result"] or {}).get("status") == "grading":
+        raise HTTPException(409, "正在批改")
+    answers = {q["id"]: body.answers.get(q["id"]) for q in s["quiz"]}
+    items = {}
+    for q in s["quiz"]:
+        a = answers[q["id"]]
+        if a is None or str(a).strip() == "":
+            items[q["id"]] = {"score": 0, "feedback": "未作答"}
+        elif q["type"] == "choice":
+            try:
+                ok = int(a) == q["answer"]
+            except (TypeError, ValueError):
+                ok = False
+            items[q["id"]] = {"score": 1 if ok else 0, "feedback": q.get("explain", "")}
+    r = {"answers": answers, "items": items, "submitted_at": db.now(),
+         "attempt": int((s["quiz_result"] or {}).get("attempt") or 0) + 1}
+    if any(q["id"] not in items for q in s["quiz"]):
+        r["status"] = "grading"
+        db.update("learn_steps", sid, {"quiz_result": r})
+        r["job_id"] = jobs.submit("learn", grade_prompt(s, r), ref=f"learn:step:{sid}:grade", add_dirs=[str(_step_dir(s))])
+        db.update("learn_steps", sid, {"quiz_result": r})
+    else:
+        _finalize_quiz(sid, r)
+    return public_step(_step(sid))
+
+
+def _finish_grade(sid: int, job: dict) -> None:
+    s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
+    if not s:
+        return
+    s = _decode_step(s)
+    r = s["quiz_result"] or {}
+    if r.get("status") != "grading" or r.get("job_id") not in (None, job.get("id")):
+        return
+    o = extract_json(job.get("output") or "", "items") if job.get("status") == "done" else None
+    if not o:
+        r["status"] = "failed"
+        db.update("learn_steps", sid, {"quiz_result": r})
+        return
+    graded = {str(x.get("id")): x for x in o.get("items") or [] if isinstance(x, dict)}
+    for q in s["quiz"]:
+        if q["id"] in r["items"]:
+            continue
+        g = graded.get(q["id"]) or {}
+        try:
+            sc = max(0.0, min(1.0, float(g.get("score") or 0)))
+        except (TypeError, ValueError):
+            sc = 0.0
+        r["items"][q["id"]] = {"score": sc, "feedback": str(g.get("feedback") or "（未批改）")}
+    r.update(summary=str(o.get("summary") or ""), advice=str(o.get("advice") or ""),
+             weak_points=[str(x) for x in o.get("weak_points") or []][:6])
+    _finalize_quiz(sid, r)
+
+
+@router.post("/steps/{sid}/quiz/reset")
+def reset_quiz(sid: int):
+    """重做测试（保留上次的分数在 last_score）。"""
+    s = _step(sid)
+    last = s["quiz_result"] or {}
+    db.update("learn_steps", sid, {"quiz_result": {"attempt": last.get("attempt", 0), "last_score": last.get("score")}
+                                   if last else ""})
+    return public_step(_step(sid))
+
+
 def on_job_done(job: dict) -> None:
     ref = job.get("ref") or ""
     if m := re.fullmatch(r"learn:item:(\d+)", ref):
         _finish_item(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:plan:(\d+)(:adapt)?", ref):
         _finish_plan(int(m.group(1)), job, bool(m.group(2)))
+    elif m := re.fullmatch(r"learn:step:(\d+):(chapter|prefetch)", ref):
+        _finish_chapter(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:step:(\d+):grade", ref):
+        _finish_grade(int(m.group(1)), job)
 
 
 # ---------- C. 对话上下文 ----------
@@ -779,9 +1093,13 @@ def _plan_snapshot(pid: int) -> str:
         ss = [s for s in steps if s["stage"] == stage]
         if not ss:
             continue
-        lines.append(f"### 阶段{stage} {name}")
+        lines.append(f"### 阶段{stage} {name}（目的：{STAGE_GOALS[stage]}）")
         for s in ss:
-            lines.append(f"- step_id={s['id']} [{s['status']}] 理解度{s['understanding']}/5 · {s['title']}（{s['est_hours']}h）")
+            chap = {"ready": "章节已生成", "generating": "章节生成中", "failed": "章节生成失败"}.get(s["chapter_status"], "")
+            lines.append(f"- step_id={s['id']} [{s['status']}] 理解度{s['understanding']}/5 · {s['title']}（{s['est_hours']}h）"
+                         + "".join(f"；{x}" for x in (chap, _quiz_line(s)) if x))
+            if s["goal"]:
+                lines.append(f"  能力目标：{s['goal'][:200]}")
             if s["feedback"]:
                 lines.append(f"  反馈：{s['feedback'][:300]}")
             if s["notes"]:
@@ -808,6 +1126,21 @@ def agent_context(ref: str) -> str:
                 f"TL;DR：{it['summary']}\n我的笔记：{it['my_notes'] or '无'}；评分：{it['rating']}/5\n"
                 f"更新笔记：curl -s -X PATCH {api}/items/{it['id']} -H 'Content-Type: application/json' -d '{{\"my_notes\":\"...\"}}'\n\n"
                 f"### 产物摘录\n{body or '（HTML 产物，请直接读取文件）'}\n\n### 用户已学其他内容\n{_known_knowledge(it['id'], 10)}")
+    if m := re.fullmatch(r"learn:step:(\d+)", ref or ""):
+        s = db.row("SELECT * FROM learn_steps WHERE id=?", [int(m.group(1))])
+        if not s:
+            return "章节不存在"
+        s = _decode_step(s)
+        r = s["quiz_result"] or {}
+        quiz = "\n".join(f"- {q['id']} [{q['type']}] {q['q']}" + (f" → 得分 {r['items'][q['id']]['score']}；用户答：{str(r['answers'].get(q['id']))[:200]}"
+                                                                  if r.get("status") == "graded" and q["id"] in r.get("items", {}) else "")
+                         for q in s["quiz"])
+        return (f"用户正在读计划 {s['plan_id']} 的一章（step_id={s['id']}）：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」\n"
+                f"本阶段目的：{STAGE_GOALS.get(s['stage'], '')}\n能力目标：{s['goal'] or '（未写）'}\n"
+                f"章节文件：{_step_dir(s) / 'chapter.md'}（下方是摘录，需要时 Read 全文）；测试：{_step_dir(s) / 'quiz.json'}\n"
+                f"测试结果：{_quiz_line(s) or r.get('status') or '未做'}" + (f"；建议：{r.get('advice')}" if r.get("advice") else "")
+                + f"\n回答时围绕本章目标，用户答错的题优先帮他想通；不要直接改写章节，除非用户要求（重新生成：POST {api}/steps/{s['id']}/open -d '{{\"force\":true,\"note\":\"...\"}}'）。\n\n"
+                f"### 章末测试\n{quiz or '（无）'}\n\n### 章节摘录\n{(s['chapter_md'] or '（未生成）')[:12000]}\n\n### 计划概况\n{_plan_snapshot(s['plan_id'])[:4000]}")
     if m := re.fullmatch(r"learn:plan:(\d+)", ref or ""):
         pid = int(m.group(1))
         if not db.row("SELECT id FROM learn_plans WHERE id=?", [pid]):
@@ -824,5 +1157,5 @@ def agent_context(ref: str) -> str:
 
 def agent_dirs(ref: str) -> list[str]:
     dirs = [str(_skill_dir("paper")), str(_skill_dir("github")), str(_skill_dir("paper").parent / "domain-landscape"),
-            str(SKILL_DIR), str(_out_root())]
+            str(SKILL_DIR), str(_out_root())]  # 章节在 _out_root()/plans/ 下
     return dirs
