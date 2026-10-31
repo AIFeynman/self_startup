@@ -3,7 +3,8 @@
 // 用法：import { annotate } from './_annotate.js';
 //   el.append(annotate(ctx, md(text), { doc: 'research:3:synth', title, link: '#research/r/3', source: text }))
 //   compact: true —— 小段落（学习计划的步骤）：讨论串放在下方，没有批注时不占位置。
-export function annotate(ctx, body, { doc, title = '', link = '', source = '', compact = false }) {
+//   actions: [{ icon, label, onPick(quote) }] —— 划线工具条上额外的按钮（如学习章节的「没懂」「展开讲」）
+export function annotate(ctx, body, { doc, title = '', link = '', source = '', compact = false, actions = [] }) {
   const { api, h, md, toast, ui } = ctx;
   injectStyle();
   const rail = h('div.an-rail');
@@ -156,7 +157,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     const after = document.createRange(); after.setStart(r.endContainer, r.endOffset); after.setEnd(body, body.childNodes.length);
     const c = { quote: quote.slice(0, 2000), prefix: before.toString().slice(-80), suffix: after.toString().slice(0, 80) };
     const rect = r.getBoundingClientRect();
-    bar.show(rect, (ask) => startNew({ ...c, ask }));
+    bar.show(rect, (ask) => startNew({ ...c, ask }), actions.map((a) => ({ ...a, pick: () => a.onPick(c.quote) })));
   });
   body.addEventListener('mouseup', onUp);
   body.addEventListener('keyup', (e) => { if (e.shiftKey) onUp(); });
@@ -175,10 +176,11 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
       window.addEventListener('scroll', hide, true);
     }
     return {
-      show(rect, pick) {
+      show(rect, pick, extra = []) {
         el.replaceChildren(
           h('button', { onmousedown: (e) => e.preventDefault(), onclick: () => { el.hidden = true; pick(false); } }, [ui.icon('chat'), '评论']),
-          h('button', { onmousedown: (e) => e.preventDefault(), onclick: () => { el.hidden = true; pick(true); } }, [ui.icon('spark'), '问 Claude']));
+          h('button', { onmousedown: (e) => e.preventDefault(), onclick: () => { el.hidden = true; pick(true); } }, [ui.icon('spark'), '问 Claude']),
+          ...extra.map((a) => h('button', { onmousedown: (e) => e.preventDefault(), onclick: () => { el.hidden = true; a.pick(); } }, [a.icon ? ui.icon(a.icon) : null, a.label])));
         el.hidden = false;
         const w = el.offsetWidth;
         el.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, rect.left + rect.width / 2 - w / 2))}px`;
