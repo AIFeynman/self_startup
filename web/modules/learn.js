@@ -110,6 +110,7 @@ const CSS = `
 .ln-chap .an-wrap { grid-template-columns: minmax(0, 1fr) minmax(200px, 240px); }
 .ln-chap .an-wrap:not(.has-threads) { grid-template-columns: minmax(0, 1fr); } /* 没有批注时不占宽度，划线评论时再出现 */
 .ln-chap .an-wrap:not(.has-threads) .an-rail { display: none; }
+.ln-chap .an-wrap.has-threads.has-w { grid-template-columns: minmax(0, 1fr) var(--an-rail-w); } /* 拖宽过的批注栏 */
 .ln-chap .an-wrap.has-threads.rail-off { grid-template-columns: minmax(0, 1fr) 30px; }
 .ln-chap .md { font-size: 15px; line-height: 1.85; }
 .ln-chap .md h2 { font-family: var(--serif); font-size: 20px; margin-top: 1.6em; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
@@ -127,7 +128,7 @@ const CSS = `
 .ln-toc .toc-open { display: none; writing-mode: vertical-rl; padding: 10px 3px; font-size: 12px; letter-spacing: .2em; color: var(--muted); border-radius: var(--radius-sm); }
 .ln-toc .toc-open:hover { color: var(--accent); border-color: var(--accent); }
 .ln-chap.toc-off .ln-toc .toc-open { display: block; }
-@media (max-width: 1150px) { .ln-chap { grid-template-columns: minmax(0, 1fr); } .ln-toc { display: none; } .ln-chap .an-wrap { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1150px) { .ln-chap, .ln-chap.toc-off { grid-template-columns: minmax(0, 1fr); } /* 窄屏目录本来就隐藏，收起状态不能占列 */ .ln-toc { display: none; } .ln-chap .an-wrap, .ln-chap .an-wrap.has-threads.has-w { grid-template-columns: minmax(0, 1fr); } }
 .ln-chap-head .k { font-size: 13px; color: var(--muted); }
 .ln-chap .md .fact, .ln-chap .md .judge { display: inline-block; font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 7px; border-radius: 5px; margin-right: 6px; vertical-align: 1px; }
 .ln-chap .md .fact { background: var(--accent-soft); color: var(--accent); }
