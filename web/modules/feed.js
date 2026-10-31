@@ -51,7 +51,8 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 26px 0 10px; }
 .fd-bar .tabs { margin: 0; flex: 1; }
 .fd-kbd { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.fd-opts { display: flex; gap: 6px; }
+.fd-opts { display: flex; gap: 6px; margin-left: auto; }
+@media (max-width: 1500px) { .fd-bar .fd-kbd { display: none; } }   /* 窄屏下快捷键提示让位给分类和筛选，避免分类折行 */
 .fd-chip.art { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .fd-opts select { width: auto; font-size: 12px; padding: 4px 8px; border-radius: 8px; }
 .fd-opts select.on { border-color: var(--accent); color: var(--accent); }
@@ -151,7 +152,7 @@ export default {
     const tabs = h('div.tabs');
     const listBox = h('div.fd-list');
     const sentinel = h('div.fd-sentinel');
-    const kbd = h('span.fd-kbd', {}, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 移动 · ', h('kbd', {}, 'l'), ' 赞 · ',
+    const kbd = h('span.fd-kbd', { title: 'j/k 移动 · l 赞 · s 收藏 · o 打开 · d 深读 · / 输入' }, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 移动 · ', h('kbd', {}, 'l'), ' 赞 · ',
       h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, 'o'), ' 打开 · ', h('kbd', {}, 'd'), ' 深读 · ', h('kbd', {}, '/'), ' 输入']);
 
     // 时间筛选 + 排序：只作用于下面的列表（今日精选固定按综合分）
@@ -229,7 +230,8 @@ export default {
       x.extra?.x_article && h('span.fd-chip.art', { title: '长文正文未抓取，点标题去 X 上看' }, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
       x.extra?.origin === 'learn_evolve' && h('span.fd-chip', {}, 'learn_evolve'),
       x.extra?.hn_url && h('a.fd-chip', { href: x.extra.hn_url, target: '_blank', rel: 'noopener' }, [ui.icon('chat'), `HN 讨论${x.extra.comments ? ' ' + x.extra.comments : ''}`]),
-      ...(x.also || []).slice(0, 2).map((a) => h('span.fd-chip', {}, '也见 ' + (a.source_label || a.source || a))),
+      ...Object.entries((x.also || []).reduce((m, a) => { const k = a.source_label || a.source || a; m[k] = (m[k] || 0) + 1; return m; }, {}))
+        .slice(0, 2).map(([k, n]) => h('span.fd-chip', {}, `也见 ${k}${n > 1 ? '×' + n : ''}`)),
     ];
     const actions = (entry) => {
       const { x } = entry;

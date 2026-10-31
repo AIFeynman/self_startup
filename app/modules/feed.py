@@ -114,6 +114,8 @@ def upsert(items: list[dict]) -> int:
             merged = {**_extra(old), **{k: v for k, v in extra.items() if v not in ("", None, [], {})}}
             if merged.get("article_title") and not extra.get("article_title"):
                 it = {**it, "title": old["title"], "summary": old["summary"]}   # X 长文已补过标题，别被占位文案盖掉
+            if (it.get("summary") or "").startswith("链接到") and old["summary"] and not old["summary"].startswith("链接到"):
+                it = {**it, "summary": old["summary"]}     # HN 已读到原文简介，别被占位文案盖掉
             db.execute("UPDATE feed_items SET source=?, type=?, title=?, summary=?, url=?, date=?, popularity=?, extra=?, "
                        "fetched_at=? WHERE id=?",
                        [it["source"], it["type"], it["title"], it.get("summary") or old["summary"],
@@ -207,7 +209,7 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
 def _collectors() -> dict:
     fc = settings.get("feed", {}) or {}
     return {
-        "hn": lambda: src.fetch_hn(list(cfg("hn_queries"))),
+        "hn": lambda: src.fetch_hn(list(cfg("hn_queries")), known_ids=_enriched_hn()),
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
         "github": lambda: src.fetch_github(list(cfg("github_queries"))),
@@ -222,6 +224,11 @@ def _collectors() -> dict:
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
     }
+
+
+def _enriched_hn() -> set[str]:
+    """已经有原文简介的 HN 条目（summary 不再是「链接到 …」占位），刷新时不再读原文页。"""
+    return {r["id"] for r in db.rows("SELECT id FROM feed_items WHERE source='hn' AND summary NOT LIKE '链接到%'")}
 
 
 def _known_articles() -> set[str]:
@@ -311,8 +318,9 @@ def source_health() -> dict:
 # ---------- 列表与反馈 ----------
 
 def _public(x: dict) -> dict:
-    return {k: x[k] for k in ("id", "source", "type", "title", "summary", "url", "date", "popularity", "score",
-                              "why", "feedback", "also")} | {"extra": x.get("extra", {}),
+    return {k: x[k] for k in ("id", "source", "type", "title", "url", "date", "popularity", "score",
+                              "why", "feedback", "also")} | {"summary": rk.display_summary(x["title"], x["summary"]),
+                                                              "extra": x.get("extra", {}),
                                                               "source_label": rk.SOURCE_LABEL.get(x["source"], x["source"])}
 
 

@@ -141,14 +141,17 @@ def _leave_one_out(aff: dict, it: dict) -> dict:
 
 def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, interests: list[str],
                aff: dict | None = None, fb: dict | None = None) -> tuple[float, list[str]]:
+    # why 的顺序 = 读者判断「值不值得看」的顺序：硬信号（官方 / 长文 / 关注 / 多源）→ 热度 → 新鲜 → 兴趣 → 偏好
+    lead: list[str] = []
     why: list[str] = []
     s = W["pop"] * pop_norm
-    pl = fmt_pop(it.get("source", ""), it.get("popularity") or 0)
-    if pl:
-        why.append(pl)
-
     d = item_time(it, now)
     age_h = max(0.0, (now - d).total_seconds() / 3600) if d else 24 * 30
+    pl = fmt_pop(it.get("source", ""), it.get("popularity") or 0)
+    if pl and it.get("source") == "github" and d:
+        pl += f"（建 {max(1, round(age_h / 24))} 天）"     # 仓库的星是累计的：配上天数才看得出涨得快不快
+    if pl:
+        why.append(pl)
     fresh = 0.5 ** (age_h / max(half_life_h * TYPE_HALF_LIFE.get(it.get("type", ""), 1.0), 1))
     s += W["fresh"] * fresh
     if age_h < 24:
@@ -162,20 +165,23 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     org = official_org(it)
     if org:
         s += W["official"]
-        why.append(f"{org} 官方")
+        lead.append(f"{org} 官方")
     xa = (it.get("extra") or {}).get("x_article")
     if xa:
         s += W["x_article"] if xa == "own" else W["x_article"] / 2
-        why.append("X 长文" if xa == "own" else "引用了 X 长文")
-    if str((it.get("extra") or {}).get("via") or "").startswith("@"):
+        lead.append("X 长文" if xa == "own" else "引用了 X 长文")
+    via = str((it.get("extra") or {}).get("via") or "")
+    if via.startswith("@"):
         s += W["follow"]
-        why.append("关注账号")
+        lead.append(f"关注账号 {via}")
 
     text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
     hits = [t for t in interests if t and _interest_re(t).search(text)]
     if hits:
         s += W["interest"] * min(len(hits), W["interest_max"])
-        why.append("命中 " + "、".join(hits[:3]))
+        # 「agent」和「coding agent」都中时只写更具体的那个
+        shown = [h for h in hits if not any(h != o and _interest_re(h).search(o.lower()) for o in hits)]
+        why.append("命中 " + "、".join(shown[:3]))
 
     if aff:
         aff = _leave_one_out(aff, it)
@@ -187,8 +193,12 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
         src_s = aff["src"].get(src, 0) / (n + 5) if n >= SRC_MIN_EXAMPLES else 0.0
         s += W["token"] * tok_s + W["source"] * src_s
         if tok_s >= 1:
-            liked = sorted((t for t in toks if aff["tok"].get(t, 0) > 0), key=lambda t: -aff["tok"][t])[:2]
-            why.append("你赞过相似内容（" + "、".join(liked) + "）")
+            # 已在「命中」里出现的词不重复说；剩下的才是兴趣词之外的偏好线索
+            hit_words = {w for h in hits for w in h.lower().split()}
+            # 只说至少在 2 条赞过的内容里出现过的词，偶然撞上的（inside、change…）不算线索
+            liked = sorted((t for t in toks if aff["tok"].get(t, 0) >= 2 and t not in hit_words), key=lambda t: -aff["tok"][t])[:2]
+            if liked:
+                why.append("你赞过相似内容（" + "、".join(liked) + "）")
         elif tok_s <= -1:
             why.append("与你踩过的内容相似")
         if src_s >= 0.3:
@@ -206,7 +216,7 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     elif fb.get("vote", 0) < 0:
         s += W["self_dislike"]
         why.append("你踩过")
-    return s, why
+    return s, lead + why
 
 
 def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float = 72, interests: list[str] = (),
@@ -231,28 +241,72 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
     scored.sort(key=lambda x: (-x["score"], x["id"]))
 
     out, seen_url, seen_title = [], {}, {}
+    by_tok: dict[str, list[dict]] = {}
     for it in scored:
         u, t = norm_url(it.get("url", "")), norm_title(it.get("title", ""))
         dup = seen_url.get(u) if u else None
         dup = dup or (seen_title.get(t) if len(t) >= 12 else None)
+        ev = event_tokens(it.get("title", ""))
+        dup = dup or _same_event(it, ev, by_tok, now)
         if dup:
-            label = SOURCE_LABEL.get(it["source"], it["source"])
-            if label not in dup["also"]:
-                dup["also"].append(label)
+            dup["also"].append(SOURCE_LABEL.get(it["source"], it["source"]))
             continue
         it["also"] = []
+        it["_ev"] = ev
         out.append(it)
         if u:
             seen_url[u] = it
         if len(t) >= 12:
             seen_title[t] = it
+        for tok in ev:
+            by_tok.setdefault(tok, []).append(it)
     for it in out:
+        it.pop("_ev", None)
         if it["also"]:
-            # 多个来源都收了同一条 = 互相印证，加一点分
+            # 多个来源 / 多条报道收了同一件事 = 互相印证，加一点分
             it["score"] = round(it["score"] + W["also"] * min(len(it["also"]), W["also_max"]), 3)
-            it["why"] = (it["why"] + " · " if it["why"] else "") + "也见于 " + "、".join(it["also"])
+            n = Counter(it["also"])
+            it["why"] = (it["why"] + " · " if it["why"] else "") + "也见于 " + "、".join(
+                f"{k}×{v}" if v > 1 else k for k, v in n.items())
     out.sort(key=lambda x: (-x["score"], x["id"]))
     return out
+
+
+EVENT_MIN_SHARED, EVENT_JACCARD, EVENT_DAYS = 3, 0.5, 4
+
+
+def event_tokens(title: str) -> set[str]:
+    """判断「同一件事」用的标题词：去掉 @作者 前缀，简单去复数 / 所有格。"""
+    body = re.sub(r"^@\w+：", "", title or "")
+    return {re.sub(r"(?:'s|’s|s)$", "", t) if len(t) > 4 else t for t in tokens(body)}
+
+
+def _same_event(it: dict, ev: set[str], by_tok: dict[str, list[dict]], now: datetime) -> dict | None:
+    """已保留的条目里，标题词重合 ≥3 个、Jaccard ≥0.5、发布时间相差 ≤4 天的，算同一件事（没有 LLM 的近似）。"""
+    if len(ev) < EVENT_MIN_SHARED:
+        return None
+    shared = Counter(id(o) for tok in ev for o in by_tok.get(tok, []))
+    d = item_time(it, now)
+    for o in (o for lst in (by_tok.get(tok, []) for tok in ev) for o in lst):
+        k = shared.get(id(o), 0)
+        if k < EVENT_MIN_SHARED or k / len(ev | o["_ev"]) < EVENT_JACCARD:
+            continue
+        od = item_time(o, now)
+        if d and od and abs((d - od).total_seconds()) > EVENT_DAYS * 86400:
+            continue
+        return o
+    return None
+
+
+def display_summary(title: str, summary: str) -> str:
+    """简介开头重复了标题（推文标题就是正文第一句）时去掉重复部分；剩下太短就不显示。"""
+    body = re.sub(r"^@\w+：", "", title or "").strip()
+    if body.endswith("…"):          # 标题在词中间截断：退到上一个完整词，简介从被截的词开头接上
+        body = body[:-1].rsplit(" ", 1)[0] if " " in body else body[:-1]
+    sm = (summary or "").strip()
+    if len(body) >= 10 and sm.lower().startswith(body.lower()):
+        sm = sm[len(body):].lstrip(" .。:：-—|｜").strip()
+    return sm if len(norm_title(sm)) >= 8 else ""
 
 
 def official_org(it: dict) -> str:
