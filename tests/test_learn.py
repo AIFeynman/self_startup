@@ -184,7 +184,7 @@ TWO_STEPS = '```json\n{"overview_md": "o", "steps": [{"stage": 1, "title": "领�
 QUIZ = {"cards": [{"front": "pass^k 是什么？", "back": "k 次<b>都</b>成功的概率", "tag": "概念"}, {"front": "", "back": "坏卡"}],
         "questions": [
     {"id": "q1", "type": "choice", "q": "哪个是痛点？", "options": ["a", "b", "c", "d"], "answer": 2, "explain": "因为 c", "skill": "痛点识别"},
-    {"id": "q2", "type": "short", "q": "这篇新论文归哪个方向？", "reference": "规划", "rubric": ["说出方向", "说出痛点"], "skill": "分类定位"},
+    {"id": "q2", "type": "short", "dim": "应用", "about": "你最近读的 ReAct", "q": "这篇新论文归哪个方向？", "reference": "规划", "rubric": ["说出方向", "说出痛点"]},
     {"type": "choice", "q": "坏题", "options": ["x"], "answer": 5},
 ]}
 
@@ -233,10 +233,12 @@ def test_chapter_quiz_flow(client, fake_submit):
     assert fake_submit[-1]["ref"] == f"learn:step:{s1['id']}:grade" and "规划方向" in fake_submit[-1]["prompt"]
     assert client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {}}).status_code == 409
     learn.on_job_done(_job(fake_submit[-1]["id"], '```json\n{"items": [{"id": "q2", "score": 0.5, "feedback": "缺痛点依据"}],'
-                                                  ' "summary": "还行", "weak_points": ["痛点识别"], "advice": "回看全景图"}\n```'))
+                                                  ' "summary": "还行", "assessment": {"理解": "方向清楚", "应用": "能落到项目上"},'
+                                                  ' "weak_points": ["痛点识别"], "advice": "回看全景图"}\n```'))
     s = client.get(f"/api/learn/steps/{s1['id']}").json()
     qr = s["quiz_result"]
     assert qr["status"] == "graded" and qr["score"] == 75 and qr["passed"] and qr["weak_points"] == ["痛点识别"]
+    assert qr["dims"] == {"理解": 100, "应用": 50} and qr["assessment"]["应用"] == "能落到项目上"  # q1 的 skill「痛点识别」归到理解
     assert s["status"] == "done" and s["understanding"] == 4
     assert s["quiz"][0]["answer"] == 2  # 批改后给答案
     assert "测试 75 分" in learn._plan_snapshot(p["id"]) and "痛点识别" in learn.agent_context(f"learn:step:{s1['id']}")
@@ -314,4 +316,22 @@ def test_check_answer_and_review(client, fake_submit):
     client.post(f"/api/learn/steps/{s1['id']}/open", json={"force": True})
     _write_chapter(client, fake_submit, s1)
     assert client.get(f"/api/learn/steps/{s1['id']}").json()["checks"] == {}
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_quiz_limits_and_recent_context(client, fake_submit, monkeypatch):
+    qs = [{"type": "short", "q": f"简答{i}", "reference": "r"} for i in range(4)] + \
+         [{"type": "choice", "q": f"选择{i}", "options": ["a", "b"], "answer": 0, "skill": "证据评估"} for i in range(6)]
+    out = learn._clean_quiz({"questions": qs})
+    assert len(out) == 6 and sum(q["type"] == "short" for q in out) == 2
+    assert {q["dim"] for q in out if q["type"] == "choice"} == {"判断"}
+    # 出章节时带上最近在读 / 在做的东西
+    db.insert("tasks", {"date": db.today(), "title": "给自己的 Agent 搭评测集", "kind": "work"})
+    it = client.post("/api/learn/items", json={"url": "https://arxiv.org/abs/2210.03629"}).json()
+    db.update("learn_items", it["id"], {"status": "done", "title": "ReAct", "summary": "推理与行动交替"})
+    ctx = learn._recent_context()
+    assert "ReAct" in ctx and "给自己的 Agent 搭评测集" in ctx
+    p = _plan_with_steps(client, fake_submit)
+    client.post(f"/api/learn/steps/{p['steps'][0]['id']}/open", json={})
+    assert "学以致用" in fake_submit[-1]["prompt"] and "ReAct" in fake_submit[-1]["prompt"]
     client.delete(f"/api/learn/plans/{p['id']}")
