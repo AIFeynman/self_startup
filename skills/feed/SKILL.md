@@ -20,7 +20,7 @@ description: 信息推荐板块：收集 AI 相关的论文、博客、产品、
 | podcast | 播客 | `settings.feed.podcasts` 的播客 RSS（Latent Space、Dwarkesh、No Priors、MLST、硅谷101…），每档最多 5 期，只取节目简介；无热度 |
 | xiaoyuzhou | 播客 | `settings.feed.xiaoyuzhou` 的小宇宙节目页（张小珺、十字路口、晚点聊），直读页面内嵌数据，每档最多 5 期；失败时依次试 `feed.rsshub_bases` 的公共 RSSHub；playCount（播放） |
 | reddit | 讨论 | r/LocalLLaMA、r/ClaudeAI、r/MachineLearning 本周 top（JSON 被挡时退回 RSS，无票数） |
-| twitter | 讨论 | `feed.x_accounts` 名单（约 95 个官方 / 研究 / 工程账号）每人近 3 天 ≥100 赞的原创推文取前 2 条 + `feed.x_queries` 热帖搜索（结果需含明确 AI 词）；likes。GetXAPI 优先、twitterapi.io 兜底，每账号 / 搜索词一次请求 |
+| twitter | 讨论 | `feed.x_accounts` 名单（约 95 个官方 / 研究 / 工程账号）每人近 3 天 ≥100 赞的原创推文取前 2 条 + `feed.x_queries` 热帖搜索（结果需含明确 AI 词）；likes。GetXAPI 优先、twitterapi.io 兜底，每账号 / 搜索词一次请求。X 长文（Article）标 `extra.x_article`（own 自己发 / quoted 引用），自己发的长文另调 twitterapi.io 补标题和开头（`extra.article_title`，每次最多 20 篇，补过的不再调），不取正文；搜索来的长文补不到标题或与 AI 无关就丢掉 |
 | producthunt | 产品 | 官方 GraphQL，近 2 天按票数，只留 AI 相关；votes。没配密钥时退回公开 feed（无票数） |
 
 接口密钥放项目根目录 `.env`（不进 git）：`GETXAPI_KEY` / `TWITTER_API_KEY`（X）、`PN_API_KEY` + `PN_API_Secret` 或 `PRODUCTHUNT_TOKEN`（Product Hunt）、`GITHUB_TOKEN`。缺 X 密钥时 x 来源报错、其它来源照常。
@@ -29,12 +29,18 @@ description: 信息推荐板块：收集 AI 相关的论文、博客、产品、
 
 ## 排序（确定性、可解释）
 
-score = 热度（同源内 log 归一化，0–1；整源无热度给 0.35）
-      + 2.0 × 新鲜度（`0.5^(小时数/half_life_hours)`，默认半衰期 72h）
+score = 热度（同源最近 30 天条目里的百分位，0–1；整源无热度给 0.35，避免历史爆款压低新条目）
+      + 2.0 × 新鲜度（`0.5^(小时数/半衰期)`；半衰期 = half_life_hours（默认 72h）× 类型系数：讨论 0.5、产品 0.67、
+        博客 1、项目 / 论文 1.67、播客 2.33；只精确到天的日期按当天中午算）
       + 0.45 × 命中兴趣词数（最多 3 个；英文按词边界匹配，标题+简介）
-      + 反馈亲和（你赞过/收藏的标题词 +、踩过的 −；你常赞的来源 +；早先从 learn_evolve 导入的条目，其 star/good/bad 评分也算样本和先验）
+      + 反馈亲和（你赞过/收藏的标题词 +、踩过的 −，常见虚词不算；某来源样本 ≥5 条才算「你常赞 X」；
+        早先从 learn_evolve 导入的条目，其 star/good/bad 评分也算样本和先验）
+      + 1.2 官方博客（链接域名是 anthropic.com / claude.com / claude.dev / openai.com / deepmind.google / blog.google / research.google）
+      + 0.4 X 长文（引用长文 +0.2）+ 0.3 关注账号（X 名单里的账号，搜索来的不加）
+      + 0.25 × 其它来源也收了同一条（最多 2 个，「也见于」）
       + 本条自己被赞 +1 / 被踩 −2；隐藏的条目不出现
 同一 URL（arXiv/HF 论文统一按 arXiv id）或同一标题只保留分最高的一条，其余记为「也见于」。
+「全部」列表做多样化：前 5 条（今日精选）每个来源最多 1 条、每类最多 2 条；前 30 条每类 ≤40%、每个来源 ≤20%。
 每条带 `why`，例如 `HN 312分 · 24 小时内 · 命中 agent · 你赞过相似内容（memory）`。
 
 ## API
@@ -44,6 +50,7 @@ curl -s "$API/api/feed/items?limit=10"                       # 排序后的推�
 curl -s "$API/api/feed/items?type=paper&limit=5"             # type: paper/blog/podcast/product/repo/discussion/news
 curl -s "$API/api/feed/items?saved=true"                     # 已收藏
 curl -s "$API/api/feed/items?q=memory"                       # 标题/简介筛选
+curl -s "$API/api/feed/items?days=1&sort=hot"                # days: 只要最近 N 天发布的；sort: score 综合（默认）/ new 最新 / hot 最热（同源热度百分位）
 curl -s -X POST $API/api/feed/refresh -H 'Content-Type: application/json' -d '{}'                 # 后台刷新全部来源
 curl -s -X POST $API/api/feed/refresh -H 'Content-Type: application/json' -d '{"sources":["hn","github"],"wait":true}'  # 同步刷新指定来源
 curl -s $API/api/feed/status                                 # 刷新状态、各来源条数/错误、反馈统计

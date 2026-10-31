@@ -112,6 +112,8 @@ def upsert(items: list[dict]) -> int:
         extra = dict(it.get("extra") or {})
         if old:
             merged = {**_extra(old), **{k: v for k, v in extra.items() if v not in ("", None, [], {})}}
+            if merged.get("article_title") and not extra.get("article_title"):
+                it = {**it, "title": old["title"], "summary": old["summary"]}   # X 长文已补过标题，别被占位文案盖掉
             db.execute("UPDATE feed_items SET source=?, type=?, title=?, summary=?, url=?, date=?, popularity=?, extra=?, "
                        "fetched_at=? WHERE id=?",
                        [it["source"], it["type"], it["title"], it.get("summary") or old["summary"],
@@ -174,11 +176,15 @@ def _mark_gone(items: list[dict]) -> None:
             it["extra"]["gone"] = True
 
 
-def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None) -> list[dict]:
+def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
+           sort: str = "score") -> list[dict]:
+    """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合 / new 最新 / hot 最热（同源热度百分位）。
+    只有「全部 + 综合 + 不限时间 + 无筛选」时做类型 / 来源多样化（今日精选就取这个列表的前 5 条）。"""
+    now = now or datetime.now(timezone.utc)
     items = _load_items()
     _mark_gone(items)
     fb = _feedback()
-    out = rk.rank(items, now=now or datetime.now(timezone.utc), half_life_h=float(cfg("half_life_hours")),
+    out = rk.rank(items, now=now, half_life_h=float(cfg("half_life_hours")),
                   interests=list(cfg("interests") or []), feedback=fb, examples=_examples(items, fb),
                   include_hidden=saved)
     if saved:
@@ -188,7 +194,10 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     if q:
         ql = q.lower()
         out = [x for x in out if ql in f"{x['title']} {x['summary']}".lower()]
-    if not (type_ or saved or q):
+    out = rk.within_days(out, days, now)
+    if sort in ("new", "hot"):
+        return rk.sort_items(out, sort, now)
+    if not (type_ or saved or q or days):
         out = rk.diversify(out)
     return out
 
@@ -210,9 +219,14 @@ def _collectors() -> dict:
         "reddit": lambda: src.fetch_reddit(list(cfg("reddit"))),
         "x": lambda: src.fetch_x(list(fc.get("x_accounts") or []), list(fc.get("x_queries") or []),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
-                                 per_account=int(cfg("x_per_account"))),
+                                 per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
     }
+
+
+def _known_articles() -> set[str]:
+    """已补过标题的 X 长文（标题不再是占位文案），刷新时不再调 twitterapi.io。"""
+    return {r["id"] for r in db.rows("SELECT id FROM feed_items WHERE source='twitter' AND extra LIKE '%article_title%'")}
 
 
 def _known_urls(source: str) -> set[str]:
@@ -303,8 +317,11 @@ def _public(x: dict) -> dict:
 
 
 @router.get("/items")
-def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0):
-    out = ranked(type, saved, q)
+def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0, days: float = 0,
+          sort: str = "score"):
+    if sort not in ("score", "new", "hot"):
+        raise HTTPException(400, "sort 只能是 score / new / hot")
+    out = ranked(type, saved, q, days=days, sort=sort)
     return {"total": len(out), "items": [_public(x) for x in out[offset: offset + limit]]}
 
 

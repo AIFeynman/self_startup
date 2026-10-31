@@ -5,7 +5,9 @@ const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast
 const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论' };
 const PAGE = 40;
 const TOP_N = 5;
-const st = { tab: '', q: '', mode: 'filter' };
+const DAYS = [['0', '不限时间'], ['1', '24 小时内'], ['3', '3 天内'], ['7', '7 天内'], ['30', '30 天内']];
+const SORTS = [['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）']];
+const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score' };
 
 const CSS = `
 .fd-refresh { position: relative; }
@@ -49,6 +51,10 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 26px 0 10px; }
 .fd-bar .tabs { margin: 0; flex: 1; }
 .fd-kbd { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.fd-opts { display: flex; gap: 6px; }
+.fd-chip.art { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.fd-opts select { width: auto; font-size: 12px; padding: 4px 8px; border-radius: 8px; }
+.fd-opts select.on { border-color: var(--accent); color: var(--accent); }
 .fd-kbd kbd { margin: 0 1px; }
 .fd-list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
 .fd-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 10px; border-radius: 9px; border: 1px solid transparent; }
@@ -148,9 +154,17 @@ export default {
     const kbd = h('span.fd-kbd', {}, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 移动 · ', h('kbd', {}, 'l'), ' 赞 · ',
       h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, 'o'), ' 打开 · ', h('kbd', {}, 'd'), ' 深读 · ', h('kbd', {}, '/'), ' 输入']);
 
+    // 时间筛选 + 排序：只作用于下面的列表（今日精选固定按综合分）
+    const optSel = (opts, key, title) => {
+      const s = h('select', { title, onchange: (e) => { st[key] = e.target.value; s.classList.toggle('on', st[key] !== opts[0][0]); loadList(); } },
+        opts.map(([v, name]) => h('option', { value: v, selected: st[key] === v }, name)));
+      return s;
+    };
+    const opts = h('div.fd-opts', {}, [optSel(DAYS, 'days', '按发布时间筛选'), optSel(SORTS, 'sort', '列表排序方式')]);
+
     el.append(h('style', {}, CSS), head, comp, intsEl, quick,
-      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈'), topBox,
-      h('div.fd-bar', {}, [tabs, kbd]), listBox, sentinel);
+      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条'), topBox,
+      h('div.fd-bar', {}, [tabs, opts, kbd]), listBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
     function renderStatus() {
@@ -212,6 +226,7 @@ export default {
       TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
       h('span.fd-chip', {}, [ui.icon('doc'), x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')]),
       (x.extra?.feed || x.extra?.subreddit) && h('span.fd-chip', {}, x.extra.feed || `r/${x.extra.subreddit}`),
+      x.extra?.x_article && h('span.fd-chip.art', { title: '长文正文未抓取，点标题去 X 上看' }, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
       x.extra?.origin === 'learn_evolve' && h('span.fd-chip', {}, 'learn_evolve'),
       x.extra?.hn_url && h('a.fd-chip', { href: x.extra.hn_url, target: '_blank', rel: 'noopener' }, [ui.icon('chat'), `HN 讨论${x.extra.comments ? ' ' + x.extra.comments : ''}`]),
       ...(x.also || []).slice(0, 2).map((a) => h('span.fd-chip', {}, '也见 ' + (a.source_label || a.source || a))),
@@ -252,6 +267,7 @@ export default {
             titleLink(x),
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
+              x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
               x.extra?.hn_url && h('a.muted', { href: x.extra.hn_url, target: '_blank', rel: 'noopener', style: { whiteSpace: 'nowrap' } }, 'HN 讨论'),
               x.why ? h('span.fd-why', { title: x.why }, '· ' + x.why) : null]),
@@ -359,10 +375,10 @@ export default {
       topBox.replaceChildren(tops.length ? h('div.fd-top', {}, tops.map(mount)) : ui.empty('还没有内容', '点右上角「刷新」抓取信息源'));
       if (st.q) for (const e of tops) e.el.classList.toggle('fd-hidden', !matches(e.el));
     }
-    // 「全部」且无筛选时，列表从第 6 条开始，避免与精选重复
-    const baseOffset = () => (!st.tab && !st.q ? TOP_N : 0);
+    // 「全部」、综合排序、不限时间且无筛选时，列表从第 6 条开始，避免与精选重复
+    const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' ? TOP_N : 0);
     function params(offset) {
-      const p = new URLSearchParams({ limit: PAGE, offset, q: st.q });
+      const p = new URLSearchParams({ limit: PAGE, offset, q: st.q, days: st.days, sort: st.sort });
       if (st.tab === 'saved') p.set('saved', 'true'); else if (st.tab) p.set('type', st.tab);
       return p;
     }
@@ -378,7 +394,7 @@ export default {
       const rows = r.items.map((x) => ({ x, kind: 'list' }));
       entries.push(...rows);
       listBox.replaceChildren(...(rows.length ? rows.map(mount)
-        : [ui.empty(st.q ? `没有匹配「${st.q}」的内容` : st.tab === 'saved' ? '还没有收藏' : '暂无内容', st.q ? '换个词，或切到「问 Agent」' : st.tab === 'saved' ? '按 ☆ 或 s 收藏' : '点右上角「刷新」抓取')]));
+        : [ui.empty(st.q ? `没有匹配「${st.q}」的内容` : st.tab === 'saved' ? '还没有收藏' : st.days !== '0' ? '这段时间内没有内容' : '暂无内容', st.q ? '换个词，或切到「问 Agent」' : st.tab === 'saved' ? '按 ☆ 或 s 收藏' : '点右上角「刷新」抓取')]));
       if (selId) { const i = entries.findIndex((e) => e.kind === 'list' && e.x.id === selId); if (i >= 0) select(i, false); }
       renderSentinel();
     }

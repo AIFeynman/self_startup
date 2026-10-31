@@ -158,6 +158,8 @@ DEFAULTS: dict = {
             "Claude min_faves:500 -filter:replies lang:en",
             "Codex min_faves:300 -filter:replies lang:en",
             "(\"AI agent\" OR \"coding agent\" OR \"agent harness\") min_faves:300 -filter:replies lang:en",
+            # 专搜 X 长文（补完标题后再按 AI 词过滤）
+            "url:\"x.com/i/article\" (Claude OR Codex OR LLM OR \"AI agent\" OR \"coding agent\") min_faves:200",
         ],
     },
     # 深度学习：已有的 codex 解析 skill
