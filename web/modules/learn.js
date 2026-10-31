@@ -166,12 +166,25 @@ const CSS = `
 .ln-chap .md .dg-tabbar button { border: 0; background: none; padding: 6px 12px; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; border-radius: 0; }
 .ln-chap .md .dg-tabbar button.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 .ln-chap .md .dg-tab { display: none; padding: 4px 16px 10px; } .ln-chap .md .dg-tab.on { display: block; }
-.ln-chap .md .dg-flash, .ln-flash { position: relative; margin: 14px 0; padding: 12px 16px 12px 44px; border: 1px dashed var(--accent); border-radius: var(--radius-sm); background: var(--accent-soft); cursor: pointer; font-size: 14px; }
-.ln-chap .md .dg-flash::before { content: '停一下'; position: absolute; left: 10px; top: 13px; font-size: 10.5px; line-height: 1.2; width: 24px; color: var(--accent); font-weight: 700; }
-.ln-chap .md .dg-flash .dg-q { font-weight: 500; }
-.ln-chap .md .dg-flash .dg-a { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--accent-ring); color: var(--text); }
-.ln-chap .md .dg-flash::after { content: '想好了点开看要点'; display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
-.ln-chap .md .dg-flash.open { border-style: solid; background: var(--panel); } .ln-chap .md .dg-flash.open .dg-a { display: block; } .ln-chap .md .dg-flash.open::after { display: none; }
+.ln-chap .md .dg-flash { position: relative; margin: 16px 0; padding: 12px 16px 14px; border: 1px dashed var(--accent); border-radius: var(--radius-sm); background: var(--accent-soft); font-size: 14px; }
+.ln-chap .md .dg-flash .lbl { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: .05em; }
+.ln-chap .md .dg-flash .dg-q { font-weight: 500; margin: 2px 0 8px; }
+.ln-chap .md .dg-flash > .dg-a { display: none; }
+.ln-chap .md .dg-flash textarea { width: 100%; font-size: 14px; background: var(--panel); }
+.ln-chap .md .dg-flash .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.ln-chap .md .dg-flash .acts .muted { font-size: 12px; }
+.ln-chap .md .dg-flash.open { border-style: solid; background: var(--panel); }
+.ln-chap .md .dg-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.ln-chap .md .dg-cmp > div { padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--bg); min-width: 0; }
+.ln-chap .md .dg-cmp > div > .k { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .05em; margin-bottom: 4px; }
+.ln-chap .md .dg-cmp .mine { white-space: pre-wrap; } .ln-chap .md .dg-cmp .pts { background: var(--focus); }
+.ln-chap .md .dg-cmp ul { margin: 0; padding-left: 18px; }
+.ln-chap .md .dg-rv { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); font-size: 13.5px; }
+.ln-chap .md .dg-rv .row2 { display: flex; gap: 8px; margin: 3px 0; } .ln-chap .md .dg-rv .row2 > b { flex: none; min-width: 52px; font-size: 12px; }
+.ln-chap .md .dg-rv .ok > b { color: var(--ok); } .ln-chap .md .dg-rv .miss > b { color: var(--warn); } .ln-chap .md .dg-rv .bad > b { color: var(--err); } .ln-chap .md .dg-rv .plus > b { color: var(--accent); }
+.ln-chap .md .dg-rv .better { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line-2); }
+.ln-chap .md .dg-rv .sc { float: right; font: 700 13px var(--mono); color: var(--accent); }
+@media (max-width: 640px) { .ln-chap .md .dg-cmp { grid-template-columns: 1fr; } }
 .ln-chap .md .dg-widget { margin: 16px 0 20px; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; background: var(--panel); }
 .ln-chap .md .dg-widget .wt { padding: 7px 12px; font-size: 12.5px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); }
 .ln-chap .md .dg-widget iframe { display: block; width: 100%; border: 0; background: transparent; }
@@ -183,6 +196,10 @@ const CSS = `
 .ln-fc .front { font: 600 19px/1.5 var(--serif); text-align: center; transition: font-size .2s; }
 .ln-fc .back { display: none; font-size: 15px; line-height: 1.75; padding-top: 12px; border-top: 1px dashed var(--line-2); animation: ln-fade .25s; }
 .ln-fc.flip { background: var(--focus); } .ln-fc.flip .front { font-size: 15px; color: var(--muted); } .ln-fc.flip .back { display: block; }
+.ln-fc input.mine { font-size: 14px; background: var(--bg); } .ln-fc.flip input.mine { display: none; }
+.ln-fc .mine-show { display: none; font-size: 14px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg); white-space: pre-wrap; }
+.ln-fc.flip .mine-show:not(:empty) { display: block; }
+.ln-fc .k { display: block; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .05em; margin-bottom: 2px; }
 .ln-fc .tg { position: absolute; top: 10px; left: 14px; font-size: 11px; color: var(--muted); }
 .ln-fc .hint { position: absolute; bottom: 8px; right: 14px; font-size: 11px; color: var(--muted); } .ln-fc.flip .hint { display: none; }
 @keyframes ln-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -759,7 +776,7 @@ async function renderChapter(el, ctx, pid, sid) {
 
   // 正文 + 目录
   const body = md(s.chapter_md);
-  enhance(h, body, sid);
+  enhance(ctx, body, s);
   const heads = [...body.querySelectorAll('h2')];
   heads.forEach((hd, i) => { hd.id = `ln-h-${i}`; hd.style.scrollMarginTop = '16px'; });
   const toc = h('nav.ln-toc', {}, [h('div.k', {}, '本章目录'),
@@ -908,7 +925,9 @@ function quizView(ctx, p, s, { gotoSection, chat, next }) {
 const PASS_TXT = '70 分及格，及格自动完成本章';
 
 // 章节里的交互组件：Agent 写结构化 HTML（skills/learn/chapter.md），这里接上行为
-function enhance(h, body, sid) {
+function enhance(ctx, body, s) {
+  const { h } = ctx;
+  const sid = s.id;
   // 树：一行放下所有分支（最多 5 列，再多换行）
   body.querySelectorAll('.dg-branches').forEach((b) => { const n = b.children.length; b.style.setProperty('--n', n <= 5 ? n : 3); });
   // 点开看细节
@@ -949,8 +968,8 @@ function enhance(h, body, sid) {
     box.prepend(h('div.dg-tabbar', {}, btns));
     pick(0);
   });
-  // 翻转卡（停一下）
-  body.querySelectorAll('.dg-flash').forEach((c) => c.addEventListener('click', () => { if (!window.getSelection()?.toString()) c.classList.toggle('open'); }));
+  // 停一下：先写自己的判断，再和要点并排对照，可请 Agent 点评差异
+  body.querySelectorAll('.dg-flash').forEach((c, i) => checkCard(ctx, c, s, i));
   // 交互小组件：沙箱 iframe（只允许脚本，不同源）
   body.querySelectorAll('.dg-widget[data-src]').forEach((w) => {
     const src = (w.dataset.src || '').replace(/^\/+/, '');
@@ -985,8 +1004,16 @@ function cardDeck(ctx, s) {
     }
     const i = st.queue[0];
     const c = s.cards[i];
-    const fc = h('div.ln-fc', { onclick: () => fc.classList.toggle('flip') }, [
-      c.tag ? h('span.tg', {}, c.tag) : null, h('div.front', {}, c.front), h('div.back', {}, md(c.back)), h('span.hint', {}, '先想答案，再点击翻面'),
+    const mine = h('input.mine', { placeholder: '我的答案（可选，写了翻面时并排对照）', onclick: (e) => e.stopPropagation(),
+      onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); flip(); } } });
+    const mineShow = h('div.mine-show');
+    const flip = () => {
+      fc.classList.toggle('flip');
+      mineShow.replaceChildren(...(mine.value.trim() ? [h('span.k', {}, '我的答案'), mine.value.trim()] : []));
+    };
+    const fc = h('div.ln-fc', { onclick: flip }, [
+      c.tag ? h('span.tg', {}, c.tag) : null, h('div.front', {}, c.front), mine, mineShow, h('div.back', {}, [h('span.k', {}, '要点'), md(c.back)]),
+      h('span.hint', {}, '先想答案，再点击翻面'),
     ]);
     const step = (ok) => {
       st.queue.shift();
@@ -1006,11 +1033,75 @@ function cardDeck(ctx, s) {
     if (!fc) return;
     const r = box.getBoundingClientRect();
     if (r.bottom < 0 || r.top > innerHeight) return;
-    if (e.key === ' ') { e.preventDefault(); fc.classList.toggle('flip'); }
+    if (e.key === ' ') { e.preventDefault(); fc.click(); }
     else if (e.key === 'ArrowRight') box.querySelector('.ctl .primary')?.click();
     else if (e.key === 'ArrowLeft') box.querySelector('.ctl button')?.click();
   };
   document.addEventListener('keydown', onKey);
   draw();
   return box;
+}
+
+function checkCard(ctx, card, s, idx) {
+  const { api, h, toast } = ctx;
+  const qEl = card.querySelector('.dg-q'), aEl = card.querySelector('.dg-a');
+  if (!qEl || !aEl) return;
+  const q = qEl.textContent.trim(), points = aEl.innerText.trim(), pointsHtml = aEl.innerHTML;
+  let c = (s.checks || {})[idx] || null;
+  const ta = h('textarea', { rows: 3, placeholder: '先写下你的判断和理由（不用写全，写你真实的第一反应），再对照要点', value: c?.answer || '' });
+  const draftKey = `ln-chk-${s.id}-${idx}`;
+  if (!c?.answer) { try { ta.value = localStorage.getItem(draftKey) || ''; } catch { /* ignore */ } }
+  ta.addEventListener('input', () => { try { localStorage.setItem(draftKey, ta.value); } catch { /* ignore */ } });
+  const box = h('div');
+  const save = async (review) => {
+    try { c = await api.post(`/api/learn/steps/${s.id}/checks/${idx}`, { q, points, answer: ta.value.trim(), review }); }
+    catch (e) { toast('保存失败：' + e.message, true); return; }
+    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+    draw();
+    if (c.status === 'reviewing') poll();
+  };
+  const poll = async () => {
+    await ctx.api.waitJob(c.job_id, null, 3000).catch(() => {});
+    const st = await api.get(`/api/learn/steps/${s.id}`).catch(() => null);
+    if (st?.checks?.[idx]) { c = st.checks[idx]; draw(); }
+  };
+  const list = (cls, label, arr) => (arr?.length ? h('div.row2.' + cls, {}, [h('b', {}, label), h('div', {}, arr.length > 1 ? h('ul', { style: { margin: 0, paddingLeft: '16px' } }, arr.map((x) => h('li', {}, x))) : arr[0])]) : null);
+  const draw = () => {
+    const shown = c && ['viewed', 'answered', 'reviewing', 'reviewed', 'failed'].includes(c.status);
+    card.classList.toggle('open', !!shown);
+    const kids = [];
+    if (!shown) {
+      const plain = h('button.sm', { onclick: () => save(false) });
+      const label = () => { plain.textContent = ta.value.trim() ? '只对照要点' : '直接看要点'; };
+      ta.oninput = label;
+      label();
+      kids.push(ta, h('div.acts', {}, [
+        h('button.sm.primary', { onclick: () => (ta.value.trim() ? save(true) : toast('先写下你的判断，哪怕一句话', true)) }, '对照要点 + Agent 点评差异'),
+        plain,
+        h('span.muted', {}, '写下来再对照，差距才看得见'),
+      ]));
+    } else {
+      kids.push(h('div.dg-cmp', {}, [
+        h('div.mine', {}, [h('div.k', {}, '我的判断'), c.answer || h('span.muted', {}, '（没写，直接看了要点）')]),
+        h('div.pts', {}, [h('div.k', {}, '要点'), h('div', { html: pointsHtml })]),
+      ]));
+      const rv = c.review;
+      if (c.status === 'reviewing') kids.push(h('div.dg-rv.muted.dots', {}, 'Agent 正在对照点评（约半分钟）'));
+      else if (rv) {
+        kids.push(h('div.dg-rv', {}, [
+          h('span.sc', {}, `${Math.round((rv.score || 0) * 100)}%`),
+          list('ok', '抓到了', rv.covered), list('miss', '漏掉了', rv.missing), list('bad', '想偏了', rv.off), list('plus', '有道理的补充', rv.extra),
+          rv.better ? h('div.better', {}, [h('b', {}, '高手会这样想：'), rv.better]) : null,
+        ]));
+      } else if (c.status === 'failed') kids.push(h('div.dg-rv', { style: { color: 'var(--err)' } }, '点评失败，可以重写后再试'));
+      kids.push(h('div.acts', {}, [
+        h('button.sm', { onclick: () => { c = { ...c, status: 'editing' }; ta.value = c.answer || ''; draw(); ta.focus(); } }, c.answer ? '改写我的判断' : '补写我的判断'),
+        c.answer && !rv && c.status !== 'reviewing' ? h('button.sm.outline', { onclick: () => save(true) }, '请 Agent 点评差异') : null,
+      ]));
+    }
+    box.replaceChildren(...kids.filter(Boolean));
+  };
+  card.replaceChildren(h('div.lbl', {}, '停一下'), qEl, aEl, box);
+  draw();
+  if (c?.status === 'reviewing') poll();
 }

@@ -6,6 +6,7 @@
     learn:plan:<id>:adapt    根据反馈调整计划
     learn:step:<id>:chapter  把计划的一步写成章节教程 + 章末测试（:prefetch = 用户读上一章时后台预生成）
     learn:step:<id>:grade    批改章末测试的简答题
+    learn:step:<id>:check:<n> 点评第 n 个「停一下」：用户的判断和要点差在哪
 对话 ref：learn:item:<id> / learn:plan:<id> / learn:step:<id>（读某一章时）/ 空（总览）。
 """
 from __future__ import annotations
@@ -73,6 +74,7 @@ CREATE TABLE IF NOT EXISTS learn_steps (
     chapter_job   INTEGER,
     quiz          TEXT DEFAULT '[]',          -- 章末测试 JSON [{id,type:choice|short,q,options,answer,explain,reference,rubric,skill,section}]
     cards         TEXT DEFAULT '[]',          -- 知识卡 JSON [{front,back,tag}]
+    checks        TEXT DEFAULT '{}',          -- 「停一下」作答 JSON {序号: {q,points,answer,at,status,job_id,review}}
     quiz_result   TEXT DEFAULT ''             -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
 );
 CREATE INDEX IF NOT EXISTS idx_learn_steps_plan ON learn_steps(plan_id);
@@ -92,7 +94,7 @@ STAGE_GOALS = {
 PASS_SCORE = 70  # 章末测试及格线：及格自动标记完成
 STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapter_status": "TEXT DEFAULT ''",
              "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''",
-             "cards": "TEXT DEFAULT '[]'"}
+             "cards": "TEXT DEFAULT '[]'", "checks": "TEXT DEFAULT '{}'"}
 SKILL_DIR = ROOT / "skills" / "learn"
 STEP_STATUS = ("todo", "doing", "done", "skipped")
 router = APIRouter()
@@ -494,6 +496,7 @@ def _decode_step(s: dict) -> dict:
     s["questions"] = _loads(s.get("questions"), [])
     s["quiz"] = _loads(s.get("quiz"), [])
     s["cards"] = _loads(s.get("cards"), [])
+    s["checks"] = _loads(s.get("checks"), {}) or {}
     s["quiz_result"] = _loads(s.get("quiz_result"), None)
     return s
 
@@ -825,6 +828,17 @@ def _ordered(steps: list[dict]) -> list[dict]:
     return sorted(steps, key=lambda x: (x["stage"], x["ord"], x["id"]))
 
 
+def _checks_text(s: dict) -> str:
+    out = []
+    for k, c in sorted((s.get("checks") or {}).items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
+        if not c.get("answer"):
+            continue
+        rv = c.get("review") or {}
+        out.append(f"- 问：{c['q'][:150]}\n  我答：{c['answer'][:300]}"
+                   + (f"\n  漏掉：{'；'.join(rv.get('missing') or [])[:200]}；想偏：{'；'.join(rv.get('off') or [])[:200]}" if rv else ""))
+    return "\n".join(out)
+
+
 def _quiz_line(s: dict) -> str:
     r = s.get("quiz_result") or {}
     if r.get("status") != "graded":
@@ -952,7 +966,7 @@ def _finish_chapter(sid: int, job: dict) -> None:
     ok = job.get("status") == "done" and len(text) > 200
     data = {"chapter_status": "ready" if ok else "failed"}
     if ok:
-        data.update(chapter_md=text, quiz=quiz, cards=cards)
+        data.update(chapter_md=text, quiz=quiz, cards=cards, checks={})  # 章节变了，「停一下」作答按序号对不上，清掉
         old = _loads(s.get("quiz_result"), None)
         if old:  # 重新生成后题目变了：旧答卷作废，只留上次分数
             data["quiz_result"] = {"attempt": old.get("attempt", 0), "last_score": old.get("score", old.get("last_score"))}
@@ -1058,6 +1072,75 @@ def submit_quiz(sid: int, body: QuizIn):
     return public_step(_step(sid))
 
 
+class CheckIn(BaseModel):
+    q: str
+    points: str = ""
+    answer: str = ""
+    review: bool = False
+
+
+def check_prompt(s: dict, c: dict) -> str:
+    p = _plan(s["plan_id"])
+    return f"""任务：对照「停一下」的要点，点评用户自己写下的判断，帮他看清差距、提升判断力。今天是 {db.today()}。
+计划：{p['topic']}；本章：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」
+本阶段目的：{STAGE_GOALS.get(s['stage'], '')}
+（本章正文在 {_step_dir(s) / 'chapter.md'}，需要时可读。）
+
+问题：{c['q']}
+要点（参考答案）：{c['points'] or '（未提供，按本章内容判断）'}
+用户的判断：{c['answer']}
+
+要求：具体、短、不客套。用户说对的要认可；要点里没有但用户说得有道理的也要指出（要点不是唯一答案）。
+不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
+{{"covered": ["抓到的要点（用用户的话对应到要点）"], "missing": ["漏掉的要点，及为什么重要"], "off": ["想偏或说错的地方，错在哪"],
+ "extra": ["要点之外、用户说得有道理的补充"], "better": "高手会怎么想：一两句示范推理路径", "score": 0.0}}
+score 取 0–1，表示对要点的覆盖和推理质量。
+"""
+
+
+@router.post("/steps/{sid}/checks/{idx}")
+def save_check(sid: int, idx: int, body: CheckIn):
+    """保存一个「停一下」的作答；review=true 时提交后台点评（对照要点看差异）。"""
+    s = _step(sid)
+    checks = s["checks"]
+    c = {"q": body.q[:600], "points": body.points[:3000], "answer": body.answer[:3000], "at": db.now(),
+         "status": "answered" if body.answer.strip() else "viewed"}
+    old = checks.get(str(idx)) or {}
+    if old.get("review") and old.get("answer") == c["answer"]:  # 答案没改，保留上次点评
+        c.update(status=old.get("status", "reviewed"), review=old["review"])
+    if body.review and body.answer.strip():
+        c["status"] = "reviewing"
+        c.pop("review", None)
+        c["job_id"] = jobs.submit("learn", check_prompt(s, c), ref=f"learn:step:{sid}:check:{idx}",
+                                  add_dirs=[str(_step_dir(s))])
+    checks[str(idx)] = c
+    db.update("learn_steps", sid, {"checks": checks})
+    return c
+
+
+def _finish_check(sid: int, idx: str, job: dict) -> None:
+    s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
+    if not s:
+        return
+    checks = _loads(s.get("checks"), {}) or {}
+    c = checks.get(idx)
+    if not c or c.get("job_id") != job.get("id"):
+        return  # 用户已改答案重新点评
+    o = extract_json(job.get("output") or "", "missing") if job.get("status") == "done" else None
+    if not o:
+        c["status"] = "failed"
+    else:
+        lst = lambda k: [str(x) for x in o.get(k) or [] if x][:6]  # noqa: E731
+        try:
+            score = max(0.0, min(1.0, float(o.get("score") or 0)))
+        except (TypeError, ValueError):
+            score = 0.0
+        c.update(status="reviewed", review={"covered": lst("covered"), "missing": lst("missing"), "off": lst("off"),
+                                            "extra": lst("extra"), "better": str(o.get("better") or ""), "score": score})
+    checks[idx] = c
+    db.update("learn_steps", sid, {"checks": checks})
+
+
 def _finish_grade(sid: int, job: dict) -> None:
     s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
     if not s:
@@ -1106,6 +1189,8 @@ def on_job_done(job: dict) -> None:
         _finish_chapter(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:step:(\d+):grade", ref):
         _finish_grade(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:step:(\d+):check:(\d+)", ref):
+        _finish_check(int(m.group(1)), m.group(2), job)
 
 
 # ---------- C. 对话上下文 ----------
@@ -1167,7 +1252,7 @@ def agent_context(ref: str) -> str:
                 f"章节文件：{_step_dir(s) / 'chapter.md'}（下方是摘录，需要时 Read 全文）；测试：{_step_dir(s) / 'quiz.json'}\n"
                 f"测试结果：{_quiz_line(s) or r.get('status') or '未做'}" + (f"；建议：{r.get('advice')}" if r.get("advice") else "")
                 + f"\n回答时围绕本章目标，用户答错的题优先帮他想通；不要直接改写章节，除非用户要求（重新生成：POST {api}/steps/{s['id']}/open -d '{{\"force\":true,\"note\":\"...\"}}'）。\n\n"
-                f"### 章末测试\n{quiz or '（无）'}\n\n### 章节摘录\n{(s['chapter_md'] or '（未生成）')[:12000]}\n\n### 计划概况\n{_plan_snapshot(s['plan_id'])[:4000]}")
+                f"### 「停一下」作答\n{_checks_text(s) or '（无）'}\n\n### 章末测试\n{quiz or '（无）'}\n\n### 章节摘录\n{(s['chapter_md'] or '（未生成）')[:12000]}\n\n### 计划概况\n{_plan_snapshot(s['plan_id'])[:4000]}")
     if m := re.fullmatch(r"learn:plan:(\d+)", ref or ""):
         pid = int(m.group(1))
         if not db.row("SELECT id FROM learn_plans WHERE id=?", [pid]):
