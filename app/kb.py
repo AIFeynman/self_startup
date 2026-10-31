@@ -319,6 +319,8 @@ def _daily(docs: list[dict]) -> list[dict]:
                     body.append(f"\n## {name}\n{rv[k]}")
             if rv.get("ai_analysis"):
                 body.append(f"\n## AI 完成情况检查\n{rv['ai_analysis']}")
+            if rv.get("improve_md"):
+                body.append(f"\n## AI 改进分析（结合会话与学习反馈）\n{rv['improve_md']}")
         ef = db.row("SELECT * FROM review_agent_stats WHERE date=?", [date]) if _has("review_agent_stats") else None
         if ef:
             s = json.loads(ef["summary"] or "{}")

@@ -56,6 +56,13 @@ const CSS = `
 .rv-rec .k { font-size: 12px; color: var(--accent); margin-bottom: 2px; }
 .rv-rec .v { white-space: pre-wrap; font-size: 14px; min-height: 22px; }
 .rv-rec .v.none { color: var(--muted); }
+.rv-entries { display: flex; flex-direction: column; }
+.rv-entry { display: grid; grid-template-columns: 64px 44px 1fr; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px dashed var(--line); }
+.rv-entry:first-child { border-top: none; padding-top: 0; }
+.rv-entry .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rv-entry .f { font-size: 12px; color: var(--accent); }
+.rv-entry .x { white-space: pre-wrap; font-size: 14px; overflow-wrap: anywhere; }
+.rv-improve .md { font-size: 14px; }
 .rv-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line-2); }
 @media (max-width: 760px) { .rv-rec, .rv-form { grid-template-columns: 1fr; } }
 .rv-notes { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-items: start; }
@@ -145,7 +152,8 @@ export default {
           if (mode === 'ask') { askAgent(text); return; }
           if (mode === 'record') {
             const r = await api.post(`/api/review/day/${state.date}/append`, { text });
-            toast(`已追加到「${REC_FIELD[r.field] || r.field}」`);
+            toast(`已追加到「${REC_FIELD[r.field] || r.field}」，AI 正在分析怎么改进`);
+            if (state.tab !== 'day') go(null, 'day');
           } else {
             const n = await api.post('/api/review/notes/quick', { text, date: state.date });
             toast(`已记一条「${NOTE_KIND[n.kind] || n.kind}」${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
@@ -308,8 +316,11 @@ export default {
     }
 
     function recordCard(rec) {
-      const view = h('div.rv-rec', {}, Object.entries(REC_FIELD).map(([k, label]) => h('div', {}, [
-        h('div.k', {}, label), h('div.v' + (rec[k] ? '' : '.none'), {}, rec[k] || '—')])));
+      const entries = rec.entries || [];
+      const view = entries.length ? h('div.rv-entries', {}, entries.map((e) => h('div.rv-entry', {}, [
+        h('span.t', { title: e.at ? e.at.replace('T', ' ') : '没记时间（老记录或手动编辑）' }, e.time ? (e.next_day ? `次日 ${e.time}` : e.time) : '—'),
+        h('span.f', {}, REC_FIELD[e.field] || e.field), h('span.x', {}, e.text)])))
+        : h('div.muted', {}, '还没写复盘。用上方「写复盘」一句句追加，每条会记下时间，按时间线排在这里。');
       const formBox = h('div');
       const editBtn = h('button.ghost.sm', { onclick: () => {
         if (formBox.firstChild) { formBox.replaceChildren(); editBtn.lastChild.textContent = '展开详细'; return; }
@@ -324,6 +335,26 @@ export default {
         editBtn.lastChild.textContent = '收起';
       } }, [ui.icon('edit'), h('span', {}, '展开详细')]);
       return h('div.card', {}, [h('div', { style: { float: 'right' } }, editBtn), view, formBox]);
+    }
+
+    function improveCard(d) {
+      const rec = d.record;
+      const status = h('div.rv-status');
+      const running = d.jobs.find((j) => j.ref.startsWith('improve:') && ['queued', 'running'].includes(j.status));
+      if (running) { status.textContent = 'AI 正在结合当天会话和学习反馈分析…'; watch(running.id, '改进分析', status); }
+      const run = async () => {
+        try { await api.post('/api/review/improve', { date: state.date }); toast('改进分析已开始'); show(); } catch (e) { toast(e.message, true); }
+      };
+      const btn = h('button' + (rec.improve_md ? '.ghost.sm' : '.dark'), { disabled: !!running, onclick: run },
+        [ui.icon('spark'), running ? '分析中' : rec.improve_md ? '重新分析' : '分析怎么改进']);
+      return h('div.card.rv-improve', {}, [
+        h('div.row.between', {}, [h('span.card-label', {}, 'AI 改进分析 · 结合当天会话与学习反馈'), rec.improve_md ? btn : null]),
+        rec.improve_md ? h('div.md', {}, md(rec.improve_md))
+          : h('div', {}, [h('div.muted', { style: { margin: '2px 0 12px' } },
+            (rec.entries || []).length ? '每次写复盘后会自动分析；也可以手动开始。' : '写下复盘后，AI 会把每条放回当天时间线，对照会话和学习记录找根因、给改进。'),
+          (rec.entries || []).length && !running ? btn : null]),
+        status,
+      ]);
     }
 
     function noteCard(n, after) {
@@ -342,6 +373,7 @@ export default {
       const rec = d.record;
       const lx = d.learning_extra;
       const nodes = [
+        ui.section('我的复盘', '按写下的时间排列 · 用上方「写复盘」一句句追加'), recordCard(rec), improveCard(d),
         ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
         h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
         await deliveries({ api, h, ui }, { date: state.date }),
@@ -358,7 +390,6 @@ export default {
             ...lx.events.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
         ]));
       }
-      nodes.push(ui.section('我的复盘', '用上方「写复盘」一句句追加'), recordCard(rec));
       if (rec.ai_analysis) nodes.push(h('details.card.flat', {}, [h('summary', {}, 'AI 检查完整分析'), md(rec.ai_analysis)]));
       nodes.push(ui.section('问题与经验', d.notes.length ? `${d.notes.length} 条` : ''),
         d.notes.length ? h('div.rv-notes', {}, d.notes.map((n) => noteCard(n, show)))

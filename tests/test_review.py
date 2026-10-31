@@ -206,8 +206,43 @@ def test_quick_capture_api(client):
     assert n["kind"] == "insight" and n["tags"] == "agent" and n["date"] == d
     client.post(f"/api/review/day/{d}/append", json={"text": "问题：等太久"})
     r = client.post(f"/api/review/day/{d}/append", json={"text": "又一条", "field": "problems"}).json()
-    assert r["record"]["problems"] == "等太久\n又一条"
+    assert [e["text"] for e in r["record"]["entries"]] == ["等太久", "又一条"]
+    assert r["improve_job_id"]
     assert client.post(f"/api/review/suggestions/{d}/0/dismiss").status_code == 404
+
+
+def test_record_entries_timeline_and_improve(client):
+    """写复盘每条带时间，按时间线排；提交后派改进分析，排队中的那次被最新内容替换，只认最新一次的输出。"""
+    from app import db
+    from app.modules import review
+    d = "2001-02-03"
+    review.upsert_record(d, {"summary": "老的一条没时间\n[21:30] 晚上写的", "problems": "[09:15] 早上的问题",
+                             "wins": "[02-04 07:10] 第二天补的"})
+    es = review.get_record(d)["entries"]
+    assert [(e["time"], e["field"], e["text"]) for e in es] == [
+        ("", "summary", "老的一条没时间"), ("09:15", "problems", "早上的问题"),
+        ("21:30", "summary", "晚上写的"), ("07:10", "wins", "第二天补的")]
+    assert es[-1]["next_day"] and not es[1]["next_day"]
+    assert review.stamp(d, f"{d}T08:05:09") == "[08:05] " and review.stamp(d, "2001-02-04T07:10:00") == "[02-04 07:10] "
+
+    r1 = client.post(f"/api/review/day/{d}/append", json={"text": "学习：测试题太难"}).json()
+    r2 = client.post(f"/api/review/day/{d}/append", json={"text": "问题：后台任务失败"}).json()
+    assert r1["improve_job_id"] == r2["improve_job_id"]           # 还在排队：换成最新内容，不重复排
+    job = db.row("SELECT * FROM jobs WHERE id=?", [r2["improve_job_id"]])
+    assert job["ref"] == f"improve:{d}" and "后台任务失败" in job["prompt"] and "学习平台反馈" in job["prompt"]
+    db.execute("UPDATE jobs SET status='running' WHERE id=?", [job["id"]])
+    r3 = client.post("/api/review/improve", json={"date": d}).json()
+    assert r3["job_id"] != job["id"]
+    review.on_job_done({**job, "status": "done", "output": "旧的分析"})  # 被新一次取代的输出不写回
+    assert review.get_record(d)["improve_md"] == ""
+    review.on_job_done({"id": r3["job_id"], "ref": f"improve:{d}", "status": "done", "output": "## 改进\n- 先跑 trace"})
+    day = client.get(f"/api/review/day?date={d}").json()
+    assert day["record"]["improve_md"].startswith("## 改进") and any(j["ref"] == f"improve:{d}" for j in day["jobs"])
+    rec = client.put(f"/api/review/day/{d}", json={"next_actions": "明天先跑 trace"}).json()
+    assert rec["improve_job_id"]                                   # 改了内容才重新分析
+    n = db.row("SELECT count(*) n FROM jobs WHERE ref=?", [f"improve:{d}"])["n"]
+    client.put(f"/api/review/day/{d}", json={"next_actions": "明天先跑 trace"})
+    assert db.row("SELECT count(*) n FROM jobs WHERE ref=?", [f"improve:{d}"])["n"] == n
 
 
 def test_efficiency_snapshot_taken_during_the_day_is_rescanned(monkeypatch):

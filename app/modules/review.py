@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS review_days (
     ai_analysis      TEXT DEFAULT '',          -- AI 检查完成情况（markdown）
     task_suggestions TEXT DEFAULT '[]',        -- JSON [{task_id,status,progress,evidence,problem,applied}]
     check_job_id     INTEGER,
+    improve_md       TEXT DEFAULT '',          -- 写复盘后 AI 结合会话与学习反馈的改进分析（markdown）
+    improve_job_id   INTEGER,
     created_at       TEXT,
     updated_at       TEXT
 );
@@ -90,13 +92,63 @@ def _tree(items: list[dict]) -> list[dict]:
     return roots
 
 
+_DAY_COLS = {"improve_md": "TEXT DEFAULT ''", "improve_job_id": "INTEGER"}
+_day_cols_ok = False
+
+
+def _ensure_day_cols() -> None:
+    """老库补上改进分析列。"""
+    global _day_cols_ok
+    if _day_cols_ok:
+        return
+    cols = _cols("review_days")
+    for k, decl in _DAY_COLS.items():
+        if k not in cols:
+            db.execute(f"ALTER TABLE review_days ADD COLUMN {k} {decl}")
+    _day_cols_ok = True
+
+
 def get_record(date: str) -> dict:
+    _ensure_day_cols()
     r = db.row("SELECT * FROM review_days WHERE date=?", [date])
     if not r:
-        return {"date": date, "summary": "", "wins": "", "problems": "", "next_actions": "",
-                "ai_analysis": "", "task_suggestions": [], "check_job_id": None}
-    r["task_suggestions"] = _loads(r["task_suggestions"], [])
+        r = {"date": date, "summary": "", "wins": "", "problems": "", "next_actions": "",
+             "ai_analysis": "", "task_suggestions": [], "check_job_id": None, "improve_md": "", "improve_job_id": None}
+    else:
+        r["task_suggestions"] = _loads(r["task_suggestions"], [])
+    r["entries"] = record_entries(r)
     return r
+
+
+# 「写复盘」逐条追加时每行带时间：同一天「[HH:MM] 」，第二天补写「[MM-DD HH:MM] 」
+_STAMP = re.compile(r"^\[(?:(\d{2}-\d{2}) )?(\d{2}:\d{2})\]\s*")
+
+
+def stamp(date: str, at: str | None = None) -> str:
+    at = at or db.now()
+    return f"[{at[11:16]}] " if at[:10] == date else f"[{at[5:10]} {at[11:16]}] "
+
+
+def record_entries(rec: dict) -> list[dict]:
+    """把四栏复盘拆成一条条，按时间线排好（没时间的行沿用上一条的时间，保持原来的先后）。"""
+    date = rec.get("date") or db.today()
+    out = []
+    for f in RECORD_FIELDS:
+        last = ""
+        for i, line in enumerate(ln.strip() for ln in (rec.get(f) or "").splitlines()):
+            if not line:
+                continue
+            m = _STAMP.match(line)
+            if m:
+                md, hm = m.groups()
+                last = (f"{date[:4]}-{md}" if md else date) + "T" + hm
+                line = line[m.end():]
+            out.append({"field": f, "text": line, "at": last, "time": last[11:16] if last else "",
+                        "next_day": bool(last) and last[:10] != date, "_i": i})
+    out.sort(key=lambda e: (e["at"] or "", RECORD_FIELDS.index(e["field"]), e["_i"]))
+    for e in out:
+        e.pop("_i")
+    return out
 
 
 def upsert_record(date: str, data: dict) -> dict:
@@ -153,8 +205,8 @@ def day_data(date: str) -> dict:
         "notes": list_notes(date=date),
         "efficiency": {"headline": eff["summary"].get("headline", ""), "scanned_at": eff.get("scanned_at"),
                        "summary": {k: v for k, v in eff["summary"].items() if k != "by_project"}} if eff else None,
-        "jobs": db.rows("SELECT id, ref, status, created_at, finished_at FROM jobs WHERE module='review' AND ref IN (?,?) "
-                        "ORDER BY id DESC LIMIT 4", [f"check:{date}", f"reflect:{date}"]),
+        "jobs": db.rows("SELECT id, ref, status, created_at, finished_at FROM jobs WHERE module='review' AND ref IN (?,?,?) "
+                        "ORDER BY id DESC LIMIT 6", [f"check:{date}", f"reflect:{date}", f"improve:{date}"]),
     }
 
 
@@ -176,7 +228,13 @@ def api_day(date: str = ""):
 
 @router.put("/day/{date}")
 def api_put_day(date: str, body: RecordIn):
-    return upsert_record(_day(date), {k: v for k, v in body.model_dump().items() if v is not None})
+    date = _day(date)
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    before = get_record(date)
+    rec = upsert_record(date, patch)
+    if any((before.get(k) or "").strip() != (v or "").strip() for k, v in patch.items()):
+        rec = {**rec, "improve_job_id": submit_improve(date)}
+    return rec
 
 
 class AppendIn(BaseModel):
@@ -185,6 +243,7 @@ class AppendIn(BaseModel):
 
 
 RECORD_FIELDS = ("summary", "wins", "problems", "next_actions")
+REC_LABEL = {"summary": "总结", "wins": "收获", "problems": "问题", "next_actions": "下一步"}
 _REC_PREFIX = {"总结": "summary", "收获": "wins", "做成": "wins", "问题": "problems", "下一步": "next_actions",
                "明天": "next_actions", "next": "next_actions"}
 
@@ -205,8 +264,9 @@ def api_append_day(date: str, body: AppendIn):
     if not text:
         raise HTTPException(400, "text required")
     cur = (get_record(date).get(field) or "").rstrip()
-    rec = upsert_record(date, {field: (cur + "\n" + text).strip()})
-    return {"field": field, "text": text, "record": rec}
+    upsert_record(date, {field: (cur + "\n" + stamp(date) + text).strip()})
+    jid = submit_improve(date)
+    return {"field": field, "text": text, "record": get_record(date), "improve_job_id": jid}
 
 
 # ---------- 证据包：git / 文档 ----------
@@ -396,6 +456,8 @@ def on_job_done(job: dict) -> None:
             upsert_record(date, {"ai_analysis": msg})
         elif kind == "reflect":
             _upsert_stats(date, {"reflection": msg})
+        elif kind == "improve" and get_record(date).get("improve_job_id") == job["id"]:
+            upsert_record(date, {"improve_md": msg})
         return
     if kind == "check":
         md, sugg = parse_suggestions(job.get("output") or "")
@@ -404,6 +466,8 @@ def on_job_done(job: dict) -> None:
         auto_apply(date)
     elif kind == "reflect":
         _upsert_stats(date, {"reflection": (job.get("output") or "").strip()})
+    elif kind == "improve" and get_record(date).get("improve_job_id") == job["id"]:  # 只认最新一次提交的分析
+        upsert_record(date, {"improve_md": (job.get("output") or "").strip()})
 
 
 _NO_EVIDENCE = re.compile(r"^\s*(无证据|没有证据|未找到|暂无|无)")
@@ -717,6 +781,93 @@ def api_reflect(body: DateIn):
     return {"job_id": jid, "date": date}
 
 
+# ---------- 写复盘后的改进分析 ----------
+
+def learning_feedback(date: str) -> list[str]:
+    """学习平台当天的反馈：测试 / 停一下的批改、对步骤的理解度与反馈、读材料时划线问的问题。"""
+    out = [f"- {x}" for x in learning_extra(date)["events"]]
+    if _has_table("learn_steps") and {"feedback", "understanding"} <= _cols("learn_steps"):
+        for s in db.rows("SELECT title, status, understanding, feedback FROM learn_steps "
+                         "WHERE substr(done_at,1,10)=? AND (feedback!='' OR understanding>0) LIMIT 20", [date]):
+            out.append(f"- 步骤「{s['title']}」{s['status']} 理解 {s['understanding'] or '-'}/5"
+                       + (f"，反馈：{(s['feedback'] or '')[:200]}" if s["feedback"] else ""))
+    if _has_table("annotations") and _has_table("annotation_msgs"):
+        for a in db.rows("SELECT a.title, a.quote, m.content FROM annotation_msgs m JOIN annotations a ON a.id=m.annotation_id "
+                         "WHERE m.role='user' AND substr(m.created_at,1,10)=? ORDER BY m.id LIMIT 30", [date]):
+            out.append(f"- 读「{(a['title'] or '')[:30]}」" + (f"划线「{a['quote'][:50]}」" if a["quote"] else "")
+                       + f"问/评：{(a['content'] or '')[:150]}")
+    return out
+
+
+def improve_prompt(date: str) -> str:
+    rec = get_record(date)
+    entries = "\n".join(f"- {('次日 ' if e['next_day'] else '') + e['time'] if e['time'] else '（未记时间）'} "
+                        f"[{REC_LABEL[e['field']]}] {e['text']}" for e in rec["entries"]) or "（无）"
+    eff = get_efficiency(date, scan_if_missing=False) or scan_efficiency(date) or {"summary": {}, "sessions": []}
+    sess = []
+    for x in eff["sessions"]:
+        if x["automated"] and not x["human_turns"]:
+            continue
+        sess.append(f"\n### [{x['engine']}] {x['project']} {x.get('title', '')[:40]} {x['start'][11:16]}-{x['end'][11:16]} "
+                    f"活跃 {x['active_min']} 分 / 墙钟 {x['wall_min']} 分，工具错误 {x['tool_errors']}，权限拒绝 {x['denials']}")
+        for m in x["messages"][:25]:
+            w = f"等 {m['wait_min']} 分后" if m["wait_min"] is not None else ""
+            sess.append(f"- {m['t']} {w} [{rs.KIND_LABELS.get(m['kind'], m['kind'])}] {m['text'][:160]}")
+    runs = platform_runs(date)
+    failed = [f"- #{j['id']} {j['module']} {j['ref']} {j['status']}" for j in runs["jobs"] if j["status"] != "done"]
+    learn_fb = learning_feedback(date)
+    since = (Date.fromisoformat(date) - timedelta(days=7)).isoformat()
+    prev = [f"- {n['date']} [{n['kind']}] {n['title']}" for n in list_notes(start=since, end=date, limit=30)]
+    return f"""用户刚写完 {date} 的复盘。请结合当天的 Claude Code / Codex 会话和学习平台的反馈，分析怎么改进。
+只读分析：不要修改文件或平台数据，不要运行测试、不要启动服务。
+
+## 用户写的复盘（按写下的时间排列）
+{entries}
+
+## 当天事项
+{_task_lines(tasks.list_for(date))}
+
+## 当天 Agent 会话（人工消息：时间、等待、分类、内容截断）
+汇总：{eff["summary"].get("headline", "") or "（无）"}
+{chr(10).join(sess) or "（无交互会话）"}
+
+## 本平台后台任务
+共 {len(runs["jobs"])} 个，未成功：
+{chr(10).join(failed) or "（无）"}
+
+## 学习平台反馈（测试 / 停一下批改 / 理解度与反馈 / 划线提问）
+{chr(10).join(learn_fb) or "（无）"}
+
+## 近 7 天已记的问题与经验（别重复给，看有没有落实）
+{chr(10).join(prev) or "（无）"}
+
+## 输出（markdown，中文，具体、简洁，不要复述原文）
+1. **时间线**：把复盘的每一条放回当天的时间线（对应哪个会话 / 学习步骤 / 后台任务、发生在几点），一条一行。
+2. **逐条诊断**：每条复盘的证据（引用上面具体的消息、测试分数、失败任务）、根因；证据不足就直说「无证据」。
+3. **改进**：分「怎么用 Agent」「怎么学习」「平台该补的能力」三类，每条写清楚做什么、怎么验证有效；已在近 7 天记过的标注「已记过，未落实 / 已落实」。
+4. **明天就做的 3 条**：可执行、可检查。"""
+
+
+def submit_improve(date: str) -> int:
+    """写复盘后派一次改进分析。还在排队的那次直接换成最新内容，不重复排队。"""
+    prompt = improve_prompt(date)
+    q = db.row("SELECT id FROM jobs WHERE module='review' AND ref=? AND status='queued' ORDER BY id DESC LIMIT 1",
+               [f"improve:{date}"])
+    if q and db.execute("UPDATE jobs SET prompt=? WHERE id=? AND status='queued'", [prompt, q["id"]]):
+        jid = q["id"]
+    else:
+        jid = jobs.submit("review", prompt, ref=f"improve:{date}", system=agent.build_system("review"),
+                          add_dirs=repo_dirs(date))
+    upsert_record(date, {"improve_job_id": jid})
+    return jid
+
+
+@router.post("/improve")
+def api_improve(body: DateIn):
+    date = _day(body.date)
+    return {"job_id": submit_improve(date), "date": date}
+
+
 # ---------- 对话 Agent ----------
 
 def agent_context(ref: str) -> str:
@@ -733,6 +884,8 @@ def agent_context(ref: str) -> str:
     parts.append("### 复盘记录\n" + "\n".join(f"- {k}：{rec.get(k) or '（空）'}" for k in ("summary", "wins", "problems", "next_actions")))
     if rec.get("ai_analysis"):
         parts.append("### AI 检查结论（摘要）\n" + rec["ai_analysis"][:1500])
+    if rec.get("improve_md"):
+        parts.append("### AI 改进分析（摘要）\n" + rec["improve_md"][:1500])
     if d["notes"]:
         parts.append("### 问题与经验\n" + "\n".join(f"- [{n['kind']}] {n['title']}：{(n['content'] or '')[:150]}" for n in d["notes"]))
     if d["efficiency"]:
