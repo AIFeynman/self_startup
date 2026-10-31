@@ -1,4 +1,4 @@
-"""信息推荐：从 learn_evolve（只读）+ HN/HF/AlphaXiv/GitHub/RSS/Reddit 收集 AI 相关内容，按热度/新鲜度/兴趣/反馈排序。
+"""信息推荐：从 HN/HF/AlphaXiv/GitHub/博客 RSS 与官方站/播客/Reddit/X/Product Hunt 收集 AI 相关内容，按热度/新鲜度/兴趣/反馈排序。
 
 不做逐条提炼：只展示标题 + 简介 + 链接 + 「为什么推荐」。排序逻辑见 _feed_rank.py，采集见 _feed_sources.py。
 """
@@ -51,13 +51,17 @@ CFG_DEFAULTS = {
     "half_life_hours": 72,
     "auto_refresh_hours": 6,      # 数据超过这么久自动后台刷新；0 = 关闭
     "stale_source_days": 7,       # 某来源最新条目早于这么多天，status 里标为停更
-    "learn_evolve_days": 30,
     "hn_queries": ["LLM", "AI agent", "Claude", "OpenAI", "GPT", "coding agent"],
     "github_queries": ["llm", "ai agent", "mcp", "claude code"],
     "reddit": ["LocalLLaMA", "ClaudeAI", "MachineLearning"],
-    "sources": ["learn_evolve", "hn", "hf", "alphaxiv", "github", "rss", "reddit"],
+    "x_days": 3,                  # X：只要最近几天的推文
+    "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
+    "x_per_account": 2,           # X 名单账号：每人每次最多收几条
+    "producthunt_days": 2,
+    "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "reddit", "x", "producthunt"],
 }
-TYPES = {"paper": "论文", "blog": "博客", "product": "产品", "repo": "项目", "discussion": "讨论", "news": "资讯"}
+TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
+         "news": "资讯"}
 
 router = APIRouter()
 _state: dict = {"running": False, "started_at": "", "finished_at": "", "results": {}}
@@ -97,7 +101,7 @@ def _iso(d: datetime) -> str:
     return d.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 def upsert(items: list[dict]) -> int:
-    """写入/合并：新值非空才覆盖；extra 合并（保留 learn_evolve 评分等）。"""
+    """写入/合并：新值非空才覆盖；extra 合并（保留旧条目已有的字段）。"""
     n = 0
     ts = db.now()
     for it in items:
@@ -144,7 +148,7 @@ def _feedback() -> dict[str, dict]:
 
 
 def _examples(items: list[dict], fb: dict[str, dict]) -> list[dict]:
-    """亲和度样本：本平台的赞/收藏（+）与踩（-），以及 learn_evolve 的 star/good（+）与 bad（-）。"""
+    """亲和度样本：本平台的赞/收藏（+）与踩（-）；早先从 learn_evolve 导入的条目，其 star/good（+）与 bad（-）评分也算。"""
     ex = []
     for it in items:
         f = fb.get(it["id"], {})
@@ -194,14 +198,23 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
 def _collectors() -> dict:
     fc = settings.get("feed", {}) or {}
     return {
-        "learn_evolve": lambda: src.fetch_learn_evolve(fc.get("learn_evolve_db", ""), int(cfg("learn_evolve_days"))),
         "hn": lambda: src.fetch_hn(list(cfg("hn_queries"))),
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
         "github": lambda: src.fetch_github(list(cfg("github_queries"))),
         "rss": lambda: src.fetch_rss(list(fc.get("rss") or [])),
+        "sites": lambda: src.fetch_sites(list(fc.get("sites") or []), known_urls=_known_urls("blog")),
+        "podcast": lambda: src.fetch_rss(list(fc.get("podcasts") or []), per_feed=5, source="podcast", typ="podcast"),
         "reddit": lambda: src.fetch_reddit(list(cfg("reddit"))),
+        "x": lambda: src.fetch_x(list(fc.get("x_accounts") or []), list(fc.get("x_queries") or []),
+                                 days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
+                                 per_account=int(cfg("x_per_account"))),
+        "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
     }
+
+
+def _known_urls(source: str) -> set[str]:
+    return {r["url"] for r in db.rows("SELECT url FROM feed_items WHERE source=?", [source])}
 
 
 def refresh_sync(only: list[str] | None = None) -> dict:
@@ -219,7 +232,7 @@ def refresh_sync(only: list[str] | None = None) -> dict:
             log.warning("feed source %s failed: %s", name, e)
             return name, {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         for name, res in ex.map(run, names):
             results[name] = res
     return results
@@ -353,8 +366,9 @@ def deep_reads() -> int:
 
 @router.get("/config")
 def config():
-    return {k: cfg(k) for k in ("interests", "half_life_hours", "learn_evolve_days", "hn_queries", "github_queries",
-                                "reddit", "sources")} | {"rss": settings.get("feed.rss", []), "types": TYPES}
+    return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
+                                "x_min_likes", "x_per_account", "producthunt_days", "sources")} | {
+        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "x_accounts", "x_queries")} | {"types": TYPES}
 
 
 # ---------- 定时刷新 ----------
