@@ -190,21 +190,17 @@ const CSS = `
 .ln-chap .md .dg-widget iframe { display: block; width: 100%; border: 0; background: transparent; }
 /* 知识卡复习 */
 .ln-tabs2 { display: flex; gap: 4px; margin-bottom: 12px; } .ln-tabs2 button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-.ln-deck { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.ln-fc { position: relative; width: 100%; max-width: 560px; min-height: 200px; display: flex; flex-direction: column; justify-content: center; gap: 12px;
-  padding: 30px 30px 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); cursor: pointer; }
-.ln-fc .front { font: 600 19px/1.5 var(--serif); text-align: center; transition: font-size .2s; }
-.ln-fc .back { display: none; font-size: 15px; line-height: 1.75; padding-top: 12px; border-top: 1px dashed var(--line-2); animation: ln-fade .25s; }
-.ln-fc.flip { background: var(--focus); } .ln-fc.flip .front { font-size: 15px; color: var(--muted); } .ln-fc.flip .back { display: block; }
-.ln-fc input.mine { font-size: 14px; background: var(--bg); } .ln-fc.flip input.mine { display: none; }
-.ln-fc .mine-show { display: none; font-size: 14px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg); white-space: pre-wrap; }
-.ln-fc.flip .mine-show:not(:empty) { display: block; }
-.ln-fc .k { display: block; font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .05em; margin-bottom: 2px; }
-.ln-fc .tg { position: absolute; top: 10px; left: 14px; font-size: 11px; color: var(--muted); }
-.ln-fc .hint { position: absolute; bottom: 8px; right: 14px; font-size: 11px; color: var(--muted); } .ln-fc.flip .hint { display: none; }
-@keyframes ln-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-.ln-deck .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
-.ln-deck .meta { font-size: 12px; color: var(--muted); }
+.ln-kp { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.ln-kpc { padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); background: var(--panel); font-size: 14px; }
+.ln-kpc .hd { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; } .ln-kpc .hd b { flex: 1; }
+.ln-kpc .tg { font-size: 11px; color: var(--muted); white-space: nowrap; } .ln-kpc .md { font-size: 13.5px; color: var(--text); } .ln-kpc .md p { margin: 0; }
+.ln-dim { background: var(--accent-soft); color: var(--accent); }
+.ln-about { font-size: 12px; color: var(--accent); margin: -4px 0 6px 22px; }
+.ln-dims { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.ln-dimrow { display: grid; grid-template-columns: 34px 120px 40px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 13px; }
+.ln-dimrow .bar { height: 6px; border-radius: 3px; background: var(--bg-2); overflow: hidden; } .ln-dimrow .bar i { display: block; height: 100%; background: var(--accent); }
+.ln-dimrow .v { font: 600 12px var(--mono); } .ln-dimrow .t { color: var(--muted); }
+@media (max-width: 640px) { .ln-dimrow { grid-template-columns: 34px 1fr 40px; } .ln-dimrow .t { grid-column: 1 / -1; } }
 @media (max-width: 640px) { .ln-chap .md .dg-branches { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ln-chap .md .dg-vs { grid-template-columns: 1fr; } .ln-chap .md .dg-side + .dg-side { border-left: 0; border-top: 1px solid var(--line); }
   .ln-chap .md .dg-node:not(:last-child)::after { content: '↓'; right: auto; left: 50%; top: auto; bottom: -19px; transform: none; } }
 .ln-qz { padding: 16px 20px; margin-bottom: 10px; }
@@ -781,7 +777,7 @@ async function renderChapter(el, ctx, pid, sid) {
   heads.forEach((hd, i) => { hd.id = `ln-h-${i}`; hd.style.scrollMarginTop = '16px'; });
   const toc = h('nav.ln-toc', {}, [h('div.k', {}, '本章目录'),
     ...heads.map((hd) => h('a', { href: 'javascript:void 0', onclick: () => hd.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, hd.textContent)),
-    s.quiz.length || s.cards?.length ? h('a.quiz', { href: 'javascript:void 0', onclick: () => document.getElementById('ln-quiz')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, s.cards?.length ? `知识卡 ${s.cards.length} · 测试 ${s.quiz.length} 题` : `章末测试 · ${s.quiz.length} 题`) : null]);
+    s.quiz.length || s.cards?.length ? h('a.quiz', { href: 'javascript:void 0', onclick: () => document.getElementById('ln-quiz')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, s.cards?.length ? `要点 ${s.cards.length} · 测试 ${s.quiz.length} 题` : `章末测试 · ${s.quiz.length} 题`) : null]);
   const main = h('div', { style: { minWidth: 0 } }, [
     h('div.card.ln-reader-card', { style: { padding: '22px 26px' } },
       annotate(ctx, body, { doc: `learn:chapter:${sid}`, title: `${p.topic} · ${s.title}`, link: chapterHref(pid, sid), source: s.chapter_md })),
@@ -804,15 +800,15 @@ async function renderChapter(el, ctx, pid, sid) {
   };
   const qv = quizView(ctx, p, s, { gotoSection, chat, next });
   if (s.cards?.length) {
-    const deck = cardDeck(ctx, s);
+    const deck = keyPoints(ctx, s);
     const key = `ln-chap-tab-${sid}`;
     let tab = (() => { try { return localStorage.getItem(key); } catch { return null; } })() || (s.quiz_result?.status ? 'quiz' : 'cards');
-    const bCards = h('button.sm', { onclick: () => show('cards') }, `知识卡 · ${s.cards.length} 张`);
+    const bCards = h('button.sm', { onclick: () => show('cards') }, `本章要点 · ${s.cards.length} 条`);
     const bQuiz = h('button.sm', { onclick: () => show('quiz') }, `章末测试 · ${s.quiz.length} 题`);
     const show = (t2) => { tab = t2; try { localStorage.setItem(key, t2); } catch { /* ignore */ }
       deck.style.display = t2 === 'cards' ? '' : 'none'; qv.style.display = t2 === 'quiz' ? '' : 'none';
       bCards.classList.toggle('on', t2 === 'cards'); bQuiz.classList.toggle('on', t2 === 'quiz'); };
-    main.append(h('div', { id: 'ln-quiz', style: { scrollMarginTop: '16px' } }, [ui.section('复习与测试', '先过知识卡，再做测试'), h('div.ln-tabs2', {}, [bCards, bQuiz]), deck, qv]));
+    main.append(h('div', { id: 'ln-quiz', style: { scrollMarginTop: '16px' } }, [ui.section('复习与测试', '先过一遍要点，再做测试'), h('div.ln-tabs2', {}, [bCards, bQuiz]), deck, qv]));
     qv.removeAttribute('id');
     qv.querySelector('.section-title')?.remove();
     show(tab);
@@ -849,7 +845,7 @@ function quizView(ctx, p, s, { gotoSection, chat, next }) {
   const graded = r.status === 'graded';
   const grading = r.status === 'grading';
   const answers = graded || grading || r.status === 'failed' ? { ...(r.answers || {}) } : loadDraft(s.id);
-  wrap.append(ui.section('章末测试', `${s.quiz.length} 题 · ${PASS_TXT}` + (r.attempt ? ` · 第 ${r.attempt + (graded || grading ? 0 : 1)} 次` : '')));
+  wrap.append(ui.section('章末测试', `${s.quiz.length} 题 · 评估理解 / 判断 / 应用 · ${PASS_TXT}` + (r.attempt ? ` · 第 ${r.attempt + (graded || grading ? 0 : 1)} 次` : '')));
 
   if (graded) {
     const pass = r.passed;
@@ -858,6 +854,9 @@ function quizView(ctx, p, s, { gotoSection, chat, next }) {
       h('div.t', {}, [
         h('div', {}, h('b', {}, pass ? '通过，本章已标记完成' : '还没过关：建议回看薄弱处再重做')),
         r.summary ? h('div', { style: { marginTop: '4px' } }, r.summary) : null,
+        r.dims && Object.keys(r.dims).length ? h('div.ln-dims', {}, Object.entries(r.dims).map(([d, v]) => h('div.ln-dimrow', {}, [
+          h('b', {}, d), h('div.bar', {}, h('i', { style: { width: v + '%' } })), h('span.v', {}, v + '%'),
+          r.assessment?.[d] ? h('span.t', {}, r.assessment[d]) : null]))) : null,
         r.weak_points?.length ? h('ul', {}, r.weak_points.map((w) => h('li', {}, w))) : null,
         r.advice ? h('div.muted', { style: { marginTop: '4px' } }, '建议：' + r.advice) : null,
       ]),
@@ -875,8 +874,8 @@ function quizView(ctx, p, s, { gotoSection, chat, next }) {
   s.quiz.forEach((q, i) => {
     const it = (r.items || {})[q.id];
     const scoreCls = it ? (it.score >= 1 ? 'full' : it.score > 0 ? 'part' : 'zero') : '';
-    const card = h('div.card.ln-qz', {}, [h('div.qh', {}, [h('span.no', {}, i + 1), h('span.q', {}, q.q),
-      q.skill ? h('span.tag.gray', {}, q.skill) : null,
+    const card = h('div.card.ln-qz', {}, [q.about && !/无直接相关/.test(q.about) ? h('div.ln-about', {}, ['学以致用 · ', q.about]) : null, h('div.qh', {}, [h('span.no', {}, i + 1), h('span.q', {}, q.q),
+      q.dim ? h('span.tag.ln-dim', { title: { 理解: '对这个方向的理解', 判断: '判断力', 应用: '用到自己的论文 / 项目上' }[q.dim] || '' }, q.dim) : null,
       graded && it ? h('span.sc.' + scoreCls, {}, q.type === 'choice' ? (it.score ? '✓' : '✗') : `${Math.round(it.score * 100)}%`) : null])]);
     if (q.type === 'choice') {
       q.options.forEach((o, k) => {
@@ -981,65 +980,11 @@ function enhance(ctx, body, s) {
   });
 }
 
-// 知识卡：翻面复习，「记住了」移出本轮，「再看看」放回队尾；进度存在本机
-function cardDeck(ctx, s) {
-  const { h, md, ui } = ctx;
-  const key = `ln-cards-${s.id}`;
-  const load = () => { try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; } };
-  const save = (d) => { try { localStorage.setItem(key, JSON.stringify(d)); } catch { /* ignore */ } };
-  let st = load(); // {known: [idx], queue: [idx]}
-  const all = s.cards.map((_, i) => i);
-  const fresh = () => ({ known: [], queue: all.slice() });
-  if (!Array.isArray(st.queue) || st.queue.some((i) => i >= s.cards.length)) st = fresh();
-  const box = h('div.ln-deck');
-  const draw = () => {
-    save(st);
-    const known = st.known.length;
-    if (!st.queue.length) {
-      box.replaceChildren(h('div.card', { style: { width: '100%', maxWidth: '560px', textAlign: 'center', padding: '28px' } }, [
-        h('div.serif', { style: { fontSize: '20px' } }, `本章 ${s.cards.length} 张知识卡都记住了`),
-        h('div.muted', { style: { margin: '6px 0 14px' } }, '可以去做章末测试，或者再过一遍'),
-        h('button', { onclick: () => { st = fresh(); draw(); } }, [ui.icon('refresh'), '再过一遍'])]));
-      return;
-    }
-    const i = st.queue[0];
-    const c = s.cards[i];
-    const mine = h('input.mine', { placeholder: '我的答案（可选，写了翻面时并排对照）', onclick: (e) => e.stopPropagation(),
-      onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); flip(); } } });
-    const mineShow = h('div.mine-show');
-    const flip = () => {
-      fc.classList.toggle('flip');
-      mineShow.replaceChildren(...(mine.value.trim() ? [h('span.k', {}, '我的答案'), mine.value.trim()] : []));
-    };
-    const fc = h('div.ln-fc', { onclick: flip }, [
-      c.tag ? h('span.tg', {}, c.tag) : null, h('div.front', {}, c.front), mine, mineShow, h('div.back', {}, [h('span.k', {}, '要点'), md(c.back)]),
-      h('span.hint', {}, '先想答案，再点击翻面'),
-    ]);
-    const step = (ok) => {
-      st.queue.shift();
-      if (ok) st.known.push(i); else st.queue.splice(Math.min(st.queue.length, 3), 0, i); // 隔几张再出现
-      draw();
-    };
-    box.replaceChildren(fc, h('div.ctl', {}, [
-      h('button', { onclick: () => step(false) }, '再看看'),
-      h('button.primary', { onclick: () => step(true) }, [ui.icon('check'), '记住了']),
-    ]), h('div.meta', {}, `已记住 ${known}/${s.cards.length} · 本轮还剩 ${st.queue.length} 张 · 空格翻面`));
-  };
-  // 空格翻面、←/→ 再看看 / 记住了（只在卡片区可见时）
-  const onKey = (e) => {
-    if (!box.isConnected) { document.removeEventListener('keydown', onKey); return; }
-    if (box.offsetParent === null || /input|textarea|select/i.test(e.target.tagName)) return;
-    const fc = box.querySelector('.ln-fc');
-    if (!fc) return;
-    const r = box.getBoundingClientRect();
-    if (r.bottom < 0 || r.top > innerHeight) return;
-    if (e.key === ' ') { e.preventDefault(); fc.click(); }
-    else if (e.key === 'ArrowRight') box.querySelector('.ctl .primary')?.click();
-    else if (e.key === 'ArrowLeft') box.querySelector('.ctl button')?.click();
-  };
-  document.addEventListener('keydown', onKey);
-  draw();
-  return box;
+// 本章要点：直接总结，只读不答
+function keyPoints(ctx, s) {
+  const { h, md } = ctx;
+  return h('div.ln-kp', {}, s.cards.map((c) => h('div.ln-kpc', {}, [
+    h('div.hd', {}, [h('b', {}, c.front), c.tag ? h('span.tg', {}, c.tag) : null]), md(c.back)])));
 }
 
 function checkCard(ctx, card, s, idx) {

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -72,7 +74,7 @@ CREATE TABLE IF NOT EXISTS learn_steps (
     chapter_md    TEXT DEFAULT '',            -- 章节教程（markdown）
     chapter_status TEXT DEFAULT '',           -- '' / generating / ready / failed
     chapter_job   INTEGER,
-    quiz          TEXT DEFAULT '[]',          -- 章末测试 JSON [{id,type:choice|short,q,options,answer,explain,reference,rubric,skill,section}]
+    quiz          TEXT DEFAULT '[]',          -- 章末测试 JSON [{id,type:choice|short,q,options,answer,explain,reference,rubric,dim:理解|判断|应用,about,section}]
     cards         TEXT DEFAULT '[]',          -- 知识卡 JSON [{front,back,tag}]
     checks        TEXT DEFAULT '{}',          -- 「停一下」作答 JSON {序号: {q,points,answer,at,status,job_id,review}}
     quiz_result   TEXT DEFAULT ''             -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
@@ -91,6 +93,7 @@ STAGE_GOALS = {
     5: "快速消化新论文并判断价值：相对已有工作的增量、证据是否可信、代表什么趋势",
     6: "用产出检验理解：做出来、讲清楚、按验收标准自评",
 }
+DIMS = ("理解", "判断", "应用")  # 章末测试评估的三个维度
 PASS_SCORE = 70  # 章末测试及格线：及格自动标记完成
 STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapter_status": "TEXT DEFAULT ''",
              "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''",
@@ -847,6 +850,31 @@ def _quiz_line(s: dict) -> str:
     return f"测试 {r.get('score')} 分" + (f"，薄弱：{weak}" if weak else "")
 
 
+def _recent_context() -> str:
+    """用户最近在读 / 在做的东西：章末测试的「学以致用」题从这里取材。"""
+    since = (date.fromisoformat(db.today()) - timedelta(days=14)).isoformat()
+    out = []
+    for i in db.rows("SELECT kind,title,url,summary FROM learn_items WHERE status='done' ORDER BY id DESC LIMIT 8"):
+        first = (i["summary"] or "").splitlines()[0][:120] if i["summary"] else ""
+        out.append(f"- [深读{'论文' if i['kind'] == 'paper' else '项目'}] {i['title'] or i['url']}：{first}")
+    try:
+        for r in db.rows("SELECT title,created_at FROM research_docs WHERE created_at>=? ORDER BY id DESC LIMIT 5", [since]):
+            out.append(f"- [调研] {r['title']}（{r['created_at'][:10]}）")
+    except Exception:  # noqa: BLE001  调研模块缺失时跳过
+        pass
+    for tk in db.rows("SELECT title,date FROM tasks WHERE parent_id IS NULL AND date>=? ORDER BY date DESC, id DESC LIMIT 8", [since]):
+        out.append(f"- [事项 {tk['date']}] {tk['title'][:160]}")
+    for repo in (settings.get("repos", []) or [])[:4]:
+        try:
+            log = subprocess.run(["git", "-C", repo, "log", f"--since={since}", "--no-merges", "--pretty=%s", "-6"],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            log = ""
+        if log:
+            out.append(f"- [项目 {Path(repo).name}] 最近提交：" + "；".join(x[:60] for x in log.splitlines()))
+    return "\n".join(out) or "（暂无记录）"
+
+
 def chapter_prompt(s: dict, note: str = "") -> str:
     p = _plan(s["plan_id"])
     steps = _ordered(steps_of(p["id"]))
@@ -876,6 +904,9 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 
 用户已学的其他内容（可做联系）：
 {_known_knowledge(exclude_plan=p['id'], limit=10)}
+
+用户最近在读 / 在做（章末测试至少 1 题从中挑和本章相关的论文或项目出题，学以致用）：
+{_recent_context()}
 {('用户对本章的要求：' + note) if note else ''}
 
 做法：
@@ -912,6 +943,14 @@ def _prefetch_next(s: dict) -> int | None:
     return None
 
 
+def _dim(q: dict) -> str:
+    d = str(q.get("dim") or "")
+    if d in DIMS:
+        return d
+    sk = str(q.get("skill") or "") + d
+    return "应用" if re.search(r"应用|迁移|实践", sk) else "判断" if re.search(r"判断|证据|评估|预测", sk) else "理解"
+
+
 def _clean_quiz(o) -> list[dict]:
     qs = o.get("questions") if isinstance(o, dict) else o
     out = []
@@ -919,7 +958,7 @@ def _clean_quiz(o) -> list[dict]:
         if not isinstance(q, dict) or not str(q.get("q") or "").strip():
             continue
         item = {"id": str(q.get("id") or f"q{i}"), "type": "choice" if q.get("type") == "choice" else "short",
-                "q": str(q["q"]), "skill": str(q.get("skill") or ""), "section": str(q.get("section") or "")}
+                "q": str(q["q"]), "dim": _dim(q), "about": str(q.get("about") or ""), "section": str(q.get("section") or "")}
         if item["type"] == "choice":
             opts = [str(x) for x in q.get("options") or []]
             try:
@@ -933,6 +972,9 @@ def _clean_quiz(o) -> list[dict]:
             rub = q.get("rubric") or []
             item.update(reference=str(q.get("reference") or ""), rubric=[str(x) for x in (rub if isinstance(rub, list) else [rub])])
         out.append(item)
+    # 题少而精：最多 2 道手写题、总共不超过 6 题（多出来的丢掉，按出题顺序保留）
+    shorts = [q for q in out if q["type"] == "short"][:2]
+    out = [q for q in out if q["type"] == "choice" or q in shorts][:6]
     ids = [q["id"] for q in out]
     if len(set(ids)) != len(ids):  # id 重复就重新编号
         for i, q in enumerate(out, 1):
@@ -979,7 +1021,12 @@ def _finalize_quiz(sid: int, r: dict) -> dict:
     items = r.get("items") or {}
     n = len(s["quiz"]) or 1
     score = round(100 * sum(float((items.get(q["id"]) or {}).get("score") or 0) for q in s["quiz"]) / n)
-    r.update(score=score, status="graded", graded_at=db.now(), passed=score >= PASS_SCORE)
+    dims = {}
+    for d in DIMS:
+        qs = [q for q in s["quiz"] if q.get("dim", "理解") == d]
+        if qs:
+            dims[d] = round(100 * sum(float((items.get(q["id"]) or {}).get("score") or 0) for q in qs) / len(qs))
+    r.update(score=score, dims=dims, status="graded", graded_at=db.now(), passed=score >= PASS_SCORE)
     upd = {"quiz_result": r, "understanding": max(1, min(5, round(score / 20)))}
     if score >= PASS_SCORE and s["status"] != "done":
         upd.update(status="done", done_at=db.now())
@@ -992,10 +1039,11 @@ def _finalize_quiz(sid: int, r: dict) -> dict:
 def grade_prompt(s: dict, r: dict) -> str:
     p = _plan(s["plan_id"])
     qs = [q for q in s["quiz"] if q["type"] == "short" and str(r["answers"].get(q["id"]) or "").strip()]
-    body = "\n\n".join(f"### {q['id']}（考察：{q['skill'] or '理解'}；对应小节：{q['section'] or '-'}）\n题目：{q['q']}\n"
+    body = "\n\n".join(f"### {q['id']}（维度：{q.get('dim') or '理解'}；对应小节：{q['section'] or '-'}"
+                        + (f"；关联：{q['about']}" if q.get("about") else "") + f"）\n题目：{q['q']}\n"
                         f"参考答案要点：{q['reference']}\n评分要点：" + "；".join(q["rubric"]) + f"\n用户回答：{r['answers'][q['id']]}"
                         for q in qs)
-    wrong = "；".join(f"{q['id']}（{q['skill'] or q['section']}）" for q in s["quiz"]
+    wrong = "；".join(f"{q['id']}（{q.get('dim') or ''}·{q['section']}）" for q in s["quiz"]
                       if q["type"] == "choice" and not (r["items"].get(q["id"]) or {}).get("score"))
     return f"""任务：批改学习测试里的简答题，像一位严格但愿意教的导师。今天是 {db.today()}。
 计划：{p['topic']}；本章：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」
@@ -1008,7 +1056,10 @@ def grade_prompt(s: dict, r: dict) -> str:
 评分：每题 score 取 0 / 0.25 / 0.5 / 0.75 / 1，按评分要点给分；意思对、表述不同也给分；只复述概念、没有理由或判断的不给满分。
 feedback 写 2–4 句：哪里对、缺了什么、高手会怎么想（判断类题目要点出代表人物的推理路径和你的依据）。
 不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
-{{"items": [{{"id": "q2", "score": 0.5, "feedback": "..."}}], "summary": "一两句总体评价", "weak_points": ["薄弱点（具体到概念/能力）"], "advice": "下一步怎么补：回看哪一节、做什么练习"}}
+{{"items": [{{"id": "q2", "score": 0.5, "feedback": "..."}}], "summary": "一两句总体评价",
+ "assessment": {{"理解": "对这个方向的理解到什么程度（一句）", "判断": "判断力如何、离一线的人差在哪（一句）", "应用": "能否用到自己的论文/项目上（一句）"}},
+ "weak_points": ["薄弱点（具体到概念/能力）"], "advice": "下一步怎么补：回看哪一节、做什么练习"}}
+assessment 结合全部题目（包括选择题对错）来写，评价的是人对这个方向的整体能力，不是逐题复述。
 """
 
 
@@ -1164,6 +1215,8 @@ def _finish_grade(sid: int, job: dict) -> None:
         except (TypeError, ValueError):
             sc = 0.0
         r["items"][q["id"]] = {"score": sc, "feedback": str(g.get("feedback") or "（未批改）")}
+    asm = o.get("assessment") if isinstance(o.get("assessment"), dict) else {}
+    r["assessment"] = {d: str(asm[d])[:300] for d in DIMS if asm.get(d)}
     r.update(summary=str(o.get("summary") or ""), advice=str(o.get("advice") or ""),
              weak_points=[str(x) for x in o.get("weak_points") or []][:6])
     _finalize_quiz(sid, r)
