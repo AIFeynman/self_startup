@@ -1,21 +1,19 @@
 """信息推荐的采集器：每个来源一个函数，返回统一形状的 dict 列表；失败抛异常，由调用方按来源记录。
 
 统一形状：{id: "source:external_id", source, type, title, summary(≤400), url, date, popularity, extra{}}
-type: paper / blog / product / repo / discussion / news
-不调 LLM；learn_evolve 只读打开。
+type: paper / blog / podcast / product / repo / discussion / news
+不调 LLM；接口密钥从环境变量读（项目根目录 .env，见 settings.load_env）。
 """
 from __future__ import annotations
 
 import html
-import json
 import os
 import re
-import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
-from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import feedparser
 import httpx
@@ -24,10 +22,12 @@ UA = "self-startup-feed/0.1 (local learning platform)"
 TIMEOUT = httpx.Timeout(15.0, connect=8.0)
 SUMMARY_MAX = 400
 
-LE_TYPE = {"arxiv": "paper", "hn": "discussion", "reddit": "discussion", "twitter": "discussion",
-           "github": "repo", "producthunt": "product", "openrouter": "product", "yc": "product",
-           "huggingface": "repo", "blog": "blog", "podcast": "blog", "youtube": "blog"}
-LE_SKIP_SOURCES = {"changelog"}           # llama.cpp 构建日志之类，噪音大
+BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
+# X 搜索结果不在名单里，要求更强的 AI 词（单个 agent / assistant / model 常是体育经纪人、执法人员之类）
+X_SEARCH_RE = re.compile(r"\b(ai|llms?|gpt[\w.-]*|claude|anthropic|openai|codex|gemini|deepseek|qwen|mcp|"
+                         r"(ai|coding|llm) agents?|agentic|prompt|fine-?tun\w*|inference|transformers?)\b", re.I)
+AI_HINT_RE = re.compile(r"\b(ai|gpt|llms?|agents?|agentic|copilot|assistant|machine learning|generative|chatbot|neural|"
+                        r"model|claude|openai|gemini|mcp|rag)\b|人工智能|大模型|智能体|混元|元宝", re.I)
 
 
 def clean(text, limit: int = SUMMARY_MAX) -> str:
@@ -46,87 +46,6 @@ def _iso(dt: datetime | None) -> str:
 
 def _days_ago(n: int) -> datetime:
     return datetime.now(timezone.utc) - timedelta(days=n)
-
-
-# ---------- learn_evolve（只读） ----------
-
-_SUMMARY_KEYS = ("summary", "abstract", "feed_description", "description", "tagline", "selftext", "text", "shownotes")
-_POP_KEYS = {"arxiv": ("likes",), "hn": ("points",), "github": ("stars",), "reddit": ("score",)}
-
-
-def summary_from_payload(p: dict) -> str:
-    """从 learn_evolve raw payload 里挑一段简介：优先较长的摘要类字段，再看 article.description/text。"""
-    if not isinstance(p, dict):
-        return ""
-    cands = [p.get(k) for k in _SUMMARY_KEYS]
-    art = p.get("article")
-    if isinstance(art, dict):
-        cands += [art.get("description"), art.get("text")]
-    cands = [clean(c) for c in cands if isinstance(c, str) and c.strip()]
-    for c in cands:
-        if len(c) >= 40:
-            return c
-    return cands[0] if cands else ""
-
-
-def _pop_from_payload(source: str, p: dict, fallback: float) -> float:
-    for k in _POP_KEYS.get(source, ()):
-        if isinstance(p.get(k), (int, float)):
-            return float(p[k])
-    if source == "producthunt":
-        rec = p.get("reception") or {}
-        if isinstance(rec, dict) and isinstance(rec.get("votes"), (int, float)):
-            return float(rec["votes"])
-    if source == "twitter":
-        m = p.get("metrics") or {}
-        if isinstance(m, dict):
-            return float(m.get("like_count") or m.get("likes") or 0)
-    return float(fallback or 0) if source not in ("arxiv",) else 0.0  # arxiv 的 score 是复合分，不当热度
-
-
-def fetch_learn_evolve(db_path: str, days: int = 30, limit: int = 400) -> list[dict]:
-    """读 learn_evolve .news.db：最近 days 天（以库里最新日期为锚，避免它停更后什么都读不到）+ 所有有评分的条目。"""
-    p = Path(db_path).expanduser()
-    if not p.exists():
-        raise FileNotFoundError(f"learn_evolve 数据库不存在：{p}")
-    root = p.parent
-    conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    try:
-        latest = conn.execute("SELECT max(date) FROM items").fetchone()[0] or datetime.now().strftime("%Y-%m-%d")
-        anchor = min(latest[:10], datetime.now().strftime("%Y-%m-%d"))
-        since = (datetime.strptime(anchor, "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
-        rows = conn.execute(
-            "SELECT id, source, content_type, title, url, date, score, raw_path, rating, tags FROM items "
-            "WHERE (date >= ? OR rating IN ('star','good','bad','skip')) AND content_type NOT LIKE '%\\_deep' ESCAPE '\\' "
-            "ORDER BY (rating IS NOT NULL AND rating != '') DESC, date DESC LIMIT ?", (since, limit)).fetchall()
-    finally:
-        conn.close()
-    out = []
-    for r in rows:
-        if r["source"] in LE_SKIP_SOURCES or not r["title"]:
-            continue
-        payload: dict = {}
-        if r["raw_path"]:
-            try:
-                payload = json.loads((root / r["raw_path"]).read_text("utf-8"))
-            except (OSError, ValueError):
-                payload = {}
-        url = r["url"] or ""
-        if r["source"] == "hn" and isinstance(payload.get("url"), str) and payload["url"]:
-            url = payload["url"]  # 原文链接；HN 讨论页放 extra
-        try:
-            tags = json.loads(r["tags"] or "[]")
-        except ValueError:
-            tags = []
-        out.append({
-            "id": r["id"], "source": r["source"], "type": LE_TYPE.get(r["source"], "news"),
-            "title": clean(r["title"], 200), "summary": summary_from_payload(payload), "url": url,
-            "date": r["date"] or "", "popularity": _pop_from_payload(r["source"], payload, r["score"]),
-            "extra": {"origin": "learn_evolve", "le_rating": r["rating"] or "", "tags": tags[:6],
-                      **({"hn_url": payload["hn_url"]} if payload.get("hn_url") else {})},
-        })
-    return out
 
 
 # ---------- 直连抓取 ----------
@@ -261,18 +180,23 @@ def parse_feed(text: str, feed_url: str = "", source: str = "blog", typ: str = "
     return out
 
 
-def fetch_rss(urls: list[str], days: int = 30, per_feed: int = 15) -> tuple[list[dict], list[str]]:
-    """逐个 feed 抓；单个 feed 失败只记错误，不影响其它。返回 (items, errors)。"""
+def fetch_rss(urls: list[str], days: int = 30, per_feed: int = 15, source: str = "blog",
+              typ: str = "blog") -> tuple[list[dict], list[str]]:
+    """并发抓多个 feed（博客 / 播客共用）；单个 feed 失败只记错误，不影响其它。返回 (items, errors)。"""
+    def one(c, u):
+        try:
+            r = c.get(u)
+            r.raise_for_status()
+            return parse_feed(r.text, u, source=source, typ=typ, days=days, limit=per_feed), None
+        except Exception as e:  # noqa: BLE001
+            return [], f"{u}: {type(e).__name__}: {str(e)[:120]}"
+
     items, errors = [], []
-    with _client() as c:
-        for u in urls:
-            try:
-                r = c.get(u)
-                r.raise_for_status()
-                got = parse_feed(r.text, u, days=days, limit=per_feed)
-                items += got
-            except Exception as e:  # noqa: BLE001
-                errors.append(f"{u}: {type(e).__name__}: {str(e)[:120]}")
+    with _client() as c, ThreadPoolExecutor(max_workers=8) as ex:
+        for got, err in ex.map(lambda u: one(c, u), urls):
+            items += got
+            if err:
+                errors.append(err)
     return items, errors
 
 
@@ -317,4 +241,252 @@ def fetch_reddit(subs: list[str], limit: int = 15) -> tuple[list[dict], list[str
                     items.append(it)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"r/{sub}: {type(e).__name__}: {str(e)[:120]}")
+    return items, errors
+
+
+# ---------- X（Twitter）：GetXAPI 优先，twitterapi.io 兜底 ----------
+# 两家响应同构（tweets[] + next_cursor，tweet 带 id/text/likeCount/author.userName）；差在路径、参数名和鉴权头。
+X_PROVIDERS = [
+    {"name": "getxapi", "env": "GETXAPI_KEY", "base": "https://api.getxapi.com",
+     "auth": lambda k: {"Authorization": f"Bearer {k}"},
+     "timeline": ("/twitter/user/tweets", lambda u: {"userName": u}),
+     "search": ("/twitter/tweet/advanced_search", lambda q: {"q": q, "product": "Latest"})},
+    {"name": "twitterapi.io", "env": "TWITTER_API_KEY", "base": "https://api.twitterapi.io",
+     "auth": lambda k: {"X-API-Key": k},
+     "timeline": ("/twitter/user/last_tweets", lambda u: {"userName": u}),
+     "search": ("/twitter/tweet/advanced_search", lambda q: {"query": q, "queryType": "Latest"})},
+]
+_TCO = re.compile(r"\s*https://t\.co/\w+")
+
+
+def _x_providers() -> list[dict]:
+    return [{**p, "key": os.environ[p["env"]].strip()} for p in X_PROVIDERS if os.environ.get(p["env"], "").strip()]
+
+
+def _x_call(c: httpx.Client, provs: list[dict], kind: str, arg: str) -> list[dict]:
+    """按顺序试 provider，第一个成功的为准；全失败抛最后一个错误。"""
+    err: Exception | None = None
+    for p in provs:
+        path, params = p[kind]
+        try:
+            r = c.get(p["base"] + path, params=params(arg), headers=p["auth"](p["key"]))
+            r.raise_for_status()
+            j = r.json() or {}
+            data = j.get("data") if isinstance(j.get("data"), dict) else {}
+            return j.get("tweets") or data.get("tweets") or []
+        except Exception as e:  # noqa: BLE001
+            err = RuntimeError(f"{p['name']} {path}: {type(e).__name__}: {str(e)[:100]}")
+    raise err or RuntimeError("no X provider")
+
+
+def _x_time(s: str) -> datetime | None:
+    try:
+        return datetime.strptime(s or "", "%a %b %d %H:%M:%S %z %Y")
+    except ValueError:
+        return None
+
+
+def x_item(tw: dict, via: str) -> dict | None:
+    """推文 → 统一形状。转推 / 回复 / 拿不到作者的返回 None。"""
+    a = tw.get("author") or {}
+    user, tid = a.get("userName") or "", str(tw.get("id") or "")
+    if not user or not tid or tw.get("retweeted_tweet") or tw.get("isReply"):
+        return None
+    text = clean(_TCO.sub("", tw.get("text") or ""), 2000)
+    links = [u.get("expanded_url") for u in ((tw.get("entities") or {}).get("urls") or []) if u.get("expanded_url")]
+    head = text.split(". ")[0] if text else ("分享了链接 " + urlsplit(links[0]).netloc if links else "发布了长文 / 媒体")
+    summary = text
+    q = tw.get("quoted_tweet") or {}
+    if q.get("text"):
+        summary += f" ｜ 引用 @{(q.get('author') or {}).get('userName', '')}：{_TCO.sub('', q['text'])}"
+    return {
+        "id": f"twitter:{tid}", "source": "twitter", "type": "discussion",
+        "title": clean(f"@{user}：{head}", 140), "summary": clean(summary),
+        "url": tw.get("url") or f"https://x.com/{user}/status/{tid}", "date": _iso(_x_time(tw.get("createdAt"))),
+        "popularity": float(tw.get("likeCount") or 0),
+        "extra": {"author": user, "name": a.get("name") or "", "followers": a.get("followers") or 0,
+                  "retweets": tw.get("retweetCount") or 0, "replies": tw.get("replyCount") or 0,
+                  "views": tw.get("viewCount") or 0, "links": links[:3], "via": via}}
+
+
+def fetch_x(accounts: list[str], queries: list[str], days: int = 3, min_likes: int = 100,
+            per_account: int = 2) -> tuple[list[dict], list[str]]:
+    """名单账号：每人最近一页里 days 天内、≥min_likes 赞的原创推文取前 per_account 条；搜索词：days 天内全取。
+    每个账号 / 搜索词一次请求（GetXAPI 约 $0.001/次）。"""
+    provs = _x_providers()
+    if not provs:
+        raise RuntimeError("未配置 GETXAPI_KEY / TWITTER_API_KEY（项目根目录 .env）")
+    cutoff = _days_ago(days)
+    jobs = [("timeline", u) for u in accounts] + [("search", q) for q in queries]
+
+    def run(c, job):
+        kind, arg = job
+        try:
+            got = [x_item(t, f"@{arg}" if kind == "timeline" else arg) for t in _x_call(c, provs, kind, arg)]
+        except Exception as e:  # noqa: BLE001
+            return [], f"{kind} {arg}: {e}"
+        got = [g for g in got if g and g["date"] and g["date"] >= _iso(cutoff)]
+        if kind == "search":
+            got = [g for g in got if X_SEARCH_RE.search(f"{g['title']} {g['summary']}")]
+        if kind == "timeline":
+            got = sorted((g for g in got if g["popularity"] >= min_likes), key=lambda g: -g["popularity"])[:per_account]
+        return got, None
+
+    out: dict[str, dict] = {}
+    errors = []
+    with _client() as c, ThreadPoolExecutor(max_workers=8) as ex:
+        for got, err in ex.map(lambda j: run(c, j), jobs):
+            for g in got:
+                out.setdefault(g["id"], g)
+            if err:
+                errors.append(err)
+    if errors and not out:
+        raise RuntimeError(errors[0])
+    return list(out.values()), errors
+
+
+# ---------- Product Hunt：官方 GraphQL（client credentials），没密钥时退回公开 Atom feed ----------
+PH_GRAPHQL = "https://api.producthunt.com/v2/api/graphql"
+PH_QUERY = """query($after: DateTime, $first: Int!) {
+  posts(order: VOTES, postedAfter: $after, first: $first) { edges { node {
+    id name tagline description url website votesCount commentsCount createdAt
+    topics(first: 5) { edges { node { name } } } } } } }"""
+
+
+def _strip_query(url: str) -> str:
+    p = urlsplit(url or "")
+    return urlunsplit((p.scheme, p.netloc, p.path, "", "")) if p.netloc else url
+
+
+def _ph_token(c: httpx.Client) -> str:
+    tok = os.environ.get("PRODUCTHUNT_TOKEN", "").strip()
+    cid = (os.environ.get("PN_API_KEY") or os.environ.get("PRODUCTHUNT_CLIENT_ID") or "").strip()
+    sec = (os.environ.get("PN_API_Secret") or os.environ.get("PN_API_SECRET")
+           or os.environ.get("PRODUCTHUNT_CLIENT_SECRET") or "").strip()
+    if tok or not (cid and sec):
+        return tok
+    r = c.post("https://api.producthunt.com/v2/oauth/token",
+               json={"client_id": cid, "client_secret": sec, "grant_type": "client_credentials"})
+    r.raise_for_status()
+    return r.json().get("access_token", "")
+
+
+def fetch_producthunt(days: int = 2, first: int = 40, ai_only: bool = True) -> list[dict]:
+    with _client() as c:
+        tok = _ph_token(c)
+        if not tok:
+            r = c.get("https://www.producthunt.com/feed")
+            r.raise_for_status()
+            items = parse_feed(r.text, source="producthunt", typ="product", days=days, limit=first)
+            return [it for it in items if not ai_only or AI_HINT_RE.search(f"{it['title']} {it['summary']}")]
+        r = c.post(PH_GRAPHQL, headers={"Authorization": f"Bearer {tok}"},
+                   json={"query": PH_QUERY, "variables": {"after": _iso(_days_ago(days)), "first": first}})
+        r.raise_for_status()
+        j = r.json()
+    if j.get("errors"):
+        raise RuntimeError(str(j["errors"])[:200])
+    out = []
+    for e in ((j.get("data") or {}).get("posts") or {}).get("edges") or []:
+        n = e.get("node") or {}
+        topics = [t["node"]["name"] for t in (n.get("topics") or {}).get("edges", []) if t.get("node")]
+        blob = " ".join([n.get("name") or "", n.get("tagline") or "", n.get("description") or "", *topics])
+        if not n.get("id") or not n.get("name") or (ai_only and not AI_HINT_RE.search(blob)):
+            continue
+        tagline = clean(n.get("tagline"), 160)
+        out.append({
+            "id": f"producthunt:{n['id']}", "source": "producthunt", "type": "product",
+            "title": clean(f"{n['name']}：{tagline}" if tagline else n["name"], 200),
+            "summary": clean(n.get("description") or tagline), "url": _strip_query(n.get("url") or ""),
+            "date": n.get("createdAt") or "", "popularity": float(n.get("votesCount") or 0),
+            "extra": {"comments": n.get("commentsCount") or 0, "topics": topics, "website": n.get("website") or ""}})
+    return out
+
+
+# ---------- 没有 RSS 的官方站：列表页 → 文章链接 → 文章页 meta ----------
+
+def _meta(page: str, *names: str) -> str:
+    for n in names:
+        n = re.escape(n)
+        m = (re.search(rf'<meta[^>]+(?:property|name|itemprop)=["\']{n}["\'][^>]*content=["\']([^"\']+)', page, re.I)
+             or re.search(rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name|itemprop)=["\']{n}["\']', page, re.I))
+        if m:
+            return html.unescape(m.group(1)).strip()
+    return ""
+
+
+_MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+
+
+def page_date(page: str) -> datetime | None:
+    """文章页的发布日期：meta → JSON-LD → <time datetime> → 正文里第一个像日期的串；晚于当前时间的不算（正文里常有活动日期）。
+    都没有返回 None。"""
+    cands = [_meta(page, "article:published_time", "datePublished", "publish_date", "date", "pubdate")]
+    for pat in (r'"datePublished"\s*:\s*"([^"]+)"', r'<time[^>]+datetime=["\']([^"\']+)',
+                r'"dateCreated"\s*:\s*"([^"]+)"', r'"dateModified"\s*:\s*"([^"]+)"'):
+        m = re.search(pat, page)
+        cands.append(m.group(1) if m else "")
+    text = re.sub(r"<[^>]+>", " ", re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", page, flags=re.S | re.I))
+    m = re.search(rf"\b(20\d\d-\d\d-\d\d)\b|\b(({_MONTHS})[a-z]*\.? \d{{1,2}}, 20\d\d)\b|(20\d\d)年(\d{{1,2}})月(\d{{1,2}})日", text)
+    if m:
+        cands.append(m.group(1) or m.group(2) or f"{m.group(4)}-{int(m.group(5)):02d}-{int(m.group(6)):02d}")
+    latest = datetime.now(timezone.utc) + timedelta(days=1)
+    for s in cands:
+        s = (s or "").strip()
+        if not s:
+            continue
+        for parse in (lambda v: datetime.fromisoformat(v.replace("Z", "+00:00")),
+                      lambda v: datetime.strptime(v[:10], "%Y-%m-%d"),
+                      lambda v: datetime.strptime(re.sub(r"(\w{3})\w*\.?", r"\1", v, count=1), "%b %d, %Y")):
+            try:
+                d = parse(s)
+            except ValueError:
+                continue
+            d = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+            if d <= latest:
+                return d
+            break
+    return None
+
+
+def fetch_sites(sites: list[dict], known_urls: set[str] | frozenset = frozenset(), days: int = 30,
+                per_site: int = 6) -> tuple[list[dict], list[str]]:
+    """sites: [{name, url, link_re, ai_only?}]。已入库的文章链接（known_urls）不再读文章页。"""
+    cutoff = _days_ago(days)
+
+    def one(c, site):
+        r = c.get(site["url"])
+        r.raise_for_status()
+        links = []
+        for href in re.findall(rf"""href\s*=\s*['"]({site['link_re']})['"]""", r.text, re.I):
+            u = _strip_query(urljoin(site["url"], html.unescape(href)))
+            if u not in links and u.rstrip("/") != site["url"].rstrip("/"):
+                links.append(u)
+        out = []
+        for u in links[:per_site]:
+            if u in known_urls:
+                continue
+            page = c.get(u).text
+            d = page_date(page)
+            title = _meta(page, "og:title", "twitter:title") or (re.search(r"<title[^>]*>(.*?)</title>", page, re.S) or [None, ""])[1]
+            summary = _meta(page, "og:description", "description", "twitter:description")
+            if not d or d < cutoff or not title or (site.get("ai_only") and not AI_HINT_RE.search(f"{title} {summary}")):
+                continue
+            out.append({"id": f"blog:{sha1(u.encode()).hexdigest()[:12]}", "source": "blog", "type": "blog",
+                        "title": clean(title, 200), "summary": clean(summary), "url": u, "date": _iso(d),
+                        "popularity": 0.0, "extra": {"feed": site["name"], "feed_url": site["url"], "via": "scrape"}})
+        return out
+
+    def run(site):
+        try:
+            with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": BROWSER_UA}, follow_redirects=True) as c:
+                return one(c, site), None
+        except Exception as e:  # noqa: BLE001
+            return [], f"{site.get('name')}: {type(e).__name__}: {str(e)[:120]}"
+
+    items, errors = [], []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for got, err in ex.map(run, sites):
+            items += got
+            if err:
+                errors.append(err)
     return items, errors

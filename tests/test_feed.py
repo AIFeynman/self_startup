@@ -1,7 +1,8 @@
-"""信息推荐：排序、learn_evolve 导入、RSS 解析、API。不触网、不调 LLM。"""
+"""信息推荐：排序、各来源解析（RSS / X / Product Hunt / 官方站）、API。不触网、不调 LLM。"""
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
+
+import httpx
 
 from app.modules import _feed_rank as rk
 from app.modules import _feed_sources as src
@@ -61,34 +62,6 @@ def test_dedupe_by_url_and_title():
     out = rk.rank(items, now=NOW)
     assert len(out) == 2
     assert any("也见于" in x["why"] for x in out)
-
-
-def test_learn_evolve_importer(tmp_path):
-    (tmp_path / "raw/arxiv/2026-06-27").mkdir(parents=True)
-    (tmp_path / "raw/arxiv/2026-06-27/p.json").write_text(json.dumps(
-        {"title": "P", "abstract": "We propose a new agent memory method that works really well on benchmarks.", "likes": 42}))
-    (tmp_path / "raw/hn/2026-06-26").mkdir(parents=True)
-    (tmp_path / "raw/hn/2026-06-26/h.json").write_text(json.dumps(
-        {"url": "https://blog.example/x", "hn_url": "https://news.ycombinator.com/item?id=1", "points": 300,
-         "article": {"description": "An article about <b>LLM</b> inference that is long enough to count."}}))
-    dbp = tmp_path / ".news.db"
-    c = sqlite3.connect(dbp)
-    c.execute("CREATE TABLE items (id TEXT PRIMARY KEY, source TEXT, content_type TEXT, title TEXT, url TEXT, date TEXT, "
-              "score REAL, raw_path TEXT, rating TEXT, tags TEXT)")
-    c.executemany("INSERT INTO items VALUES (?,?,?,?,?,?,?,?,?,?)", [
-        ("arxiv:1", "arxiv", "paper", "Paper One", "https://arxiv.org/abs/1", "2026-06-27", 1e6, "raw/arxiv/2026-06-27/p.json", "star", '["agent"]'),
-        ("hn:1", "hn", "hn_thread", "HN One", "https://news.ycombinator.com/item?id=1", "2026-06-26", 300, "raw/hn/2026-06-26/h.json", None, "[]"),
-        ("changelog:1", "changelog", "changelog", "b123", "", "2026-06-27", 0, "", None, "[]"),
-        ("hn:old", "hn", "hn_thread", "Old", "", "2025-01-01", 5, "", None, "[]"),
-        ("hn:rated", "hn", "hn_thread", "Old but rated", "", "2025-01-01", 5, "missing.json", "bad", "[]")])
-    c.commit()
-    c.close()
-    got = {x["id"]: x for x in src.fetch_learn_evolve(str(dbp), days=30)}
-    assert set(got) == {"arxiv:1", "hn:1", "hn:rated"}
-    assert got["arxiv:1"]["popularity"] == 42 and got["arxiv:1"]["extra"]["le_rating"] == "star"
-    assert got["arxiv:1"]["type"] == "paper" and got["arxiv:1"]["summary"].startswith("We propose")
-    assert got["hn:1"]["url"] == "https://blog.example/x" and "<b>" not in got["hn:1"]["summary"]
-    assert got["hn:rated"]["extra"]["le_rating"] == "bad"
 
 
 RSS = """<?xml version="1.0"?><rss version="2.0"><channel><title>Test Blog</title>
@@ -187,3 +160,123 @@ def test_auto_refresh_respects_threshold(client, monkeypatch):
     import time as _t
     _t.sleep(0.1)
     assert calls == [None]
+
+
+# ---------- X / Product Hunt / 官方站 / .env ----------
+
+def _tw(**kw):
+    tw = {"id": "1", "text": "Shipping a new coding agent today. Details below https://t.co/abc", "likeCount": 500,
+          "retweetCount": 20, "createdAt": "Wed Oct 28 10:00:00 +0000 2026", "url": "https://x.com/a/status/1",
+          "author": {"userName": "a", "name": "A", "followers": 9}, "entities": {"urls": [{"expanded_url": "https://e.com/x"}]}}
+    return {**tw, **kw}
+
+
+def test_x_item_shape_and_filters():
+    it = src.x_item(_tw(), "@a")
+    assert it["id"] == "twitter:1" and it["source"] == "twitter" and it["type"] == "discussion"
+    assert it["title"] == "@a：Shipping a new coding agent today" and "t.co" not in it["summary"]
+    assert it["date"].startswith("2026-10-28T10:00") and it["popularity"] == 500 and it["extra"]["links"] == ["https://e.com/x"]
+    assert src.x_item(_tw(retweeted_tweet={"id": "9"}), "@a") is None
+    assert src.x_item(_tw(isReply=True), "@a") is None
+    assert "引用 @b" in src.x_item(_tw(quoted_tweet={"text": "orig", "author": {"userName": "b"}}), "@a")["summary"]
+
+
+def test_fetch_x_falls_back_and_filters(monkeypatch):
+    monkeypatch.setenv("GETXAPI_KEY", "k1")
+    monkeypatch.setenv("TWITTER_API_KEY", "k2")
+    recent = datetime.now(timezone.utc).strftime("%a %b %d %H:%M:%S +0000 %Y")
+    calls = []
+
+    def handler(req):
+        calls.append(req.url.host)
+        if req.url.host == "api.getxapi.com":
+            return httpx.Response(500)
+        tweets = [_tw(id="1", createdAt=recent), _tw(id="2", createdAt=recent, likeCount=5),
+                  _tw(id="3", createdAt="Mon Jan 01 00:00:00 +0000 2024")]
+        return httpx.Response(200, json={"data": {"tweets": tweets}})
+
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    items, errs = src.fetch_x(["a"], [], days=3, min_likes=100)
+    assert [i["id"] for i in items] == ["twitter:1"] and not errs
+    assert calls == ["api.getxapi.com", "api.twitterapi.io"]
+
+
+def test_fetch_x_search_requires_ai_terms(monkeypatch):
+    monkeypatch.setenv("GETXAPI_KEY", "k1")
+    recent = datetime.now(timezone.utc).strftime("%a %b %d %H:%M:%S +0000 %Y")
+    tweets = [_tw(id="1", createdAt=recent, text="My agent just closed the hockey deal"),
+              _tw(id="2", createdAt=recent, text="Our coding agent now runs evals overnight"),
+              _tw(id="3", createdAt=recent, text="Claude wrote this whole migration")]
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"tweets": tweets}))))
+    items, _ = src.fetch_x([], ["agent min_faves:300"])
+    assert sorted(i["id"] for i in items) == ["twitter:2", "twitter:3"]
+
+
+def test_fetch_x_needs_key(monkeypatch):
+    monkeypatch.delenv("GETXAPI_KEY", raising=False)
+    monkeypatch.delenv("TWITTER_API_KEY", raising=False)
+    try:
+        src.fetch_x(["a"], [])
+        assert False
+    except RuntimeError as e:
+        assert "GETXAPI_KEY" in str(e)
+
+
+def test_producthunt_graphql(monkeypatch):
+    monkeypatch.setenv("PRODUCTHUNT_TOKEN", "t")
+    node = lambda i, name, tag, topics: {"node": {"id": i, "name": name, "tagline": tag, "description": "", "votesCount": 9,
+                                                  "url": "https://www.producthunt.com/products/x?utm_source=api",
+                                                  "commentsCount": 1, "createdAt": "2026-10-29T07:00:00Z", "website": "",
+                                                  "topics": {"edges": [{"node": {"name": t}} for t in topics]}}}
+    body = {"data": {"posts": {"edges": [node("1", "Agenty", "Your AI agent for email", ["Productivity"]),
+                                         node("2", "Socks", "Warm socks for winter", ["Fashion"])]}}}
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))))
+    got = src.fetch_producthunt()
+    assert [g["id"] for g in got] == ["producthunt:1"]
+    assert got[0]["url"] == "https://www.producthunt.com/products/x" and got[0]["title"].startswith("Agenty：")
+
+
+def test_page_date_sources_and_future_guard():
+    assert src.page_date('<meta property="article:published_time" content="2026-10-15T08:00:00Z">').day == 15
+    assert src.page_date('<script>{"datePublished":"2026-10-01"}</script>').month == 10
+    assert src.page_date("<p>Posted Oct 3, 2026 by team</p>").day == 3
+    assert src.page_date("<p>发布于 2026年9月8日</p>").month == 9
+    # 正文里的未来活动日期不能当发布日期；JSON-LD 的 dateModified 兜底
+    assert src.page_date('<script>{"dateModified":"2026-10-24"}</script><p>Event on 2099-11-04</p>').day == 24
+    assert src.page_date("<p>no date here</p>") is None
+
+
+def test_fetch_sites(monkeypatch):
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    pages = {
+        "/blog": '<a href="/blog/new-agent">x</a><a href="/blog/old-post">y</a><a href="/blog/known">z</a><a href="/about">a</a>',
+        "/blog/new-agent": f'<meta property="og:title" content="New agent"><meta name="description" content="About &amp; agents">'
+                           f'<meta property="article:published_time" content="{recent}">',
+        "/blog/old-post": '<meta property="og:title" content="Old"><meta property="article:published_time" content="2020-01-01">',
+    }
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.path)
+        return httpx.Response(200, text=pages.get(req.url.path, ""))
+
+    real = httpx.Client
+    monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), follow_redirects=True))
+    items, errs = src.fetch_sites([{"name": "Lab", "url": "https://lab.example/blog", "link_re": r"/blog/[a-z-]+"}],
+                                  known_urls={"https://lab.example/blog/known"})
+    assert not errs and [i["title"] for i in items] == ["New agent"]
+    assert items[0]["summary"] == "About & agents" and items[0]["extra"]["feed"] == "Lab"
+    assert "/blog/known" not in seen
+
+
+def test_load_env(tmp_path, monkeypatch):
+    from app import settings
+    p = tmp_path / ".env"
+    p.write_text("# c\nFOO_A=1\nexport FOO_B='two'\nFOO_C=keep\n")
+    monkeypatch.delenv("FOO_A", raising=False)
+    monkeypatch.delenv("FOO_B", raising=False)
+    monkeypatch.setenv("FOO_C", "env")
+    settings.load_env(p)
+    import os
+    assert os.environ["FOO_A"] == "1" and os.environ["FOO_B"] == "two" and os.environ["FOO_C"] == "env"

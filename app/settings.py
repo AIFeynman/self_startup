@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .db import DATA_DIR, ROOT
 
 SETTINGS_PATH = DATA_DIR / "settings.json"
+ENV_PATH = ROOT / ".env"         # 第三方接口密钥（X / Product Hunt / GitHub …），不进 git
 TZ_CACHE = "tz_inferred.json"   # 设置里 timezone 留空时，按作息推断的时区（app/modules/_tzinfer.py 写）
 
 DEFAULTS: dict = {
@@ -53,22 +54,101 @@ DEFAULTS: dict = {
     },
     # 信息收集
     "feed": {
-        "learn_evolve_db": str(ROOT.parent / "learn_evolve/.news.db"),
         "interests": ["agent", "llm", "claude code", "codex", "reasoning", "rl", "eval", "coding agent", "mcp"],
-        # 厂商博客 + 一线实践者；anthropic.com 无官方 RSS，用社区镜像（Olshansk/rss-feeds）
+        # 博客 RSS：厂商官方 + 研究机构 + 一线实践者 + 中文媒体（名单来自 learn_evolve 的 Tier1/Tier2 编辑审核，只留 AI 相关）。
+        # anthropic.com / claude.com / x.ai / Meta AI 没有官方 RSS，用社区镜像（Olshansk/rss-feeds）
         "rss": [
             "https://openai.com/news/rss.xml",
             "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_news.xml",
             "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_engineering.xml",
+            "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_anthropic_research.xml",
+            "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_claude.xml",
+            "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_xainews.xml",
+            "https://raw.githubusercontent.com/Olshansk/rss-feeds/main/feeds/feed_meta_ai.xml",
             "https://deepmind.google/blog/rss.xml",
+            "https://blog.google/innovation-and-ai/technology/ai/rss/",
+            "https://research.google/blog/rss/",
+            "https://mistral.ai/rss.xml",
+            "https://www.microsoft.com/en-us/research/feed/",
+            "https://machinelearning.apple.com/rss.xml",
+            "https://developer.nvidia.com/blog/feed/",
+            "https://www.amazon.science/index.rss",
+            "https://www.together.ai/blog/rss.xml",
+            "https://thinkingmachines.ai/blog/index.xml",
+            "https://sierra.ai/rss.xml",
+            "https://github.blog/ai-and-ml/feed/",
+            "https://bair.berkeley.edu/blog/feed.xml",
             "https://huggingface.co/blog/feed.xml",
             "https://simonwillison.net/atom/everything/",
             "https://www.latent.space/feed",
             "https://www.interconnects.ai/feed",
+            "https://importai.substack.com/feed",
+            "https://www.oneusefulthing.org/feed",
+            "https://www.dwarkesh.com/feed",
+            "https://www.lennysnewsletter.com/feed",
             "https://hamel.dev/index.xml",
             "https://eugeneyan.com/rss/",
+            "https://huyenchip.com/feed.xml",
+            "https://borischerny.com/feed.xml",
             "https://magazine.sebastianraschka.com/feed",
             "https://lilianweng.github.io/index.xml",
+            "https://www.normaltech.ai/feed",
+            "https://www.ben-evans.com/benedictevans?format=rss",
+            "https://www.tanayj.com/feed",
+            "https://lastweekin.ai/feed",
+            "https://the-decoder.com/feed/",
+            "https://www.testingcatalog.com/rss/",
+            "https://www.technologyreview.com/topic/artificial-intelligence/feed/",
+            "https://www.qbitai.com/feed",
+        ],
+        # 没有 RSS 的官方站：抓列表页里匹配 link_re 的文章链接，再读文章页的标题 / 发布日期 / 简介
+        "sites": [
+            {"name": "Claude.dev Blog", "url": "https://claude.dev/", "link_re": r"/blog/[a-z0-9][a-z0-9-]+/?"},
+            {"name": "ByteDance Seed", "url": "https://seed.bytedance.com/en/research", "link_re": r"/en/blog/[a-z0-9][a-z0-9-]+"},
+            {"name": "DeepSeek", "url": "https://deepseek.com/en/news/", "link_re": r"/en/news/[a-z0-9][a-z0-9-]+/?"},
+            {"name": "Kimi", "url": "https://www.kimi.com/en/blog/", "link_re": r"/en/blog/[a-z0-9-]+"},
+            {"name": "MiniMax", "url": "https://www.minimax.io/blog", "link_re": r"/blog/[a-z0-9-]+"},
+            {"name": "Thinking Machines News", "url": "https://thinkingmachines.ai/news/", "link_re": r"/news/[a-z0-9][a-z0-9-]+/?"},
+            {"name": "Tencent Newsroom", "url": "https://www.tencent.com/newsroom/",
+             "link_re": r"https://www\.tencent\.com/[a-z0-9][a-z0-9-]{20,}/?", "ai_only": True},
+        ],
+        # 播客 RSS（只取标题 + 节目简介，不转写）
+        "podcasts": [
+            "https://api.substack.com/feed/podcast/1084089.rss",    # Latent Space
+            "https://api.substack.com/feed/podcast/69345.rss",      # Dwarkesh Podcast
+            "https://feeds.megaphone.fm/nopriors",                  # No Priors
+            "https://anchor.fm/s/1e4a0eac/podcast/rss",             # Machine Learning Street Talk
+            "https://feeds.megaphone.fm/MLN2155636147",             # TWIML AI
+            "https://api.substack.com/feed/podcast/10845.rss",      # Lenny's Podcast
+            "https://changelog.com/practicalai/feed",               # Practical AI
+            "https://lexfridman.com/feed/podcast/",                 # Lex Fridman
+            "https://rss.art19.com/last-week-in-ai",                # Last Week in AI
+            "https://feeds.fireside.fm/sv101/rss",                  # 硅谷101
+            "https://feeds.fireside.fm/shengdongjixi/rss",          # 声东击西
+        ],
+        # X 账号：learn_evolve 编辑审核的 Tier1（官方 / 研究 / 工程 / 商业），外加几个 Claude Code / Codex 一线账号
+        "x_accounts": [
+            "OpenAI", "OpenAIDevs", "AnthropicAI", "ClaudeDevs", "GoogleDeepMind", "GoogleAI", "GoogleAIStudio",
+            "GoogleResearch", "huggingface", "nvidia", "NVIDIAAI", "NVIDIARobotics", "deepseek_ai", "Alibaba_Qwen",
+            "Kimi_Moonshot", "MiniMax_AI", "Zai_org", "MistralAI", "metaai", "AIatMeta", "GeminiApp", "xai",
+            "OpenRouter", "lmsysorg", "arena", "ArtificialAnlys", "vllm_project", "ollama", "UnslothAI",
+            "karpathy", "_jasonwei", "AlecRad", "ilyasut", "DarioAmodei", "demishassabis", "JeffDean",
+            "OriolVinyalsML", "ylecun", "drfeifei", "AndrewYNg", "fchollet", "jeremyphoward", "JustinLin610",
+            "Thom_Wolf", "ClementDelangue", "polynoamial", "soumithchintala", "DrJimFan", "natolambert", "rasbt",
+            "NeelNanda5", "janleike", "jackclarkSF", "srush_nlp", "tri_dao", "giffmana", "OfirPress", "hardmaru",
+            "seb_ruder", "NandoDF", "simonw", "ChipHuyen", "clattner_llvm", "ggerganov", "swyx", "RLanceMartin",
+            "goodside", "hwchase17", "jerryjliu0", "mntruell", "steipete", "eugeneyan", "_philschmid", "sama",
+            "amasad", "AravSrinivas", "emollick", "dylan522p", "alexandr_wang", "saranormous", "MelMitchell1",
+            "RichardMCNgo", "GaryMarcus", "gwern", "ESYudkowsky", "tegmark", "AndrewCritchPhD", "ch402",
+            "TrentonBricken",
+            "thsottiaux", "trq212", "adocomplete", "gdb", "OfficialLoganK",
+        ],
+        # X 热帖搜索（高级搜索语法）：补名单外的爆款
+        "x_queries": [
+            "LLM min_faves:500 -filter:replies lang:en",
+            "Claude min_faves:500 -filter:replies lang:en",
+            "Codex min_faves:300 -filter:replies lang:en",
+            "(\"AI agent\" OR \"coding agent\" OR \"agent harness\") min_faves:300 -filter:replies lang:en",
         ],
     },
     # 深度学习：已有的 codex 解析 skill
@@ -78,6 +158,21 @@ DEFAULTS: dict = {
         "output_dir": str(DATA_DIR / "learn"),
     },
 }
+
+
+def load_env(path: Path = ENV_PATH) -> None:
+    """读 .env（KEY=VALUE，# 注释）进 os.environ；已有的环境变量优先，不覆盖。"""
+    if not path.exists():
+        return
+    for line in path.read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.removeprefix("export ").split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+load_env()
 
 
 def _merge(base: dict, over: dict) -> dict:
