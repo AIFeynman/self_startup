@@ -181,7 +181,8 @@ def test_github_defaults_to_quick_read(client, monkeypatch):
 
 
 TWO_STEPS = '```json\n{"overview_md": "o", "steps": [{"stage": 1, "title": "领域地图", "goal": "能定位新论文"}, {"stage": 3, "title": "读经典"}]}\n```'
-QUIZ = {"questions": [
+QUIZ = {"cards": [{"front": "pass^k 是什么？", "back": "k 次<b>都</b>成功的概率", "tag": "概念"}, {"front": "", "back": "坏卡"}],
+        "questions": [
     {"id": "q1", "type": "choice", "q": "哪个是痛点？", "options": ["a", "b", "c", "d"], "answer": 2, "explain": "因为 c", "skill": "痛点识别"},
     {"id": "q2", "type": "short", "q": "这篇新论文归哪个方向？", "reference": "规划", "rubric": ["说出方向", "说出痛点"], "skill": "分类定位"},
     {"type": "choice", "q": "坏题", "options": ["x"], "answer": 5},
@@ -216,6 +217,13 @@ def test_chapter_quiz_flow(client, fake_submit):
     assert s["chapter_status"] == "ready" and s["chapter_md"].startswith("# 本章")
     assert [q["id"] for q in s["quiz"]] == ["q1", "q2"]  # 坏题被丢掉
     assert all("answer" not in q and "reference" not in q for q in s["quiz"])  # 交卷前不给答案
+    assert s["cards"] == [{"front": "pass^k 是什么？", "back": "k 次<b>都</b>成功的概率", "tag": "概念"}]
+    w = learn._step_dir(s) / "widgets"
+    w.mkdir(exist_ok=True)
+    (w / "passk.html").write_text("<p>slider</p>", "utf-8")
+    r = client.get(f"/api/learn/steps/{s1['id']}/out/widgets/passk.html")
+    assert "slider" in r.text and r.headers["content-security-policy"] == "sandbox allow-scripts"
+    assert client.get(f"/api/learn/steps/{s1['id']}/out/..%2F..%2F..%2Fapp.db").status_code == 404
     # 再次打开 → 预生成下一章
     client.post(f"/api/learn/steps/{s1['id']}/open", json={})
     assert fake_submit[-1]["ref"] == f"learn:step:{s2['id']}:prefetch"
@@ -233,8 +241,13 @@ def test_chapter_quiz_flow(client, fake_submit):
     assert s["quiz"][0]["answer"] == 2  # 批改后给答案
     assert "测试 75 分" in learn._plan_snapshot(p["id"]) and "痛点识别" in learn.agent_context(f"learn:step:{s1['id']}")
     # 重做
-    s = client.post(f"/api/learn/steps/{s1['id']}/quiz/reset").json()
-    assert s["quiz_result"]["last_score"] == 75 and "answer" not in s["quiz"][0]
+    # 重新生成本章：旧答卷作废、保留上次分数、新题不带答案
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={"force": True, "note": "多画图"})
+    assert "多画图" in fake_submit[-1]["prompt"] and "dg-tree" in fake_submit[-1]["prompt"]
+    _write_chapter(client, fake_submit, s1)
+    s = client.get(f"/api/learn/steps/{s1['id']}").json()
+    assert s["quiz_result"] == {"attempt": 1, "last_score": 75} and "answer" not in s["quiz"][0]
+    assert client.post(f"/api/learn/steps/{s1['id']}/quiz/reset").json()["quiz_result"]["last_score"] == 75
     client.delete(f"/api/learn/plans/{p['id']}")  # 别留下进行中的计划影响其他测试
 
 
