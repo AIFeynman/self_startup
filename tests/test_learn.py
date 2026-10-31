@@ -306,10 +306,13 @@ def test_check_answer_and_review(client, fake_submit):
     assert c["status"] == "reviewing" and fake_submit[-1]["ref"] == f"learn:step:{s1['id']}:check:0"
     assert "80% 够了" in fake_submit[-1]["prompt"] and "看 pass^k" in fake_submit[-1]["prompt"]
     learn.on_job_done(_job(c["job_id"], '```json\n{"covered": [], "missing": ["没看 pass^k"], "off": ["只看 pass@1"],'
-                                        ' "extra": [], "better": "先算 pass^3", "score": 0.2}\n```'))
+                                        ' "extra": ["想到了回归"], "better": "先算 pass^3", "score": 0.2}\n```'))
     s = client.get(f"/api/learn/steps/{s1['id']}").json()
     rv = s["checks"]["0"]["review"]
-    assert s["checks"]["0"]["status"] == "reviewed" and rv["missing"] == ["没看 pass^k"] and rv["score"] == 0.2
+    # 只留两项：老格式的「想偏」并进漏掉、「有道理的补充」并进抓到
+    assert s["checks"]["0"]["status"] == "reviewed" and rv["score"] == 0.2
+    assert rv["missing"] == ["没看 pass^k", "只看 pass@1"] and rv["covered"] == ["想到了回归"] and "off" not in rv
+    assert '"covered"' in fake_submit[-1]["prompt"] and '"off"' not in fake_submit[-1]["prompt"] and "宽松给分" in fake_submit[-1]["prompt"]
     assert "没看 pass^k" in learn.agent_context(f"learn:step:{s1['id']}")
     # 答案没改再保存：保留点评；重新生成章节：作答清空
     assert client.post(url, json={"q": "该上线吗？", "answer": "80% 够了，上线"}).json()["review"]["score"] == 0.2

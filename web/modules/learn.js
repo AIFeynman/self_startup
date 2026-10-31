@@ -110,6 +110,7 @@ const CSS = `
 .ln-chap .an-wrap { grid-template-columns: minmax(0, 1fr) minmax(200px, 240px); }
 .ln-chap .an-wrap:not(.has-threads) { grid-template-columns: minmax(0, 1fr); } /* 没有批注时不占宽度，划线评论时再出现 */
 .ln-chap .an-wrap:not(.has-threads) .an-rail { display: none; }
+.ln-chap .an-wrap.has-threads.rail-off { grid-template-columns: minmax(0, 1fr) 30px; }
 .ln-chap .md { font-size: 15px; line-height: 1.85; }
 .ln-chap .md h2 { font-family: var(--serif); font-size: 20px; margin-top: 1.6em; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 .ln-toc { position: sticky; top: 16px; font-size: 13px; max-height: calc(100vh - 40px); overflow: auto; }
@@ -117,6 +118,15 @@ const CSS = `
 .ln-toc a { display: block; padding: 4px 8px; border-left: 2px solid var(--line); color: var(--muted); line-height: 1.4; }
 .ln-toc a:hover, .ln-toc a.on { color: var(--accent); border-left-color: var(--accent); }
 .ln-toc a.quiz { margin-top: 8px; color: var(--accent); font-weight: 500; }
+.ln-toc .k { display: flex; align-items: center; gap: 4px; } .ln-toc .k span { flex: 1; }
+.ln-toc .k button { padding: 0 6px; font-size: 12px; line-height: 20px; border: 0; background: none; color: var(--muted); }
+.ln-toc .k button:hover { color: var(--accent); }
+.ln-chap.toc-off { grid-template-columns: 28px minmax(0, 1fr); }
+.ln-chap.toc-off .ln-toc { overflow: visible; }
+.ln-chap.toc-off .ln-toc > :not(.toc-open) { display: none; }
+.ln-toc .toc-open { display: none; writing-mode: vertical-rl; padding: 10px 3px; font-size: 12px; letter-spacing: .2em; color: var(--muted); border-radius: var(--radius-sm); }
+.ln-toc .toc-open:hover { color: var(--accent); border-color: var(--accent); }
+.ln-chap.toc-off .ln-toc .toc-open { display: block; }
 @media (max-width: 1150px) { .ln-chap { grid-template-columns: minmax(0, 1fr); } .ln-toc { display: none; } .ln-chap .an-wrap { grid-template-columns: minmax(0, 1fr); } }
 .ln-chap-head .k { font-size: 13px; color: var(--muted); }
 .ln-chap .md .fact, .ln-chap .md .judge { display: inline-block; font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 7px; border-radius: 5px; margin-right: 6px; vertical-align: 1px; }
@@ -257,6 +267,8 @@ const loadDraft = (sid) => { try { return JSON.parse(localStorage.getItem(draftK
 const saveDraft = (sid, d) => { try { localStorage.setItem(draftKey(sid), JSON.stringify(d)); } catch { /* ignore */ } };
 const chapterHref = (pid, sid) => `#learn/plan/${pid}/step/${sid}`;
 const EXTRA_TXT = { interest: '深入', confused: '补课' };
+// 「停一下」点评只分两项：抓到了（含要点外的合理补充）/ 漏掉了（含想偏的）。老记录的 off / extra 并进来
+const reviewLists = (rv) => ({ got: [...(rv.covered || []), ...(rv.extra || [])], miss: [...(rv.missing || []), ...(rv.off || [])] });
 const quizScore = (s) => (s.quiz_result?.status === 'graded' ? s.quiz_result.score : null);
 function chapterTag(h, s) {
   const sc = quizScore(s);
@@ -811,7 +823,10 @@ async function renderChapter(el, ctx, pid, sid) {
   enhance(ctx, body, s);
   const heads = [...body.querySelectorAll('h2')];
   heads.forEach((hd, i) => { hd.id = `ln-h-${i}`; hd.style.scrollMarginTop = '16px'; });
-  const toc = h('nav.ln-toc', {}, [h('div.k', {}, '本章目录'),
+  const TOC_KEY = 'ln-toc-off';
+  const setToc = (off) => { chap.classList.toggle('toc-off', off); try { localStorage.setItem(TOC_KEY, off ? '1' : ''); } catch { /* ignore */ } };
+  const toc = h('nav.ln-toc', {}, [h('button.toc-open', { title: '展开本章目录', onclick: () => setToc(false) }, '本章目录 »'),
+    h('div.k', {}, [h('span', {}, '本章目录'), h('button', { title: '收起目录，正文更宽', onclick: () => setToc(true) }, '« 收起')]),
     ...heads.map((hd) => h('a', { href: 'javascript:void 0', onclick: () => hd.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, hd.textContent)),
     s.quiz.length || s.cards?.length ? h('a.quiz', { href: 'javascript:void 0', onclick: () => document.getElementById('ln-quiz')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, s.cards?.length ? `要点 ${s.cards.length} · 测试 ${s.quiz.length} 题` : `章末测试 · ${s.quiz.length} 题`) : null]);
   const main = h('div', { style: { minWidth: 0 } }, [
@@ -820,9 +835,11 @@ async function renderChapter(el, ctx, pid, sid) {
         actions: [{ icon: 'bulb', label: '没懂', onPick: (q) => extra.open('confused', q) }, { icon: 'search', label: '展开讲', onPick: (q) => extra.open('interest', q) }] })),
     extra.el,
   ]);
-  el.append(h('div.ln-chap', {}, [toc, main]));
+  const chap = h('div.ln-chap', {}, [toc, main]);
+  try { if (localStorage.getItem(TOC_KEY)) chap.classList.add('toc-off'); } catch { /* ignore */ }
+  el.append(chap);
   // 目录高亮当前小节
-  const links = [...toc.querySelectorAll('a:not(.quiz)')];
+  const links = [...toc.querySelectorAll('a:not(.quiz)')];  // 收起按钮不是 a，不影响高亮
   const spy = () => {
     if (!toc.isConnected) { window.removeEventListener('scroll', spy, true); return; }
     let on = -1;
@@ -1120,7 +1137,7 @@ function checkCard(ctx, card, s, idx) {
       else if (rv) {
         kids.push(h('div.dg-rv', {}, [
           h('span.sc', {}, `${Math.round((rv.score || 0) * 100)}%`),
-          list('ok', '抓到了', rv.covered), list('miss', '漏掉了', rv.missing), list('bad', '想偏了', rv.off), list('plus', '有道理的补充', rv.extra),
+          list('ok', '抓到了', reviewLists(rv).got), list('miss', '漏掉了', reviewLists(rv).miss),
           rv.better ? h('div.better', {}, [h('b', {}, '高手会这样想：'), rv.better]) : null,
         ]));
       } else if (c.status === 'failed') kids.push(h('div.dg-rv', { style: { color: 'var(--err)' } }, '点评失败，可以重写后再试'));
@@ -1175,7 +1192,7 @@ function histItem(ctx, e) {
     const li = (label, arr) => (arr?.length ? h('div.sub', {}, [h('b', {}, label), arr.join('；')]) : null);
     return h('div.ln-hi', {}, [h('div.hd', {}, [at, h('b', {}, '停一下'), h('span.tag', {}, `${Math.round((rv.score || 0) * 100)}%`), d.backfill ? h('span.muted', {}, '（从任务记录补回）') : null]),
       h('div', {}, d.q), h('div.mine', {}, '我答：' + (d.answer || '')),
-      li('抓到了：', rv.covered), li('漏掉了：', rv.missing), li('想偏了：', rv.off), li('有道理的补充：', rv.extra),
+      li('抓到了：', reviewLists(rv).got), li('漏掉了：', reviewLists(rv).miss),
       rv.better ? h('div.sub', {}, [h('b', {}, '高手会这样想：'), rv.better]) : null]);
   }
   if (e.kind === 'chapter') return h('div.ln-hi', {}, h('div.hd', {}, [at, h('b', {}, '章节' + (d.action || '生成')), d.note ? h('span.muted', {}, '要求：' + d.note) : null,

@@ -231,7 +231,8 @@ def test_draft_discuss_flow(client):
 def test_learning_next_suggests_unscheduled_step(client):
     from app import db
     from app.modules import plan
-    pid = db.insert("learn_plans", {"topic": "测试主题", "status": "active", "created_at": db.now(), "updated_at": db.now()})
+    # updated_at 定在最后：别的测试留下的计划和它同一秒更新时，只取最近 3 个会把它挤掉
+    pid = db.insert("learn_plans", {"topic": "测试主题", "status": "active", "created_at": db.now(), "updated_at": "9999-12-31 23:59:59"})
     sid = db.insert("learn_steps", {"plan_id": pid, "stage": 1, "ord": 0, "title": "第一步", "est_hours": 1})
     db.insert("learn_steps", {"plan_id": pid, "stage": 2, "ord": 0, "title": "第二步", "est_hours": 1})
     s = plan._learning_next(db.today())
