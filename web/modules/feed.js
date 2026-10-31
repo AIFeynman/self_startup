@@ -52,6 +52,7 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-bar .tabs { margin: 0; flex: 1; }
 .fd-kbd { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .fd-opts { display: flex; gap: 6px; }
+.fd-chip.art { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 .fd-opts select { width: auto; font-size: 12px; padding: 4px 8px; border-radius: 8px; }
 .fd-opts select.on { border-color: var(--accent); color: var(--accent); }
 .fd-kbd kbd { margin: 0 1px; }
@@ -225,6 +226,7 @@ export default {
       TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
       h('span.fd-chip', {}, [ui.icon('doc'), x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')]),
       (x.extra?.feed || x.extra?.subreddit) && h('span.fd-chip', {}, x.extra.feed || `r/${x.extra.subreddit}`),
+      x.extra?.x_article && h('span.fd-chip.art', { title: '长文正文未抓取，点标题去 X 上看' }, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
       x.extra?.origin === 'learn_evolve' && h('span.fd-chip', {}, 'learn_evolve'),
       x.extra?.hn_url && h('a.fd-chip', { href: x.extra.hn_url, target: '_blank', rel: 'noopener' }, [ui.icon('chat'), `HN 讨论${x.extra.comments ? ' ' + x.extra.comments : ''}`]),
       ...(x.also || []).slice(0, 2).map((a) => h('span.fd-chip', {}, '也见 ' + (a.source_label || a.source || a))),
@@ -265,6 +267,7 @@ export default {
             titleLink(x),
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
+              x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
               x.extra?.hn_url && h('a.muted', { href: x.extra.hn_url, target: '_blank', rel: 'noopener', style: { whiteSpace: 'nowrap' } }, 'HN 讨论'),
               x.why ? h('span.fd-why', { title: x.why }, '· ' + x.why) : null]),

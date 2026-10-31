@@ -258,6 +258,16 @@ X_PROVIDERS = [
      "search": ("/twitter/tweet/advanced_search", lambda q: {"query": q, "queryType": "Latest"})},
 ]
 _TCO = re.compile(r"\s*https://t\.co/\w+")
+_X_ARTICLE = re.compile(r"(?:x|twitter)\.com/i/article/\d+")
+
+
+def is_x_article(tw: dict) -> bool:
+    """X 长文（Article）：twitterapi.io 的链接展开成 x.com/i/article/<id>；GetXAPI 不给展开链接，
+    长文推的正文只有一个 t.co 短链（无媒体、无外链）。只做标记，不取正文。"""
+    links = " ".join(str(u.get("expanded_url") or "") for u in ((tw.get("entities") or {}).get("urls") or []))
+    if _X_ARTICLE.search(links) or _X_ARTICLE.search(tw.get("text") or ""):
+        return True
+    return bool(re.fullmatch(r"\s*https://t\.co/\w+\s*", tw.get("text") or "")) and not links and not tw.get("media")
 
 
 def _x_providers() -> list[dict]:
@@ -295,11 +305,16 @@ def x_item(tw: dict, via: str) -> dict | None:
         return None
     text = clean(_TCO.sub("", tw.get("text") or ""), 2000)
     links = [u.get("expanded_url") for u in ((tw.get("entities") or {}).get("urls") or []) if u.get("expanded_url")]
-    head = text.split(". ")[0] if text else ("分享了链接 " + urlsplit(links[0]).netloc if links else "发布了长文 / 媒体")
-    summary = text
+    article = is_x_article(tw)
+    links = [u for u in links if not _X_ARTICLE.search(u)]
     q = tw.get("quoted_tweet") or {}
+    q_article = bool(q) and is_x_article(q)
+    head = (text.split(". ")[0] if text else ARTICLE_STUB if article
+            else "分享了链接 " + urlsplit(links[0]).netloc if links else "发布了图片 / 视频")
+    summary = text
     if q.get("text"):
-        summary += f" ｜ 引用 @{(q.get('author') or {}).get('userName', '')}：{_TCO.sub('', q['text'])}"
+        qtext = _TCO.sub("", q["text"]).strip() or ("一篇 X 长文" if q_article else "")
+        summary += f" ｜ 引用 @{(q.get('author') or {}).get('userName', '')}：{qtext}"
     return {
         "id": f"twitter:{tid}", "source": "twitter", "type": "discussion",
         "title": clean(f"@{user}：{head}", 140), "summary": clean(summary),
@@ -307,13 +322,31 @@ def x_item(tw: dict, via: str) -> dict | None:
         "popularity": float(tw.get("likeCount") or 0),
         "extra": {"author": user, "name": a.get("name") or "", "followers": a.get("followers") or 0,
                   "retweets": tw.get("retweetCount") or 0, "replies": tw.get("replyCount") or 0,
-                  "views": tw.get("viewCount") or 0, "links": links[:3], "via": via}}
+                  "views": tw.get("viewCount") or 0, "links": links[:3], "via": via,
+                  **({"x_article": "own" if article else "quoted"} if article or q_article else {})}}
+
+
+ARTICLE_STUB = "发布了一篇 X 长文"
+ARTICLE_MAX = 20     # 每次刷新最多给几篇 X 长文补标题
+
+
+def _article_head(c: httpx.Client, tid: str) -> dict:
+    """X 长文的标题和开头（twitterapi.io /twitter/article）；只取这两项，不存正文。"""
+    key = os.environ.get("TWITTER_API_KEY", "").strip()
+    if not key:
+        return {}
+    r = c.get("https://api.twitterapi.io/twitter/article", params={"tweet_id": tid}, headers={"X-API-Key": key})
+    r.raise_for_status()
+    a = r.json().get("article") or {}
+    return {"title": clean(a.get("title"), 160), "preview": clean(a.get("preview_text"))} if a.get("title") else {}
 
 
 def fetch_x(accounts: list[str], queries: list[str], days: int = 3, min_likes: int = 100,
-            per_account: int = 2) -> tuple[list[dict], list[str]]:
+            per_account: int = 2, known_articles: set[str] | frozenset = frozenset()) -> tuple[list[dict], list[str]]:
     """名单账号：每人最近一页里 days 天内、≥min_likes 赞的原创推文取前 per_account 条；搜索词：days 天内全取。
-    每个账号 / 搜索词一次请求（GetXAPI 约 $0.001/次）。"""
+    每个账号 / 搜索词一次请求（GetXAPI 约 $0.001/次）。
+    自己发的 X 长文另调一次 twitterapi.io 补标题和开头（known_articles 里已补过的不再调）；
+    搜索来的长文补完标题后再按 AI 词过滤，补不到标题的丢掉。"""
     provs = _x_providers()
     if not provs:
         raise RuntimeError("未配置 GETXAPI_KEY / TWITTER_API_KEY（项目根目录 .env）")
@@ -328,7 +361,8 @@ def fetch_x(accounts: list[str], queries: list[str], days: int = 3, min_likes: i
             return [], f"{kind} {arg}: {e}"
         got = [g for g in got if g and g["date"] and g["date"] >= _iso(cutoff)]
         if kind == "search":
-            got = [g for g in got if X_SEARCH_RE.search(f"{g['title']} {g['summary']}")]
+            # 长文推正文只有短链，先放行，补完标题后再判断
+            got = [g for g in got if g["extra"].get("x_article") or X_SEARCH_RE.search(f"{g['title']} {g['summary']}")]
         if kind == "timeline":
             got = sorted((g for g in got if g["popularity"] >= min_likes), key=lambda g: -g["popularity"])[:per_account]
         return got, None
@@ -341,6 +375,26 @@ def fetch_x(accounts: list[str], queries: list[str], days: int = 3, min_likes: i
                 out.setdefault(g["id"], g)
             if err:
                 errors.append(err)
+        todo = [g for g in out.values() if g["extra"].get("x_article") == "own" and g["id"] not in known_articles]
+        todo = sorted(todo, key=lambda g: -g["popularity"])[:ARTICLE_MAX]
+
+        def enrich(g):
+            try:
+                return g, _article_head(c, g["id"].split(":", 1)[1]), None
+            except Exception as e:  # noqa: BLE001
+                return g, {}, f"article {g['id']}: {type(e).__name__}: {str(e)[:80]}"
+
+        for g, head, err in ex.map(enrich, todo):
+            if head:
+                g["title"] = clean(f"@{g['extra']['author']}：{head['title']}", 160)
+                g["summary"] = head["preview"]
+                g["extra"]["article_title"] = head["title"]
+            if err:
+                errors.append(err)
+    # 搜索来的长文：没补到标题，或补到了但与 AI 无关的，丢掉；名单账号发的保留
+    out = {k: g for k, g in out.items() if not (
+        g["extra"].get("x_article") == "own" and not g["extra"]["via"].startswith("@") and k not in known_articles
+        and not (g["extra"].get("article_title") and X_SEARCH_RE.search(f"{g['title']} {g['summary']}")))}
     if errors and not out:
         raise RuntimeError(errors[0])
     return list(out.values()), errors

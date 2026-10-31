@@ -14,7 +14,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
-     "follow": 0.3, "also": 0.25, "also_max": 2}
+     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "x_article": 0.4}
+# 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
+OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
+                  "openai.com": "OpenAI", "deepmind.google": "Google DeepMind", "blog.google": "Google",
+                  "research.google": "Google Research"}
 # 新鲜度半衰期 = 基准（settings feed.half_life_hours，默认 72h）× 类型系数：
 # 讨论 / 产品一两天就过气；论文、项目、播客的价值衰减慢，且论文日期只精确到天
 TYPE_HALF_LIFE = {"discussion": 0.5, "product": 0.67, "blog": 1.0, "news": 1.0, "repo": 1.67, "paper": 1.67,
@@ -155,6 +159,14 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     if (it.get("extra") or {}).get("gone"):
         s += W["gone"]
         why.append("最近一次抓取未再出现（可能已删除或掉出搜索前列）")
+    org = official_org(it)
+    if org:
+        s += W["official"]
+        why.append(f"{org} 官方")
+    xa = (it.get("extra") or {}).get("x_article")
+    if xa:
+        s += W["x_article"] if xa == "own" else W["x_article"] / 2
+        why.append("X 长文" if xa == "own" else "引用了 X 长文")
     if str((it.get("extra") or {}).get("via") or "").startswith("@"):
         s += W["follow"]
         why.append("关注账号")
@@ -241,6 +253,14 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
             it["why"] = (it["why"] + " · " if it["why"] else "") + "也见于 " + "、".join(it["also"])
     out.sort(key=lambda x: (-x["score"], x["id"]))
     return out
+
+
+def official_org(it: dict) -> str:
+    """博客条目的链接属于官方域名（含子域）时返回机构名。"""
+    if it.get("source") != "blog":
+        return ""
+    host = urlsplit(it.get("url") or "").netloc.lower().removeprefix("www.")
+    return next((org for d, org in OFFICIAL_BLOGS.items() if host == d or host.endswith("." + d)), "")
 
 
 def pop_index(items: list[dict], now: datetime) -> dict[str, list[float]]:

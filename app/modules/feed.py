@@ -112,6 +112,8 @@ def upsert(items: list[dict]) -> int:
         extra = dict(it.get("extra") or {})
         if old:
             merged = {**_extra(old), **{k: v for k, v in extra.items() if v not in ("", None, [], {})}}
+            if merged.get("article_title") and not extra.get("article_title"):
+                it = {**it, "title": old["title"], "summary": old["summary"]}   # X 长文已补过标题，别被占位文案盖掉
             db.execute("UPDATE feed_items SET source=?, type=?, title=?, summary=?, url=?, date=?, popularity=?, extra=?, "
                        "fetched_at=? WHERE id=?",
                        [it["source"], it["type"], it["title"], it.get("summary") or old["summary"],
@@ -217,9 +219,14 @@ def _collectors() -> dict:
         "reddit": lambda: src.fetch_reddit(list(cfg("reddit"))),
         "x": lambda: src.fetch_x(list(fc.get("x_accounts") or []), list(fc.get("x_queries") or []),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
-                                 per_account=int(cfg("x_per_account"))),
+                                 per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
     }
+
+
+def _known_articles() -> set[str]:
+    """已补过标题的 X 长文（标题不再是占位文案），刷新时不再调 twitterapi.io。"""
+    return {r["id"] for r in db.rows("SELECT id FROM feed_items WHERE source='twitter' AND extra LIKE '%article_title%'")}
 
 
 def _known_urls(source: str) -> set[str]:

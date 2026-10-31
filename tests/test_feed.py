@@ -407,3 +407,86 @@ def test_api_days_sort(client, monkeypatch):
     assert ids("days=1") == ["hn:1"]
     assert ids("sort=hot")[0] == "hn:2" and ids("sort=new")[0] == "hn:1"
     assert client.get("/api/feed/items?sort=bogus").status_code == 400
+
+
+# ---------- X 长文标记 / 官方博客加权 ----------
+
+def test_x_article_detection():
+    stub = {"text": "https://t.co/BF6TE1AT9I", "entities": {"urls": []}, "media": []}
+    assert src.is_x_article(stub)                                                     # GetXAPI 形状
+    assert src.is_x_article({"text": "https://t.co/BF6", "entities": {"urls": [
+        {"expanded_url": "https://x.com/i/article/2108450979251130368"}]}})               # twitterapi.io 形状
+    assert not src.is_x_article({**stub, "media": [{"type": "photo"}]})               # 只有图
+    assert not src.is_x_article({"text": "https://t.co/x", "entities": {"urls": [{"expanded_url": "https://e.com"}]}})
+    assert not src.is_x_article({"text": "Real words here https://t.co/x", "entities": {"urls": []}})
+
+    it = src.x_item(_tw(text="https://t.co/BF6TE1AT9I", entities={"urls": []}), "@a")
+    assert it["title"] == "@a：发布了一篇 X 长文" and it["extra"]["x_article"] == "own" and it["extra"]["links"] == []
+    q = src.x_item(_tw(quoted_tweet={"text": "https://t.co/zz", "entities": {"urls": []}, "author": {"userName": "b"}}), "@a")
+    assert q["extra"]["x_article"] == "quoted" and "引用 @b：一篇 X 长文" in q["summary"]
+    assert "x_article" not in src.x_item(_tw(), "@a")["extra"]
+
+
+def test_x_search_drops_untitled_articles(monkeypatch):
+    monkeypatch.setenv("GETXAPI_KEY", "k1")
+    recent = datetime.now(timezone.utc).strftime("%a %b %d %H:%M:%S +0000 %Y")
+    tweets = [_tw(id="1", createdAt=recent, text="https://t.co/abc", entities={"urls": []}),
+              _tw(id="2", createdAt=recent, text="My agent closed the hockey deal")]
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"tweets": tweets}))))
+    items, _ = src.fetch_x([], ["Claude min_faves:300"])
+    assert items == []          # 长文补不到标题（这里接口没返回 article）就无从判断是否与 AI 相关，丢掉
+
+
+def test_official_blog_and_article_bonus():
+    assert rk.official_org({"source": "blog", "url": "https://www.anthropic.com/news/x"}) == "Anthropic"
+    assert rk.official_org({"source": "blog", "url": "https://openai.com/index/model-spec"}) == "OpenAI"
+    assert rk.official_org({"source": "blog", "url": "https://research.google/blog/x"}) == "Google Research"
+    assert rk.official_org({"source": "hn", "url": "https://openai.com/x"}) == ""          # 只认博客条目
+    assert rk.official_org({"source": "blog", "url": "https://notopenai.com/x"}) == ""
+    items = [{**_it("blog:1", "zz official", source="blog", url="https://openai.com/index/a"), "type": "blog"},
+             {**_it("blog:2", "zz personal", source="blog", url="https://someone.dev/a"), "type": "blog"},
+             _it("twitter:1", "zz art", source="twitter", extra={"x_article": "own"}),
+             _it("twitter:2", "zz plain", source="twitter")]
+    out = {x["id"]: x for x in rk.rank(items, now=NOW)}
+    assert abs(out["blog:1"]["score"] - out["blog:2"]["score"] - rk.W["official"]) < 1e-6 and "OpenAI 官方" in out["blog:1"]["why"]
+    assert out["twitter:1"]["score"] > out["twitter:2"]["score"] and "X 长文" in out["twitter:1"]["why"]
+
+
+def test_x_article_title_enrichment(monkeypatch):
+    monkeypatch.setenv("GETXAPI_KEY", "k1")
+    monkeypatch.setenv("TWITTER_API_KEY", "k2")
+    recent = datetime.now(timezone.utc).strftime("%a %b %d %H:%M:%S +0000 %Y")
+    stub = dict(text="https://t.co/abc", entities={"urls": []}, createdAt=recent)
+    titles = {"1": "How we evaluate coding agents", "2": "How to build a profitable digital product", "4": "LLM eval notes"}
+    article_calls = []
+
+    def handler(req):
+        if req.url.path == "/twitter/article":
+            tid = req.url.params["tweet_id"]
+            article_calls.append(tid)
+            return httpx.Response(200, json={"article": {"title": titles.get(tid, ""), "preview_text": "opening text"}})
+        if "advanced_search" in req.url.path:
+            return httpx.Response(200, json={"tweets": [_tw(id="1", **stub), _tw(id="2", **stub), _tw(id="3", **stub)]})
+        return httpx.Response(200, json={"tweets": [_tw(id="4", **stub)]})
+
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    items, errs = src.fetch_x(["a"], ["q"], min_likes=0, known_articles={"9"})
+    got = {i["id"]: i for i in items}
+    # 搜索来的：1 补到 AI 标题保留；2 与 AI 无关丢掉；3 没标题丢掉。名单账号发的 4 保留
+    assert set(got) == {"twitter:1", "twitter:4"} and not errs
+    assert got["twitter:1"]["title"] == "@a：How we evaluate coding agents" and got["twitter:1"]["summary"] == "opening text"
+    assert sorted(article_calls) == ["1", "2", "3", "4"]
+    article_calls.clear()
+    items, _ = src.fetch_x([], ["q"], known_articles={"twitter:1"})
+    assert "1" not in article_calls and "twitter:1" in {i["id"] for i in items}
+
+
+def test_upsert_keeps_enriched_article_title(client):
+    from app.modules import feed
+    base = _it("twitter:77", "@a：Real article title", source="twitter", extra={"x_article": "own", "article_title": "Real article title"})
+    feed.upsert([base])
+    feed.upsert([{**base, "title": "@a：发布了一篇 X 长文", "summary": "", "popularity": 999, "extra": {"x_article": "own"}}])
+    from app import db
+    row = db.row("SELECT title, popularity FROM feed_items WHERE id='twitter:77'")
+    assert row["title"] == "@a：Real article title" and row["popularity"] == 999
