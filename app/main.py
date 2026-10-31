@@ -29,7 +29,8 @@ for name, m in mods.items():
 
 @app.on_event("startup")
 def _startup():
-    jobs._mark_interrupted()  # 只在真正启动服务时清理上次中断的任务
+    jobs.kick()  # 任务在独立的 runner 进程里，服务重启不影响；这里清理已不在的、接着跑排队的
+    jobs.start_kicker()
     kb.schedule_sync(0.5)
     for m in mods.values():  # 板块自己的后台任务（信息推荐的定时刷新、规划的到点自动派发、看板的时区推断）
         if hasattr(m, "on_startup"):
@@ -52,7 +53,7 @@ RELOAD_FLAG = db.DATA_DIR / ".reload_pending"  # supervisor 写：后端有改�
 
 
 def busy() -> dict:
-    """正在跑的后台任务和对话；supervisor 只在都为 0 时重启，避免杀掉任务。"""
+    """正在跑的后台任务和对话。任务在独立进程里，supervisor 重启只等对话结束。"""
     n = (db.row("SELECT count(*) AS n FROM jobs WHERE status IN ('queued','running')") or {}).get("n", 0)
     return {"jobs": n, "chats": chat.active}
 

@@ -96,6 +96,7 @@ def test_pause_and_resume_job(client, monkeypatch):
 
     class Proc:
         killed = False
+        pid = 0  # 假进程：stop() 不会去 killpg
         def terminate(self): Proc.killed = True
         def poll(self): return None
 

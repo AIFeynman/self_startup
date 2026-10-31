@@ -37,7 +37,7 @@ async function boot() {
 
 // ---------- 改动自动生效 ----------
 // 前端文件变了 / 后端重启过 → 自动刷新页面（正在输入或对话进行中时改为提示条）；
-// 后端改动在等任务结束才重启（supervisor）→ 显示等待提示。
+// 后端改动在等对话结束才重启（supervisor；后台任务在独立进程里，不受影响）→ 显示等待提示。
 function watchUpdates() {
   let base = null;
   const bar = h('div.update-bar');
@@ -62,9 +62,8 @@ function watchUpdates() {
     const p = s.reload_pending;
     if (p) {
       const b = p.busy || s.busy;
-      const wait = [b.jobs ? `${b.jobs} 个后台任务` : '', b.chats ? `${b.chats} 个对话` : ''].filter(Boolean).join('、');
-      return show([ui.icon('clock'), h('span', {}, `后端有更新（${(p.files || []).length} 个文件），${wait ? `等 ${wait} 结束后` : '即将'}自动重启`),
-        h('span.muted', {}, '任务不会被打断')]);
+      return show([ui.icon('clock'), h('span', {}, `后端有更新（${(p.files || []).length} 个文件），${b.chats ? `等 ${b.chats} 个对话结束后` : '即将'}自动重启`),
+        h('span.muted', {}, '后台任务不受影响')]);
     }
     show([]);
   }, 3000);

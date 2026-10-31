@@ -28,6 +28,8 @@ DEFAULTS: dict = {
     "max_agent_concurrency": 3,
     # 规划排好的自动任务（auto + Claude/Codex）到开始时间、依赖完成后自动派发，不用人点
     "plan_auto_dispatch": True,
+    # 起后台任务前看机器：1 分钟负载 / CPU 核数超过它、或可用内存低于它（GB）就继续排队
+    "job_guard": {"max_load_per_cpu": 0.9, "min_free_mem_gb": 4},
     "engines": {
         "default": "claude",            # claude / codex
         "claude": {

@@ -18,3 +18,16 @@ from fastapi.testclient import TestClient  # noqa: E402
 def client():
     from app.main import app
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_runner(request, monkeypatch):
+    """默认不真的起 runner 进程（否则排队的测试任务会去调真实的 claude）；标了 real_runner 的测试除外。"""
+    if request.node.get_closest_marker("real_runner"):
+        return
+    from app import jobs
+    monkeypatch.setattr(jobs, "_spawn", lambda jid: None)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_runner: 真的起 app.jobrun 进程（配合假的 claude CLI）")

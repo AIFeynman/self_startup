@@ -1,8 +1,8 @@
 """后台常驻启动器（./run.sh -d 用）：跑 uvicorn 子进程，盯 app/ 下的 Python 改动，空闲时自动重启。
 
-- 后台任务（深读 / 调研…）和对话都在服务进程里跑，重启会杀掉它们；
-  所以改动后先写 data/.reload_pending（页面上显示「等 N 个任务完成后重启」），
-  每隔几秒问一次 /api/dev/busy，任务和对话都结束了才重启。
+- 后台任务（深读 / 调研 / 规划执行…）在各自独立的 runner 进程里跑（app/jobrun.py），重启不影响它们，不用等；
+- 对话（SSE）还在服务进程里，重启会断开：改动后先写 data/.reload_pending（页面上显示「等 N 个对话结束后重启」），
+  每隔几秒问一次 /api/dev/status，对话都结束了才重启。
 - 改出语法错误导致服务起不来：不反复拉起，等下一次改动再试。
 - 前端（web/）改动不需要重启，页面自己会刷新（见 web/app.js watchUpdates）。
 """
@@ -109,7 +109,7 @@ def main() -> None:
         if not pending:
             continue
         b = busy() if proc.poll() is None else {"jobs": 0, "chats": 0}
-        if b and (b["jobs"] or b["chats"]):
+        if b and b["chats"]:
             set_flag(pending, b)
             continue
         if b is None and proc.poll() is None and deaf < 30:
