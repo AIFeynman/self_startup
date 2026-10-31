@@ -13,6 +13,8 @@ import re
 import signal
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
@@ -29,8 +31,44 @@ STARTING_GRACE = 60  # 秒：刚认领、runner 还没写 pid 的任务不当成
 
 
 def _cap() -> int:
-    # 各板块共享；比 Agent 并发度留些余量，避免长调研任务堵住短任务（拆解等）
-    return max(4, 2 * int(settings.get("max_agent_concurrency", 3)))
+    """同时在跑的后台任务总数上限 = Agent 并发度（各板块共享，多的排队）。"""
+    return max(1, int(settings.get("max_agent_concurrency", 3)))
+
+
+def _free_mem_gb() -> float | None:
+    """可用内存（空闲 + 可回收）。macOS 读 vm_stat，Linux 读 /proc/meminfo；读不到返回 None（不拦）。"""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=3).stdout
+            page = int(re.search(r"page size of (\d+)", out)[1])
+            pages = sum(int(m[1]) for k in ("free", "inactive", "speculative", "purgeable")
+                        if (m := re.search(rf"Pages {k}:\s+(\d+)", out)))
+            return pages * page / 2**30
+        with open("/proc/meminfo") as f:
+            return int(re.search(r"MemAvailable:\s+(\d+)", f.read())[1]) / 2**20
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def machine() -> dict:
+    """机器现在能不能再起任务：{ok, reason, load, cpus, free_gb}。"""
+    cfg = {"max_load_per_cpu": 0.9, "min_free_mem_gb": 4, **(settings.get("job_guard") or {})}
+    cpus = os.cpu_count() or 1
+    load = os.getloadavg()[0]
+    free = _free_mem_gb()
+    reason = ""
+    if load > cfg["max_load_per_cpu"] * cpus:
+        reason = f"CPU 负载 {load:.1f}（{cpus} 核，上限 {cfg['max_load_per_cpu'] * cpus:.1f}）"
+    elif free is not None and free < cfg["min_free_mem_gb"]:
+        reason = f"可用内存 {free:.1f}GB（低于 {cfg['min_free_mem_gb']}GB）"
+    return {"ok": not reason, "reason": reason, "load": round(load, 1), "cpus": cpus,
+            "free_gb": round(free, 1) if free is not None else None}
+
+
+# 每个后台任务的提示词末尾都带上：平台按上限和机器负载排队，Agent 自己别再开并行重活
+RESOURCE_RULE = """【机器资源约定】平台同时只跑少数几个后台任务，并按机器负载排队；请遵守：
+- 不要在后台挂常驻进程（nohup / & / 监控循环 / dev server），需要等结果就在前台等，任务结束前停掉你起的所有进程；
+- 重活（视频渲染、批量出片、全量测试、模型推理、大批量下载）一次只跑一路；需要并行的，把剩下的写成清单在总结里列出，由人拆成多个平台任务排队跑。"""
 
 
 def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system: str = "",
@@ -39,6 +77,7 @@ def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system:
     """提交后台 Agent 任务，返回 job id。完成后调用 modules.<module>.on_job_done(job)，
     有 chat_session_id 时再把结果回帖到那个对话（对话里让 Agent 提交的任务，见 chat.link_jobs）。"""
     engine = engine or settings.get("engines.default", "claude")
+    prompt = prompt.rstrip() + "\n\n" + RESOURCE_RULE
     jid = db.insert("jobs", {"module": module, "ref": ref, "engine": engine, "prompt": prompt,
                              "status": "queued", "created_at": db.now(), "chat_session_id": chat_session_id, "cwd": cwd or "",
                              "system": system, "add_dirs": json.dumps([*(add_dirs or []), str(kb.KB_DIR)]), "session_in": session})
@@ -75,7 +114,10 @@ def kick() -> list[int]:
     reap()
     busy = db.row("SELECT count(*) n FROM jobs WHERE status='running'")["n"]
     started = []
-    for j in db.rows("SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT ?", [max(0, _cap() - busy)]):
+    free = max(0, _cap() - busy)
+    if free and db.row("SELECT id FROM jobs WHERE status='queued' LIMIT 1") and not machine()["ok"]:
+        return started  # 机器忙：继续排队，kicker 每 30 秒再看一次
+    for j in db.rows("SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT ?", [free]):
         # 先认领再起进程：服务和各个 runner 可能同时 kick
         if db.execute("UPDATE jobs SET status='running', started_at=?, pid=NULL WHERE id=? AND status='queued'",
                       [db.now(), j["id"]]) != 1:
@@ -88,6 +130,21 @@ def kick() -> list[int]:
             db.execute("UPDATE jobs SET status='failed', log=log||?, finished_at=? WHERE id=?",
                        [f"\n[runner 启动失败] {e}", db.now(), j["id"]])
     return started
+
+
+KICK_EVERY = 30  # 秒
+
+
+def start_kicker() -> None:
+    """服务进程里的定时 kick：机器从忙变闲、或 runner 意外退出后，排队的任务也能接上。"""
+    def loop():
+        while True:
+            time.sleep(KICK_EVERY)
+            try:
+                kick()
+            except Exception:  # noqa: BLE001 —— 下一轮再试
+                log.exception("kick failed")
+    threading.Thread(target=loop, daemon=True, name="jobs-kicker").start()
 
 
 def _spawn(jid: int) -> None:
@@ -389,6 +446,14 @@ def pause(jid: int) -> bool:
     if proc := _procs.get(jid):
         agent.stop(proc)
     return True
+
+
+@router.get("/machine")
+def get_machine():
+    """机器负载 + 排队情况：页面上显示「机器忙，排队中」。"""
+    q = db.row("SELECT count(*) n FROM jobs WHERE status='queued'")["n"]
+    r = db.row("SELECT count(*) n FROM jobs WHERE status='running'")["n"]
+    return {**machine(), "queued": q, "running": r, "cap": _cap()}
 
 
 @router.post("/pause_all")

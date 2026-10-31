@@ -30,6 +30,7 @@ for name, m in mods.items():
 @app.on_event("startup")
 def _startup():
     jobs.kick()  # 任务在独立的 runner 进程里，服务重启不影响；这里清理已不在的、接着跑排队的
+    jobs.start_kicker()
     kb.schedule_sync(0.5)
     for m in mods.values():  # 板块自己的后台任务（信息推荐的定时刷新、规划的到点自动派发、看板的时区推断）
         if hasattr(m, "on_startup"):

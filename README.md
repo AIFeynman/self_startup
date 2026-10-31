@@ -8,7 +8,7 @@
 ./run.sh stop       # 停止后台服务
 ```
 
-改动自动生效：`web/` 改了打开的页面会自动刷新（正在输入或对话中时改为提示条）；`app/` 改了由 supervisor 等对话结束后自动重启；后台任务各在独立的 runner 进程里跑（`app/jobrun.py`），重启不等它们、也不会打断。
+改动自动生效：`web/` 改了打开的页面会自动刷新（正在输入或对话中时改为提示条）；`app/` 改了由 supervisor 等对话结束后自动重启；后台任务各在独立的 runner 进程里跑（`app/jobrun.py`），重启不等它们、也不会打断；同时最多跑「Agent 并发度」个，机器 CPU 负载或内存紧张时继续排队（设置 `job_guard`），页面显示「机器忙，排队中」。
 
 依赖：`uv`、`claude`（或 `codex`）。数据全部在 `data/`（SQLite `app.db` + markdown/HTML 产物），已 gitignore。
 

@@ -393,19 +393,24 @@ export default {
       const tick = async () => {
         if (!box.isConnected) return clearInterval(liveTimer);
         let finished = false;
+        const m = await api.get('/api/jobs/machine').catch(() => null);
+        busyTag.replaceChildren(m?.queued ? (m.ok ? `排队 ${m.queued} 个（车道 ${m.running}/${m.cap}）` : `机器忙，排队中 ${m.queued} 个：${m.reason}`) : '');
+        busyTag.hidden = !m?.queued;
+        busyTag.classList.toggle('warn', !!m && !m.ok);
         await Promise.all(rows.map(async (x) => {
           try {
             const j = await api.get(`/api/jobs/${x.r.tip_job_id || x.r.job_id}`);
             const steps = (j.log || '').split('\n').filter((l) => l.startsWith('[tool]'));
             const last = (steps.at(-1) || '').replace('[tool] ', '');
-            const status = { queued: '排队中', running: '执行中', done: '完成', failed: '失败', paused: '已暂停' }[j.status] || j.status;
+            const queued = m && !m.ok ? `机器忙，排队中（${m.reason}）` : `排队中（车道 ${m?.running ?? '?'}/${m?.cap ?? '?'} 已满）`;
+            const status = { queued: m && !m.ok ? '机器忙' : '排队中', running: '执行中', done: '完成', failed: '失败', paused: '已暂停' }[j.status] || j.status;
             const rnd = x.r.round > 1 ? ` · 第 ${x.r.round} 轮` : '';
             x.meta.textContent = `${status}${rnd} · ${elapsed(j.started_at || j.created_at, j.finished_at)} · ${steps.length} 步`;
             x.row.className = `pl-live-row ${j.status === 'queued' ? 'running' : j.status}`;
             x.acts.replaceChildren(
               ['queued', 'running'].includes(j.status) ? h('button.sm.outline', { onclick: (e) => act(e, `/api/jobs/${j.id}/pause`, '已暂停，会话已保存') }, '暂停') : '',
               j.status === 'paused' ? h('button.sm.primary', { onclick: (e) => act(e, `/api/jobs/${j.id}/resume`, '已续接原会话继续执行') }, '继续') : '');
-            x.now.textContent = j.status === 'running' || j.status === 'queued' ? (last ? '正在：' + last : '启动中…')
+            x.now.textContent = j.status === 'queued' ? queued : j.status === 'running' ? (last ? '正在：' + last : '启动中…')
               : (j.output || '').trim().split('\n').filter(Boolean).slice(-1)[0] || status;
             x.log.textContent = j.status === 'done' ? j.output : (j.log || '').split('\n').slice(-40).join('\n');
             if (live(x.r) && j.status !== 'running' && j.status !== 'queued') finished = true;
@@ -417,6 +422,7 @@ export default {
         e.preventDefault(); e.stopPropagation(); // 按钮在 summary 里，别顺手展开日志
         try { await api.post(url, {}); toast(msg); load(); } catch (err) { toast(err.message, true); }
       };
+      const busyTag = h('span.tag', { hidden: true });
       const running = list.filter(live).length;
       const nPaused = list.filter(paused).length;
       const autoOn = d.config.plan_auto_dispatch !== false;
@@ -448,8 +454,8 @@ export default {
       ]) : null;
       const box = h('div.card.pl-live', {}, [
         h('div.pl-live-h', {}, [h('b', {}, '正在执行'),
-          h('span.muted', {}, `${running} 个 Agent 在跑${nPaused ? ` · 已暂停 ${nPaused} 个` : ''}${list.length > running + nPaused ? ` · 今天已结束 ${list.length - running - nPaused} 个` : ''} · 每 10 秒刷新 · 点开看日志`),
-          h('span.sp'),
+          h('span.muted', {}, `${list.filter((r) => r.tip_status === 'running').length} 个 Agent 在跑${nPaused ? ` · 已暂停 ${nPaused} 个` : ''}${list.length > running + nPaused ? ` · 今天已结束 ${list.length - running - nPaused} 个` : ''} · 每 10 秒刷新 · 点开看日志`),
+          busyTag, h('span.sp'),
           h('button.sm.ghost', { onclick: () => setAuto(!autoOn), title: '到排程时间且依赖完成的自动任务，是否自动派给 Agent' }, autoOn ? '自动派发：开' : '自动派发：已关'),
           running ? h('button.sm.outline', { onclick: pauseAll }, '全部暂停') : null]),
         readyBox, ...rows.map((x) => x.row)]);
