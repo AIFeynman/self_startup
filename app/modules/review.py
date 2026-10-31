@@ -182,6 +182,11 @@ def learning_extra(date: str) -> dict:
             out["events"] = [learn.event_line(e, titles) for e in learn.events_of(date=date) if e["kind"] != "check"]
         except Exception:  # noqa: BLE001  学习模块出错不影响复盘
             pass
+        try:  # 学习习惯三项：停一下平均分 / 学完当天用到项目 / 每日论文笔记
+            from . import _habits
+            out["habits"] = _habits.lines(date)
+        except Exception:  # noqa: BLE001
+            pass
     return out
 
 
@@ -376,6 +381,8 @@ def check_prompt(date: str) -> str:
     learn_txt = "\n".join(f"- 学习步骤 {s['title']}（{s['status']}）" for s in learn["steps"]) or ""
     if learn["events"]:
         learn_txt += "\n学习记录（测试、停一下作答与点评）：\n" + "\n".join(f"- {x}" for x in learn["events"][-20:])
+    if learn.get("habits"):
+        learn_txt += "\n学习习惯（停一下 / 学完当天用到项目 / 每日论文）：\n" + "\n".join(f"- {x}" for x in learn["habits"])
     return f"""请检查 {date} 的事项完成情况。只读分析：不要修改任何文件或平台数据，不要运行测试、不要启动服务（会污染平台数据），用 git / Read / Grep 看证据即可。
 
 ## 当天事项与目标
@@ -785,7 +792,8 @@ def api_reflect(body: DateIn):
 
 def learning_feedback(date: str) -> list[str]:
     """学习平台当天的反馈：测试 / 停一下的批改、对步骤的理解度与反馈、读材料时划线问的问题。"""
-    out = [f"- {x}" for x in learning_extra(date)["events"]]
+    lx = learning_extra(date)
+    out = [f"- 学习习惯 · {x}" for x in lx.get("habits") or []] + [f"- {x}" for x in lx["events"]]
     if _has_table("learn_steps") and {"feedback", "understanding"} <= _cols("learn_steps"):
         for s in db.rows("SELECT title, status, understanding, feedback FROM learn_steps "
                          "WHERE substr(done_at,1,10)=? AND (feedback!='' OR understanding>0) LIMIT 20", [date]):

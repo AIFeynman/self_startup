@@ -297,7 +297,7 @@ def summarize(meta: dict, events: list[dict], day: Date) -> dict | None:
     return {
         "engine": meta["engine"], "session_id": meta["session_id"], "file": meta["file"],
         "cwd": cwd, "project": Path(cwd).name if cwd else Path(meta["file"]).parent.name,
-        "title": meta.get("title", ""), "automated": bool(meta.get("automated")),
+        "title": meta.get("title", ""), "automated": bool(meta.get("automated")), "platform_chat": bool(meta.get("platform_chat")),
         "start": start.isoformat(timespec="seconds"), "end": end.isoformat(timespec="seconds"),
         "wall_min": round((end - start).total_seconds() / 60, 1),
         "active_min": round(active / 60, 1),

@@ -49,6 +49,8 @@ DEFAULTS: dict = {
     },
     # 按板块指定 Claude 模型（后台任务和对话都生效；空 / 不写 = 用 engines.claude.model）
     "module_models": {"learn": "claude-sonnet-5-5"},
+    # 学习习惯：每天自动加一个「读前沿论文」学习块（规划页打开今天时加；在信息推荐的论文上写一句话判断即完成）
+    "habits": {"paper_task": True, "paper_minutes": 30, "paper_per_day": 2},
     # 复盘时分析的代码库 / 文档目录
     "repos": [],
     # Claude Code / Codex 会话日志位置（效率复盘）

@@ -67,6 +67,10 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-list .fd-item.fd-sel { border-radius: 9px; }
 .fd-item .fd-t { font: 600 14.5px/1.45 var(--font); }
 .fd-item .fd-line { display: flex; gap: 8px; align-items: center; min-width: 0; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.fd-verdict { font-size: 13px; margin-top: 4px; display: flex; gap: 6px; align-items: baseline; }
+.fd-verdict b { color: var(--accent); font-weight: 600; white-space: nowrap; }
+.fd-verdict.edit { align-items: center; }
+.fd-verdict.edit input { flex: 1; min-width: 0; }
 .fd-item .fd-line .fd-why { margin: 0; flex: 1; min-width: 0; font-size: 12px; }
 .fd-item .fd-acts button { padding: 3px 9px; font-size: 12px; }
 .fd-item .fd-acts .fd-deep { padding: 3px 12px; }
@@ -245,12 +249,29 @@ export default {
         h('button.icon.fd-more', { title: f.hidden ? '取消隐藏 (x)' : '隐藏 (x)', onclick: () => fb(entry, { hidden: !f.hidden }) }, ui.icon(f.hidden ? 'refresh' : 'x')),
         h('button' + (f.vote > 0 ? '.on' : ''), { title: '赞 (l)', onclick: () => fb(entry, { vote: f.vote > 0 ? 0 : 1 }) }, '👍'),
         h('button' + (f.saved ? '.on' : ''), { title: '收藏 (s)', onclick: () => fb(entry, { saved: !f.saved }) }, f.saved ? '★' : '☆'),
+        h('button' + (f.verdict ? '.on' : ''), { title: '读完写一句话判断（进知识库的论文笔记）', onclick: () => { entry.judging = !entry.judging; mount(entry); entry.el.querySelector('.fd-verdict input')?.focus(); } }, ui.icon('edit')),
         h('button.fd-deep', { title: '深读 (d)', onclick: () => deep(x) }, ['深读', ui.icon('arrow')]),
       ]);
     };
     // 打开原文只做统计（推荐 → 点击 → 深读的转化），失败不打扰
     const logClick = (x) => { api.post('/api/feed/click', { id: x.id }).catch(() => {}); };
     const titleLink = (x) => h('a.fd-t', { href: x.url, target: '_blank', rel: 'noopener', onclick: () => logClick(x), onauxclick: () => logClick(x) }, x.title);
+    // 一句话判断：已写的直接显示，点「编辑」展开输入框；论文每天写 1–2 篇是学习习惯之一
+    const verdictBox = (entry) => {
+      const { x } = entry;
+      const v = x.feedback?.verdict || '';
+      if (!entry.judging) return v ? h('div.fd-verdict', {}, [h('b', {}, '我的判断'), v]) : null;
+      const inp = h('input', { value: v, placeholder: '一句话判断：增量在哪、证据可不可信、值不值得跟（Enter 保存，清空 = 删除）',
+        onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); save(); } if (e.key === 'Escape') { entry.judging = false; mount(entry); } } });
+      const save = async () => {
+        try {
+          const r = await api.post('/api/feed/verdict', { id: x.id, text: inp.value });
+          for (const e of entries) if (e.x.id === x.id) { e.x.feedback = { ...(e.x.feedback || {}), verdict: r.verdict, verdict_at: r.verdict_at }; e.judging = false; mount(e); }
+          toast(r.verdict ? '已存进今天的论文笔记' : '已删除判断');
+        } catch (e) { toast('保存失败：' + e.message, true); }
+      };
+      return h('div.fd-verdict.edit', {}, [inp, h('button.sm.primary', { onclick: save }, '保存')]);
+    };
     const why = (x) => (x.why ? h('div.fd-why', { title: x.why }, [h('b', {}, '推荐理由'), x.why]) : null);
 
     function build(entry) {
@@ -264,6 +285,7 @@ export default {
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
             why(x),
+            verdictBox(entry),
             h('div.fd-meta', {}, metaChips(x)),
           ]),
           actions(entry),
@@ -279,6 +301,7 @@ export default {
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
               x.extra?.hn_url && h('a.muted', { href: x.extra.hn_url, target: '_blank', rel: 'noopener', style: { whiteSpace: 'nowrap' } }, 'HN 讨论'),
               x.why ? h('span.fd-why', { title: x.why }, '· ' + x.why) : null]),
+            verdictBox(entry),
           ]),
           actions(entry),
         ]);
@@ -299,9 +322,9 @@ export default {
     async function fb(entry, patch) {
       try {
         const r = await api.post('/api/feed/feedback', { id: entry.x.id, ...patch });
-        entry.x.feedback = r;
+        entry.x.feedback = { ...(entry.x.feedback || {}), ...r };
         // 同一条可能同时出现在精选和列表里
-        for (const e of entries) if (e !== entry && e.x.id === entry.x.id) { e.x.feedback = r; mount(e); }
+        for (const e of entries) if (e !== entry && e.x.id === entry.x.id) { e.x.feedback = { ...(e.x.feedback || {}), ...r }; mount(e); }
         if (r.hidden && st.tab !== 'saved') {
           const idx = entries.indexOf(entry);
           entry.el.remove(); entries.splice(idx, 1);
