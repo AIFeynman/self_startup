@@ -1,4 +1,5 @@
 // 调研：新调研（大输入框，回车即开跑）/ 文档库 / 产品体验。路由 #research/<tab>，详情 #research/r/<id>，文档 #research/docs/<id>。
+import { annotate } from './_annotate.js';
 const STATUS = {
   queued: ['排队中', 'gray'], running: ['调研中', 'warn'], waiting: ['等待 GrokBot', 'warn'], timeout: ['等待超时', 'warn'],
   awaiting_paste: ['待粘贴', ''], done: ['完成', 'ok'], failed: ['失败', 'err'],
@@ -290,7 +291,7 @@ async function detail(el, ctx, id) {
     const synth = h('div.card.hl.rs-synth', {}, [
       h('div.row', { style: { marginBottom: '6px' } }, [h('span.card-label', { style: { margin: 0 } }, [ui.icon('spark'), ' 综合结论']), h('span.grow'),
         r.synth_status ? statusTag(h, r.synth_status) : null]),
-      r.synthesis ? md(r.synthesis) : h('div.empty', { style: { padding: '18px 0' } }, [
+      r.synthesis ? annotate(ctx, md(r.synthesis), { doc: `research:${r.id}:synth`, title: `${r.topic} · 综合结论`, link: `#research/r/${r.id}`, source: r.synthesis }) : h('div.empty', { style: { padding: '18px 0' } }, [
         h('div.serif', {}, synthRunning ? '正在合并各引擎结果' : r.synth_status === 'failed' ? '综合失败，可重试' : `${doneCount} 个引擎已完成`),
         synthRunning ? h('div.dots', {}, '稍等') : h('div', { style: { marginTop: '10px' } }, synthBtn()),
       ]),
@@ -306,8 +307,9 @@ async function detail(el, ctx, id) {
     el.append(ui.section('各引擎原文', `${done.length} 份`));
     for (const x of done) {
       const body = md(x.content); body.classList.add('rs-read');
+      const read = annotate(ctx, body, { doc: `research:${r.id}:r${x.id}`, title: `${r.topic} · ${ENGINE_NAMES[x.engine] || x.engine}`, link: `#research/r/${r.id}`, source: x.content });
       el.append(h('details.card.rs-result', { id: 'rs-res-' + x.id, open: !r.synthesis && done.length === 1 },
-        [h('summary', {}, [ui.icon(ENGINE_ICON[x.engine] || 'robot'), ENGINE_NAMES[x.engine] || x.engine, subTag(h, x), h('span.muted', { style: { fontFamily: 'var(--font)', fontWeight: 400 } }, fmt(x.finished_at))]), body]));
+        [h('summary', {}, [ui.icon(ENGINE_ICON[x.engine] || 'robot'), ENGINE_NAMES[x.engine] || x.engine, subTag(h, x), h('span.muted', { style: { fontFamily: 'var(--font)', fontWeight: 400 } }, fmt(x.finished_at))]), read]));
     }
   }
 }
@@ -407,7 +409,7 @@ async function docs(el, ctx, openId) {
           h('div.row', { style: { marginBottom: '6px' } }, [...d.tags.map((t) => h('span.tag', {}, t)), h('span.muted', { style: { fontSize: '12px' } }, d.path)]),
           h('hr', { style: { border: 'none', borderTop: '1px solid var(--line)', margin: '14px 0' } }),
         ]),
-        body,
+        annotate(ctx, body, { doc: `research_doc:${d.id}`, title: d.title, link: `#research/docs/${d.id}`, source: d.content }),
       ]));
     view.querySelector('.rs-back svg').style.transform = 'rotate(180deg)';
     document.getElementById('page')?.scrollTo({ top: 0 });

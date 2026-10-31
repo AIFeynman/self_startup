@@ -1,6 +1,8 @@
 // 知识库：检索 / 浏览 data/kb 下自动同步的 markdown 知识树。也是新视觉风格的参考实现。
+import { annotate } from './_annotate.js';
 export default {
-  async render(el, { api, h, md, toast, ui, ask }) {
+  async render(el, ctx) {
+    const { api, h, md, toast, ui, ask } = ctx;
     const st = await api.get('/api/kb/stats');
     const results = h('div');
     const reader = h('div');
@@ -14,7 +16,7 @@ export default {
       reader.replaceChildren(h('div.card', {}, [
         h('div.row.between', {}, [h('span.card-label', {}, path),
           h('button.icon', { title: '关闭', onclick: () => reader.replaceChildren() }, ui.icon('x'))]),
-        md(body)]));
+        annotate(ctx, md(body), { doc: `kb:${path}`, title: path, link: '#kb', source: body })]));
       reader.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
     const row = (d) => h('div.item', { style: { cursor: 'pointer' }, onclick: () => show(d.path) }, [

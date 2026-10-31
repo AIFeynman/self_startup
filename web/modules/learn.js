@@ -1,5 +1,6 @@
 // 深度学习：条目深读（论文 / GitHub）+ 主题学习计划。
 // 路由：#learn（总览 + 智能输入框）、#learn/plans（同总览，滚到计划）、#learn/plan/<id>、#learn/item/<id>（笔记阅读）
+import { annotate } from './_annotate.js';
 const CSS = `
 .ln-opts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: -4px 0 10px; }
 .ln-opts .lbl { font-size: 12px; color: var(--muted); margin-right: 2px; }
@@ -404,7 +405,10 @@ async function renderItem(el, ctx, iid) {
     else if (it.kind === 'github') text = await api.get(`/api/learn/items/${it.id}/out/summary.md`).catch(() => null);
     const hasNote = typeof text === 'string' && text.trim();
     if (tldrBox && !(hasNote && /TL;?DR/i.test(text.slice(0, 3000)))) reader.append(tldrBox);
-    if (hasNote) reader.append(h('div.card', {}, md(text.replace(/^---[\s\S]*?---\s*/, ''))));
+    if (hasNote) {
+      const note = text.replace(/^---[\s\S]*?---\s*/, '');
+      reader.append(h('div.card', {}, annotate(ctx, md(note), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
+    }
     else if (isHtml) reader.append(h('div.card', {}, ui.empty('这是一份 HTML 教程', '点上方「打开 HTML 教程」在新标签页阅读')));
   }
 
@@ -484,7 +488,8 @@ async function renderPlan(el, ctx, pid) {
   if (ctx.sub[2] === 'adapt') setTimeout(() => { adaptNote.focus(); history.replaceState(null, '', `#learn/plan/${pid}`); }, 30);
 
   if (p.overview_md) {
-    el.append(h('details.card.flat', { open: !p.steps.length }, [h('summary', {}, '计划总览 / 调整记录'), md(p.overview_md)]));
+    el.append(h('details.card.flat', { open: !p.steps.length }, [h('summary', {}, '计划总览 / 调整记录'),
+      annotate(ctx, md(p.overview_md), { doc: `learn:plan:${pid}`, title: `${p.topic} · 计划总览`, link: `#learn/plan/${pid}`, source: p.overview_md })]));
   }
   for (const s of stageInfo) {
     if (!s.ss.length) continue;
@@ -508,7 +513,7 @@ function stepView(s, p, ctx, isCur) {
     Object.entries(STEP_TXT).map(([k, v]) => h('option', { value: k, selected: s.status === k }, v)));
   const expanded = openSteps.has(s.id) || ((isCur || s.status === 'doing') && !closedSteps.has(s.id));
   const body = h('div.ln-st-body', { style: { display: expanded ? '' : 'none' } }, [
-    s.description ? md(s.description) : null,
+    s.description ? annotate(ctx, md(s.description), { doc: `learn:step:${s.id}`, title: `${p.topic} · ${s.title}`, link: `#learn/plan/${p.id}`, source: s.description, compact: true }) : null,
     s.resources.length ? h('div.ln-st-sub', {}, '资源') : null,
     ...s.resources.map((r) => h('div.ln-res', {}, [ui.icon(r.type === 'code' || /github/.test(r.url || '') ? 'box' : r.type === 'video' ? 'bolt' : 'link'),
       h('div.why', {}, [r.url ? h('a', { href: r.url, target: '_blank', rel: 'noopener' }, r.title || r.url) : h('b', {}, r.title || ''),

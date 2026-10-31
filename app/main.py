@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, chat, db, jobs, kb, modules, settings, tasks
+from . import agent, annotations, chat, db, jobs, kb, modules, settings, tasks
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -17,9 +17,10 @@ app = FastAPI(title="本地学习平台", version="0.1.0")
 settings.apply_timezone()
 
 mods = modules.discover()
-db.init(getattr(m, "SCHEMA", "") for m in mods.values())
+db.init([annotations.SCHEMA, *(getattr(m, "SCHEMA", "") for m in mods.values())])
 
 app.include_router(chat.router)
+app.include_router(annotations.router)
 app.include_router(jobs.router)
 app.include_router(tasks.router)
 for name, m in mods.items():
@@ -55,7 +56,7 @@ RELOAD_FLAG = db.DATA_DIR / ".reload_pending"  # supervisor 写：后端有改�
 def busy() -> dict:
     """正在跑的后台任务和对话。任务在独立进程里，supervisor 重启只等对话结束。"""
     n = (db.row("SELECT count(*) AS n FROM jobs WHERE status IN ('queued','running')") or {}).get("n", 0)
-    return {"jobs": n, "chats": chat.active}
+    return {"jobs": n, "chats": chat.active + annotations.active}  # 阅读批注里问 Claude 也在服务进程里跑
 
 
 def static_version() -> float:
