@@ -70,7 +70,7 @@ def test_plan_generation_and_parse(client, fake_submit):
     learn.on_job_done(_job(fake_submit[-1]["id"], PLAN_OUT))
     p = client.get(f"/api/learn/plans/{p['id']}").json()
     assert p["status"] == "active" and p["overview_md"].startswith("# 世界模型")
-    assert [(s["stage"], s["title"]) for s in p["steps"]] == [(1, "读综述"), (5, "前沿")]
+    assert [(s["stage"], s["title"]) for s in p["steps"]] == [(1, "读综述"), (3, "前沿")]  # 新计划是三轮，stage 超出的归到第 3 轮
     s0 = p["steps"][0]
     assert s0["resources"][0]["url"] == "https://arxiv.org/abs/1" and s0["resources"][1]["url"] == "https://x.org"
     assert s0["questions"] == ["世界模型解决什么？"] and p["steps"][1]["est_hours"] == 2.0
@@ -112,7 +112,7 @@ def test_feedback_adapt_and_today(client, fake_submit):
 
     # 手动新增 / 删除步骤
     ns = client.post(f"/api/learn/plans/{p['id']}/steps", json={"stage": 6, "title": "写一篇讲解"}).json()
-    assert ns["stage"] == 6
+    assert ns["stage"] == 3  # 三轮计划最多第 3 轮
     assert client.delete(f"/api/learn/steps/{ns['id']}").json()["ok"]
 
     t = client.post(f"/api/learn/steps/{steps[1]['id']}/today", json={}).json()
@@ -206,12 +206,12 @@ def _write_chapter(client, fake_submit, s, quiz=QUIZ):
 
 def test_chapter_quiz_flow(client, fake_submit):
     p = _plan_with_steps(client, fake_submit)
-    assert p["stage_goals"]["1"].startswith("建立整体地图")
+    assert p["stage_goals"]["1"].startswith("拿到最新的领域地图") and p["unit"] == "轮"
     s1, s2 = p["steps"]
     assert s1["goal"] == "能定位新论文" and s1["chapter_status"] == ""
     # 打开第一章 → 生成；提示词带阶段目的和能力目标
     assert client.post(f"/api/learn/steps/{s1['id']}/open", json={}).json()["chapter_status"] == "generating"
-    assert "建立整体地图" in fake_submit[-1]["prompt"] and "能定位新论文" in fake_submit[-1]["prompt"]
+    assert "第 1 轮 · 看懂" in fake_submit[-1]["prompt"] and "能定位新论文" in fake_submit[-1]["prompt"]
     _write_chapter(client, fake_submit, s1)
     s = client.get(f"/api/learn/steps/{s1['id']}").json()
     assert s["chapter_status"] == "ready" and s["chapter_md"].startswith("# 本章")
@@ -434,3 +434,37 @@ def test_on_demand_extra_sections(client, fake_submit):
     snap = learn._plan_snapshot(p["id"])
     assert f"按需深入（源自 step_id={s1['id']}）" in snap and "/extra" in learn.agent_context(f"learn:step:{s1['id']}")
     client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_three_rounds_and_restructure_old_plan(client, fake_submit):
+    # 新计划默认三轮：提示词要求最新综述、项目和产品实践
+    p = client.post("/api/learn/plans", json={"topic": "世界模型"}).json()
+    assert p["layout"] == "rounds" and p["stages"]["3"].startswith("跟前沿") and "最新" in fake_submit[-1]["prompt"]
+    assert "产品实践" in fake_submit[-1]["prompt"] and "GitHub" in fake_submit[-1]["prompt"]
+    client.delete(f"/api/learn/plans/{p['id']}")
+    # 老计划（六阶段）照旧：stage 可到 6，标签和调整提示词按六阶段
+    old = client.post("/api/learn/plans", json={"topic": "Agent 评测"}).json()
+    db.update("learn_plans", old["id"], {"layout": ""})
+    learn.on_job_done(_job(fake_submit[-1]["id"], TWO_STEPS))
+    s1, s2 = client.get(f"/api/learn/plans/{old['id']}").json()["steps"]
+    assert s2["stage"] == 3 and client.get(f"/api/learn/plans/{old['id']}").json()["unit"] == "阶段"
+    assert client.post(f"/api/learn/plans/{old['id']}/steps", json={"stage": 6, "title": "实践"}).json()["stage"] == 6
+    client.post(f"/api/learn/plans/{old['id']}/adapt", json={})
+    assert "六阶段" in fake_submit[-1]["prompt"] and "阶段 1 · 领域综述" in fake_submit[-1]["prompt"]
+    db.update("learn_plans", old["id"], {"status": "active"})
+    client.patch(f"/api/learn/steps/{s1['id']}", json={"status": "done", "feedback": "痛点没懂"})
+    # 精简成三轮：另建新计划，带上老计划进度；老计划先不动
+    n = client.post(f"/api/learn/plans/{old['id']}/rounds").json()
+    assert n["id"] != old["id"] and n["from_plan"] == old["id"] and n["layout"] == "rounds" and n["from_topic"] == "Agent 评测"
+    sent = fake_submit[-1]
+    assert sent["ref"] == f"learn:plan:{n['id']}" and "精简成三轮" in sent["prompt"] and "痛点没懂" in sent["prompt"]
+    assert client.post(f"/api/learn/plans/{old['id']}/rounds").json()["id"] == n["id"]  # 不重复建
+    assert client.post(f"/api/learn/plans/{n['id']}/rounds").status_code == 400
+    assert learn._plan(old["id"])["status"] == "active"
+    # 新计划生成好 → 老计划归档，步骤和记录都在
+    learn.on_job_done(_job(sent["id"], TWO_STEPS))
+    o = client.get(f"/api/learn/plans/{old['id']}").json()
+    assert o["status"] == "archived" and o["rounds_plan"] == n["id"] and len(o["steps"]) == 3 and "已精简成三轮" in o["overview_md"]
+    assert client.get(f"/api/learn/plans/{n['id']}").json()["status"] == "active"
+    for pid in (old["id"], n["id"]):
+        client.delete(f"/api/learn/plans/{pid}")

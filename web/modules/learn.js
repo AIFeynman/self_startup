@@ -44,6 +44,9 @@ const CSS = `
 .ln-meta .progress { flex: 1; min-width: 160px; }
 .ln-stagecard h3 { font-size: 17px; margin: 0 0 18px; }
 .ln-stages { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.ln-banner { display: flex; gap: 12px; align-items: center; padding: 12px 16px; margin-bottom: 14px; font-size: 14px; }
+.ln-banner .t { flex: 1; min-width: 0; } .ln-banner .t .muted { font-size: 13px; }
+.ln-res .sm { flex: none; }
 .ln-stage { position: relative; text-align: center; cursor: pointer; padding: 0 4px; }
 .ln-stage::before { content: ''; position: absolute; top: 9px; left: -50%; right: 50%; height: 1.5px; background: var(--line-2); }
 .ln-stage:first-child::before { display: none; }
@@ -259,8 +262,8 @@ const CSS = `
 .ln-chap-nav { display: flex; gap: 10px; justify-content: space-between; margin: 22px 0 8px; }
 .ln-chap-nav button { max-width: 48%; } .ln-chap-nav span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
-const STATUS_TAG = { done: 'ok', active: 'ok', failed: 'err', running: 'warn', queued: 'warn', generating: 'warn', adapting: 'warn' };
-const STATUS_TXT = { queued: '排队', running: '解析中', done: '完成', failed: '失败', generating: '生成中', active: '进行中', adapting: '调整中' };
+const STATUS_TAG = { archived: 'gray', done: 'ok', active: 'ok', failed: 'err', running: 'warn', queued: 'warn', generating: 'warn', adapting: 'warn' };
+const STATUS_TXT = { archived: '已归档', queued: '排队', running: '解析中', done: '完成', failed: '失败', generating: '生成中', active: '进行中', adapting: '调整中' };
 const STEP_TXT = { todo: '待学', doing: '学习中', done: '已完成', skipped: '跳过' };
 const openedChapters = new Set(); // 本次页面会话里已经「进入」过的章节（避免软刷新时重复触发生成）
 const draftKey = (sid) => `ln-quiz-${sid}`;
@@ -268,6 +271,8 @@ const loadDraft = (sid) => { try { return JSON.parse(localStorage.getItem(draftK
 const saveDraft = (sid, d) => { try { localStorage.setItem(draftKey(sid), JSON.stringify(d)); } catch { /* ignore */ } };
 const chapterHref = (pid, sid) => `#learn/plan/${pid}/step/${sid}`;
 const EXTRA_TXT = { interest: '深入', confused: '补课' };
+// 新计划三轮（「第 1 轮」），老计划六阶段（「阶段 1」）
+const stageNo = (p, no) => (p.unit === '轮' ? `第 ${no} 轮` : `阶段 ${no}`);
 // 「停一下」点评只分两项：抓到了（含要点外的合理补充）/ 漏掉了（含想偏的）。老记录的 off / extra 并进来
 const reviewLists = (rv) => ({ got: [...(rv.covered || []), ...(rv.extra || [])], miss: [...(rv.missing || []), ...(rv.off || [])] });
 const quizScore = (s) => (s.quiz_result?.status === 'graded' ? s.quiz_result.score : null);
@@ -373,7 +378,8 @@ async function renderHome(el, ctx, scrollToPlans) {
   const [items, plans] = await Promise.all([api.get('/api/learn/items'), api.get('/api/learn/plans')]);
   items.forEach((it) => watchJob(ctx, it.job_id, it.status));
   plans.forEach((p) => watchJob(ctx, p.job_id, p.status));
-  const latestPlan = [...plans].filter((p) => p.status !== 'failed').sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0];
+  plans.sort((a, b) => (a.status === 'archived') - (b.status === 'archived'));
+  const latestPlan = [...plans].filter((p) => !['failed', 'archived'].includes(p.status)).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0];
 
   const defs = loadDefaults();
   const opt = { background: defs.background, goal: '', hours: defs.hours, focus: '', kind: '', depth: 'quick' };
@@ -629,6 +635,25 @@ async function renderPlan(el, ctx, pid) {
       tag(h, p.status),
       h('button.primary', { onclick: () => openChat({ module: 'learn', ref, title: chatTitle }) }, [ui.icon('chat'), '讨论 / 改计划']),
     ])));
+  if (p.status === 'archived' && p.rounds_plan) {
+    el.append(h('div.card.ln-banner', {}, [h('div.t', {}, [h('b', {}, '这份计划已精简成三轮'), h('div.muted', {}, '进度、测试和学习记录都还在这里，可以随时回看')]),
+      h('button.primary', { onclick: () => { location.hash = `#learn/plan/${p.rounds_plan}`; } }, ['去三轮计划', ui.icon('arrow')])]));
+  } else if (p.from_plan) {
+    el.append(h('div.card.ln-banner', {}, [h('div.t', {}, [h('b', {}, '由老计划精简成三轮'),
+      h('div.muted', {}, `跳过了「${p.from_topic || p.topic}」里已经学会的，补上了测试和反馈里的薄弱处`)]),
+      h('a', { href: `#learn/plan/${p.from_plan}` }, '查看老计划')]));
+  } else if (p.unit !== '轮' && p.steps.length && !p.rounds_plan) {
+    el.append(h('div.card.ln-banner', {}, [h('div.t', {}, [h('b', {}, '这是老的六阶段计划，比较长'),
+      h('div.muted', {}, '可以精简成三轮由浅入深：最新全貌 + 主干 → 会判断 → 跟前沿、项目和产品实践，主线约 15–20 小时；已学的跳过、薄弱处补上，老计划保留')]),
+      h('button.outline', { disabled: busy, onclick: async (e) => {
+        e.target.disabled = true;
+        try { const n = await api.post(`/api/learn/plans/${pid}/rounds`); toast('Agent 正在生成三轮计划（几分钟），生成好后老计划自动归档'); location.hash = `#learn/plan/${n.id}`; }
+        catch (err) { toast('没成功：' + err.message, true); e.target.disabled = false; }
+      } }, [ui.icon('refresh'), '精简成三轮'])]));
+  } else if (p.unit !== '轮' && p.rounds_plan) {
+    el.append(h('div.card.ln-banner', {}, [h('div.t', {}, h('b', {}, '三轮精简版正在生成')),
+      h('a', { href: `#learn/plan/${p.rounds_plan}` }, '去看看')]));
+  }
   el.append(h('div.ln-meta', { style: { marginTop: '-4px', marginBottom: '16px' } }, [
     h('span.pct', {}, `${p.progress.pct}%`), ui.progress(p.progress.pct),
     h('span', {}, `${p.progress.done}/${p.progress.total} 步`), h('span', {}, [ui.icon('clock'), ` 约 ${p.progress.hours}h`]),
@@ -637,7 +662,7 @@ async function renderPlan(el, ctx, pid) {
   ]));
 
   // 阶段时间线 + 调整
-  const adaptNote = h('input', { placeholder: '怎么调整？如「第 4 阶段太难」「想多做实践」· Enter 提交', title: '会结合每步的反馈与理解度一起调整',
+  const adaptNote = h('input', { placeholder: p.unit === '轮' ? '怎么调整？如「第 2 轮太难」「想多做产品实践」· Enter 提交' : '怎么调整？如「第 4 阶段太难」「想多做实践」· Enter 提交', title: '会结合每步的反馈与理解度一起调整',
     onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); doAdapt(); } } });
   const doAdapt = async () => {
     if (busy || !p.steps.length) return;
@@ -645,13 +670,13 @@ async function renderPlan(el, ctx, pid) {
     toast('Agent 正在根据反馈调整计划'); softRefresh();
   };
   el.append(h('div.card.ln-stagecard', {}, [
-    h('h3', {}, busy ? (p.status === 'generating' ? '计划生成中…' : '计划调整中…') : cur ? `当前阶段 · ${cur.name}` : p.steps.length ? '全部阶段已完成' : '暂无步骤'),
-    h('div.ln-stages', {}, stageInfo.map((s, i) => {
+    h('h3', {}, busy ? (p.status === 'generating' ? '计划生成中…' : '计划调整中…') : cur ? `当前${p.unit || '阶段'} · ${cur.name}` : p.steps.length ? `全部${p.unit || '阶段'}已完成` : '暂无步骤'),
+    h('div.ln-stages', { style: { gridTemplateColumns: `repeat(${stageInfo.length}, minmax(0, 1fr))` } }, stageInfo.map((s, i) => {
       const prevDone = i > 0 && stageInfo[i - 1].isDone;
       const cls = [s.isDone ? 'done' : '', cur && s.no === cur.no ? 'cur' : '', (s.isDone || (cur && s.no === cur.no)) && (i === 0 || prevDone) ? 'reached' : '', s.ss.length ? '' : 'empty'].filter(Boolean).join('.');
       return h('div.ln-stage' + (cls ? '.' + cls : ''), { onclick: () => s.ss.length && document.getElementById(`ln-stage-${s.no}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, [
         h('div.ln-dot', {}, s.isDone ? ui.icon('check') : null),
-        h('div.k', {}, `阶段 ${s.no}${s.ss.length ? ` · ${s.done}/${s.ss.length}` : ''}`),
+        h('div.k', {}, `${stageNo(p, s.no)}${s.ss.length ? ` · ${s.done}/${s.ss.length}` : ''}`),
         h('div.n', {}, s.name),
       ]);
     })),
@@ -668,7 +693,7 @@ async function renderPlan(el, ctx, pid) {
   if (curStep && !busy) {
     const no = p.steps.filter((s) => s.status !== 'skipped').indexOf(curStep) + 1;
     el.append(h('div.card.ln-continue', {}, [
-      h('div.t', {}, [h('div.k', {}, `跟着学 · 第 ${no} 章 · 阶段 ${curStep.stage} ${p.stages[curStep.stage]}`), h('div.n', {}, curStep.title),
+      h('div.t', {}, [h('div.k', {}, `跟着学 · 第 ${no} 章 · ${stageNo(p, curStep.stage)} ${p.stages[curStep.stage]}`), h('div.n', {}, curStep.title),
         curStep.goal ? h('div.muted', { style: { fontSize: '13px' } }, '学完能：' + curStep.goal) : null]),
       chapterTag(h, curStep),
       h('button.primary', { onclick: () => { location.hash = chapterHref(pid, curStep.id); } }, [curStep.chapter_status === 'ready' ? '继续学习' : '开始学习', ui.icon('arrow')]),
@@ -682,10 +707,23 @@ async function renderPlan(el, ctx, pid) {
   }
   for (const s of stageInfo) {
     if (!s.ss.length) continue;
-    el.append(h('div', { id: `ln-stage-${s.no}`, style: { scrollMarginTop: '16px' } }, ui.section(`阶段 ${s.no} · ${s.name}`, `${s.done}/${s.ss.length} · ${s.hours}h`)));
-    if (p.stage_goals?.[s.no]) el.append(h('div.ln-purpose', {}, [h('b', {}, '本阶段目的：'), p.stage_goals[s.no]]));
+    el.append(h('div', { id: `ln-stage-${s.no}`, style: { scrollMarginTop: '16px' } }, ui.section(`${stageNo(p, s.no)} · ${s.name}`, `${s.done}/${s.ss.length} · ${s.hours}h`)));
+    if (p.stage_goals?.[s.no]) el.append(h('div.ln-purpose', {}, [h('b', {}, `本${p.unit || '阶段'}目的：`), p.stage_goals[s.no]]));
     s.ss.forEach((st) => el.append(stepView(st, p, ctx, curStep && st.id === curStep.id)));
   }
+}
+
+// 资源里的 GitHub 仓库：读过就打开笔记，没读过就开一个速读
+async function quickRead(ctx, url) {
+  const { api, toast } = ctx;
+  const norm = (u) => (u || '').replace(/\/+$/, '').replace(/\.git$/, '').toLowerCase();
+  try {
+    const items = await api.get('/api/learn/items');
+    const hit = items.find((it) => norm(it.url) === norm(url));
+    const it = hit || await api.post('/api/learn/items', { url, kind: 'github', depth: 'quick' });
+    if (!hit) toast('已开始速读这个仓库，几分钟出笔记');
+    location.hash = `#learn/item/${it.id}`;
+  } catch (e) { toast('速读没开始：' + e.message, true); }
 }
 
 function stepView(s, p, ctx, isCur) {
@@ -706,11 +744,12 @@ function stepView(s, p, ctx, isCur) {
     s.goal ? h('div.ln-goal', {}, [h('b', {}, '能力目标'), s.goal]) : null,
     s.description ? annotate(ctx, md(s.description), { doc: `learn:step:${s.id}`, title: `${p.topic} · ${s.title}`, link: `#learn/plan/${p.id}`, source: s.description, compact: true }) : null,
     s.resources.length ? h('div.ln-st-sub', {}, '资源') : null,
-    ...s.resources.map((r) => h('div.ln-res', {}, [ui.icon(r.type === 'code' || /github/.test(r.url || '') ? 'box' : r.type === 'video' ? 'bolt' : 'link'),
+    ...s.resources.map((r) => h('div.ln-res', {}, [ui.icon(r.type === 'code' || r.type === 'repo' || /github/.test(r.url || '') ? 'box' : r.type === 'product' ? 'spark' : r.type === 'video' ? 'bolt' : 'link'),
       h('div.why', {}, [r.url ? h('a', { href: r.url, target: '_blank', rel: 'noopener' }, r.title || r.url) : h('b', {}, r.title || ''),
         r.why ? h('span', {}, ' — ' + r.why) : null]),
       r.type ? h('span.tag.gray', {}, r.type) : null,
-      r.verified === false ? h('span.tag.warn', {}, '未核验') : null])),
+      r.verified === false ? h('span.tag.warn', {}, '未核验') : null,
+      /github\.com\/[\w.-]+\/[\w.-]+/.test(r.url || '') ? h('button.sm.ghost', { title: '用深读板块速读这个仓库（几分钟出一份架构笔记）', onclick: () => quickRead(ctx, r.url) }, '速读') : null])),
     s.questions.length ? h('div.ln-st-sub', {}, '检查题 · 能答上来再打勾') : null,
     ...s.questions.map((q, i) => h('div.ln-q', {}, [h('span.no', {}, i + 1), h('span', {}, q)])),
     h('div.ln-fb', {}, [h('span.muted', {}, '理解度'), stars(h, ui, s.understanding, (v) => quiet({ understanding: v })), fb, saved]),
@@ -767,7 +806,7 @@ async function renderChapter(el, ctx, pid, sid) {
 
   el.append(back(h, ui, `#learn/plan/${pid}`, p.topic));
   el.append(h('div.ln-head.ln-chap-head', {}, ui.pageHead(s.title,
-    h('span.k', {}, `第 ${idx + 1}/${seq.length} 章 · ` + (s.origin ? `按需${EXTRA_TXT[s.origin] || ''}${parent ? ` · 源自「${parent.title}」` : ''}` : `阶段 ${s.stage} ${p.stages[s.stage]}`) + ` · 约 ${s.est_hours}h`), [
+    h('span.k', {}, `第 ${idx + 1}/${seq.length} 章 · ` + (s.origin ? `按需${EXTRA_TXT[s.origin] || ''}${parent ? ` · 源自「${parent.title}」` : ''}` : `${stageNo(p, s.stage)} ${p.stages[s.stage]}`) + ` · 约 ${s.est_hours}h`), [
       chapterTag(h, s),
       h('button.primary', { onclick: () => chat() }, [ui.icon('chat'), '追问本章']),
     ])));
@@ -776,7 +815,7 @@ async function renderChapter(el, ctx, pid, sid) {
     el.append(h('div.ln-purpose', {}, [h('b', {}, s.origin === 'confused' ? '你没懂的地方：' : '你想深入的方向：'), ask,
       quoted ? h('span.muted', {}, `${ask ? ' · ' : ''}划线「${quoted}」`) : null,
       parent ? h('a', { href: chapterHref(pid, parent.id), style: { marginLeft: '10px' } }, '回到原章 ↩') : null]));
-  } else el.append(h('div.ln-purpose', {}, [h('b', {}, '本阶段目的：'), p.stage_goals?.[s.stage] || '']));
+  } else el.append(h('div.ln-purpose', {}, [h('b', {}, `本${p.unit || '阶段'}目的：`), p.stage_goals?.[s.stage] || '']));
   if (s.goal) el.append(h('div.ln-goal', {}, [h('b', {}, s.origin ? '本节能力目标' : '本章能力目标'), s.goal]));
   const extra = s.chapter_status === 'ready' ? extraPanel(ctx, p, s) : null;
 
