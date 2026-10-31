@@ -346,7 +346,7 @@ export default {
         h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
         await deliveries({ api, h, ui }, { date: state.date }),
       ];
-      if (d.learning.length || lx.steps.length || lx.items.length) {
+      if (d.learning.length || lx.steps.length || lx.items.length || lx.events?.length) {
         nodes.push(ui.section('学习'), h('div.card', {}, [
           d.learning.length ? taskList(d.learning) : null,
           lx.steps.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '深度学习步骤'),
@@ -354,6 +354,8 @@ export default {
               s.understanding ? h('span.muted', {}, ` 理解 ${s.understanding}/5`) : null]))]) : null,
           lx.items.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '完成的论文 / 代码解析'),
             ...lx.items.map((i) => h('div.item', {}, [h('span.tag', {}, i.kind), i.title || i.url]))]) : null,
+          lx.events?.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '学习记录（测试 / 停一下 / 理解度）'),
+            ...lx.events.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
         ]));
       }
       nodes.push(ui.section('我的复盘', '用上方「写复盘」一句句追加'), recordCard(rec));

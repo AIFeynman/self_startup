@@ -111,7 +111,7 @@ def upsert_record(date: str, data: dict) -> dict:
 
 def learning_extra(date: str) -> dict:
     """深度学习板块的数据（表存在才读）：当天完成/进行中的学习步骤、当天完成的解析。"""
-    out: dict = {"steps": [], "items": []}
+    out: dict = {"steps": [], "items": [], "events": []}
     if _has_table("learn_steps") and {"title", "status", "done_at"} <= _cols("learn_steps"):
         join = _has_table("learn_plans") and "topic" in _cols("learn_plans")
         sql = ("SELECT s.id, s.title, s.status, s.done_at, s.understanding, s.plan_id"
@@ -123,6 +123,13 @@ def learning_extra(date: str) -> dict:
     if _has_table("learn_items") and {"title", "status", "updated_at"} <= _cols("learn_items"):
         out["items"] = db.rows("SELECT id, kind, title, url, status, rating FROM learn_items "
                                "WHERE status='done' AND substr(updated_at,1,10)=? LIMIT 30", [date])
+    if _has_table("learn_events"):  # 学习记录：测试、停一下作答与点评、理解度 / 反馈变化
+        try:
+            from . import learn
+            titles = {r["id"]: r["title"] for r in db.rows("SELECT id, title FROM learn_steps")}
+            out["events"] = [learn.event_line(e, titles) for e in learn.events_of(date=date) if e["kind"] != "check"]
+        except Exception:  # noqa: BLE001  学习模块出错不影响复盘
+            pass
     return out
 
 
@@ -307,6 +314,8 @@ def check_prompt(date: str) -> str:
     rec = get_record(date)
     learn = learning_extra(date)
     learn_txt = "\n".join(f"- 学习步骤 {s['title']}（{s['status']}）" for s in learn["steps"]) or ""
+    if learn["events"]:
+        learn_txt += "\n学习记录（测试、停一下作答与点评）：\n" + "\n".join(f"- {x}" for x in learn["events"][-20:])
     return f"""请检查 {date} 的事项完成情况。只读分析：不要修改任何文件或平台数据，不要运行测试、不要启动服务（会污染平台数据），用 git / Read / Grep 看证据即可。
 
 ## 当天事项与目标
@@ -718,6 +727,9 @@ def agent_context(ref: str) -> str:
              "### 事项\n" + _task_lines([t for t in tasks.list_for(date)])]
     if d["learning_extra"]["steps"]:
         parts.append("### 学习步骤\n" + "\n".join(f"- [{s['id']}] {s['title']}（{s['status']}）" for s in d["learning_extra"]["steps"]))
+    if d["learning_extra"].get("events"):
+        parts.append("### 学习记录（测试 / 停一下 / 理解度变化；复盘学习时据此评价理解、判断、应用，并给出怎么提升）\n"
+                     + "\n".join(f"- {x}" for x in d["learning_extra"]["events"][-30:]))
     parts.append("### 复盘记录\n" + "\n".join(f"- {k}：{rec.get(k) or '（空）'}" for k in ("summary", "wins", "problems", "next_actions")))
     if rec.get("ai_analysis"):
         parts.append("### AI 检查结论（摘要）\n" + rec["ai_analysis"][:1500])

@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS learn_steps (
     quiz_result   TEXT DEFAULT ''             -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
 );
 CREATE INDEX IF NOT EXISTS idx_learn_steps_plan ON learn_steps(plan_id);
+-- 学习记录：只追加、不覆盖（作答、Agent 点评、每次测试连同当时的题目、理解度 / 反馈变化、章节重新生成），用于复盘和成长评价
+CREATE TABLE IF NOT EXISTS learn_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id     INTEGER,
+    step_id     INTEGER,
+    kind        TEXT NOT NULL,              -- check 作答 / check_review 点评 / quiz 测试 / rating 理解度·反馈·状态 / chapter 章节生成
+    data        TEXT DEFAULT '{}',
+    src         TEXT DEFAULT '',            -- 来源：job:<id> / backfill
+    created_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_learn_events_step ON learn_events(step_id);
 """
 
 STAGES = {1: "领域综述", 2: "核心人物与观点", 3: "关键书籍 / 经典论文",
@@ -780,10 +791,13 @@ def get_step(sid: int):
 
 @router.patch("/steps/{sid}")
 def patch_step(sid: int, body: StepIn):
-    _step(sid)
+    old = _step(sid)
     f = _step_fields(body.model_dump())
     if f:
         db.update("learn_steps", sid, f)
+        changed = {k: f[k] for k in ("understanding", "feedback", "status", "notes") if k in f and f[k] != old.get(k)}
+        if changed:
+            log_event(old, "rating", {**changed, "prev": {k: old.get(k) for k in changed}})
     return public_step(_step(sid))
 
 
@@ -819,6 +833,131 @@ def _finish_plan(pid: int, job: dict, adapt: bool) -> None:
         p = _plan(pid)
         db.update("learn_plans", pid, {"status": "active" if adapt else "failed", "updated_at": db.now(),
                                        "overview_md": (p["overview_md"] or "") + f"\n\n> 解析失败（job {job['id']}）：{e}"})
+
+
+# ---------- 学习记录 ----------
+
+def log_event(s: dict, kind: str, data: dict, src: str = "", at: str = "") -> None:
+    db.insert("learn_events", {"plan_id": s.get("plan_id"), "step_id": s.get("id"), "kind": kind, "data": data,
+                               "src": src, "created_at": at or db.now()})
+
+
+def events_of(step_id: int | None = None, plan_id: int | None = None, date: str = "") -> list[dict]:
+    conds = [("step_id=?", step_id), ("plan_id=?", plan_id), ("substr(created_at,1,10)=?", date)]
+    where, args = [c for c, v in conds if v], [v for _, v in conds if v]
+    rows = db.rows("SELECT * FROM learn_events" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created_at, id", args)
+    for r in rows:
+        r["data"] = _loads(r["data"], {})
+    return rows
+
+
+def event_line(e: dict, titles: dict | None = None) -> str:
+    """一条学习记录的一行摘要（知识库、复盘、对话上下文共用）。"""
+    d, t = e["data"], (titles or {}).get(e["step_id"], f"step {e['step_id']}")
+    at = (e["created_at"] or "")[11:16]
+    if e["kind"] == "quiz":
+        dims = "、".join(f"{k}{v}" for k, v in (d.get("dims") or {}).items())
+        weak = "；".join(d.get("weak_points") or [])[:200]
+        return f"{at} 测试「{t}」第 {d.get('attempt', 1)} 次 {d.get('score', '?')} 分" + (f"（{dims}）" if dims else "") + (f"；薄弱：{weak}" if weak else "")
+    if e["kind"] == "check_review":
+        rv = d.get("review") or {}
+        return (f"{at} 停一下「{d.get('q', '')[:40]}」我答：{d.get('answer', '')[:80]} → {round(100 * float(rv.get('score') or 0))}%"
+                + (f"；漏：{'；'.join(rv.get('missing') or [])[:120]}" if rv.get("missing") else ""))
+    if e["kind"] == "check":
+        return f"{at} 停一下「{d.get('q', '')[:40]}」我答：{d.get('answer', '')[:80]}"
+    if e["kind"] == "rating":
+        return f"{at} 「{t}」" + "，".join(f"{k}→{v}" for k, v in d.items() if k != "prev")[:200]
+    if e["kind"] == "chapter":
+        return f"{at} 「{t}」章节{d.get('action', '生成')}" + (f"（要求：{d['note']}）" if d.get("note") else "")
+    return f"{at} {e['kind']}"
+
+
+def backfill_events() -> dict:
+    """从后台任务记录里补回学习记录（有学习记录表之前的作答、点评、测试批改）。按 job 去重，可重复执行。"""
+    done = {r["src"] for r in db.rows("SELECT src FROM learn_events WHERE src LIKE 'job:%'")}
+    stat = {"check_review": 0, "quiz": 0}
+    graded = db.rows("SELECT id, ref FROM jobs WHERE ref LIKE 'learn:step:%:grade' AND status='done' ORDER BY id")
+    latest_grade = {int(r["ref"].split(":")[2]): r["id"] for r in graded}
+    for j in db.rows("SELECT * FROM jobs WHERE (ref LIKE 'learn:step:%:check:%' OR ref LIKE 'learn:step:%:grade') "
+                     "AND status='done' ORDER BY id"):
+        if f"job:{j['id']}" in done:
+            continue
+        sid = int(j["ref"].split(":")[2])
+        s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
+        if not s:
+            continue
+        s = _decode_step(s)
+        at, src, prompt = j["finished_at"] or j["created_at"], f"job:{j['id']}", j["prompt"] or ""
+        if ":check:" in j["ref"]:
+            m = re.search(r"问题：(.*?)\n要点（参考答案）：(.*?)\n用户的判断：(.*?)\n\n要求", prompt, re.S)
+            o = extract_json(j["output"] or "", "missing")
+            if not m or not o:
+                continue
+            log_event(s, "check_review", {"idx": int(j["ref"].split(":")[-1]), "q": m.group(1).strip(), "points": m.group(2).strip(),
+                                          "answer": m.group(3).strip(), "review": o, "backfill": True}, src=src, at=at)
+            stat["check_review"] += 1
+        else:
+            o = extract_json(j["output"] or "", "items")
+            if not o:
+                continue
+            qs = {}
+            for m in re.finditer(r"### (\w+)（[^\n]*）\n题目：(.*?)\n参考答案要点：(.*?)\n评分要点：(.*?)\n用户回答：(.*?)(?=\n\n###|\n\n评分：|\Z)", prompt, re.S):
+                qs[m.group(1)] = {"q": m.group(2).strip(), "reference": m.group(3).strip(), "answer": m.group(5).strip()}
+            wrong = re.search(r"选择题答错的：(.*)", prompt)
+            last = (s["quiz_result"] or {}) if isinstance(s["quiz_result"], dict) else {}
+            score = last.get("score", last.get("last_score")) if latest_grade.get(sid) == j["id"] else None
+            items = {str(x.get("id")): {**qs.get(str(x.get("id")), {}), "score": x.get("score"), "feedback": x.get("feedback")}
+                     for x in o.get("items") or [] if isinstance(x, dict)}
+            log_event(s, "quiz", {"attempt": last.get("attempt") or 1, "score": score, "summary": o.get("summary", ""),
+                                  "assessment": o.get("assessment") or {}, "weak_points": o.get("weak_points") or [],
+                                  "advice": o.get("advice", ""), "items": items, "wrong_choices": (wrong.group(1).strip() if wrong else ""),
+                                  "backfill": True}, src=src, at=at)
+            stat["quiz"] += 1
+    return stat
+
+
+@router.post("/events/backfill")
+def api_backfill():
+    return backfill_events()
+
+
+@router.get("/steps/{sid}/events")
+def step_events(sid: int):
+    _step(sid)
+    return events_of(step_id=sid)
+
+
+@router.get("/plans/{pid}/growth")
+def plan_growth(pid: int):
+    """成长档案：每章最近一次测试的分数和三个维度、各维度平均、最近的薄弱点和停一下漏掉的点。"""
+    _plan(pid)
+    steps = {s["id"]: s for s in steps_of(pid)}
+    evs = events_of(plan_id=pid)
+    latest: dict[int, dict] = {}
+    for e in evs:
+        if e["kind"] == "quiz":
+            latest[e["step_id"]] = e
+    chapters = [{"step_id": k, "title": steps.get(k, {}).get("title", ""), "score": e["data"].get("score"),
+                 "dims": e["data"].get("dims") or {}, "attempt": e["data"].get("attempt"), "at": e["created_at"],
+                 "assessment": e["data"].get("assessment") or {}} for k, e in latest.items()]
+    dims = {}
+    for d in DIMS:
+        vals = [c["dims"][d] for c in chapters if d in c["dims"]]
+        if vals:
+            dims[d] = round(sum(vals) / len(vals))
+    weak = []
+    for e in reversed(evs):
+        if e["kind"] == "quiz":
+            weak += [{"text": w, "step_id": e["step_id"], "from": "测试", "at": e["created_at"]} for w in e["data"].get("weak_points") or []]
+        elif e["kind"] == "check_review":
+            weak += [{"text": w, "step_id": e["step_id"], "from": "停一下", "at": e["created_at"]}
+                     for w in (e["data"].get("review") or {}).get("missing") or []][:1]
+    checks = [e for e in evs if e["kind"] == "check_review"]
+    ck = [float((e["data"].get("review") or {}).get("score") or 0) for e in checks]
+    return {"chapters": chapters, "dims": dims, "weak": weak[:12], "counts": {
+        "quiz": sum(e["kind"] == "quiz" for e in evs), "check": len(checks),
+        "check_avg": round(100 * sum(ck) / len(ck)) if ck else None, "events": len(evs)},
+        "titles": {k: v["title"] for k, v in steps.items()}}
 
 
 # ---------- B2. 章节教程 + 章末测试 ----------
@@ -915,6 +1054,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
    - {out / 'chapter.md'}
    - {out / 'quiz.json'}（测试题 + 知识卡）
    - 需要交互小组件时：{out / 'widgets'}/<名字>.html（可选，最多 2 个）
+   目录里的 history/ 是旧版本归档：不要读、不要沿用，按本次要求从头写。
 3. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了，以及资料时效结论。
 
 ---- 章节教程规范 ----
@@ -922,9 +1062,26 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 """
 
 
+def _archive_chapter(s: dict) -> str:
+    """重新生成前把旧章节（正文、测试、小组件）挪到 history/<时间>/，Agent 只能重写，学习记录里留着旧版路径。"""
+    out = _step_dir(s)
+    olds = [p for p in (out / "chapter.md", out / "quiz.json", out / "widgets") if p.exists()]
+    if not olds:
+        return ""
+    dest = out / "history" / db.now().replace(":", "").replace("-", "")
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in olds:
+        p.rename(dest / p.name)
+    return str(dest)
+
+
 def start_chapter_job(s: dict, note: str = "", prefetch: bool = False) -> int:
     out = _step_dir(s)
     out.mkdir(parents=True, exist_ok=True)
+    archived = _archive_chapter(s)
+    if archived or note:
+        log_event(s, "chapter", {"action": "重新生成" if archived else "生成", "note": note, "archived": archived,
+                                 "old_score": (s.get("quiz_result") or {}).get("score") if isinstance(s.get("quiz_result"), dict) else None})
     jid = jobs.submit("learn", chapter_prompt(s, note), ref=f"learn:step:{s['id']}:{'prefetch' if prefetch else 'chapter'}",
                       cwd=str(out), add_dirs=[str(SKILL_DIR)])
     db.update("learn_steps", s["id"], {"chapter_status": "generating", "chapter_job": jid})
@@ -1027,6 +1184,9 @@ def _finalize_quiz(sid: int, r: dict) -> dict:
         if qs:
             dims[d] = round(100 * sum(float((items.get(q["id"]) or {}).get("score") or 0) for q in qs) / len(qs))
     r.update(score=score, dims=dims, status="graded", graded_at=db.now(), passed=score >= PASS_SCORE)
+    log_event(s, "quiz", {k: r.get(k) for k in ("attempt", "score", "dims", "passed", "summary", "assessment", "weak_points",
+                                                  "advice", "answers", "items")} | {"questions": s["quiz"]},
+              src=f"job:{r['job_id']}" if r.get("job_id") else "")
     upd = {"quiz_result": r, "understanding": max(1, min(5, round(score / 20)))}
     if score >= PASS_SCORE and s["status"] != "done":
         upd.update(status="done", done_at=db.now())
@@ -1166,6 +1326,8 @@ def save_check(sid: int, idx: int, body: CheckIn):
                                   add_dirs=[str(_step_dir(s))])
     checks[str(idx)] = c
     db.update("learn_steps", sid, {"checks": checks})
+    if c["answer"].strip() and c["answer"] != old.get("answer"):
+        log_event(s, "check", {"idx": idx, "q": c["q"], "points": c["points"], "answer": c["answer"]})
     return c
 
 
@@ -1188,6 +1350,8 @@ def _finish_check(sid: int, idx: str, job: dict) -> None:
             score = 0.0
         c.update(status="reviewed", review={"covered": lst("covered"), "missing": lst("missing"), "off": lst("off"),
                                             "extra": lst("extra"), "better": str(o.get("better") or ""), "score": score})
+        log_event(s, "check_review", {"idx": int(idx), "q": c["q"], "points": c.get("points", ""), "answer": c["answer"],
+                                      "review": c["review"]}, src=f"job:{job.get('id')}")
     checks[idx] = c
     db.update("learn_steps", sid, {"checks": checks})
 
@@ -1305,6 +1469,7 @@ def agent_context(ref: str) -> str:
                 f"章节文件：{_step_dir(s) / 'chapter.md'}（下方是摘录，需要时 Read 全文）；测试：{_step_dir(s) / 'quiz.json'}\n"
                 f"测试结果：{_quiz_line(s) or r.get('status') or '未做'}" + (f"；建议：{r.get('advice')}" if r.get("advice") else "")
                 + f"\n回答时围绕本章目标，用户答错的题优先帮他想通；不要直接改写章节，除非用户要求（重新生成：POST {api}/steps/{s['id']}/open -d '{{\"force\":true,\"note\":\"...\"}}'）。\n\n"
+                f"### 学习记录（历次作答 / 测试 / 点评）\n{chr(10).join(event_line(e, {s['id']: s['title']}) for e in events_of(step_id=s['id'])[-30:]) or '（无）'}\n\n"
                 f"### 「停一下」作答\n{_checks_text(s) or '（无）'}\n\n### 章末测试\n{quiz or '（无）'}\n\n### 章节摘录\n{(s['chapter_md'] or '（未生成）')[:12000]}\n\n### 计划概况\n{_plan_snapshot(s['plan_id'])[:4000]}")
     if m := re.fullmatch(r"learn:plan:(\d+)", ref or ""):
         pid = int(m.group(1))
