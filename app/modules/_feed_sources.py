@@ -7,6 +7,7 @@ type: paper / blog / podcast / product / repo / discussion / news
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import time
@@ -486,6 +487,71 @@ def fetch_sites(sites: list[dict], known_urls: set[str] | frozenset = frozenset(
     items, errors = [], []
     with ThreadPoolExecutor(max_workers=6) as ex:
         for got, err in ex.map(run, sites):
+            items += got
+            if err:
+                errors.append(err)
+    return items, errors
+
+
+# ---------- 小宇宙：节目页内嵌 __NEXT_DATA__（含播放数）直读，失败再走公共 RSSHub ----------
+XYZ_ID = re.compile(r"xiaoyuzhoufm\.com/podcast/([0-9a-f]{24})")
+RSSHUB_BASES = ["https://rsshub.ktachibana.party", "https://rsshub.app", "https://hub.slarker.me"]
+
+
+def xyz_items(pod: dict, days: int = 30, limit: int = 5) -> list[dict]:
+    """__NEXT_DATA__.props.pageProps.podcast → 统一形状；popularity 取播放数。"""
+    cutoff, name, out = _iso(_days_ago(days)), pod.get("title") or "", []
+    for e in (pod.get("episodes") or [])[:limit * 2]:
+        eid, date = e.get("eid"), _iso(datetime.fromisoformat(e["pubDate"].replace("Z", "+00:00"))) if e.get("pubDate") else ""
+        if not eid or not e.get("title") or (days and date and date < cutoff):
+            continue
+        out.append({"id": f"xiaoyuzhou:{eid}", "source": "xiaoyuzhou", "type": "podcast", "title": clean(e["title"], 200),
+                    "summary": clean(e.get("description") or e.get("shownotes")),
+                    "url": f"https://www.xiaoyuzhoufm.com/episode/{eid}", "date": date,
+                    "popularity": float(e.get("playCount") or 0),
+                    "extra": {"feed": name, "comments": int(e.get("commentCount") or 0),
+                              "minutes": int(e.get("duration") or 0) // 60}})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def fetch_xiaoyuzhou(urls: list[str], days: int = 30, per_feed: int = 5,
+                     rsshub_bases: list[str] | None = None) -> tuple[list[dict], list[str]]:
+    """urls: 小宇宙节目页 https://www.xiaoyuzhoufm.com/podcast/<24 位 id>。"""
+    def one(c, u):
+        m = XYZ_ID.search(u or "")
+        if not m:
+            return [], f"{u}: 不是小宇宙节目页链接"
+        pid, why = m.group(1), ""
+        try:
+            page = c.get(f"https://www.xiaoyuzhoufm.com/podcast/{pid}").text
+            nd = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
+            pod = json.loads(nd.group(1))["props"]["pageProps"]["podcast"] if nd else {}
+            if pod.get("episodes"):
+                return xyz_items(pod, days, per_feed), None
+            why = "节目页没有 episodes"
+        except Exception as e:  # noqa: BLE001
+            why = f"{type(e).__name__}: {str(e)[:80]}"
+        for base in rsshub_bases or RSSHUB_BASES:    # 公共实例时好时坏，挨个试
+            try:
+                r = c.get(f"{base.rstrip('/')}/xiaoyuzhou/podcast/{pid}", timeout=10)
+                got = parse_feed(r.text, u, source="xiaoyuzhou", typ="podcast", days=days, limit=per_feed) if r.status_code == 200 else []
+            except Exception:  # noqa: BLE001
+                got = []
+            for it in got:
+                eid = re.search(r"/episode/([0-9a-f]{24})", it["url"])
+                if eid:
+                    it["id"] = f"xiaoyuzhou:{eid.group(1)}"
+                it["extra"]["via"] = base
+            if got:
+                return got, None
+        return [], f"{u}: 直连失败（{why}），RSSHub 也没取到"
+
+    items, errors = [], []
+    with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": BROWSER_UA}, follow_redirects=True) as c, \
+            ThreadPoolExecutor(max_workers=4) as ex:
+        for got, err in ex.map(lambda u: one(c, u), urls):
             items += got
             if err:
                 errors.append(err)

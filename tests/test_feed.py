@@ -280,3 +280,45 @@ def test_load_env(tmp_path, monkeypatch):
     settings.load_env(p)
     import os
     assert os.environ["FOO_A"] == "1" and os.environ["FOO_B"] == "two" and os.environ["FOO_C"] == "env"
+
+
+def _xyz_handler(direct_ok: bool, hub_ok: set[str]):
+    recent = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00.000Z")
+    pod = {"title": "张小珺", "episodes": [
+        {"eid": "a" * 24, "title": "E1 机器人", "pubDate": recent, "description": "嘉宾聊具身", "playCount": "2100",
+         "commentCount": "5", "duration": "3600"},
+        {"eid": "b" * 24, "title": "Old", "pubDate": "2020-01-01T00:00:00.000Z", "playCount": "9"}]}
+    rss = f"""<?xml version="1.0"?><rss version="2.0"><channel><title>张小珺</title><item><title>E1 hub</title>
+<link>https://www.xiaoyuzhoufm.com/episode/{'c' * 24}</link><pubDate>{datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate>
+<description>hub desc</description></item></channel></rss>"""
+
+    def handler(req):
+        if req.url.host == "www.xiaoyuzhoufm.com":
+            if not direct_ok:
+                return httpx.Response(200, text="<html>blocked</html>")
+            return httpx.Response(200, text=f'<script id="__NEXT_DATA__" type="application/json">'
+                                            f'{json.dumps({"props": {"pageProps": {"podcast": pod}}})}</script>')
+        return httpx.Response(200, text=rss) if req.url.host in hub_ok else httpx.Response(502)
+    return handler
+
+
+def test_xiaoyuzhou_direct(monkeypatch):
+    real = httpx.Client
+    monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(_xyz_handler(True, set()))))
+    items, errs = src.fetch_xiaoyuzhou(["https://www.xiaoyuzhoufm.com/podcast/" + "0" * 24, "https://example.com/x"])
+    assert [i["id"] for i in items] == ["xiaoyuzhou:" + "a" * 24]
+    it = items[0]
+    assert it["type"] == "podcast" and it["popularity"] == 2100 and it["extra"] == {"feed": "张小珺", "comments": 5, "minutes": 60}
+    assert len(errs) == 1 and "不是小宇宙节目页" in errs[0]
+
+
+def test_xiaoyuzhou_rsshub_fallback(monkeypatch):
+    real = httpx.Client
+    monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(_xyz_handler(False, {"hub2.example"}))))
+    items, errs = src.fetch_xiaoyuzhou(["https://www.xiaoyuzhoufm.com/podcast/" + "0" * 24],
+                                       rsshub_bases=["https://hub1.example", "https://hub2.example/"])
+    assert not errs and [i["id"] for i in items] == ["xiaoyuzhou:" + "c" * 24]
+    assert items[0]["source"] == "xiaoyuzhou" and items[0]["extra"]["via"] == "https://hub2.example/"
+    monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(_xyz_handler(False, set()))))
+    items, errs = src.fetch_xiaoyuzhou(["https://www.xiaoyuzhoufm.com/podcast/" + "0" * 24], rsshub_bases=["https://hub1.example"])
+    assert not items and "RSSHub 也没取到" in errs[0]

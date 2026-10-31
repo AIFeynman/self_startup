@@ -18,6 +18,7 @@ description: 信息推荐板块：收集 AI 相关的论文、博客、产品、
 | github | 项目 | Search API，近 14 天新建的 AI 仓库，stars（设 `GITHUB_TOKEN` 提高限额） |
 | blog | 博客 | `settings.feed.rss` 里约 40 个 RSS/Atom（厂商官方、研究机构、一线实践者、中文媒体），加 `feed.sites` 里没有 RSS 的官方站（Claude.dev、Kimi、MiniMax、DeepSeek、字节 Seed…，读文章页的标题 / 发布日期 / 简介，`extra.via=scrape`）；无热度 |
 | podcast | 播客 | `settings.feed.podcasts` 的播客 RSS（Latent Space、Dwarkesh、No Priors、MLST、硅谷101…），每档最多 5 期，只取节目简介；无热度 |
+| xiaoyuzhou | 播客 | `settings.feed.xiaoyuzhou` 的小宇宙节目页（张小珺、十字路口、晚点聊），直读页面内嵌数据，每档最多 5 期；失败时依次试 `feed.rsshub_bases` 的公共 RSSHub；playCount（播放） |
 | reddit | 讨论 | r/LocalLLaMA、r/ClaudeAI、r/MachineLearning 本周 top（JSON 被挡时退回 RSS，无票数） |
 | twitter | 讨论 | `feed.x_accounts` 名单（约 95 个官方 / 研究 / 工程账号）每人近 3 天 ≥100 赞的原创推文取前 2 条 + `feed.x_queries` 热帖搜索（结果需含明确 AI 词）；likes。GetXAPI 优先、twitterapi.io 兜底，每账号 / 搜索词一次请求 |
 | producthunt | 产品 | 官方 GraphQL，近 2 天按票数，只留 AI 相关；votes。没配密钥时退回公开 feed（无票数） |
@@ -50,11 +51,11 @@ curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{
 curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{"id":"hn:123","saved":true}'
 curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{"id":"hn:123","hidden":true}'
 curl -s $API/api/feed/config                                 # 当前兴趣词、半衰期、查询词、RSS / 官方站 / 播客 / X 名单
-# 修改兴趣词（整体替换列表）；其它旋钮同理写在 feed 下：half_life_hours / hn_queries / github_queries / reddit / rss / sites / podcasts / x_accounts / x_queries / x_min_likes / sources
+# 修改兴趣词（整体替换列表）；其它旋钮同理写在 feed 下：half_life_hours / hn_queries / github_queries / reddit / rss / sites / podcasts / xiaoyuzhou / rsshub_bases / x_accounts / x_queries / x_min_likes / sources
 curl -s -X PUT $API/api/settings -H 'Content-Type: application/json' -d '{"feed":{"interests":["agent","llm","mcp","rl"]}}'
 ```
 
-条目 id 形如 `hn:123`、`github:owner/repo`、`arxiv:2610.12345`、`hf:2610.12345`、`blog:<hash>`、`podcast:<hash>`、`reddit:<id>`、`twitter:<tweet id>`、`producthunt:<id>`。
+条目 id 形如 `hn:123`、`github:owner/repo`、`arxiv:2610.12345`、`hf:2610.12345`、`blog:<hash>`、`podcast:<hash>`、`xiaoyuzhou:<eid>`、`reddit:<id>`、`twitter:<tweet id>`、`producthunt:<id>`。
 
 ## 怎么给推荐
 
