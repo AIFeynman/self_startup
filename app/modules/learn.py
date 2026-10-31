@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS learn_plans (
     overview_md    TEXT DEFAULT '',
     job_id         INTEGER,
     created_at     TEXT,
-    updated_at     TEXT
+    updated_at     TEXT,
+    layout         TEXT DEFAULT '',            -- rounds 三轮由浅入深（2026-10-31 起的默认）/ '' 老计划的六阶段
+    from_plan      INTEGER                     -- 由哪个老计划「精简成三轮」而来（老计划保留，状态 archived）
 );
 CREATE TABLE IF NOT EXISTS learn_steps (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +100,15 @@ CREATE TABLE IF NOT EXISTS learn_events (
 CREATE INDEX IF NOT EXISTS idx_learn_events_step ON learn_events(step_id);
 """
 
+# 三轮由浅入深（新计划默认）：先拿到最新全貌和主干，再学会判断，最后跟前沿、用项目和产品实践检验；每轮结束都可以停
+ROUNDS = {1: "看懂：最新全貌与主干机制", 2: "会判断：经典与一线人物", 3: "跟前沿、做出来"}
+ROUND_GOALS = {
+    1: "拿到最新的领域地图（以近 12 个月的综述 / 书为主读物），吃透撑起它的 2–3 个核心机制；能把任意新论文或新产品定位到地图上、讲清它靠什么工作",
+    2: "一篇经典讲透一个机制，知道主干怎么来的、为什么有效；看懂一线人物的判断和依据，能对新方案做出有依据的判断",
+    3: "消化最新论文并判断价值；读懂代表性开源项目怎么落地，亲手用对标产品 / 工具并写出有依据的使用评估",
+}
+PLAN_COLS = {"layout": "TEXT DEFAULT ''", "from_plan": "INTEGER"}
+# 老计划的六个阶段（2026-10-31 之前生成的计划）
 STAGES = {1: "领域综述", 2: "核心人物与观点", 3: "关键书籍 / 经典论文",
           4: "核心机制 / 概念精学", 5: "前沿进展", 6: "实践与输出"}
 # 每个阶段的目的：写章节、出测试、页面引导都按它来（细则见 skills/learn/chapter.md）
@@ -239,6 +250,31 @@ class ItemIn(BaseModel):
     kind: str = ""
     focus: str = ""
     depth: str = ""      # quick / full；空 = 论文 full、GitHub quick
+
+
+def layout_of(p: dict | None) -> tuple[dict, dict, str]:
+    """计划用哪套结构：(各轮 / 阶段名, 目的, 单位)。"""
+    return (ROUNDS, ROUND_GOALS, "轮") if (p or {}).get("layout") == "rounds" else (STAGES, STAGE_GOALS, "阶段")
+
+
+def stage_label(p: dict | None, no: int, with_goal: bool = False) -> str:
+    names, goals, unit = layout_of(p)
+    label = f"第 {no} 轮 · {names.get(no, '')}" if unit == "轮" else f"阶段 {no} · {names.get(no, '')}"
+    return label + (f" —— 本{unit}目的：{goals.get(no, '')}" if with_goal else "")
+
+
+_plan_cols_ok = False
+
+
+def _ensure_plan_cols() -> None:
+    global _plan_cols_ok
+    if _plan_cols_ok:
+        return
+    cols = {r["name"] for r in db.rows("PRAGMA table_info(learn_plans)")}
+    for k, decl in PLAN_COLS.items():
+        if k not in cols:
+            db.execute(f"ALTER TABLE learn_plans ADD COLUMN {k} {decl}")
+    _plan_cols_ok = True
 
 
 def _ensure_step_cols() -> None:
@@ -506,6 +542,7 @@ class StepIn(BaseModel):
 
 
 def _plan(pid: int) -> dict:
+    _ensure_plan_cols()
     p = db.row("SELECT * FROM learn_plans WHERE id=?", [pid])
     if not p:
         raise HTTPException(404, "plan not found")
@@ -601,6 +638,8 @@ def add_step(pid: int, d: dict, after_step_id: int | None = None) -> int:
     if not f.get("title"):
         raise HTTPException(400, "title required")
     f.setdefault("stage", 1)
+    if (db.row("SELECT layout FROM learn_plans WHERE id=?", [pid]) or {}).get("layout") == "rounds":
+        f["stage"] = min(f["stage"], len(ROUNDS))
     after = db.row("SELECT * FROM learn_steps WHERE id=? AND plan_id=?", [after_step_id, pid]) if after_step_id else None
     if after:
         f["stage"], f["ord"] = after["stage"], after["ord"] + 1
@@ -682,16 +721,26 @@ def apply_edits(pid: int, text: str) -> dict:
     return stat
 
 
+def _from_old_block(p: dict) -> str:
+    """由老计划精简成三轮：交代已经学过什么、哪里薄弱，新计划跳过已会的、补薄弱处。"""
+    if not p.get("from_plan") or not db.row("SELECT id FROM learn_plans WHERE id=?", [p["from_plan"]]):
+        return ""
+    return (f"\n- 这份计划由用户的老计划（六阶段、偏长）精简成三轮。老计划的进度、测试和反馈如下：已完成且测试过关的内容不要再排"
+            f"（第 1 轮全貌可以一句话衔接）；薄弱处和反馈里没懂的地方要在新计划里补上；老计划里仍然有价值的资源可以沿用（先核对是否仍是最新）。\n"
+            f"{_plan_snapshot(p['from_plan'])[:6000]}\n")
+
+
 def plan_prompt(p: dict) -> str:
-    return f"""任务：为下面的主题生成一份专业级、可交互的学习计划。今天是 {db.today()}。
+    return f"""任务：为下面的主题生成一份专业级、循序渐进的三轮学习计划。今天是 {db.today()}。
 主题：{p['topic']}
 我的背景：{p['background'] or '（未说明）'}
 学习目标：{p['goal'] or '（未说明）'}
 每周可投入：{p['hours_per_week']} 小时
 
 要求：
-- 阶段 1 的写法参考 {Path(settings.get('learn.paper_skill', '')).expanduser().parent.parent / 'domain-landscape' / 'SKILL.md'}（如能读取）。
-- 联网检索真实资源，尽量用 WebFetch/curl 核对链接可访问；前沿进展写明日期。
+- 第 1 轮全貌的写法参考 {Path(settings.get('learn.paper_skill', '')).expanduser().parent.parent / 'domain-landscape' / 'SKILL.md'}（如能读取）。
+- 联网检索真实资源，尽量用 WebFetch/curl 核对链接可访问。全貌必须以最新的综述 / 书为主读物，前沿只用近 6–12 个月的材料，都写日期；
+  项目实践选活跃的 GitHub 仓库（写 star 和最近提交），产品实践选真实可上手的对标产品 / 工具。{_from_old_block(p)}
 - 用户已学过的内容（避免重复、可做衔接）：
 {_known_knowledge(exclude_plan=p['id'])}
 - 不要写任何文件，也不要调用平台 API 写数据；只在最终回复中给出 JSON（一个 ```json 代码块），平台会自动导入。
@@ -703,6 +752,7 @@ def plan_prompt(p: dict) -> str:
 
 def adapt_prompt(p: dict, note: str = "") -> str:
     return f"""任务：根据我的学习进度和反馈，调整学习计划（主题：{p['topic']}）。今天是 {db.today()}。
+计划结构：{'三轮（stage 填 1–3）' if p.get('layout') == 'rounds' else '老计划的六阶段（stage 仍按六阶段填 1–6，见方法论末尾「老计划」）'}
 {('我的补充说明：' + note) if note else ''}
 
 当前计划与进度（step_id 用于 edits）：
@@ -733,8 +783,9 @@ def list_plans():
 def create_plan(body: PlanIn):
     if not body.topic.strip():
         raise HTTPException(400, "topic required")
+    _ensure_plan_cols()
     pid = db.insert("learn_plans", {"topic": body.topic.strip(), "background": body.background, "goal": body.goal,
-                                    "hours_per_week": body.hours_per_week, "status": "generating",
+                                    "hours_per_week": body.hours_per_week, "status": "generating", "layout": "rounds",
                                     "created_at": db.now(), "updated_at": db.now()})
     jid = jobs.submit("learn", plan_prompt(_plan(pid)), ref=f"learn:plan:{pid}", add_dirs=_plan_dirs())
     db.update("learn_plans", pid, {"job_id": jid})
@@ -747,8 +798,10 @@ def get_plan(pid: int):
     steps = steps_of(pid)
     p["progress"] = _progress(steps)
     p["steps"] = [public_step(s) for s in steps]
-    p["stages"] = STAGES
-    p["stage_goals"] = STAGE_GOALS
+    p["stages"], p["stage_goals"], p["unit"] = layout_of(p)
+    if p.get("from_plan"):
+        p["from_topic"] = (db.row("SELECT topic FROM learn_plans WHERE id=?", [p["from_plan"]]) or {}).get("topic", "")
+    p["rounds_plan"] = (db.row("SELECT id FROM learn_plans WHERE from_plan=? AND status!='failed' ORDER BY id DESC", [pid]) or {}).get("id")
     return p
 
 
@@ -771,9 +824,28 @@ def delete_plan(pid: int):
 @router.post("/plans/{pid}/regenerate")
 def regenerate_plan(pid: int):
     p = _plan(pid)
+    if p.get("layout") != "rounds":  # 重新生成会清空步骤，顺势换成三轮
+        db.update("learn_plans", pid, {"layout": "rounds"})
+        p = _plan(pid)
     jid = jobs.submit("learn", plan_prompt(p), ref=f"learn:plan:{pid}", add_dirs=_plan_dirs())
     db.update("learn_plans", pid, {"job_id": jid, "status": "generating", "updated_at": db.now()})
     return get_plan(pid)
+
+
+@router.post("/plans/{pid}/rounds")
+def plan_to_rounds(pid: int):
+    """老计划精简成三轮：另生成一份新计划（跳过已学、补薄弱处），老计划原样保留，新计划生成成功后才归档老计划。"""
+    old = _plan(pid)
+    if old.get("layout") == "rounds":
+        raise HTTPException(400, "已经是三轮计划")
+    if (cur := db.row("SELECT id FROM learn_plans WHERE from_plan=? AND status!='failed' ORDER BY id DESC", [pid])):
+        return get_plan(cur["id"])
+    nid = db.insert("learn_plans", {"topic": old["topic"], "background": old["background"], "goal": old["goal"],
+                                    "hours_per_week": old["hours_per_week"], "status": "generating", "layout": "rounds",
+                                    "from_plan": pid, "created_at": db.now(), "updated_at": db.now()})
+    jid = jobs.submit("learn", plan_prompt(_plan(nid)), ref=f"learn:plan:{nid}", add_dirs=_plan_dirs())
+    db.update("learn_plans", nid, {"job_id": jid})
+    return get_plan(nid)
 
 
 @router.post("/plans/{pid}/adapt")
@@ -836,6 +908,11 @@ def _finish_plan(pid: int, job: dict, adapt: bool) -> None:
         return
     try:
         apply_edits(pid, job["output"]) if adapt else apply_plan(pid, job["output"])
+        p = _plan(pid)
+        if not adapt and p.get("from_plan") and (old := db.row("SELECT * FROM learn_plans WHERE id=?", [p["from_plan"]])) \
+                and old["status"] != "archived":  # 精简版生成好了：老计划归档（步骤、测试、记录都留着）
+            db.update("learn_plans", old["id"], {"status": "archived", "updated_at": db.now(),
+                                                 "overview_md": (old["overview_md"] or "") + f"\n\n## 已精简成三轮 {db.today()}\n新计划：计划 {pid}（#learn/plan/{pid}）。这份老计划的进度和学习记录都保留。"})
     except ValueError as e:
         p = _plan(pid)
         db.update("learn_plans", pid, {"status": "active" if adapt else "failed", "updated_at": db.now(),
@@ -1034,7 +1111,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 
 计划主题：{p['topic']}
 我的背景：{p['background'] or '（未说明）'}；学习目标：{p['goal'] or '（未说明）'}
-本章所在阶段：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} —— 本阶段目的：{STAGE_GOALS.get(s['stage'], '')}
+本章所在：{stage_label(p, s['stage'], True)}
 
 本章：{s['title']}
 能力目标：{s['goal'] or '（计划未写，按阶段目的和下面的说明自己定一个具体、可检验的目标）'}
@@ -1056,7 +1133,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 {('用户对本章的要求：' + note) if note else ''}
 {_extra_block(s)}
 做法：
-1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；阶段 1、3、5 必须核对资料时效。
+1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；全貌、前沿章节（老计划的阶段 1、3、5）必须核对资料时效，优先用最新的综述 / 书 / 论文。
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
    - {out / 'chapter.md'}
    - {out / 'quiz.json'}（测试题 + 知识卡）
@@ -1268,8 +1345,8 @@ def grade_prompt(s: dict, r: dict) -> str:
     wrong = "；".join(f"{q['id']}（{q.get('dim') or ''}·{q['section']}）" for q in s["quiz"]
                       if q["type"] == "choice" and not (r["items"].get(q["id"]) or {}).get("score"))
     return f"""任务：批改学习测试里的简答题，像一位鼓励为主、看重理解和判断的导师。今天是 {db.today()}。
-计划：{p['topic']}；本章：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」
-本阶段目的：{STAGE_GOALS.get(s['stage'], '')}
+计划：{p['topic']}；本章：{stage_label(p, s['stage'])} ·「{s['title']}」
+{stage_label(p, s['stage'], True).split(' —— ')[1]}
 （本章正文在 {_step_dir(s) / 'chapter.md'}，需要时可读。）
 选择题答错的：{wrong or '无'}
 
@@ -1370,8 +1447,8 @@ class CheckIn(BaseModel):
 def check_prompt(s: dict, c: dict) -> str:
     p = _plan(s["plan_id"])
     return f"""任务：对照「停一下」的要点，点评用户自己写下的判断，帮他看清差距、提升判断力。今天是 {db.today()}。
-计划：{p['topic']}；本章：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」
-本阶段目的：{STAGE_GOALS.get(s['stage'], '')}
+计划：{p['topic']}；本章：{stage_label(p, s['stage'])} ·「{s['title']}」
+{stage_label(p, s['stage'], True).split(' —— ')[1]}
 （本章正文在 {_step_dir(s) / 'chapter.md'}，需要时可读。）
 
 问题：{c['q']}
@@ -1497,11 +1574,12 @@ def _plan_snapshot(pid: int) -> str:
     pr = _progress(steps)
     lines = [f"计划 {pid}：{p['topic']}（状态 {p['status']}，进度 {pr['done']}/{pr['total']}，{pr['hours']}h）",
              f"背景：{p['background']}；目标：{p['goal']}；每周 {p['hours_per_week']}h", ""]
-    for stage, name in STAGES.items():
+    names, goals, unit = layout_of(p)
+    for stage, name in names.items():
         ss = [s for s in steps if s["stage"] == stage]
         if not ss:
             continue
-        lines.append(f"### 阶段{stage} {name}（目的：{STAGE_GOALS[stage]}）")
+        lines.append(f"### {stage_label(p, stage)}（目的：{goals[stage]}）")
         for s in ss:
             chap = {"ready": "章节已生成", "generating": "章节生成中", "failed": "章节生成失败"}.get(s["chapter_status"], "")
             extra = f"按需{EXTRA[s['origin']]}（源自 step_id={s['parent_id']}）" if s.get("origin") in EXTRA else ""
@@ -1544,8 +1622,9 @@ def agent_context(ref: str) -> str:
         quiz = "\n".join(f"- {q['id']} [{q['type']}] {q['q']}" + (f" → 得分 {r['items'][q['id']]['score']}；用户答：{str(r['answers'].get(q['id']))[:200]}"
                                                                   if r.get("status") == "graded" and q["id"] in r.get("items", {}) else "")
                          for q in s["quiz"])
-        return (f"用户正在读计划 {s['plan_id']} 的一章（step_id={s['id']}）：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」\n"
-                f"本阶段目的：{STAGE_GOALS.get(s['stage'], '')}\n能力目标：{s['goal'] or '（未写）'}\n"
+        sp = db.row("SELECT * FROM learn_plans WHERE id=?", [s["plan_id"]])
+        return (f"用户正在读计划 {s['plan_id']} 的一章（step_id={s['id']}）：{stage_label(sp, s['stage'])} ·「{s['title']}」\n"
+                f"{stage_label(sp, s['stage'], True).split(' —— ')[1]}\n能力目标：{s['goal'] or '（未写）'}\n"
                 f"章节文件：{_step_dir(s) / 'chapter.md'}（下方是摘录，需要时 Read 全文）；测试：{_step_dir(s) / 'quiz.json'}\n"
                 f"测试结果：{_quiz_line(s) or r.get('status') or '未做'}" + (f"；建议：{r.get('advice')}" if r.get("advice") else "")
                 + f"\n回答时围绕本章目标，用户答错的题优先帮他想通；不要直接改写章节，除非用户要求（重新生成：POST {api}/steps/{s['id']}/open -d '{{\"force\":true,\"note\":\"...\"}}'）。"
