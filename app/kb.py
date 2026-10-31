@@ -227,6 +227,8 @@ def _plans() -> list[dict]:
                 body.append(f"- 章末测试：{qr.get('score')} 分" + (f"；薄弱：{weak}" if weak else ""))
             if s.get("chapter_md"):
                 body.append(f"\n<details><summary>章节教程</summary>\n\n{s['chapter_md']}\n\n</details>")
+        if _has("learn_events"):
+            body += _learn_events_md(plan_id=p["id"])
         out.append(_doc("plan", p["id"], p["topic"], "\n".join(body), date=p["created_at"], updated=p.get("updated_at") or "",
                         tags=["学习计划", p["topic"]], status=p["status"],
                         summary=f"{p['goal']}（进度 {done}/{len(steps)}）"))
@@ -276,11 +278,24 @@ def _clip(t: str, n: int) -> str:
     return t if len(t) <= n else t[:n] + "…"
 
 
+def _learn_events_md(date: str = "", plan_id: int = 0) -> list[str]:
+    """学习记录（测试、停一下作答与 Agent 点评、理解度 / 反馈变化）的 markdown 行。"""
+    try:
+        from .modules import learn
+        titles = {r["id"]: r["title"] for r in db.rows("SELECT id, title FROM learn_steps")}
+        lines = [f"- {learn.event_line(e, titles)}" for e in learn.events_of(plan_id=plan_id or None, date=date) if e["kind"] != "check"]
+    except Exception:  # noqa: BLE001
+        return []
+    return (["\n## 学习记录"] + lines) if lines else []
+
+
 def _daily(docs: list[dict]) -> list[dict]:
     dates = {r["date"] for r in db.rows("SELECT DISTINCT date FROM tasks")}
     for t in ("review_days", "review_notes", "review_agent_stats", "agent_util"):
         if _has(t):
             dates |= {r["date"] for r in db.rows(f"SELECT DISTINCT date FROM {t}")}
+    if _has("learn_events"):
+        dates |= {r["d"] for r in db.rows("SELECT DISTINCT substr(created_at,1,10) AS d FROM learn_events")}
     by_date: dict[str, list[dict]] = {}
     for d in docs:
         if d["date"]:
@@ -326,6 +341,8 @@ def _daily(docs: list[dict]) -> list[dict]:
                     body.append(f"\n## {t}（{len(g[k])}）" if k == "delivered" else f"\n### {t}（{len(g[k])}）")
                     body += [f"- {x['at']} [{'/'.join(x['labels'])}] {x['project']} · {x['title']}"
                              + (f"（文档：{', '.join(x['docs'][:3])}）" if x.get("docs") else "") for x in g[k]]
+        if _has("learn_events"):
+            body += _learn_events_md(date)
         related = [d for d in by_date.get(date, []) if d["type"] != "daily"]
         if related:
             body.append("\n## 当天产出与记录")

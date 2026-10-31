@@ -335,3 +335,62 @@ def test_quiz_limits_and_recent_context(client, fake_submit, monkeypatch):
     client.post(f"/api/learn/steps/{p['steps'][0]['id']}/open", json={})
     assert "学以致用" in fake_submit[-1]["prompt"] and "ReAct" in fake_submit[-1]["prompt"]
     client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_learning_records_survive_regenerate(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    s1 = p["steps"][0]
+    sid = s1["id"]
+    client.post(f"/api/learn/steps/{sid}/open", json={})
+    _write_chapter(client, fake_submit, s1)
+    # 停一下作答 + 点评
+    c = client.post(f"/api/learn/steps/{sid}/checks/0", json={"q": "先怀疑什么？", "points": "题坏了", "answer": "评分器", "review": True}).json()
+    learn.on_job_done(_job(c["job_id"], '```json\n{"covered": ["评分器"], "missing": ["题坏了"], "off": [], "extra": [], "better": "b", "score": 0.5}\n```'))
+    # 测试
+    r = client.post(f"/api/learn/steps/{sid}/quiz", json={"answers": {"q1": 1, "q2": "规划"}}).json()
+    learn.on_job_done(_job(r["quiz_result"]["job_id"], '```json\n{"items": [{"id": "q2", "score": 1, "feedback": "好"}], "summary": "s",'
+                                                       ' "assessment": {"应用": "能用"}, "weak_points": ["痛点识别"], "advice": "a"}\n```'))
+    client.patch(f"/api/learn/steps/{sid}", json={"understanding": 4, "feedback": "pass^k 没懂"})
+    # 重新生成：旧章节归档、记录都在
+    client.post(f"/api/learn/steps/{sid}/open", json={"force": True, "note": "更难一点"})
+    out = learn._step_dir(s1)
+    assert not (out / "chapter.md").exists() and list((out / "history").glob("*/chapter.md"))
+    assert "history/ 是旧版本归档" in fake_submit[-1]["prompt"]
+    kinds = [e["kind"] for e in client.get(f"/api/learn/steps/{sid}/events").json()]
+    assert kinds == ["check", "check_review", "quiz", "rating", "chapter"]
+    quiz = [e for e in learn.events_of(step_id=sid) if e["kind"] == "quiz"][0]["data"]
+    assert quiz["score"] == 50 and quiz["answers"]["q1"] == 1 and quiz["questions"][0]["answer"] == 2  # 连同当时的题目
+    g = client.get(f"/api/learn/plans/{p['id']}/growth").json()
+    assert g["chapters"][0]["score"] == 50 and g["dims"] == {"理解": 0, "应用": 100}
+    assert [w["text"] for w in g["weak"]][:2] == ["痛点识别", "题坏了"]
+    assert g["counts"] == {"quiz": 1, "check": 1, "check_avg": 50, "events": 5}
+    # 复盘、知识库都能看到
+    from app import kb
+    from app.modules import review
+    ev = review.learning_extra(db.today())["events"]
+    assert any("测试「领域地图」第 1 次 50 分" in x for x in ev) and any("停一下" in x for x in ev)
+    assert any("学习记录" in line for line in kb._learn_events_md(date=db.today()))
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_backfill_from_jobs(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    s1 = p["steps"][0]
+    sid = s1["id"]
+    db.update("learn_steps", sid, {"quiz_result": {"attempt": 1, "last_score": 65}})
+    jc = db.insert("jobs", {"module": "learn", "ref": f"learn:step:{sid}:check:2", "engine": "fake", "status": "done",
+                            "prompt": "任务：…\n问题：0% 先怀疑什么？\n要点（参考答案）：题坏了\n用户的判断：评分器坏了\n\n要求：…",
+                            "output": '```json\n{"covered": [], "missing": ["题坏了"], "off": [], "extra": [], "better": "b", "score": 0.4}\n```',
+                            "created_at": "2026-10-31T17:00:00", "finished_at": "2026-10-31T17:00:20"})
+    db.insert("jobs", {"module": "learn", "ref": f"learn:step:{sid}:grade", "engine": "fake", "status": "done",
+                       "prompt": "选择题答错的：q1（痛点）\n\n### q5（考察：理解；对应小节：x）\n题目：举例\n参考答案要点：r\n评分要点：a\n用户回答：我的回答\n\n评分：…",
+                       "output": '```json\n{"items": [{"id": "q5", "score": 0.5, "feedback": "f"}], "summary": "s", "weak_points": ["w"]}\n```',
+                       "created_at": "2026-10-31T17:28:00", "finished_at": "2026-10-31T17:28:30"})
+    assert client.post("/api/learn/events/backfill").json() == {"check_review": 1, "quiz": 1}
+    assert client.post("/api/learn/events/backfill").json() == {"check_review": 0, "quiz": 0}  # 去重
+    evs = learn.events_of(step_id=sid)
+    ck = next(e for e in evs if e["src"] == f"job:{jc}")
+    assert ck["data"]["answer"] == "评分器坏了" and ck["created_at"] == "2026-10-31T17:00:20"
+    qz = next(e for e in evs if e["kind"] == "quiz")["data"]
+    assert qz["score"] == 65 and qz["items"]["q5"]["answer"] == "我的回答" and qz["wrong_choices"].startswith("q1")
+    client.delete(f"/api/learn/plans/{p['id']}")

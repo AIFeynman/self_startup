@@ -195,6 +195,16 @@ const CSS = `
 .ln-kpc .hd { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; } .ln-kpc .hd b { flex: 1; }
 .ln-kpc .tg { font-size: 11px; color: var(--muted); white-space: nowrap; } .ln-kpc .md { font-size: 13.5px; color: var(--text); } .ln-kpc .md p { margin: 0; }
 .ln-dim { background: var(--accent-soft); color: var(--accent); }
+.ln-hist { margin-top: 14px; } .ln-hist > summary { cursor: pointer; }
+.ln-hi { padding: 10px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.ln-hi .hd { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; } .ln-hi .at { font: 12px var(--mono); color: var(--muted); }
+.ln-hi .sub { margin: 3px 0; } .ln-hi .sub > b { font-weight: 600; } .ln-hi .mine { margin: 3px 0; padding: 4px 8px; background: var(--bg); border-radius: 6px; white-space: pre-wrap; }
+.ln-hi details > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.ln-growth { margin-bottom: 16px; } .ln-growth h3 { margin: 0; font-size: 17px; }
+.ln-gch { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ln-gch a { display: inline-flex; gap: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; color: var(--text); }
+.ln-gch a b { color: var(--accent); font-family: var(--mono); }
+.ln-weak { font-size: 13px; padding: 3px 0; } .ln-weak .tag { margin-right: 6px; }
 .ln-about { font-size: 12px; color: var(--accent); margin: -4px 0 6px 22px; }
 .ln-dims { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .ln-dimrow { display: grid; grid-template-columns: 34px 120px 40px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 13px; }
@@ -636,6 +646,7 @@ async function renderPlan(el, ctx, pid) {
     ]));
   }
 
+  el.append(growthView(ctx, pid));
   if (p.overview_md) {
     el.append(h('details.card.flat', { open: !p.steps.length }, [h('summary', {}, '计划总览 / 调整记录'),
       annotate(ctx, md(p.overview_md), { doc: `learn:plan:${pid}`, title: `${p.topic} · 计划总览`, link: `#learn/plan/${pid}`, source: p.overview_md })]));
@@ -814,6 +825,7 @@ async function renderChapter(el, ctx, pid, sid) {
     show(tab);
   } else main.append(qv);
 
+  main.append(historyView(ctx, s));
   // 我的笔记 / 理解度 / 反馈（与计划页同一份数据）
   const saved = h('span.ln-saved');
   const quiet = async (patch) => { await api.patch(`/api/learn/steps/${sid}`, patch); saved.textContent = '已保存 ✓'; setTimeout(() => { saved.textContent = ''; }, 2000); };
@@ -1049,4 +1061,77 @@ function checkCard(ctx, card, s, idx) {
   card.replaceChildren(h('div.lbl', {}, '停一下'), qEl, aEl, box);
   draw();
   if (c?.status === 'reviewing') poll();
+}
+
+// 学习记录：本章历次测试、停一下作答与点评、理解度变化（只追加，重新生成章节也保留）
+function historyView(ctx, s) {
+  const { api, h, ui } = ctx;
+  const box = h('details.card.flat.ln-hist', {}, [h('summary', {}, '学习记录（历次测试、停一下作答与点评）')]);
+  box.addEventListener('toggle', async () => {
+    if (!box.open || box.dataset.loaded) return;
+    box.dataset.loaded = '1';
+    const evs = (await api.get(`/api/learn/steps/${s.id}/events`).catch(() => [])).filter((e) => e.kind !== 'check');
+    if (!evs.length) { box.append(h('div.muted', {}, '还没有记录')); return; }
+    box.append(...evs.slice().reverse().map((e) => histItem(ctx, e)));
+  });
+  return box;
+}
+
+function histItem(ctx, e) {
+  const { h, ui } = ctx;
+  const d = e.data || {};
+  const at = h('span.at', {}, (e.created_at || '').slice(5, 16).replace('T', ' '));
+  if (e.kind === 'quiz') {
+    const items = Object.entries(d.items || {});
+    return h('div.ln-hi', {}, [h('div.hd', {}, [at, h('b', {}, `测试第 ${d.attempt || 1} 次`), d.score !== null && d.score !== undefined ? h('span.tag' + (d.passed ? '.ok' : ''), {}, `${d.score} 分`) : null,
+      ...Object.entries(d.dims || {}).map(([k, v]) => h('span.tag.gray', {}, `${k} ${v}`)), d.backfill ? h('span.muted', {}, '（从任务记录补回）') : null]),
+      d.summary ? h('div', {}, d.summary) : null,
+      ...Object.entries(d.assessment || {}).map(([k, v]) => h('div.sub', {}, [h('b', {}, k + '：'), v])),
+      d.weak_points?.length ? h('div.sub', {}, [h('b', {}, '薄弱：'), d.weak_points.join('；')]) : null,
+      d.advice ? h('div.sub', {}, [h('b', {}, '建议：'), d.advice]) : null,
+      items.length ? h('details', {}, [h('summary', {}, `逐题（${items.length}）`), ...items.map(([qid, it]) => {
+        const q = (d.questions || []).find((x) => x.id === qid) || {};
+        const mine = it.answer ?? d.answers?.[qid];
+        return h('div.sub', {}, [h('b', {}, `${qid} · ${Math.round((it.score || 0) * 100)}%`), ' ', it.q || q.q || '',
+          mine !== undefined && mine !== null && mine !== '' ? h('div.mine', {}, '我答：' + (q.options ? `${'ABCDEFG'[+mine]}. ${q.options[+mine] ?? ''}` : mine)) : null,
+          it.feedback ? h('div.muted', {}, it.feedback) : null]);
+      })]) : null]);
+  }
+  if (e.kind === 'check_review') {
+    const rv = d.review || {};
+    const li = (label, arr) => (arr?.length ? h('div.sub', {}, [h('b', {}, label), arr.join('；')]) : null);
+    return h('div.ln-hi', {}, [h('div.hd', {}, [at, h('b', {}, '停一下'), h('span.tag', {}, `${Math.round((rv.score || 0) * 100)}%`), d.backfill ? h('span.muted', {}, '（从任务记录补回）') : null]),
+      h('div', {}, d.q), h('div.mine', {}, '我答：' + (d.answer || '')),
+      li('抓到了：', rv.covered), li('漏掉了：', rv.missing), li('想偏了：', rv.off), li('有道理的补充：', rv.extra),
+      rv.better ? h('div.sub', {}, [h('b', {}, '高手会这样想：'), rv.better]) : null]);
+  }
+  if (e.kind === 'chapter') return h('div.ln-hi', {}, h('div.hd', {}, [at, h('b', {}, '章节' + (d.action || '生成')), d.note ? h('span.muted', {}, '要求：' + d.note) : null,
+    d.old_score !== null && d.old_score !== undefined ? h('span.muted', {}, `旧版测试 ${d.old_score} 分`) : null]));
+  if (e.kind === 'rating') {
+    const names = { understanding: '理解度', feedback: '反馈', status: '状态', notes: '笔记' };
+    return h('div.ln-hi', {}, h('div.hd', {}, [at, ...Object.entries(d).filter(([k]) => k !== 'prev').map(([k, v]) => h('span', {}, `${names[k] || k}：${String(v).slice(0, 80)}`))]));
+  }
+  return h('div.ln-hi', {}, h('div.hd', {}, [at, e.kind]));
+}
+
+// 成长档案：每章最近一次测试、三个维度平均、最近的薄弱点
+function growthView(ctx, pid) {
+  const { api, h, ui } = ctx;
+  const box = h('div');
+  api.get(`/api/learn/plans/${pid}/growth`).then((g) => {
+    if (!g.counts.events) return;
+    const titles = g.titles || {};
+    box.append(h('div.card.ln-growth', {}, [
+      h('div.row', {}, [h('h3', {}, '成长档案'), h('span.grow'), h('span.muted', {},
+        `测试 ${g.counts.quiz} 次 · 停一下点评 ${g.counts.check} 次` + (g.counts.check_avg !== null ? `（平均 ${g.counts.check_avg}%）` : ''))]),
+      Object.keys(g.dims).length ? h('div.ln-dims', {}, Object.entries(g.dims).map(([d, v]) => h('div.ln-dimrow', {}, [
+        h('b', {}, d), h('div.bar', {}, h('i', { style: { width: v + '%' } })), h('span.v', {}, v + '%'), h('span.t', {}, { 理解: '对这个方向的理解', 判断: '判断力', 应用: '用到自己的论文 / 项目' }[d])]))) : null,
+      g.chapters.length ? h('div.ln-gch', {}, g.chapters.map((c) => h('a', { href: chapterHref(pid, c.step_id) }, [
+        h('span', {}, c.title), h('b', {}, c.score !== null && c.score !== undefined ? `${c.score}` : '—')]))) : null,
+      g.weak.length ? h('div', { style: { marginTop: '10px' } }, [h('div.card-label', {}, '最近要补的地方（来自测试和停一下点评）'),
+        ...g.weak.slice(0, 6).map((w) => h('div.ln-weak', {}, [h('span.tag.gray', {}, w.from), w.text,
+          h('a.muted', { href: chapterHref(pid, w.step_id) }, ' · ' + (titles[w.step_id] || '').slice(0, 16))]))]) : null,
+    ]));
+  }).catch(() => {});
+  return box;
 }
