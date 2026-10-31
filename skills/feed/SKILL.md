@@ -23,7 +23,7 @@ description: 信息推荐板块：收集 AI 相关的论文、博客、产品、
 | twitter | 讨论 | `feed.x_accounts` 名单（约 95 个官方 / 研究 / 工程账号）每人近 3 天 ≥100 赞的原创推文取前 2 条 + `feed.x_queries` 热帖搜索（结果需含明确 AI 词）；likes。GetXAPI 优先、twitterapi.io 兜底，每账号 / 搜索词一次请求。X 长文（Article）标 `extra.x_article`（own 自己发 / quoted 引用），自己发的长文另调 twitterapi.io 补标题和开头（`extra.article_title`，每次最多 20 篇，补过的不再调），不取正文；搜索来的长文补不到标题或与 AI 无关就丢掉 |
 | producthunt | 产品 | 官方 GraphQL，近 2 天按票数，只留 AI 相关；votes。没配密钥时退回公开 feed（无票数） |
 
-接口密钥放项目根目录 `.env`（不进 git）：`GETXAPI_KEY` / `TWITTER_API_KEY`（X）、`PN_API_KEY` + `PN_API_Secret` 或 `PRODUCTHUNT_TOKEN`（Product Hunt）、`GITHUB_TOKEN`。缺 X 密钥时 x 来源报错、其它来源照常。
+接口密钥放项目根目录 `.env`（不进 git）：`DEEPSEEK_API_KEY`（中文一句话）、`GETXAPI_KEY` / `TWITTER_API_KEY`（X）、`PN_API_KEY` + `PN_API_Secret` 或 `PRODUCTHUNT_TOKEN`（Product Hunt）、`GITHUB_TOKEN`。缺 X 密钥时 x 来源报错、其它来源照常。
 
 每个来源独立失败，错误记在 `/api/feed/status` 的 `results.<source>.errors`，不影响其它来源。
 
@@ -42,6 +42,8 @@ score = 热度（同源最近 30 天条目里的百分位，0–1；整源无热
 同一 URL（arXiv/HF 论文统一按 arXiv id）、同一标题，或「同一件事」（标题词重合 ≥3 个、Jaccard ≥0.5、发布相差 ≤4 天）
 只保留分最高的一条，其余记为「也见于 HN×2、博客」。
 `why` 的顺序：官方 / X 长文 / 关注账号 → 热度（GitHub 带「建 N 天」）→ 新鲜度 → 命中兴趣词（只写最具体的）→ 偏好线索（只说兴趣词之外、在 ≥2 条赞过内容里出现的词）。
+`gist`：排序前列（全部前 60 + 每类前 10，标题已是中文的除外）的中文一句话（≤40 字，DeepSeek deepseek-v4-flash 根据标题和简介生成，
+不补充给出内容以外的事实）。完整刷新后自动补，只刷部分来源不跑；`POST /api/feed/gist` 手动补。推荐时优先用 gist 当中文简介。
 API 返回的 `summary` 已去掉与标题重复的开头（推文标题就是第一句）；HN 链接帖的简介是原文页的 og:description，GitHub 标题带一句话描述。
 「全部」列表做多样化：前 5 条（今日精选）每个来源最多 1 条、每类最多 2 条；前 30 条每类 ≤40%、每个来源 ≤20%。
 每条带 `why`，例如 `HN 312分 · 24 小时内 · 命中 agent · 你赞过相似内容（memory）`。

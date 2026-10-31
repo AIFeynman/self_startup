@@ -574,3 +574,54 @@ def test_same_event_merge():
     assert len({"twitter:1", "blog:1"} & set(out)) == 1                       # 官方博客和官方推文是同一条新闻
     assert "hn:3" in out and "hn:4" in out
     assert rk.event_tokens("@a：Backdoors in Extensions") == {"backdoor", "extension"}
+
+
+# ---------- 中文一句话 ----------
+
+def _gist_handler(calls):
+    def handler(req):
+        rows = json.loads(json.loads(req.content)["messages"][1]["content"])
+        calls.append(len(rows))
+        items = [{"id": r["id"], "gist": f"中文概括{r['id']}"} for r in rows] + [{"id": "bogus", "gist": "不该出现"}]
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"items": items}, ensure_ascii=False)}}]})
+    return handler
+
+
+def test_gist_pick_and_generate(monkeypatch):
+    from app.modules import _feed_gist as g
+    a = _it("a", "Title A", summary="sum a")
+    b = {**_it("b", "Title B"), "extra": {"gist": "旧", "gist_src": g.gist_key(_it("b", "Title B"))}}
+    c = {**_it("c", "Title C changed"), "extra": {"gist": "旧", "gist_src": "stale"}}
+    zh = _it("zh", "新的创业机会，正在 Claude Code 和 Codex 周围长出来｜对谈 Treg")
+    assert g.is_chinese(zh["title"]) and not g.is_chinese("@a：Claude Code 插件 plugins I'd install on day one")
+    todo = g.pick([a, b, c, zh], {"paper": [a]}, top=10, per_type=5)
+    assert [x["id"] for x in todo] == ["a", "c"]                    # b 已有且没变；a 只算一次；c 标题变了重做
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    calls = []
+    many = [_it(f"i{n}", f"T{n}") for n in range(45)]
+    got, errs = g.generate(many, client=httpx.Client(transport=httpx.MockTransport(_gist_handler(calls))))
+    assert calls == [20, 20, 5] and len(got) == 45 and got["i3"] == "中文概括i3" and "bogus" not in got and not errs
+    assert g.fit("短句") == "短句"
+    long = "有文章称 Anthropic 官方 Claude Code 的 VS Code 扩展在 Cursor 上含恶意代码，会创建后门并上传本地文件，影响大量开发者的机器安全与凭据，社区正在讨论如何排查与清理受影响的安装"
+    assert g.fit(long).endswith("…") and len(g.fit(long)) <= g.MAX_CHARS + 1 and "，会创建" not in g.fit(long)[-6:]
+    monkeypatch.delenv("DEEPSEEK_API_KEY")
+    assert g.generate(many)[1][0].startswith("未配置 DEEPSEEK_API_KEY")
+
+
+def test_gist_runs_only_on_full_refresh(client, monkeypatch):
+    from app import db
+    from app.modules import _feed_gist as g, feed
+    monkeypatch.setattr(feed, "_collectors", lambda: {"hn": lambda: [_it("hn:g1", "Gist me please")]})
+    ran = []
+    monkeypatch.setattr(g, "generate", lambda items, **kw: (ran.append(len(items)) or {x["id"]: "一句话" for x in items}, []))
+    monkeypatch.setattr(feed, "cfg", lambda k: {"sources": ["hn"]}.get(k, feed.CFG_DEFAULTS.get(k)))
+    st = client.post("/api/feed/refresh", json={"sources": ["hn"], "wait": True}).json()
+    assert "gist" not in st["results"] and not ran                  # 只刷部分来源：不调模型
+    st = client.post("/api/feed/refresh", json={"wait": True}).json()
+    assert st["results"]["gist"]["count"] >= 1
+    item = next(x for x in client.get("/api/feed/items?q=一句话").json()["items"] if x["id"] == "hn:g1")
+    assert item["gist"] == "一句话"
+    before = len(ran)
+    client.post("/api/feed/gist")
+    assert len(ran) == before or ran[-1] < ran[0]                    # 已生成且没变的不再送
+    assert '"gist_src"' in db.row("SELECT extra FROM feed_items WHERE id='hn:g1'")["extra"]

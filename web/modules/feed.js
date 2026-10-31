@@ -32,6 +32,8 @@ const CSS = `
 .fd-best { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent);
   font: 600 12px/20px var(--font); vertical-align: 2px; }
 .fd-sum { color: var(--text); opacity: .82; font-size: 13.5px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.fd-gist { color: var(--text); font-size: 14.5px; font-weight: 500; line-height: 1.5; margin-top: 4px; }
+.fd-gist + .fd-sum { opacity: .6; font-size: 12.5px; }
 .fd-why { color: var(--muted); font-size: 12.5px; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .fd-why b { font-weight: 500; color: var(--muted); margin-right: 4px; }
 .fd-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
@@ -257,6 +259,7 @@ export default {
           h('div.fd-n', {}, String(i + 1).padStart(2, '0')),
           h('div', { style: { minWidth: 0 } }, [
             h('div', {}, [titleLink(x), i === 0 ? h('span.fd-best', {}, '最推荐') : null]),
+            x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
             why(x),
             h('div.fd-meta', {}, metaChips(x)),
@@ -267,6 +270,7 @@ export default {
         node = h('div.fd-item', {}, [
           h('div', { style: { minWidth: 0 } }, [
             titleLink(x),
+            x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
               x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
@@ -278,7 +282,7 @@ export default {
         ]);
       }
       node.addEventListener('mousedown', (e) => { if (!e.target.closest('button, a')) select(entries.indexOf(entry), false); });
-      node._hay = norm([x.title, x.summary, x.source_label, x.why, x.extra?.feed, TYPE_NAME[x.type]].join(' '));
+      node._hay = norm([x.title, x.gist, x.summary, x.source_label, x.why, x.extra?.feed, TYPE_NAME[x.type]].join(' '));
       if (st.q && !matches(node)) node.classList.add('fd-hidden');
       return node;
     }
