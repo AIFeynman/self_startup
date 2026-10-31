@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS learn_steps (
     chapter_status TEXT DEFAULT '',           -- '' / generating / ready / failed
     chapter_job   INTEGER,
     quiz          TEXT DEFAULT '[]',          -- 章末测试 JSON [{id,type:choice|short,q,options,answer,explain,reference,rubric,skill,section}]
+    cards         TEXT DEFAULT '[]',          -- 知识卡 JSON [{front,back,tag}]
     quiz_result   TEXT DEFAULT ''             -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
 );
 CREATE INDEX IF NOT EXISTS idx_learn_steps_plan ON learn_steps(plan_id);
@@ -90,7 +91,8 @@ STAGE_GOALS = {
 }
 PASS_SCORE = 70  # 章末测试及格线：及格自动标记完成
 STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapter_status": "TEXT DEFAULT ''",
-             "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''"}
+             "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''",
+             "cards": "TEXT DEFAULT '[]'"}
 SKILL_DIR = ROOT / "skills" / "learn"
 STEP_STATUS = ("todo", "doing", "done", "skipped")
 router = APIRouter()
@@ -491,6 +493,7 @@ def _decode_step(s: dict) -> dict:
     s["resources"] = _loads(s.get("resources"), [])
     s["questions"] = _loads(s.get("questions"), [])
     s["quiz"] = _loads(s.get("quiz"), [])
+    s["cards"] = _loads(s.get("cards"), [])
     s["quiz_result"] = _loads(s.get("quiz_result"), None)
     return s
 
@@ -865,7 +868,8 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；阶段 1、3、5 必须核对资料时效。
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
    - {out / 'chapter.md'}
-   - {out / 'quiz.json'}
+   - {out / 'quiz.json'}（测试题 + 知识卡）
+   - 需要交互小组件时：{out / 'widgets'}/<名字>.html（可选，最多 2 个）
 3. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了，以及资料时效结论。
 
 ---- 章节教程规范 ----
@@ -922,6 +926,15 @@ def _clean_quiz(o) -> list[dict]:
     return out
 
 
+def _clean_cards(o) -> list[dict]:
+    cs = o.get("cards") if isinstance(o, dict) else None
+    out = []
+    for c in cs if isinstance(cs, list) else []:
+        if isinstance(c, dict) and str(c.get("front") or "").strip() and str(c.get("back") or "").strip():
+            out.append({"front": str(c["front"])[:300], "back": str(c["back"])[:1200], "tag": str(c.get("tag") or "")[:20]})
+    return out[:30]
+
+
 def _finish_chapter(sid: int, job: dict) -> None:
     s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
     if not s or s.get("chapter_job") not in (None, job.get("id")):
@@ -929,18 +942,20 @@ def _finish_chapter(sid: int, job: dict) -> None:
     out = _step_dir(s)
     chap = out / "chapter.md"
     text = chap.read_text("utf-8", errors="replace").strip() if chap.is_file() else ""
-    quiz = []
+    qo = {}
     qf = out / "quiz.json"
     if qf.is_file():
-        quiz = _clean_quiz(_loads(qf.read_text("utf-8", errors="replace"), {}))
-    if not quiz:
-        quiz = _clean_quiz(extract_json(job.get("output") or "", "questions") or {})
+        qo = _loads(qf.read_text("utf-8", errors="replace"), {})
+    if not _clean_quiz(qo):
+        qo = extract_json(job.get("output") or "", "questions") or {}
+    quiz, cards = _clean_quiz(qo), _clean_cards(qo)
     ok = job.get("status") == "done" and len(text) > 200
     data = {"chapter_status": "ready" if ok else "failed"}
     if ok:
-        data.update(chapter_md=text, quiz=quiz)
-        if not quiz:
-            data["quiz"] = []
+        data.update(chapter_md=text, quiz=quiz, cards=cards)
+        old = _loads(s.get("quiz_result"), None)
+        if old:  # 重新生成后题目变了：旧答卷作废，只留上次分数
+            data["quiz_result"] = {"attempt": old.get("attempt", 0), "last_score": old.get("score", old.get("last_score"))}
     db.update("learn_steps", sid, data)
 
 
@@ -997,6 +1012,18 @@ def open_chapter(sid: int, body: dict | None = None):
     elif s["chapter_status"] == "ready":
         _prefetch_next(s)
     return public_step(_step(sid))
+
+
+@router.get("/steps/{sid}/out/{path:path}")
+def step_out(sid: int, path: str):
+    """章节目录里的文件（嵌入的交互小组件 widgets/*.html 等）。
+    HTML 是 Agent 写的脚本：响应头强制沙箱（不同源、不能调平台 API），直接在新窗口打开也一样。"""
+    base = _step_dir(_step(sid)).resolve()
+    p = (base / path).resolve()
+    if not p.is_relative_to(base) or not p.is_file():
+        raise HTTPException(404)
+    headers = {"Content-Security-Policy": "sandbox allow-scripts"} if p.suffix.lower() in (".html", ".htm") else None
+    return FileResponse(p, headers=headers)
 
 
 @router.post("/steps/{sid}/quiz")
@@ -1064,7 +1091,7 @@ def reset_quiz(sid: int):
     """重做测试（保留上次的分数在 last_score）。"""
     s = _step(sid)
     last = s["quiz_result"] or {}
-    db.update("learn_steps", sid, {"quiz_result": {"attempt": last.get("attempt", 0), "last_score": last.get("score")}
+    db.update("learn_steps", sid, {"quiz_result": {"attempt": last.get("attempt", 0), "last_score": last.get("score", last.get("last_score"))}
                                    if last else ""})
     return public_step(_step(sid))
 

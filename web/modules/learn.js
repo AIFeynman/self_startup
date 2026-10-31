@@ -107,6 +107,8 @@ const CSS = `
 /* 章节阅读 */
 .ln-chap { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 20px; align-items: start; }
 .ln-chap .an-wrap { grid-template-columns: minmax(0, 1fr) minmax(200px, 240px); }
+.ln-chap .an-wrap:not(.has-threads) { grid-template-columns: minmax(0, 1fr); } /* 没有批注时不占宽度，划线评论时再出现 */
+.ln-chap .an-wrap:not(.has-threads) .an-rail { display: none; }
 .ln-chap .md { font-size: 15px; line-height: 1.85; }
 .ln-chap .md h2 { font-family: var(--serif); font-size: 20px; margin-top: 1.6em; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 .ln-toc { position: sticky; top: 16px; font-size: 13px; max-height: calc(100vh - 40px); overflow: auto; }
@@ -124,7 +126,70 @@ const CSS = `
 .ln-chap .md blockquote { border-left: 3px solid var(--accent); background: var(--focus); margin: 12px 0; padding: 8px 16px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
 .ln-chap .md table { border-collapse: collapse; font-size: 14px; display: block; overflow-x: auto; }
 .ln-chap .md th, .ln-chap .md td { border: 1px solid var(--line); padding: 5px 9px; vertical-align: top; min-width: 7em; }
-.ln-chap .md pre { overflow-x: auto; }
+.ln-chap .md pre { overflow-x: auto; white-space: pre; } /* 老章节里的字符画：不换行，横向滚动 */
+/* 章节图示组件（skills/learn/chapter.md「图示组件」）：Agent 写结构化 HTML，样式在这里 */
+.ln-chap .md [class^="dg-"] b { font-weight: 600; }
+.ln-chap .md .dg-tree, .ln-chap .md .dg-flow, .ln-chap .md .dg-cards, .ln-chap .md .dg-vs { margin: 16px 0 20px; font-size: 13.5px; line-height: 1.55; }
+.ln-chap .md .dg-root { margin: 0 auto; max-width: 560px; text-align: center; padding: 12px 18px; border-radius: var(--radius); background: var(--accent); color: #fff; }
+.ln-chap .md .dg-root b, .ln-chap .md .dg-root span { display: block; } .ln-chap .md .dg-root span { opacity: .9; margin-top: 2px; }
+.ln-chap .md .dg-branches { position: relative; display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 12px; margin-top: 26px; padding-top: 0; }
+.ln-chap .md .dg-branches::before { content: ''; position: absolute; top: -26px; left: 50%; height: 13px; border-left: 1.5px solid var(--line-2); }
+.ln-chap .md .dg-branches::after { content: ''; position: absolute; top: -13px; left: 8%; right: 8%; border-top: 1.5px solid var(--line-2); }
+.ln-chap .md .dg-branch { position: relative; padding: 10px 12px; border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: var(--radius-sm); background: var(--panel); }
+.ln-chap .md .dg-branch::before { content: ''; position: absolute; top: -16px; left: 50%; height: 13px; border-left: 1.5px solid var(--line-2); }
+.ln-chap .md .dg-branch ul { margin: 6px 0 0; padding-left: 16px; } .ln-chap .md .dg-branch li { margin: 2px 0; color: var(--muted); }
+.ln-chap .md .dg-flow { display: flex; flex-wrap: wrap; gap: 8px 26px; align-items: stretch; }
+.ln-chap .md .dg-node { position: relative; flex: 1 1 120px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.ln-chap .md .dg-node b, .ln-chap .md .dg-node span { display: block; } .ln-chap .md .dg-node span { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.ln-chap .md .dg-node:not(:last-child)::after { content: '→'; position: absolute; right: -20px; top: 50%; transform: translateY(-50%); color: var(--accent); font-weight: 700; }
+.ln-chap .md .dg-flow.loop::after { content: '↺ 回到第一步，持续迭代'; flex-basis: 100%; text-align: center; font-size: 12px; color: var(--accent); padding: 4px; border: 1.5px dashed var(--accent-ring); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); }
+.ln-chap .md .dg-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.ln-chap .md .dg-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.ln-chap .md .dg-card i { display: inline-block; font-style: normal; font-size: 11px; padding: 0 7px; margin: 0 0 4px 6px; border-radius: 5px; background: var(--bg-2); color: var(--muted); }
+.ln-chap .md .dg-card p, .ln-chap .md .dg-side p { margin: 4px 0 0; color: var(--muted); }
+.ln-chap .md .dg-vs { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.ln-chap .md .dg-side { padding: 12px 16px; background: var(--panel); } .ln-chap .md .dg-side + .dg-side { border-left: 1px solid var(--line); background: var(--bg); }
+.ln-chap .md .hot { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+.ln-chap .md .warn { border-color: var(--warn); background: var(--warn-soft); }
+/* 交互：点开细节 / 逐步播放 / 标签页 / 翻转卡 / 小组件 */
+.ln-chap .md .dg-more { display: none; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line-2); color: var(--text); font-size: 13px; }
+.ln-chap .md .has-more { cursor: pointer; } .ln-chap .md .has-more.open > .dg-more { display: block; }
+.ln-chap .md .has-more > b::after { content: ' +'; color: var(--accent); font-weight: 400; } .ln-chap .md .has-more.open > b::after { content: ' −'; }
+.ln-chap .md .has-more:hover { border-color: var(--accent); }
+.ln-chap .md .dg-flow.steps .dg-node { opacity: .45; transition: opacity .2s; } .ln-chap .md .dg-flow.steps .dg-node.on { opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+.ln-chap .md .dg-flow.steps .dg-node.seen { opacity: 1; }
+.ln-chap .md .dg-flow.steps .dg-node > .dg-more { display: none !important; }
+.ln-chap .md .dg-stepper { display: flex; gap: 10px; align-items: flex-start; margin: -8px 0 18px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13.5px; }
+.ln-chap .md .dg-stepper .txt { flex: 1; min-width: 0; } .ln-chap .md .dg-stepper .n { color: var(--accent); font: 700 13px var(--mono); white-space: nowrap; }
+.ln-chap .md .dg-tabs { margin: 16px 0 20px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.ln-chap .md .dg-tabbar { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--line); background: var(--bg); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.ln-chap .md .dg-tabbar button { border: 0; background: none; padding: 6px 12px; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; border-radius: 0; }
+.ln-chap .md .dg-tabbar button.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.ln-chap .md .dg-tab { display: none; padding: 4px 16px 10px; } .ln-chap .md .dg-tab.on { display: block; }
+.ln-chap .md .dg-flash, .ln-flash { position: relative; margin: 14px 0; padding: 12px 16px 12px 44px; border: 1px dashed var(--accent); border-radius: var(--radius-sm); background: var(--accent-soft); cursor: pointer; font-size: 14px; }
+.ln-chap .md .dg-flash::before { content: '停一下'; position: absolute; left: 10px; top: 13px; font-size: 10.5px; line-height: 1.2; width: 24px; color: var(--accent); font-weight: 700; }
+.ln-chap .md .dg-flash .dg-q { font-weight: 500; }
+.ln-chap .md .dg-flash .dg-a { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--accent-ring); color: var(--text); }
+.ln-chap .md .dg-flash::after { content: '想好了点开看要点'; display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.ln-chap .md .dg-flash.open { border-style: solid; background: var(--panel); } .ln-chap .md .dg-flash.open .dg-a { display: block; } .ln-chap .md .dg-flash.open::after { display: none; }
+.ln-chap .md .dg-widget { margin: 16px 0 20px; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; background: var(--panel); }
+.ln-chap .md .dg-widget .wt { padding: 7px 12px; font-size: 12.5px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); }
+.ln-chap .md .dg-widget iframe { display: block; width: 100%; border: 0; background: transparent; }
+/* 知识卡复习 */
+.ln-tabs2 { display: flex; gap: 4px; margin-bottom: 12px; } .ln-tabs2 button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.ln-deck { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.ln-fc { position: relative; width: 100%; max-width: 560px; min-height: 200px; display: flex; flex-direction: column; justify-content: center; gap: 12px;
+  padding: 30px 30px 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); cursor: pointer; }
+.ln-fc .front { font: 600 19px/1.5 var(--serif); text-align: center; transition: font-size .2s; }
+.ln-fc .back { display: none; font-size: 15px; line-height: 1.75; padding-top: 12px; border-top: 1px dashed var(--line-2); animation: ln-fade .25s; }
+.ln-fc.flip { background: var(--focus); } .ln-fc.flip .front { font-size: 15px; color: var(--muted); } .ln-fc.flip .back { display: block; }
+.ln-fc .tg { position: absolute; top: 10px; left: 14px; font-size: 11px; color: var(--muted); }
+.ln-fc .hint { position: absolute; bottom: 8px; right: 14px; font-size: 11px; color: var(--muted); } .ln-fc.flip .hint { display: none; }
+@keyframes ln-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.ln-deck .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.ln-deck .meta { font-size: 12px; color: var(--muted); }
+@media (max-width: 640px) { .ln-chap .md .dg-branches { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ln-chap .md .dg-vs { grid-template-columns: 1fr; } .ln-chap .md .dg-side + .dg-side { border-left: 0; border-top: 1px solid var(--line); }
+  .ln-chap .md .dg-node:not(:last-child)::after { content: '↓'; right: auto; left: 50%; top: auto; bottom: -19px; transform: none; } }
 .ln-qz { padding: 16px 20px; margin-bottom: 10px; }
 .ln-qz .qh { display: flex; gap: 10px; align-items: baseline; }
 .ln-qz .qh .no { color: var(--accent); font: 700 15px var(--serif); }
@@ -694,11 +759,12 @@ async function renderChapter(el, ctx, pid, sid) {
 
   // 正文 + 目录
   const body = md(s.chapter_md);
+  enhance(h, body, sid);
   const heads = [...body.querySelectorAll('h2')];
   heads.forEach((hd, i) => { hd.id = `ln-h-${i}`; hd.style.scrollMarginTop = '16px'; });
   const toc = h('nav.ln-toc', {}, [h('div.k', {}, '本章目录'),
     ...heads.map((hd) => h('a', { href: 'javascript:void 0', onclick: () => hd.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, hd.textContent)),
-    s.quiz.length ? h('a.quiz', { href: 'javascript:void 0', onclick: () => document.getElementById('ln-quiz')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, `章末测试 · ${s.quiz.length} 题`) : null]);
+    s.quiz.length || s.cards?.length ? h('a.quiz', { href: 'javascript:void 0', onclick: () => document.getElementById('ln-quiz')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, s.cards?.length ? `知识卡 ${s.cards.length} · 测试 ${s.quiz.length} 题` : `章末测试 · ${s.quiz.length} 题`) : null]);
   const main = h('div', { style: { minWidth: 0 } }, [
     h('div.card.ln-reader-card', { style: { padding: '22px 26px' } },
       annotate(ctx, body, { doc: `learn:chapter:${sid}`, title: `${p.topic} · ${s.title}`, link: chapterHref(pid, sid), source: s.chapter_md })),
@@ -719,7 +785,21 @@ async function renderChapter(el, ctx, pid, sid) {
     if (hd) hd.scrollIntoView({ behavior: 'smooth', block: 'start' });
     else toast('没找到对应小节，往上翻翻');
   };
-  main.append(quizView(ctx, p, s, { gotoSection, chat, next }));
+  const qv = quizView(ctx, p, s, { gotoSection, chat, next });
+  if (s.cards?.length) {
+    const deck = cardDeck(ctx, s);
+    const key = `ln-chap-tab-${sid}`;
+    let tab = (() => { try { return localStorage.getItem(key); } catch { return null; } })() || (s.quiz_result?.status ? 'quiz' : 'cards');
+    const bCards = h('button.sm', { onclick: () => show('cards') }, `知识卡 · ${s.cards.length} 张`);
+    const bQuiz = h('button.sm', { onclick: () => show('quiz') }, `章末测试 · ${s.quiz.length} 题`);
+    const show = (t2) => { tab = t2; try { localStorage.setItem(key, t2); } catch { /* ignore */ }
+      deck.style.display = t2 === 'cards' ? '' : 'none'; qv.style.display = t2 === 'quiz' ? '' : 'none';
+      bCards.classList.toggle('on', t2 === 'cards'); bQuiz.classList.toggle('on', t2 === 'quiz'); };
+    main.append(h('div', { id: 'ln-quiz', style: { scrollMarginTop: '16px' } }, [ui.section('复习与测试', '先过知识卡，再做测试'), h('div.ln-tabs2', {}, [bCards, bQuiz]), deck, qv]));
+    qv.removeAttribute('id');
+    qv.querySelector('.section-title')?.remove();
+    show(tab);
+  } else main.append(qv);
 
   // 我的笔记 / 理解度 / 反馈（与计划页同一份数据）
   const saved = h('span.ln-saved');
@@ -826,3 +906,111 @@ function quizView(ctx, p, s, { gotoSection, chat, next }) {
   return wrap;
 }
 const PASS_TXT = '70 分及格，及格自动完成本章';
+
+// 章节里的交互组件：Agent 写结构化 HTML（skills/learn/chapter.md），这里接上行为
+function enhance(h, body, sid) {
+  // 树：一行放下所有分支（最多 5 列，再多换行）
+  body.querySelectorAll('.dg-branches').forEach((b) => { const n = b.children.length; b.style.setProperty('--n', n <= 5 ? n : 3); });
+  // 点开看细节
+  body.querySelectorAll('.dg-more').forEach((m) => {
+    const host = m.parentElement;
+    if (!host || host.closest('.dg-flow.steps')) return;
+    host.classList.add('has-more');
+    host.addEventListener('click', (e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); host.classList.toggle('open'); });
+  });
+  // 逐步播放
+  body.querySelectorAll('.dg-flow.steps').forEach((flow) => {
+    const nodes = [...flow.querySelectorAll(':scope > .dg-node')];
+    if (!nodes.length) return;
+    let i = -1;
+    const txt = h('div.txt'), n = h('span.n');
+    const prev = h('button.sm', { onclick: () => go(i - 1) }, '上一步');
+    const nextB = h('button.sm.primary', { onclick: () => go(i + 1) }, '开始');
+    const go = (k) => {
+      i = Math.max(0, Math.min(nodes.length - 1, k));
+      nodes.forEach((nd, j) => { nd.classList.toggle('on', j === i); nd.classList.toggle('seen', j < i); });
+      const nd = nodes[i];
+      const more = nd.querySelector('.dg-more');
+      txt.replaceChildren(h('b', {}, nd.querySelector('b')?.textContent || ''), ' ', more ? h('span', { html: more.innerHTML }) : h('span.muted', {}, nd.querySelector('span')?.textContent || ''));
+      n.textContent = `${i + 1}/${nodes.length}`;
+      prev.disabled = i === 0; nextB.textContent = i === nodes.length - 1 ? '已到最后' : '下一步'; nextB.disabled = i === nodes.length - 1;
+    };
+    nodes.forEach((nd, j) => nd.addEventListener('click', () => go(j)));
+    prev.disabled = true;
+    txt.append(h('span.muted', {}, `${nodes.length} 步，点「开始」或点任一节点逐步看`));
+    flow.after(h('div.dg-stepper', {}, [n, txt, prev, nextB]));
+  });
+  // 标签页
+  body.querySelectorAll('.dg-tabs').forEach((box) => {
+    const tabs = [...box.querySelectorAll(':scope > .dg-tab')];
+    if (!tabs.length) return;
+    const btns = tabs.map((tb, j) => h('button', { onclick: () => pick(j) }, tb.dataset.title || `${j + 1}`));
+    const pick = (j) => { tabs.forEach((tb, k) => tb.classList.toggle('on', k === j)); btns.forEach((b, k) => b.classList.toggle('on', k === j)); };
+    box.prepend(h('div.dg-tabbar', {}, btns));
+    pick(0);
+  });
+  // 翻转卡（停一下）
+  body.querySelectorAll('.dg-flash').forEach((c) => c.addEventListener('click', () => { if (!window.getSelection()?.toString()) c.classList.toggle('open'); }));
+  // 交互小组件：沙箱 iframe（只允许脚本，不同源）
+  body.querySelectorAll('.dg-widget[data-src]').forEach((w) => {
+    const src = (w.dataset.src || '').replace(/^\/+/, '');
+    if (!/^[\w./-]+\.html?$/.test(src) || src.includes('..')) return;
+    const height = Math.max(160, Math.min(640, +w.dataset.height || 360));
+    w.replaceChildren(
+      h('div.wt', {}, ['可交互 · ', w.dataset.title || '动手试试', ' · ', h('a', { href: `/api/learn/steps/${sid}/out/${src}`, target: '_blank', rel: 'noopener' }, '新窗口打开')]),
+      h('iframe', { src: `/api/learn/steps/${sid}/out/${src}`, sandbox: 'allow-scripts', loading: 'lazy', style: { height: height + 'px' }, title: w.dataset.title || 'widget' }));
+  });
+}
+
+// 知识卡：翻面复习，「记住了」移出本轮，「再看看」放回队尾；进度存在本机
+function cardDeck(ctx, s) {
+  const { h, md, ui } = ctx;
+  const key = `ln-cards-${s.id}`;
+  const load = () => { try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; } };
+  const save = (d) => { try { localStorage.setItem(key, JSON.stringify(d)); } catch { /* ignore */ } };
+  let st = load(); // {known: [idx], queue: [idx]}
+  const all = s.cards.map((_, i) => i);
+  const fresh = () => ({ known: [], queue: all.slice() });
+  if (!Array.isArray(st.queue) || st.queue.some((i) => i >= s.cards.length)) st = fresh();
+  const box = h('div.ln-deck');
+  const draw = () => {
+    save(st);
+    const known = st.known.length;
+    if (!st.queue.length) {
+      box.replaceChildren(h('div.card', { style: { width: '100%', maxWidth: '560px', textAlign: 'center', padding: '28px' } }, [
+        h('div.serif', { style: { fontSize: '20px' } }, `本章 ${s.cards.length} 张知识卡都记住了`),
+        h('div.muted', { style: { margin: '6px 0 14px' } }, '可以去做章末测试，或者再过一遍'),
+        h('button', { onclick: () => { st = fresh(); draw(); } }, [ui.icon('refresh'), '再过一遍'])]));
+      return;
+    }
+    const i = st.queue[0];
+    const c = s.cards[i];
+    const fc = h('div.ln-fc', { onclick: () => fc.classList.toggle('flip') }, [
+      c.tag ? h('span.tg', {}, c.tag) : null, h('div.front', {}, c.front), h('div.back', {}, md(c.back)), h('span.hint', {}, '先想答案，再点击翻面'),
+    ]);
+    const step = (ok) => {
+      st.queue.shift();
+      if (ok) st.known.push(i); else st.queue.splice(Math.min(st.queue.length, 3), 0, i); // 隔几张再出现
+      draw();
+    };
+    box.replaceChildren(fc, h('div.ctl', {}, [
+      h('button', { onclick: () => step(false) }, '再看看'),
+      h('button.primary', { onclick: () => step(true) }, [ui.icon('check'), '记住了']),
+    ]), h('div.meta', {}, `已记住 ${known}/${s.cards.length} · 本轮还剩 ${st.queue.length} 张 · 空格翻面`));
+  };
+  // 空格翻面、←/→ 再看看 / 记住了（只在卡片区可见时）
+  const onKey = (e) => {
+    if (!box.isConnected) { document.removeEventListener('keydown', onKey); return; }
+    if (box.offsetParent === null || /input|textarea|select/i.test(e.target.tagName)) return;
+    const fc = box.querySelector('.ln-fc');
+    if (!fc) return;
+    const r = box.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight) return;
+    if (e.key === ' ') { e.preventDefault(); fc.classList.toggle('flip'); }
+    else if (e.key === 'ArrowRight') box.querySelector('.ctl .primary')?.click();
+    else if (e.key === 'ArrowLeft') box.querySelector('.ctl button')?.click();
+  };
+  document.addEventListener('keydown', onKey);
+  draw();
+  return box;
+}
