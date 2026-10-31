@@ -1,6 +1,7 @@
 // 深度学习：条目深读（论文 / GitHub）+ 主题学习计划。
 // 路由：#learn（总览 + 智能输入框）、#learn/plans（同总览，滚到计划）、#learn/plan/<id>、
 //       #learn/plan/<id>/step/<sid>（跟着学：一章教程 + 章末测试）、#learn/item/<id>（笔记阅读）
+// 按需加一节：读某一章时说「X 没懂 / 对 X 感兴趣」（或划线后点），在这一章后插一节针对性讲解 + 小测试
 import { annotate } from './_annotate.js';
 const CSS = `
 .ln-opts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: -4px 0 10px; }
@@ -230,6 +231,20 @@ const CSS = `
 .ln-score .big { font: 700 40px var(--serif); line-height: 1; }
 .ln-score.pass .big { color: var(--ok); } .ln-score.fail .big { color: var(--err); }
 .ln-score .t { flex: 1; min-width: 0; font-size: 14px; } .ln-score ul { margin: 6px 0 0; padding-left: 18px; }
+/* 按需加一节 */
+.ln-extra { padding: 16px 20px; margin-top: 14px; border-style: dashed; border-color: var(--line-2); }
+.ln-extra .hd { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 10px; } .ln-extra .hd b { font-size: 15px; }
+.ln-extra .hd .muted { font-size: 12.5px; }
+.ln-extra .ln-tabs2 { margin-bottom: 8px; }
+.ln-extra input { flex: 1; min-width: 200px; }
+.ln-xquote { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; padding: 6px 10px; font-size: 13px; color: var(--muted);
+  background: var(--focus); border-left: 3px solid var(--accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.ln-xquote span { flex: 1; min-width: 0; }
+.ln-xkids { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
+.ln-xkids a { display: inline-flex; gap: 6px; align-items: center; padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; }
+.ln-xkids a.on { border-color: var(--accent); color: var(--accent); }
+.ln-step.extra { margin-left: 28px; border-left: 3px solid var(--accent-ring); }
+.ln-xtag { background: var(--accent-soft); color: var(--accent); }
 .ln-chap-nav { display: flex; gap: 10px; justify-content: space-between; margin: 22px 0 8px; }
 .ln-chap-nav button { max-width: 48%; } .ln-chap-nav span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
@@ -241,6 +256,7 @@ const draftKey = (sid) => `ln-quiz-${sid}`;
 const loadDraft = (sid) => { try { return JSON.parse(localStorage.getItem(draftKey(sid)) || '{}'); } catch { return {}; } };
 const saveDraft = (sid, d) => { try { localStorage.setItem(draftKey(sid), JSON.stringify(d)); } catch { /* ignore */ } };
 const chapterHref = (pid, sid) => `#learn/plan/${pid}/step/${sid}`;
+const EXTRA_TXT = { interest: '深入', confused: '补课' };
 const quizScore = (s) => (s.quiz_result?.status === 'graded' ? s.quiz_result.score : null);
 function chapterTag(h, s) {
   const sc = quizScore(s);
@@ -702,11 +718,12 @@ function stepView(s, p, ctx, isCur) {
     card.classList.toggle('open', show);
   };
   const done = s.status === 'done';
-  const card = h('div.card.ln-step.' + s.status + (isCur ? '.cur' : '') + (expanded ? '.open' : ''), {}, [
+  const card = h('div.card.ln-step.' + s.status + (s.origin ? '.extra' : '') + (isCur ? '.cur' : '') + (expanded ? '.open' : ''), {}, [
     h('div.ln-st-head', {}, [
       h('button.ln-check' + (done ? '.on' : ''), { title: done ? '标记为未完成' : '标记完成', onclick: () => save({ status: done ? 'doing' : 'done' }, done ? '' : '完成一步 ✓') }, ui.icon('check')),
       h('span.ln-st-title', { onclick: toggle }, s.title),
       isCur ? h('span.tag', {}, '当前') : null,
+      s.origin ? h('span.tag.ln-xtag.ln-cs', { title: s.request || '' }, '按需' + (EXTRA_TXT[s.origin] || '')) : null,
       chapterTag(h, s),
       s.understanding && !expanded ? stars(h, ui, s.understanding, null, { readonly: true }) : null,
       h('span.muted', {}, `${s.est_hours}h`), status,
@@ -733,17 +750,25 @@ async function renderChapter(el, ctx, pid, sid) {
   const idx = seq.findIndex((x) => x.id === sid);
   const prev = seq[idx - 1], next = seq[idx + 1];
   const chat = (prefill) => openChat({ module: 'learn', ref: `learn:step:${sid}`, title: '本章：' + s.title.slice(0, 16), prefill });
+  const parent = s.parent_id ? p.steps.find((x) => x.id === s.parent_id) : null;
 
   el.append(back(h, ui, `#learn/plan/${pid}`, p.topic));
   el.append(h('div.ln-head.ln-chap-head', {}, ui.pageHead(s.title,
-    h('span.k', {}, `第 ${idx + 1}/${seq.length} 章 · 阶段 ${s.stage} ${p.stages[s.stage]} · 约 ${s.est_hours}h`), [
+    h('span.k', {}, `第 ${idx + 1}/${seq.length} 章 · ` + (s.origin ? `按需${EXTRA_TXT[s.origin] || ''}${parent ? ` · 源自「${parent.title}」` : ''}` : `阶段 ${s.stage} ${p.stages[s.stage]}`) + ` · 约 ${s.est_hours}h`), [
       chapterTag(h, s),
       h('button.primary', { onclick: () => chat() }, [ui.icon('chat'), '追问本章']),
     ])));
-  el.append(h('div.ln-purpose', {}, [h('b', {}, '本阶段目的：'), p.stage_goals?.[s.stage] || '']));
-  if (s.goal) el.append(h('div.ln-goal', {}, [h('b', {}, '本章能力目标'), s.goal]));
+  if (s.origin) {
+    const [ask, quoted] = (s.request || s.title).split('\n划线原文：');
+    el.append(h('div.ln-purpose', {}, [h('b', {}, s.origin === 'confused' ? '你没懂的地方：' : '你想深入的方向：'), ask,
+      quoted ? h('span.muted', {}, `${ask ? ' · ' : ''}划线「${quoted}」`) : null,
+      parent ? h('a', { href: chapterHref(pid, parent.id), style: { marginLeft: '10px' } }, '回到原章 ↩') : null]));
+  } else el.append(h('div.ln-purpose', {}, [h('b', {}, '本阶段目的：'), p.stage_goals?.[s.stage] || '']));
+  if (s.goal) el.append(h('div.ln-goal', {}, [h('b', {}, s.origin ? '本节能力目标' : '本章能力目标'), s.goal]));
+  const extra = s.chapter_status === 'ready' ? extraPanel(ctx, p, s) : null;
 
   const toolbar = h('div.row', { style: { margin: '6px 0 16px' } }, [
+    extra ? h('button.outline', { title: '对某个子方向感兴趣，或哪里没懂：在本章后加一节针对性讲解 + 小测试', onclick: () => extra.open() }, [ui.icon('plus'), '按需加一节']) : null,
     h('span.grow'),
     s.chapter_job ? h('a.muted', { href: `/api/jobs/${s.chapter_job}`, target: '_blank' }, `job ${s.chapter_job}`) : null,
     h('button.ghost', { disabled: s.chapter_status === 'generating', onclick: async () => {
@@ -758,7 +783,7 @@ async function renderChapter(el, ctx, pid, sid) {
     watchJob(ctx, s.chapter_job, 'generating');
     const steps = h('div.ln-steps');
     const head = h('div.serif', {}, 'Agent 正在读资料、写本章教程和测试');
-    el.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, '通常 5–12 分钟，完成后自动刷新')]), steps,
+    el.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, s.origin ? '通常 3–8 分钟，完成后自动刷新' : '通常 5–12 分钟，完成后自动刷新')]), steps,
       s.description ? h('div', { style: { marginTop: '14px' } }, [h('div.ln-st-sub', {}, '本步说明（来自计划）'), md(s.description)]) : null]));
     const tick = async () => {
       if (!steps.isConnected || !s.chapter_job) return;
@@ -791,7 +816,9 @@ async function renderChapter(el, ctx, pid, sid) {
     s.quiz.length || s.cards?.length ? h('a.quiz', { href: 'javascript:void 0', onclick: () => document.getElementById('ln-quiz')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, s.cards?.length ? `要点 ${s.cards.length} · 测试 ${s.quiz.length} 题` : `章末测试 · ${s.quiz.length} 题`) : null]);
   const main = h('div', { style: { minWidth: 0 } }, [
     h('div.card.ln-reader-card', { style: { padding: '22px 26px' } },
-      annotate(ctx, body, { doc: `learn:chapter:${sid}`, title: `${p.topic} · ${s.title}`, link: chapterHref(pid, sid), source: s.chapter_md })),
+      annotate(ctx, body, { doc: `learn:chapter:${sid}`, title: `${p.topic} · ${s.title}`, link: chapterHref(pid, sid), source: s.chapter_md,
+        actions: [{ icon: 'bulb', label: '没懂', onPick: (q) => extra.open('confused', q) }, { icon: 'search', label: '展开讲', onPick: (q) => extra.open('interest', q) }] })),
+    extra.el,
   ]);
   el.append(h('div.ln-chap', {}, [toc, main]));
   // 目录高亮当前小节
@@ -809,7 +836,7 @@ async function renderChapter(el, ctx, pid, sid) {
     if (hd) hd.scrollIntoView({ behavior: 'smooth', block: 'start' });
     else toast('没找到对应小节，往上翻翻');
   };
-  const qv = quizView(ctx, p, s, { gotoSection, chat, next });
+  const qv = quizView(ctx, p, s, { gotoSection, chat, next, extra });
   if (s.cards?.length) {
     const deck = keyPoints(ctx, s);
     const key = `ln-chap-tab-${sid}`;
@@ -838,6 +865,50 @@ async function renderChapter(el, ctx, pid, sid) {
   main.append(chapterNav(h, ui, pid, prev, next));
 }
 
+// 按需加一节：选「没懂 / 感兴趣」，写下要点（或带上划线原文），在本章后插一节讲解 + 小测试，跳过去看生成进度
+function extraPanel(ctx, p, s) {
+  const { api, h, toast, ui } = ctx;
+  let kind = 'confused', quote = '';
+  const modes = h('div.ln-tabs2');
+  const quoteBox = h('div');
+  const inp = h('input', { onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); create(kind, inp.value); } } });
+  const btn = h('button.primary', { onclick: () => create(kind, inp.value) }, [ui.icon('spark'), '生成这一节']);
+  const draw = () => {
+    modes.replaceChildren(...[['confused', '没懂，换个讲法讲透'], ['interest', '感兴趣，往深处讲']].map(([k, l]) =>
+      h('button.sm' + (kind === k ? '.on' : ''), { onclick: () => { kind = k; draw(); inp.focus(); } }, l)));
+    inp.placeholder = kind === 'confused' ? '哪里没懂？例如「为什么上线要看 pass^k 而不是 pass@k」· Enter 生成'
+      : '对哪个子方向感兴趣？例如「多智能体系统怎么评测」· Enter 生成';
+    quoteBox.replaceChildren(...(quote ? [h('div.ln-xquote', {}, [h('span.clamp2', {}, '划线：' + quote),
+      h('button.icon.sm', { title: '去掉划线', onclick: () => { quote = ''; draw(); } }, ui.icon('x'))])] : []));
+  };
+  const create = async (k, text, q = quote) => {
+    const request = (text || '').trim();
+    if (!request && !q) { toast(k === 'confused' ? '先写下哪里没懂，或在正文里划线' : '先写下感兴趣的子方向', true); inp.focus(); return; }
+    btn.disabled = true;
+    try {
+      const x = await api.post(`/api/learn/steps/${s.id}/extra`, { kind: k, request, quote: q });
+      toast(x.chapter_status === 'ready' ? '这一节之前加过，直接打开' : `已在本章后加一节${EXTRA_TXT[k]}，Agent 正在写`);
+      location.hash = chapterHref(p.id, x.id);
+    } catch (e) { toast('没加上：' + e.message, true); btn.disabled = false; }
+  };
+  const root = s.parent_id || s.id;
+  const kids = p.steps.filter((x) => x.parent_id === root);
+  const el = h('div.card.ln-extra', {}, [
+    h('div.hd', {}, [h('b', {}, '按需加一节'), h('span.muted', {}, '在本章后插入一节针对你这个点的讲解 + 2–3 道小测试，通常 3–8 分钟；正文里划线后点「没懂 / 展开讲」也行')]),
+    modes, quoteBox, h('div.row', {}, [inp, btn]),
+    kids.length ? h('div.ln-xkids', {}, [h('span.muted', {}, '本章已加：'), ...kids.map((x) => h('a' + (x.id === s.id ? '.on' : ''), { href: chapterHref(p.id, x.id), title: x.request || '' },
+      [x.title, quizScore(x) !== null ? h('span.muted', {}, `${quizScore(x)} 分`) : x.chapter_status === 'generating' ? h('span.muted', {}, '生成中') : null]))]) : null,
+  ]);
+  draw();
+  return {
+    el, create,
+    open(k = kind, q) {
+      kind = k; if (q !== undefined) quote = q.slice(0, 1500); draw();
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => inp.focus({ preventScroll: true }), 350);
+    },
+  };
+}
+
 function chapterNav(h, ui, pid, prev, next) {
   return h('div.ln-chap-nav', {}, [
     prev ? h('button', { onclick: () => { location.hash = chapterHref(pid, prev.id); } }, [h('span', {}, '← 上一章：' + prev.title)]) : h('span'),
@@ -846,7 +917,7 @@ function chapterNav(h, ui, pid, prev, next) {
   ]);
 }
 
-function quizView(ctx, p, s, { gotoSection, chat, next }) {
+function quizView(ctx, p, s, { gotoSection, chat, next, extra }) {
   const { api, h, toast, ui } = ctx;
   const wrap = h('div', { id: 'ln-quiz', style: { scrollMarginTop: '16px' } });
   if (!s.quiz.length) {
@@ -922,6 +993,8 @@ function quizView(ctx, p, s, { gotoSection, chat, next }) {
   } else if (graded) {
     if (next) actions.append(h('button.primary', { onclick: () => { location.hash = chapterHref(p.id, next.id); } }, ['下一章', ui.icon('arrow')]));
     actions.append(
+      r.weak_points?.length || !r.passed ? h('button.outline', { title: '针对薄弱处在本章后加一节补课：换个讲法讲透 + 2–3 道小测试', onclick: () => extra.create('confused',
+        r.weak_points?.length ? `测试薄弱处：${r.weak_points.join('；')}` : `测试 ${r.score} 分，没过关的地方`) }, [ui.icon('plus'), '生成补课小节']) : null,
       h('button', { onclick: () => chat(`我刚做完本章测试（${r.score} 分），薄弱处：${(r.weak_points || []).join('；') || '见批改'}。请针对这些地方换个角度讲透，再出 2 道类似的题考我。`) }, [ui.icon('chat'), '针对薄弱处再讲一遍']),
       h('button.ghost', { onclick: async () => { await api.post(`/api/learn/steps/${s.id}/quiz/reset`); softRefresh(); } }, [ui.icon('refresh'), '重做测试']),
       !r.passed ? h('button.ghost', { onclick: async () => {

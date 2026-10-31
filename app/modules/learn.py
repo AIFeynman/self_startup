@@ -7,6 +7,8 @@
     learn:step:<id>:chapter  把计划的一步写成章节教程 + 章末测试（:prefetch = 用户读上一章时后台预生成）
     learn:step:<id>:grade    批改章末测试的简答题
     learn:step:<id>:check:<n> 点评第 n 个「停一下」：用户的判断和要点差在哪
+按需加一节：用户在某一章说「对 X 感兴趣 / X 没懂」→ 在这一章后面插一步（origin=interest|confused，parent_id 指向原章），
+    立即按 learn:step:<新id>:chapter 生成一节短讲解 + 2–3 题小测试，之后和普通章节一样学、测、计入进度。
 对话 ref：learn:item:<id> / learn:plan:<id> / learn:step:<id>（读某一章时）/ 空（总览）。
 """
 from __future__ import annotations
@@ -77,7 +79,10 @@ CREATE TABLE IF NOT EXISTS learn_steps (
     quiz          TEXT DEFAULT '[]',          -- 章末测试 JSON [{id,type:choice|short,q,options,answer,explain,reference,rubric,dim:理解|判断|应用,about,section}]
     cards         TEXT DEFAULT '[]',          -- 知识卡 JSON [{front,back,tag}]
     checks        TEXT DEFAULT '{}',          -- 「停一下」作答 JSON {序号: {q,points,answer,at,status,job_id,review}}
-    quiz_result   TEXT DEFAULT ''             -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
+    quiz_result   TEXT DEFAULT '',            -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
+    origin        TEXT DEFAULT '',            -- '' 计划里的步骤 / interest 按需深入 / confused 按需补课
+    parent_id     INTEGER,                    -- 按需加的一节：从哪一章加出来的
+    request       TEXT DEFAULT ''             -- 按需加的一节：用户的原话（感兴趣的子方向 / 没懂的地方）+ 划线原文
 );
 CREATE INDEX IF NOT EXISTS idx_learn_steps_plan ON learn_steps(plan_id);
 -- 学习记录：只追加、不覆盖（作答、Agent 点评、每次测试连同当时的题目、理解度 / 反馈变化、章节重新生成），用于复盘和成长评价
@@ -108,7 +113,9 @@ DIMS = ("理解", "判断", "应用")  # 章末测试评估的三个维度
 PASS_SCORE = 70  # 章末测试及格线：及格自动标记完成
 STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapter_status": "TEXT DEFAULT ''",
              "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''",
-             "cards": "TEXT DEFAULT '[]'", "checks": "TEXT DEFAULT '{}'"}
+             "cards": "TEXT DEFAULT '[]'", "checks": "TEXT DEFAULT '{}'",
+             "origin": "TEXT DEFAULT ''", "parent_id": "INTEGER", "request": "TEXT DEFAULT ''"}
+EXTRA = {"interest": "深入", "confused": "补课"}  # 按需加一节的两种：感兴趣 → 往深处展开；没懂 → 换个讲法讲透
 SKILL_DIR = ROOT / "skills" / "learn"
 STEP_STATUS = ("todo", "doing", "done", "skipped")
 router = APIRouter()
@@ -1047,7 +1054,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 用户最近在读 / 在做（章末测试至少 1 题从中挑和本章相关的论文或项目出题，学以致用）：
 {_recent_context()}
 {('用户对本章的要求：' + note) if note else ''}
-
+{_extra_block(s)}
 做法：
 1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；阶段 1、3、5 必须核对资料时效。
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
@@ -1073,6 +1080,56 @@ def _archive_chapter(s: dict) -> str:
     for p in olds:
         p.rename(dest / p.name)
     return str(dest)
+
+
+def _extra_block(s: dict) -> str:
+    """按需加的一节：交代用户要什么、从哪一章来、那一章里他哪里卡住了。"""
+    if s.get("origin") not in EXTRA:
+        return ""
+    par = db.row("SELECT * FROM learn_steps WHERE id=?", [s.get("parent_id")]) if s.get("parent_id") else None
+    par = _decode_step(par) if par else None
+    lines = [f"\n---- 这是用户按需加的一节（{EXTRA[s['origin']]}），按「章节教程规范」末尾「按需加的一节」写，篇幅和题量按那里的要求 ----",
+             f"用户的要求：{s.get('request') or s['title']}"]
+    if par:
+        lines.append(f"来自哪一章：「{par['title']}」（正文 {_step_dir(par) / 'chapter.md'}，先读它，不要重复它已经讲清的部分）")
+        if s["origin"] == "confused":
+            r = par.get("quiz_result") or {}
+            wrong = [f"{q['q'][:120]}（用户答：{str((r.get('answers') or {}).get(q['id']))[:150]}；{(r['items'][q['id']].get('feedback') or '')[:150]}）"
+                     for q in par["quiz"] if r.get("status") == "graded" and (r["items"].get(q["id"]) or {}).get("score", 1) < 1]
+            if _quiz_line(par):
+                lines.append(f"那一章的{_quiz_line(par)}" + (f"；建议：{r['advice'][:200]}" if r.get("advice") else ""))
+            if wrong:
+                lines.append("答错 / 没答全的题：\n" + "\n".join("- " + w for w in wrong[:4]))
+            if _checks_text(par):
+                lines.append("「停一下」里用户写的判断：\n" + _checks_text(par)[:1500])
+            if par.get("feedback"):
+                lines.append(f"用户对那一章的反馈：{par['feedback'][:300]}")
+    return "\n".join(lines) + "\n"
+
+
+def create_extra(sid: int, kind: str, request: str, quote: str = "") -> dict:
+    """在第 sid 章后面插一节按需讲解（同一章加的多节按加的先后排），并开始生成。同样的要求已有就直接返回那一节。"""
+    par = _step(sid)
+    if kind not in EXTRA:
+        raise HTTPException(400, "kind 只能是 interest / confused")
+    request, quote = request.strip()[:500], quote.strip()[:1500]
+    if not request and not quote:
+        raise HTTPException(400, "写下感兴趣的子方向，或哪里没懂")
+    full = (request + (f"\n划线原文：{quote}" if quote else "")).strip()
+    root = par["parent_id"] or sid  # 在按需加的一节里再加，挂到原章下面
+    for x in steps_of(par["plan_id"]):
+        if x["parent_id"] == root and x["origin"] == kind and x["request"] == full and x["chapter_status"] != "failed":
+            return x
+    kids = [x for x in _ordered(steps_of(par["plan_id"])) if x["parent_id"] == root]
+    anchor = kids[-1]["id"] if kids else root
+    label = request or quote
+    label = label if len(label) <= 30 else label[:30] + "…"
+    nid = add_step(par["plan_id"], {"title": f"{EXTRA[kind]}：{label}", "est_hours": 1 if kind == "interest" else 0.5,
+                                    "goal": "", "description": ""}, anchor)
+    db.update("learn_steps", nid, {"origin": kind, "parent_id": root, "request": full})
+    s = _step(nid)
+    start_chapter_job(s)
+    return _step(nid)
 
 
 def start_chapter_job(s: dict, note: str = "", prefetch: bool = False) -> int:
@@ -1108,7 +1165,7 @@ def _dim(q: dict) -> str:
     return "应用" if re.search(r"应用|迁移|实践", sk) else "判断" if re.search(r"判断|证据|评估|预测", sk) else "理解"
 
 
-def _clean_quiz(o) -> list[dict]:
+def _clean_quiz(o, max_q: int = 6, max_short: int = 2) -> list[dict]:
     qs = o.get("questions") if isinstance(o, dict) else o
     out = []
     for i, q in enumerate(qs if isinstance(qs, list) else [], 1):
@@ -1129,9 +1186,9 @@ def _clean_quiz(o) -> list[dict]:
             rub = q.get("rubric") or []
             item.update(reference=str(q.get("reference") or ""), rubric=[str(x) for x in (rub if isinstance(rub, list) else [rub])])
         out.append(item)
-    # 题少而精：最多 2 道手写题、总共不超过 6 题（多出来的丢掉，按出题顺序保留）
-    shorts = [q for q in out if q["type"] == "short"][:2]
-    out = [q for q in out if q["type"] == "choice" or q in shorts][:6]
+    # 题少而精：章节最多 2 道手写题、总共不超过 6 题；按需加的一节 1 道、3 题（多出来的丢掉，按出题顺序保留）
+    shorts = [q for q in out if q["type"] == "short"][:max_short]
+    out = [q for q in out if q["type"] == "choice" or q in shorts][:max_q]
     ids = [q["id"] for q in out]
     if len(set(ids)) != len(ids):  # id 重复就重新编号
         for i, q in enumerate(out, 1):
@@ -1161,11 +1218,16 @@ def _finish_chapter(sid: int, job: dict) -> None:
         qo = _loads(qf.read_text("utf-8", errors="replace"), {})
     if not _clean_quiz(qo):
         qo = extract_json(job.get("output") or "", "questions") or {}
-    quiz, cards = _clean_quiz(qo), _clean_cards(qo)
+    quiz, cards = _clean_quiz(qo, *((3, 1) if s.get("origin") in EXTRA else ())), _clean_cards(qo)
     ok = job.get("status") == "done" and len(text) > 200
     data = {"chapter_status": "ready" if ok else "failed"}
     if ok:
         data.update(chapter_md=text, quiz=quiz, cards=cards, checks={})  # 章节变了，「停一下」作答按序号对不上，清掉
+        if s.get("origin") in EXTRA and isinstance(qo, dict):  # 按需加的一节：标题和目标由 Agent 读完原章后定
+            if str(qo.get("title") or "").strip():
+                data["title"] = f"{EXTRA[s['origin']]}：{str(qo['title']).strip()[:60]}"
+            if str(qo.get("goal") or "").strip() and not s.get("goal"):
+                data["goal"] = str(qo["goal"]).strip()[:500]
         old = _loads(s.get("quiz_result"), None)
         if old:  # 重新生成后题目变了：旧答卷作废，只留上次分数
             data["quiz_result"] = {"attempt": old.get("attempt", 0), "last_score": old.get("score", old.get("last_score"))}
@@ -1237,6 +1299,18 @@ def open_chapter(sid: int, body: dict | None = None):
     elif s["chapter_status"] == "ready":
         _prefetch_next(s)
     return public_step(_step(sid))
+
+
+class ExtraIn(BaseModel):
+    kind: str = "interest"   # interest 感兴趣，往深处讲 / confused 没懂，换个讲法
+    request: str = ""
+    quote: str = ""          # 划线的原文（可选）
+
+
+@router.post("/steps/{sid}/extra")
+def add_extra(sid: int, body: ExtraIn):
+    """按需加一节：在这一章后面插一节针对性讲解 + 小测试，立即生成。"""
+    return public_step(create_extra(sid, body.kind, body.request, body.quote))
 
 
 @router.get("/steps/{sid}/out/{path:path}")
@@ -1425,8 +1499,9 @@ def _plan_snapshot(pid: int) -> str:
         lines.append(f"### 阶段{stage} {name}（目的：{STAGE_GOALS[stage]}）")
         for s in ss:
             chap = {"ready": "章节已生成", "generating": "章节生成中", "failed": "章节生成失败"}.get(s["chapter_status"], "")
+            extra = f"按需{EXTRA[s['origin']]}（源自 step_id={s['parent_id']}）" if s.get("origin") in EXTRA else ""
             lines.append(f"- step_id={s['id']} [{s['status']}] 理解度{s['understanding']}/5 · {s['title']}（{s['est_hours']}h）"
-                         + "".join(f"；{x}" for x in (chap, _quiz_line(s)) if x))
+                         + "".join(f"；{x}" for x in (extra, chap, _quiz_line(s)) if x))
             if s["goal"]:
                 lines.append(f"  能力目标：{s['goal'][:200]}")
             if s["feedback"]:
@@ -1468,7 +1543,10 @@ def agent_context(ref: str) -> str:
                 f"本阶段目的：{STAGE_GOALS.get(s['stage'], '')}\n能力目标：{s['goal'] or '（未写）'}\n"
                 f"章节文件：{_step_dir(s) / 'chapter.md'}（下方是摘录，需要时 Read 全文）；测试：{_step_dir(s) / 'quiz.json'}\n"
                 f"测试结果：{_quiz_line(s) or r.get('status') or '未做'}" + (f"；建议：{r.get('advice')}" if r.get("advice") else "")
-                + f"\n回答时围绕本章目标，用户答错的题优先帮他想通；不要直接改写章节，除非用户要求（重新生成：POST {api}/steps/{s['id']}/open -d '{{\"force\":true,\"note\":\"...\"}}'）。\n\n"
+                + f"\n回答时围绕本章目标，用户答错的题优先帮他想通；不要直接改写章节，除非用户要求（重新生成：POST {api}/steps/{s['id']}/open -d '{{\"force\":true,\"note\":\"...\"}}'）。"
+                + f"\n用户想系统地深入某个子方向、或某处需要从头讲透并测一测时，可以按需加一节（插在本章后，自动生成讲解 + 小测试）："
+                f"curl -s -X POST {api}/steps/{s['id']}/extra -H 'Content-Type: application/json' -d '{{\"kind\":\"interest 或 confused\",\"request\":\"子方向 / 没懂的地方\"}}'，"
+                f"加之前先问用户要不要；简单问题直接在对话里答。\n\n"
                 f"### 学习记录（历次作答 / 测试 / 点评）\n{chr(10).join(event_line(e, {s['id']: s['title']}) for e in events_of(step_id=s['id'])[-30:]) or '（无）'}\n\n"
                 f"### 「停一下」作答\n{_checks_text(s) or '（无）'}\n\n### 章末测试\n{quiz or '（无）'}\n\n### 章节摘录\n{(s['chapter_md'] or '（未生成）')[:12000]}\n\n### 计划概况\n{_plan_snapshot(s['plan_id'])[:4000]}")
     if m := re.fullmatch(r"learn:plan:(\d+)", ref or ""):

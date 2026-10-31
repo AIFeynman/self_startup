@@ -393,4 +393,41 @@ def test_backfill_from_jobs(client, fake_submit):
     assert ck["data"]["answer"] == "评分器坏了" and ck["created_at"] == "2026-10-31T17:00:20"
     qz = next(e for e in evs if e["kind"] == "quiz")["data"]
     assert qz["score"] == 65 and qz["items"]["q5"]["answer"] == "我的回答" and qz["wrong_choices"].startswith("q1")
+
+
+def test_on_demand_extra_sections(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    s1, s2 = p["steps"]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    _write_chapter(client, fake_submit, s1)
+    client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {"q1": 0, "q2": "不知道"}})
+    learn.on_job_done(_job(fake_submit[-1]["id"], '```json\n{"items": [{"id": "q2", "score": 0, "feedback": "没说痛点"}],'
+                                                  ' "weak_points": ["痛点识别"], "advice": "回看全景图"}\n```'))
+    base = f"/api/learn/steps/{s1['id']}/extra"
+    assert client.post(base, json={"kind": "bad", "request": "x"}).status_code == 400
+    assert client.post(base, json={"kind": "confused", "request": " "}).status_code == 400
+    # 没懂 → 插在原章后面、立即生成，提示词带原章路径、答错的题和薄弱点
+    a = client.post(base, json={"kind": "confused", "request": "pass^k 和 pass@k 的区别", "quote": "k 次都成功"}).json()
+    assert a["origin"] == "confused" and a["parent_id"] == s1["id"] and a["chapter_status"] == "generating"
+    assert a["title"] == "补课：pass^k 和 pass@k 的区别" and a["est_hours"] == 0.5 and "划线原文：k 次都成功" in a["request"]
+    sent = fake_submit[-1]
+    assert sent["ref"] == f"learn:step:{a['id']}:chapter" and "补课" in sent["prompt"] and "按需加的一节" in sent["prompt"]
+    assert str(learn._step_dir(s1) / "chapter.md") in sent["prompt"] and "没说痛点" in sent["prompt"] and "痛点识别" in sent["prompt"]
+    # 同样的要求不重复建；感兴趣的再加一节排在后面；在加出来的一节里再加挂回原章
+    assert client.post(base, json={"kind": "confused", "request": "pass^k 和 pass@k 的区别", "quote": "k 次都成功"}).json()["id"] == a["id"]
+    b = client.post(base, json={"kind": "interest", "request": "多智能体评测"}).json()
+    assert "答错 / 没答全的题" not in fake_submit[-1]["prompt"] and "深入" in fake_submit[-1]["prompt"]
+    # 生成完：标题 / 目标取 Agent 定的，小测试照常交卷
+    _write_chapter(client, fake_submit, b, {"title": "多智能体怎么评", "goal": "能设计多 Agent 评测", "cards": QUIZ["cards"],
+                                             "questions": QUIZ["questions"][:1] + [{"type": "choice", "q": f"多{i}", "options": ["a", "b"], "answer": 0} for i in range(4)]})
+    sb = client.get(f"/api/learn/steps/{b['id']}").json()
+    assert sb["chapter_status"] == "ready" and sb["title"] == "深入：多智能体怎么评" and sb["goal"] == "能设计多 Agent 评测"
+    assert len(sb["quiz"]) == 3  # 按需的一节最多 3 题
+    assert client.post(f"/api/learn/steps/{b['id']}/quiz", json={"answers": {"q1": 2, "q2": 0, "q3": 0}}).json()["status"] == "done"
+    c = client.post(f"/api/learn/steps/{a['id']}/extra", json={"kind": "interest", "request": "评测成本"}).json()
+    assert c["parent_id"] == s1["id"]
+    order = [x["id"] for x in client.get(f"/api/learn/plans/{p['id']}").json()["steps"]]
+    assert order == [s1["id"], a["id"], b["id"], c["id"], s2["id"]]
+    snap = learn._plan_snapshot(p["id"])
+    assert f"按需深入（源自 step_id={s1['id']}）" in snap and "/extra" in learn.agent_context(f"learn:step:{s1['id']}")
     client.delete(f"/api/learn/plans/{p['id']}")
