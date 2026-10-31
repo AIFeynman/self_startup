@@ -235,6 +235,7 @@ def test_chapter_quiz_flow(client, fake_submit):
     # 重做
     s = client.post(f"/api/learn/steps/{s1['id']}/quiz/reset").json()
     assert s["quiz_result"]["last_score"] == 75 and "answer" not in s["quiz"][0]
+    client.delete(f"/api/learn/plans/{p['id']}")  # 别留下进行中的计划影响其他测试
 
 
 def test_quiz_choice_only_and_fail(client, fake_submit):
@@ -246,6 +247,7 @@ def test_quiz_choice_only_and_fail(client, fake_submit):
     s = client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {"q1": 0}}).json()
     assert len(fake_submit) == n  # 全是选择题不起批改任务
     assert s["quiz_result"]["score"] == 0 and not s["quiz_result"]["passed"] and s["status"] == "doing"
+    client.delete(f"/api/learn/plans/{p['id']}")
 
 
 def test_chapter_failed_and_grade_failed(client, fake_submit):
@@ -259,6 +261,7 @@ def test_chapter_failed_and_grade_failed(client, fake_submit):
     client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {"q1": 2, "q2": "x"}})
     learn.on_job_done(_job(fake_submit[-1]["id"], "no json"))
     assert client.get(f"/api/learn/steps/{s1['id']}").json()["quiz_result"]["status"] == "failed"
+    client.delete(f"/api/learn/plans/{p['id']}")
 
 
 def test_module_model_only_for_learn(monkeypatch):
