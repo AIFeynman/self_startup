@@ -6,7 +6,7 @@ run_stream() 产出统一事件：
     {"type": "tool", "text": "..."}       工具调用摘要
     {"type": "error", "text": "..."}
     {"type": "done", "text": 最终文本, "engine": "claude|codex"}
-Claude 启动失败或报错时自动回退到 Codex（仅新会话）。
+Claude 启动失败或报错时自动回退到 Codex（仅新会话）；启动器/网络的瞬时故障先重试同一引擎。
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import os
 import shutil
 import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -202,6 +203,18 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
     yield {"type": "done", "text": final, "engine": engine, "errored": errored and not texts}
 
 
+# 启动器 / 网络的瞬时故障（还没开始干活就退出）：同一引擎稍等重试，不急着换引擎
+TRANSIENT_MARKERS = ("unavailable right now", "EOF", "timeout", "timed out", "connection reset",
+                     "connection refused", "overloaded", "529", "503", "502")
+TRANSIENT_RETRIES = 2
+RETRY_DELAY_S = 5
+
+
+def _transient(text: str) -> bool:
+    low = text.lower()
+    return any(m.lower() in low for m in TRANSIENT_MARKERS)
+
+
 def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str = "",
                cwd: str | None = None, add_dirs: list[str] | None = None,
                fallback: bool = True, on_proc=None, model: str = "") -> Iterator[dict]:
@@ -223,16 +236,25 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
             continue
         cmd = _claude_cmd(prompt, system, session, add_dirs, model) if eng == "claude" \
             else _codex_cmd(prompt, system, session, add_dirs, cwd)
-        failed = False
-        for ev in _run(eng, cmd, cwd, on_proc):
-            if ev["type"] == "done" and ev.get("errored") and i + 1 < len(order):
-                failed = True
+        for attempt in range(TRANSIENT_RETRIES + 1):
+            failed = retry = False
+            for ev in _run(eng, cmd, cwd, on_proc):
+                # fatal = 进程退出且没产出任何文本，重跑不会重复已做的工作
+                if ev.get("fatal") and attempt < TRANSIENT_RETRIES and _transient(ev["text"]):
+                    retry = True
+                    yield {"type": "error", "text": ev["text"] + f"；{RETRY_DELAY_S} 秒后重试 {eng}（第 {attempt + 1} 次）"}
+                    break
+                if ev["type"] == "done" and ev.get("errored") and i + 1 < len(order):
+                    failed = True
+                    break
+                if ev.get("fatal") and i + 1 < len(order):
+                    failed = True
+                    yield {"type": "error", "text": ev["text"] + "；回退到备选引擎"}
+                    break
+                yield ev
+            if not retry:
                 break
-            if ev.get("fatal") and i + 1 < len(order):
-                failed = True
-                yield {"type": "error", "text": ev["text"] + "；回退到备选引擎"}
-                break
-            yield ev
+            time.sleep(RETRY_DELAY_S)
         if not failed:
             return
         yield {"type": "engine", "text": f"切换到 {order[i + 1]}"}

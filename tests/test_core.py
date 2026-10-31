@@ -162,3 +162,44 @@ def test_pause_all_and_approval_dedupe(client, monkeypatch):
     items = client.get("/api/jobs/approvals").json()
     assert [i["item"] for i in items] == ["要不要发布 dev？"]
     assert items[0]["root_job_id"] == first and items[0]["round"] == 2
+
+
+def _fake_runs(monkeypatch, script):
+    """script：按调用顺序给出每次 _run 的事件列表；返回实际调用的引擎序列。"""
+    from app import agent
+    calls = []
+
+    def fake_run(eng, cmd, cwd, on_proc=None):
+        calls.append(eng)
+        yield from script[len(calls) - 1]
+
+    monkeypatch.setattr(agent, "_run", fake_run)
+    monkeypatch.setattr(agent, "available", lambda e: True)
+    monkeypatch.setattr(agent, "RETRY_DELAY_S", 0)
+    return calls
+
+
+def test_claude_transient_error_retries_before_fallback(monkeypatch):
+    from app import agent
+    blip = [{"type": "error", "text": 'claude 退出码 1: reclaude: unavailable right now: Get "https://x/client/account": EOF', "fatal": True}]
+    ok = [{"type": "done", "text": "好了", "engine": "claude", "errored": False}]
+    calls = _fake_runs(monkeypatch, [blip, ok])
+    r = agent.run_once("p", engine="claude")
+    assert calls == ["claude", "claude"] and r["engine"] == "claude" and r["text"] == "好了"
+
+
+def test_claude_persistent_transient_error_still_falls_back(monkeypatch):
+    from app import agent
+    blip = [{"type": "error", "text": "claude 退出码 1: unavailable right now", "fatal": True}]
+    ok = [{"type": "done", "text": "codex 完成", "engine": "codex", "errored": False}]
+    calls = _fake_runs(monkeypatch, [blip] * (agent.TRANSIENT_RETRIES + 1) + [ok])
+    r = agent.run_once("p", engine="claude")
+    assert calls == ["claude"] * (agent.TRANSIENT_RETRIES + 1) + ["codex"] and r["engine"] == "codex"
+
+
+def test_claude_non_transient_error_falls_back_immediately(monkeypatch):
+    from app import agent
+    bad = [{"type": "error", "text": "claude 退出码 1: unknown option --foo", "fatal": True}]
+    ok = [{"type": "done", "text": "codex 完成", "engine": "codex", "errored": False}]
+    calls = _fake_runs(monkeypatch, [bad, ok])
+    assert agent.run_once("p", engine="claude")["engine"] == "codex" and calls == ["claude", "codex"]
