@@ -241,9 +241,18 @@ def apply_timezone(tz: str | None = None) -> str:
     return time.tzname[0]
 
 
+def _system_tz_name() -> str:
+    return _SYSTEM_TZ or str(Path("/etc/localtime").resolve()).partition("zoneinfo/")[2]
+
+
+def effective_tz() -> str:
+    """进程当前用的时区名（IANA，如 Etc/GMT-8），给前端按同一时区算「今天」「现在」。"""
+    return os.environ.get("TZ") or _system_tz_name()
+
+
 def system_utc_offset(at: datetime | None = None) -> float:
     """系统时区（不受 apply_timezone 影响）此刻的 UTC 偏移小时。"""
-    name = _SYSTEM_TZ or str(Path("/etc/localtime").resolve()).partition("zoneinfo/")[2]
+    name = _system_tz_name()
     try:
         z = ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):

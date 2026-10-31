@@ -68,7 +68,21 @@ export function toast(msg, isErr = false) {
   setTimeout(() => t.remove(), 3500);
 }
 
-export const today = () => new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
+// 平台时区：服务端按它写时间、划分日期（/api/meta 的 tz，设置里的 timezone 或按作息推断）。
+// 页面上的「今天」「现在」、不带时区的时间串都按它算，不跟浏览器所在时区走，否则两边会差出一天。
+let TZ;
+export const setTz = (tz) => { try { new Intl.DateTimeFormat('sv-SE', { timeZone: tz || undefined }); TZ = tz || undefined; } catch { TZ = undefined; } };
+const WALL = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' };
+// 平台时区的墙上时间 YYYY-MM-DDTHH:MM:SS（和服务端 db.now() 同格式）
+export const nowLocal = (ms = Date.now()) => new Intl.DateTimeFormat('sv-SE', { ...WALL, timeZone: TZ }).format(ms).replace(' ', 'T');
+export const today = () => nowLocal().slice(0, 10); // YYYY-MM-DD
+// 服务端时间串 → 毫秒时间戳；不带时区的按平台时区解释
+export const toMs = (s) => {
+  s = String(s).replace(' ', 'T');
+  if (/(Z|[+-]\d\d:?\d\d)$/.test(s)) return Date.parse(s);
+  const asUtc = Date.parse(s + 'Z');
+  return asUtc - (Date.parse(nowLocal(asUtc) + 'Z') - asUtc);
+};
 
 // 简单表单字段：field('标题', inputEl)
 export const field = (label, input) => h('label.field', {}, [h('span', {}, label), input]);

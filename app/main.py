@@ -78,7 +78,7 @@ def dev_status():
 
 @app.get("/api/meta")
 def meta():
-    return {"modules": modules.meta(), "today": db.today(),
+    return {"modules": modules.meta(), "today": db.today(), "tz": settings.effective_tz(),
             "engines": {e: agent.available(e) for e in ("claude", "codex")}}
 
 

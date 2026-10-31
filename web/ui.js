@@ -1,6 +1,6 @@
 // 共享 UI 组件：图标、大输入框、快捷 chip、页头、统计块、空状态。
 // 板块页面：import { icon, composer, chips, pageHead, section, stats, empty, progress } from '../ui.js'
-import { h } from './api.js';
+import { h, nowLocal } from './api.js';
 
 const P = {
   home: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z',
@@ -118,7 +118,7 @@ export const progress = (pct) => h('div.progress', {}, h('i', { style: { width: 
 
 // 问候语
 export function greeting() {
-  const hr = new Date().getHours();
+  const hr = +nowLocal().slice(11, 13);
   return hr < 6 ? '夜深了' : hr < 11 ? '早上好' : hr < 13 ? '中午好' : hr < 18 ? '下午好' : '晚上好';
 }
 
