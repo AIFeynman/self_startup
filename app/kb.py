@@ -221,6 +221,12 @@ def _plans() -> list[dict]:
                 body.append(f"- 理解度：{s['understanding']}/5")
             if s.get("feedback"):
                 body.append(f"- 反馈：{s['feedback']}")
+            qr = json.loads(s["quiz_result"]) if s.get("quiz_result") else {}
+            if qr.get("status") == "graded":
+                weak = "；".join(qr.get("weak_points") or [])
+                body.append(f"- 章末测试：{qr.get('score')} 分" + (f"；薄弱：{weak}" if weak else ""))
+            if s.get("chapter_md"):
+                body.append(f"\n<details><summary>章节教程</summary>\n\n{s['chapter_md']}\n\n</details>")
         out.append(_doc("plan", p["id"], p["topic"], "\n".join(body), date=p["created_at"], updated=p.get("updated_at") or "",
                         tags=["学习计划", p["topic"]], status=p["status"],
                         summary=f"{p['goal']}（进度 {done}/{len(steps)}）"))

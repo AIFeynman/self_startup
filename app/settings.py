@@ -47,6 +47,8 @@ DEFAULTS: dict = {
         "grokbot": {"script": str(Path.home() / ".codex/skills/grokbot-webhook/scripts/grokbot.py")},
         "muse": {"app": "Muse"},
     },
+    # 按板块指定 Claude 模型（后台任务和对话都生效；空 / 不写 = 用 engines.claude.model）
+    "module_models": {"learn": "claude-sonnet-5-5"},
     # 复盘时分析的代码库 / 文档目录
     "repos": [],
     # Claude Code / Codex 会话日志位置（效率复盘）

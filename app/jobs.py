@@ -173,7 +173,8 @@ def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_
     text, session, used = "", "", engine
     try:
         for ev in agent.run_stream(prompt, engine=engine, system=system, session=session_in, cwd=cwd, add_dirs=add_dirs,
-                                   fallback=not session_in, on_proc=_on_proc(jid)):
+                                   fallback=not session_in, on_proc=_on_proc(jid),
+                                   model=agent.module_model(module, engine)):
             if jid in _paused:
                 break
             if ev["type"] == "session":
@@ -514,4 +515,11 @@ def get_job(jid: int):
     j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
     if not j:
         raise HTTPException(404)
+    # 服务端算好已用时间：时间戳是服务器时区（可按作息推断）的本地时间，浏览器时区不同时自己算会差几个小时
+    start = j.get("started_at") or j.get("created_at")
+    try:
+        end = datetime.fromisoformat(j["finished_at"]) if j.get("finished_at") else datetime.now()
+        j["elapsed_s"] = max(0, int((end - datetime.fromisoformat(start)).total_seconds())) if start else 0
+    except (TypeError, ValueError):
+        j["elapsed_s"] = None
     return j
