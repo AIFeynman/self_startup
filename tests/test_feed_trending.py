@@ -67,3 +67,11 @@ def test_x_article_tab(client):
     ])
     ids = {x["id"] for x in client.get("/api/feed/items", params={"type": "x_article"}).json()["items"]}
     assert {"twitter:1", "twitter:2"} <= ids and "twitter:3" not in ids
+
+
+def test_gists_cover_x_article_tab(client, monkeypatch):
+    from app.modules import _feed_gist as gist
+    seen = {}
+    monkeypatch.setattr(gist, "pick", lambda top, tabs, n, m: seen.update(tabs) or [])
+    feed.run_gists()
+    assert "x_article" in seen and "repo" in seen

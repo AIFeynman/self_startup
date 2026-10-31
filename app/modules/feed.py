@@ -276,7 +276,9 @@ def refresh_sync(only: list[str] | None = None) -> dict:
 def run_gists() -> dict:
     """给排序前列里缺中文一句话（或标题 / 简介变了）的条目生成，写回 extra.gist。"""
     try:
-        todo = gist.pick(ranked(), {t: ranked(type_=t) for t in TYPES}, int(cfg("gist_top")), int(cfg("gist_per_type")))
+        # 每个标签页的前列都要有：分类之外还有「X 长文」页
+        tabs = {t: ranked(type_=t) for t in [*TYPES, "x_article"]}
+        todo = gist.pick(ranked(), tabs, int(cfg("gist_top")), int(cfg("gist_per_type")))
         if not todo:
             return {"count": 0, "errors": []}
         got, errors = gist.generate(todo, model=str(cfg("gist_model")))
