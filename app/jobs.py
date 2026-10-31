@@ -489,9 +489,10 @@ def resume_job(jid: int):
 
 @router.get("/finished")
 def finished(since: str):
-    """since 之后结束的任务，前端轮询用来弹通知、刷新对话。"""
+    """since 之后结束的任务，前端轮询用来弹通知、刷新对话。用户自己暂停的不算（不弹「失败」）。"""
     out = []
-    for j in db.rows("SELECT id,module,ref,status,prompt,chat_session_id,finished_at FROM jobs WHERE finished_at>? ORDER BY finished_at", [since]):
+    for j in db.rows("SELECT id,module,ref,status,prompt,chat_session_id,finished_at FROM jobs "
+                     "WHERE finished_at>? AND status IN ('done','failed') ORDER BY finished_at", [since]):
         title, link, kind = describe(j)
         j.pop("prompt")
         out.append({**j, "title": title, "link": link, "kind": kind})

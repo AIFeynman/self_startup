@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
-     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "x_article": 0.4}
+     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "x_article": 0.4, "trending": 0.8}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
 OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
                   "openai.com": "OpenAI", "deepmind.google": "Google DeepMind", "blog.google": "Google",
@@ -148,7 +148,8 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     d = item_time(it, now)
     age_h = max(0.0, (now - d).total_seconds() / 3600) if d else 24 * 30
     pl = fmt_pop(it.get("source", ""), it.get("popularity") or 0)
-    if pl and it.get("source") == "github" and d:
+    ex = it.get("extra") or {}
+    if pl and it.get("source") == "github" and d and not ex.get("trending"):
         pl += f"（建 {max(1, round(age_h / 24))} 天）"     # 仓库的星是累计的：配上天数才看得出涨得快不快
     if pl:
         why.append(pl)
@@ -166,6 +167,9 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     if org:
         s += W["official"]
         lead.append(f"{org} 官方")
+    if ex.get("trending") and age_h < 48:  # 上榜那天的标记，过两天不再加分（日期就是上榜日）
+        s += W["trending"]
+        lead.append("GitHub 今日 Trending" + (f" +{ex['stars_gained']}★" if ex.get("stars_gained") else ""))
     xa = (it.get("extra") or {}).get("x_article")
     if xa:
         s += W["x_article"] if xa == "own" else W["x_article"] / 2

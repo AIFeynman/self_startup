@@ -1,7 +1,7 @@
 // 信息推荐：按热度/新鲜度/兴趣/反馈排序的 AI 信息流；只展示标题 + 简介 + 链接 + 推荐理由。
 // 页面：今日精选（前 5 条，编号行）+ 分类 pill + 紧凑列表（无限加载）+ 一个多模式输入框（筛选 / 加兴趣 / 问 Agent）。
 // 键盘：j/k 移动选中，l 赞，s 收藏，o 打开，d 深读，x 隐藏。
-const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['saved', '已收藏']];
+const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['x_article', 'X 长文'], ['saved', '已收藏']];
 const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论' };
 const PAGE = 40;
 const TOP_N = 5;
