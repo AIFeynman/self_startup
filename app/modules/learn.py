@@ -984,7 +984,7 @@ def _checks_text(s: dict) -> str:
             continue
         rv = c.get("review") or {}
         out.append(f"- 问：{c['q'][:150]}\n  我答：{c['answer'][:300]}"
-                   + (f"\n  漏掉：{'；'.join(rv.get('missing') or [])[:200]}；想偏：{'；'.join(rv.get('off') or [])[:200]}" if rv else ""))
+                   + (f"\n  漏掉：{'；'.join((rv.get('missing') or []) + (rv.get('off') or []))[:300]}" if rv else ""))
     return "\n".join(out)
 
 
@@ -1267,7 +1267,7 @@ def grade_prompt(s: dict, r: dict) -> str:
                         for q in qs)
     wrong = "；".join(f"{q['id']}（{q.get('dim') or ''}·{q['section']}）" for q in s["quiz"]
                       if q["type"] == "choice" and not (r["items"].get(q["id"]) or {}).get("score"))
-    return f"""任务：批改学习测试里的简答题，像一位严格但愿意教的导师。今天是 {db.today()}。
+    return f"""任务：批改学习测试里的简答题，像一位鼓励为主、看重理解和判断的导师。今天是 {db.today()}。
 计划：{p['topic']}；本章：阶段 {s['stage']} · {STAGES.get(s['stage'], '')} ·「{s['title']}」
 本阶段目的：{STAGE_GOALS.get(s['stage'], '')}
 （本章正文在 {_step_dir(s) / 'chapter.md'}，需要时可读。）
@@ -1275,8 +1275,11 @@ def grade_prompt(s: dict, r: dict) -> str:
 
 {body}
 
-评分：每题 score 取 0 / 0.25 / 0.5 / 0.75 / 1，按评分要点给分；意思对、表述不同也给分；只复述概念、没有理由或判断的不给满分。
-feedback 写 2–4 句：哪里对、缺了什么、高手会怎么想（判断类题目要点出代表人物的推理路径和你的依据）。
+评分：每题 score 取 0 / 0.25 / 0.5 / 0.75 / 1。核心是检查理解和判断力，不要逐字逐句对评分要点：
+- 核心判断对、理由大体成立 → 0.75–1（表述不同、举了别的例子、只缺次要细节都不扣成 0.5）；
+- 方向对但依据薄弱或缺一个关键点 → 0.5；只复述概念、没有自己的判断 → 0.25；答非所问或明显错误 → 0。
+拿不准时往高给一档，别打击积极性。
+feedback 写 2–3 句：先说哪里对，再说最值得补的一点，最后一句高手会怎么想（判断类题目点出代表人物的推理路径）。
 不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
 {{"items": [{{"id": "q2", "score": 0.5, "feedback": "..."}}], "summary": "一两句总体评价",
  "assessment": {{"理解": "对这个方向的理解到什么程度（一句）", "判断": "判断力如何、离一线的人差在哪（一句）", "应用": "能否用到自己的论文/项目上（一句）"}},
@@ -1375,11 +1378,12 @@ def check_prompt(s: dict, c: dict) -> str:
 要点（参考答案）：{c['points'] or '（未提供，按本章内容判断）'}
 用户的判断：{c['answer']}
 
-要求：具体、短、不客套。用户说对的要认可；要点里没有但用户说得有道理的也要指出（要点不是唯一答案）。
+要求：短、具体、鼓励为主，不要逐字逐句对要点。看的是理解和判断力：意思对、抓住了核心判断就算抓到，换了说法、举了别的例子都算；
+要点之外说得有道理的也算抓到（要点不是唯一答案）。只指出真正影响理解的缺口或想偏处，细枝末节不提。
 不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
-{{"covered": ["抓到的要点（用用户的话对应到要点）"], "missing": ["漏掉的要点，及为什么重要"], "off": ["想偏或说错的地方，错在哪"],
- "extra": ["要点之外、用户说得有道理的补充"], "better": "高手会怎么想：一两句示范推理路径", "score": 0.0}}
-score 取 0–1，表示对要点的覆盖和推理质量。
+{{"covered": ["抓到了什么（含要点之外有道理的），每条一句"], "missing": ["漏掉或想偏的关键点，每条一句，说清为什么重要"],
+ "better": "高手会怎么想：一两句示范推理路径", "score": 0.0}}
+covered、missing 各最多 3 条，每条一句话、40 字以内（展开的道理放进 better）。score 取 0–1，宽松给分：核心判断对了就 ≥ 0.7，方向对但缺依据约 0.5，基本没抓住才低于 0.3。
 """
 
 
@@ -1422,8 +1426,9 @@ def _finish_check(sid: int, idx: str, job: dict) -> None:
             score = max(0.0, min(1.0, float(o.get("score") or 0)))
         except (TypeError, ValueError):
             score = 0.0
-        c.update(status="reviewed", review={"covered": lst("covered"), "missing": lst("missing"), "off": lst("off"),
-                                            "extra": lst("extra"), "better": str(o.get("better") or ""), "score": score})
+        # 两项：抓到了（含要点外的合理补充）/ 漏掉了（含想偏的）；模型仍按老格式给 off / extra 时并进去
+        c.update(status="reviewed", review={"covered": (lst("covered") + lst("extra"))[:4], "missing": (lst("missing") + lst("off"))[:4],
+                                            "better": str(o.get("better") or ""), "score": score})
         log_event(s, "check_review", {"idx": int(idx), "q": c["q"], "points": c.get("points", ""), "answer": c["answer"],
                                       "review": c["review"]}, src=f"job:{job.get('id')}")
     checks[idx] = c

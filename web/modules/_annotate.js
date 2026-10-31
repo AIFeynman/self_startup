@@ -12,6 +12,9 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   let threads = [];
   let showResolved = false;
   let composer = null; // 正在写的新批注 {quote, prefix, suffix, ask}
+  const RAIL_KEY = 'an-rail-off'; // 收起批注栏（全站记住）；收起后只留一条竖排的「批注 N」，点开恢复
+  let railOff = !compact && (() => { try { return !!localStorage.getItem(RAIL_KEY); } catch { return false; } })();
+  const setRail = (off) => { railOff = off; try { localStorage.setItem(RAIL_KEY, off ? '1' : ''); } catch { /* ignore */ } paint(); };
   let timer;
 
   const load = async () => {
@@ -62,12 +65,18 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     };
     const sorted = [...shown].sort((a, b) => pos(a) - pos(b));
     wrap.classList.toggle('has-threads', !!threads.length || !!composer);
+    wrap.classList.toggle('rail-off', railOff);
+    if (railOff) {
+      rail.replaceChildren(h('button.an-reopen', { title: '展开批注栏', onclick: () => setRail(false) }, [ui.icon('chat'), threads.length ? `批注 ${open.length}` : '批注']));
+      return;
+    }
     rail.replaceChildren(...[
       h('div.an-head', {}, [
         h('b', {}, threads.length ? `批注 ${open.length}` : '批注'),
         resolved ? h('button.sm.ghost', { onclick: () => { showResolved = !showResolved; paint(); } }, showResolved ? '隐藏已解决' : `已解决 ${resolved}`) : null,
         h('span.grow'),
         h('button.sm.ghost', { title: '不划线，针对全文问 Claude', onclick: () => startNew({ quote: '', prefix: '', suffix: '', ask: true }) }, [ui.icon('spark'), '问全文']),
+        compact ? null : h('button.sm.ghost.an-close', { title: '收起批注栏，正文更宽（划线评论时自动展开）', onclick: () => setRail(true) }, ui.icon('x')),
       ]),
       composer ? newCard() : null,
       ...sorted.map((t) => card(t, lost.has(t.id))),
@@ -77,6 +86,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
 
   function startNew(c) {
     composer = c;
+    railOff = false; // 划线评论 / 提问时展开，看得到回答（不改记住的偏好）
     paint();
     rail.querySelector('.an-new textarea')?.focus();
     rail.querySelector('.an-new')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -256,6 +266,12 @@ function injectStyle() {
   @media (max-width: 1100px) { .an-rail { position: static; max-height: none; border-left: 0; padding-left: 0; border-top: 1px dashed var(--line); padding-top: 10px; } }
   .an-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
   .an-head .grow { flex: 1; }
+  .an-head .an-close { padding: 2px 4px; } .an-head .an-close svg { width: 14px; height: 14px; }
+  .an-wrap.rail-off { grid-template-columns: minmax(0, 1fr) 30px; }
+  .an-wrap.rail-off .an-rail { border-left: 0; padding-left: 0; overflow: visible; }
+  .an-reopen { writing-mode: vertical-rl; display: flex; gap: 6px; align-items: center; padding: 10px 3px; font-size: 12px; letter-spacing: .15em; color: var(--muted); }
+  .an-reopen svg { width: 14px; height: 14px; } .an-reopen:hover { color: var(--accent); border-color: var(--accent); }
+  @media (max-width: 1100px) { .an-wrap.rail-off { grid-template-columns: minmax(0, 1fr); } .an-reopen { writing-mode: horizontal-tb; } }
   .an-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
   .an-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 6px;
     transition: box-shadow .2s; }
