@@ -164,6 +164,22 @@ const CSS = `
 .ln-chap .md .dg-card p, .ln-chap .md .dg-side p { margin: 4px 0 0; color: var(--muted); }
 .ln-chap .md .dg-vs { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
 .ln-chap .md .dg-side { padding: 12px 16px; background: var(--panel); } .ln-chap .md .dg-side + .dg-side { border-left: 1px solid var(--line); background: var(--bg); }
+/* 体系架构图：从上到下分层，右侧一列贯穿各层的关注点 */
+.ln-chap .md .dg-arch { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 22%); gap: 10px; margin: 16px 0 20px; font-size: 13px; line-height: 1.5; }
+.ln-chap .md .dg-arch:not(:has(.dg-cross)) { grid-template-columns: minmax(0, 1fr); }
+.ln-chap .md .dg-stack { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ln-chap .md .dg-layer { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: stretch; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); }
+.ln-chap .md .dg-layer > b { display: flex; align-items: center; font-size: 12.5px; color: var(--accent); border-right: 2px solid var(--accent-ring); padding-right: 8px; }
+.ln-chap .md .dg-layer:first-child { background: var(--accent-soft); }
+.ln-chap .md .dg-boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px; }
+.ln-chap .md .dg-box { padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); min-width: 0; }
+.ln-chap .md .dg-box > b, .ln-chap .md .dg-box > span { display: block; } .ln-chap .md .dg-box > span { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.ln-chap .md .dg-cross { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1.5px dashed var(--accent-ring); border-radius: var(--radius-sm); }
+.ln-chap .md .dg-cross > b { font-size: 12.5px; color: var(--accent); text-align: center; }
+.ln-chap .md .dg-box .dg-go { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 500; color: var(--accent); text-align: right; }
+.ln-chap .md .dg-box .dg-go.more { color: var(--muted); } .ln-chap .md .dg-box .dg-go.more:hover { color: var(--accent); }
+.ln-chap .md .dg-box.dg-link { cursor: pointer; } .ln-chap .md .dg-box.dg-link:hover { border-color: var(--accent); }
+@media (max-width: 640px) { .ln-chap .md .dg-arch { grid-template-columns: 1fr; } .ln-chap .md .dg-layer { grid-template-columns: 1fr; } .ln-chap .md .dg-layer > b { border-right: 0; border-bottom: 2px solid var(--accent-ring); padding: 0 0 4px; } }
 .ln-chap .md .hot { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 .ln-chap .md .warn { border-color: var(--warn); background: var(--warn-soft); }
 /* 交互：点开细节 / 逐步播放 / 标签页 / 翻转卡 / 小组件 */
@@ -860,7 +876,7 @@ async function renderChapter(el, ctx, pid, sid) {
 
   // 正文 + 目录
   const body = md(s.chapter_md);
-  enhance(ctx, body, s);
+  enhance(ctx, body, s, { p, extra });
   const heads = [...body.querySelectorAll('h2')];
   heads.forEach((hd, i) => { hd.id = `ln-h-${i}`; hd.style.scrollMarginTop = '16px'; });
   const TOC_KEY = 'ln-toc-off';
@@ -959,8 +975,8 @@ function extraPanel(ctx, p, s) {
   draw();
   return {
     el, create,
-    open(k = kind, q) {
-      kind = k; if (q !== undefined) quote = q.slice(0, 1500); draw();
+    open(k = kind, q, text) {
+      kind = k; if (q !== undefined) quote = q.slice(0, 1500); if (text !== undefined) inp.value = text; draw();
       el.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => inp.focus({ preventScroll: true }), 350);
     },
   };
@@ -1066,9 +1082,24 @@ function quizView(ctx, p, s, { gotoSection, chat, next, extra }) {
 const PASS_TXT = '70 分及格，及格自动完成本章';
 
 // 章节里的交互组件：Agent 写结构化 HTML（skills/learn/chapter.md），这里接上行为
-function enhance(ctx, body, s) {
+function enhance(ctx, body, s, { p, extra } = {}) {
   const { h } = ctx;
   const sid = s.id;
+  // 体系架构图：模块点一下跳到计划里讲它的那一章（data-step）或本章小节（data-section）；没人讲的模块可「展开讲」按需生成一节
+  const seq = p ? p.steps.filter((x) => x.status !== 'skipped') : [];
+  body.querySelectorAll('.dg-arch .dg-box').forEach((box) => {
+    const name = box.querySelector(':scope > b')?.textContent.trim() || box.textContent.trim().slice(0, 30);
+    const layer = box.closest('.dg-layer')?.querySelector(':scope > b')?.textContent.trim() || '贯穿各层';
+    const st = box.dataset.step && seq.find((x) => String(x.id) === box.dataset.step && x.id !== sid);
+    const hd = box.dataset.section && [...body.querySelectorAll('h2, h3')].find((x) => x.textContent.includes(box.dataset.section) || box.dataset.section.includes(x.textContent.trim()));
+    let label, title, go;
+    if (st) { label = `第 ${seq.indexOf(st) + 1} 章${st.status === 'done' ? ' ✓' : ''} →`; title = `跳到「${st.title}」`; go = () => { location.hash = chapterHref(p.id, st.id); }; }
+    else if (hd) { label = '本章 ↓'; title = `跳到本章「${hd.textContent.trim()}」`; go = () => hd.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    else if (extra) { label = '展开讲 +'; title = '计划里没有专门讲它：按需加一节讲讲'; go = () => extra.open('interest', undefined, `体系架构图里「${layer}」层的「${name}」：它解决什么、代表工作、和相邻模块的关系`); }
+    if (!go) return;
+    box.append(h('a.dg-go' + (st || hd ? '' : '.more'), { href: 'javascript:void 0', title, onclick: (e) => { e.stopPropagation(); go(); } }, label));
+    if (!box.querySelector('.dg-more') && (st || hd)) { box.classList.add('dg-link'); box.title = title; box.addEventListener('click', go); }
+  });
   // 树：一行放下所有分支（最多 5 列，再多换行）
   body.querySelectorAll('.dg-branches').forEach((b) => { const n = b.children.length; b.style.setProperty('--n', n <= 5 ? n : 3); });
   // 点开看细节

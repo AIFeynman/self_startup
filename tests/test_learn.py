@@ -468,3 +468,14 @@ def test_three_rounds_and_restructure_old_plan(client, fake_submit):
     assert client.get(f"/api/learn/plans/{n['id']}").json()["status"] == "active"
     for pid in (old["id"], n["id"]):
         client.delete(f"/api/learn/plans/{pid}")
+
+
+def test_first_chapter_must_draw_clickable_architecture(client, fake_submit):
+    p = _plan_with_steps(client, fake_submit)
+    s1, s2 = p["steps"]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    first = fake_submit[-1]["prompt"]
+    assert "体系架构图" in first and "dg-arch" in first and f'step_id={s2["id"]}' in first and "data-step" in first
+    client.post(f"/api/learn/steps/{s2['id']}/open", json={})
+    assert "本章是计划的第一步" not in fake_submit[-1]["prompt"]
+    client.delete(f"/api/learn/plans/{p['id']}")

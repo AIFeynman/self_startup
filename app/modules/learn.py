@@ -1098,6 +1098,17 @@ def _recent_context() -> str:
     return "\n".join(out) or "（暂无记录）"
 
 
+def _arch_block(p: dict, s: dict, steps: list[dict]) -> str:
+    """计划的第一步（全貌章）必须画体系架构图，模块能点击跳到计划里讲它的那一章 / 本章小节。"""
+    main = [x for x in steps if not x.get("origin") and x["status"] != "skipped"]
+    if not main or main[0]["id"] != s["id"]:
+        return ""
+    lst = "\n".join(f"- step_id={x['id']} {stage_label(p, x['stage'])} ·「{x['title']}」" for x in main[1:])
+    return (f"\n---- 本章是计划的第一步（全貌章）：必须画「## 体系架构图」（dg-arch 组件，见规范），放在资料时效之后 ----\n"
+            f"架构图要能点击跳转：模块对应计划里后面某一步时加 data-step=\"<step_id>\"，对应本章某个小节时加 data-section=\"<小节标题>\"，"
+            f"都不对应就不加（平台会让用户点它按需生成一节）。计划里后面的各步：\n{lst or '（无）'}\n")
+
+
 def chapter_prompt(s: dict, note: str = "") -> str:
     p = _plan(s["plan_id"])
     steps = _ordered(steps_of(p["id"]))
@@ -1131,7 +1142,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 用户最近在读 / 在做（章末测试至少 1 题从中挑和本章相关的论文或项目出题，学以致用）：
 {_recent_context()}
 {('用户对本章的要求：' + note) if note else ''}
-{_extra_block(s)}
+{_extra_block(s)}{_arch_block(p, s, steps)}
 做法：
 1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；全貌、前沿章节（老计划的阶段 1、3、5）必须核对资料时效，优先用最新的综述 / 书 / 论文。
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
