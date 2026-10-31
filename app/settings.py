@@ -128,6 +128,13 @@ DEFAULTS: dict = {
             "https://feeds.fireside.fm/sv101/rss",                  # 硅谷101
             "https://feeds.fireside.fm/shengdongjixi/rss",          # 声东击西
         ],
+        # 小宇宙节目页（直读页面内嵌数据，带播放数；失败时走 rsshub_bases 里的公共 RSSHub）
+        "xiaoyuzhou": [
+            "https://www.xiaoyuzhoufm.com/podcast/626b46ea9cbbf0451cf5a962",   # 张小珺Jùn｜商业访谈录
+            "https://www.xiaoyuzhoufm.com/podcast/60502e253c92d4f62c2a9577",   # 十字路口Crossing
+            "https://www.xiaoyuzhoufm.com/podcast/61933ace1b4320461e91fd55",   # 晚点聊 LateTalk
+        ],
+        "rsshub_bases": ["https://rsshub.ktachibana.party", "https://rsshub.app", "https://hub.slarker.me"],
         # X 账号：learn_evolve 编辑审核的 Tier1（官方 / 研究 / 工程 / 商业），外加几个 Claude Code / Codex 一线账号
         "x_accounts": [
             "OpenAI", "OpenAIDevs", "AnthropicAI", "ClaudeDevs", "GoogleDeepMind", "GoogleAI", "GoogleAIStudio",

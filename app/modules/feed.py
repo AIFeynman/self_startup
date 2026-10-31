@@ -58,7 +58,7 @@ CFG_DEFAULTS = {
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
     "x_per_account": 2,           # X 名单账号：每人每次最多收几条
     "producthunt_days": 2,
-    "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "reddit", "x", "producthunt"],
+    "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt"],
 }
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
          "news": "资讯"}
@@ -205,6 +205,8 @@ def _collectors() -> dict:
         "rss": lambda: src.fetch_rss(list(fc.get("rss") or [])),
         "sites": lambda: src.fetch_sites(list(fc.get("sites") or []), known_urls=_known_urls("blog")),
         "podcast": lambda: src.fetch_rss(list(fc.get("podcasts") or []), per_feed=5, source="podcast", typ="podcast"),
+        "xiaoyuzhou": lambda: src.fetch_xiaoyuzhou(list(fc.get("xiaoyuzhou") or []),
+                                                   rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
         "reddit": lambda: src.fetch_reddit(list(cfg("reddit"))),
         "x": lambda: src.fetch_x(list(fc.get("x_accounts") or []), list(fc.get("x_queries") or []),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
@@ -368,7 +370,7 @@ def deep_reads() -> int:
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
                                 "x_min_likes", "x_per_account", "producthunt_days", "sources")} | {
-        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "x_accounts", "x_queries")} | {"types": TYPES}
+        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 
 # ---------- 定时刷新 ----------
