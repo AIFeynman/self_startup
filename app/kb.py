@@ -23,11 +23,11 @@ MANIFEST = ".manifest.json"
 
 TYPE_DIRS = {
     "daily": "daily", "note": "notes", "research": "research", "product": "products",
-    "paper": "learn/papers", "repo": "learn/repos", "plan": "learn/plans", "feed": "feed",
+    "paper": "learn/papers", "repo": "learn/repos", "plan": "learn/plans", "feed": "feed", "annotation": "annotations",
 }
 TYPE_NAMES = {
     "daily": "每日记录", "note": "问题与经验", "research": "调研", "product": "产品体验",
-    "paper": "论文深读", "repo": "项目解读", "plan": "学习计划", "feed": "收藏的信息",
+    "paper": "论文深读", "repo": "项目解读", "plan": "学习计划", "feed": "收藏的信息", "annotation": "阅读批注",
 }
 
 README = """# 本地知识库（自动生成，勿手改）
@@ -42,6 +42,7 @@ README = """# 本地知识库（自动生成，勿手改）
 - `learn/papers/`、`learn/repos/`：论文 / GitHub 项目深读（TL;DR + 我的笔记 + 全文或产物路径）。
 - `learn/plans/`：主题学习计划（阶段、步骤、进度、理解度、反馈）。
 - `feed/saved.md`：点赞 / 收藏的信息流条目。
+- `annotations/`：阅读批注，一份材料一个文件：划线原文 + 我的评论 + 问 Claude 的问答。
 - `tags/<标签>.md`：按标签列出相关文件。
 
 ## 文件格式
@@ -241,6 +242,34 @@ def _feed_saved() -> list[dict]:
                  summary=f"{len(rs)} 条点赞/收藏，最近：{rs[0]['title']}", path="feed/saved.md")]
 
 
+def _annotations() -> list[dict]:
+    """一份材料一个文件：每条划线（或针对全文）一节，下面是评论和问答。"""
+    if not _has("annotations"):
+        return []
+    out = []
+    for g in db.rows("SELECT doc, max(title) title, max(link) link, min(created_at) c, max(updated_at) u, count(*) n "
+                     "FROM annotations GROUP BY doc ORDER BY min(id)"):
+        body, first = [f"材料：`{g['doc']}`" + (f"（平台 {g['link']}）" if g["link"] else ""), ""], ""
+        for a in db.rows("SELECT * FROM annotations WHERE doc=? ORDER BY id", [g["doc"]]):
+            body.append("## " + (f"「{_clip(a['quote'], 60)}」" if a["quote"] else "全文") + ("（已解决）" if a["status"] == "resolved" else ""))
+            if a["quote"]:
+                body.append("> " + a["quote"].replace("\n", "\n> "))
+            for m in db.rows("SELECT * FROM annotation_msgs WHERE annotation_id=? AND status!='pending' ORDER BY id", [a["id"]]):
+                who = "我" if m["role"] == "user" else "Claude"
+                body.append(f"\n**{who}**（{m['created_at'][:16].replace('T', ' ')}）：{m['content'].strip()}")
+                first = first or (m["content"] if m["role"] == "user" else "")
+            body.append("")
+        title = f"批注：{g['title'] or g['doc']}"
+        out.append(_doc("annotation", _slug(g["doc"], 30), title, "\n".join(body), date=g["c"], updated=g["u"],
+                        summary=f"{g['n']} 条批注。{_clip(first, 120)}"))
+    return out
+
+
+def _clip(t: str, n: int) -> str:
+    t = re.sub(r"\s+", " ", t or "").strip()
+    return t if len(t) <= n else t[:n] + "…"
+
+
 def _daily(docs: list[dict]) -> list[dict]:
     dates = {r["date"] for r in db.rows("SELECT DISTINCT date FROM tasks")}
     for t in ("review_days", "review_notes", "review_agent_stats", "agent_util"):
@@ -303,7 +332,7 @@ def _daily(docs: list[dict]) -> list[dict]:
 
 def build() -> list[dict]:
     docs: list[dict] = []
-    for fn in (_notes, _research, _products, _learn_items, _plans, _feed_saved):
+    for fn in (_notes, _research, _products, _learn_items, _plans, _feed_saved, _annotations):
         try:
             docs += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它

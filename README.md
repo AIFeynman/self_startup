@@ -26,6 +26,13 @@
 
 全局设置（页面「设置」或 `data/settings.json`）：人重度干预时间窗（默认 10:00–11:40、13:30–16:50）、Agent 并发度、默认引擎、Claude/Codex 模型、复盘分析目录等。
 
+## 阅读批注
+
+调研报告（综合 / 各引擎原文 / 文档库）、深读笔记、知识库文档、学习计划（总览和每一步）都能划线：选中文字 → 「评论」或「问 Claude」。
+被评论的文字高亮，讨论串列在旁边（窄屏在下方）；问 Claude 的回答就地挂在讨论串里，第一问带上全文和划线，追问续接同一个会话；
+也可以不划线「问全文」。讨论存在 SQLite（`annotations` / `annotation_msgs`，接口 `/api/annotations`），并同步进知识库 `annotations/`，
+之后各板块 Agent 检索知识库时能看到你读过、问过什么。
+
 ## 本地知识库（data/kb）
 
 SQLite 管应用状态；每次写操作后，平台自动把内容同步成一棵适合大模型检索阅读的 markdown 树（可随时重建，勿手改）：
@@ -39,6 +46,7 @@ data/kb/
   research/  products/ 调研文档、产品体验
   learn/papers|repos|plans/  论文/项目深读（TL;DR + 笔记 + 全文内嵌）、学习计划（阶段/步骤/理解度/反馈）
   feed/saved.md        点赞 / 收藏的信息
+  annotations/         阅读批注：一份材料一个文件，划线原文 + 评论 + 问 Claude 的问答
   tags/<标签>.md       按标签的反向索引
 ```
 
@@ -60,6 +68,7 @@ app/
   chat.py        /api/chat/<module>：每个板块的对话 Agent（SSE，可续聊）
   jobs.py        后台 Agent 任务（调研、解析、拆解等长任务）：排队、暂停 / 继续、审批，完成回调板块 on_job_done
   jobrun.py      单个任务的 runner 进程（独立会话，服务重启不影响）
+  annotations.py 阅读批注：划线评论、问 Claude（就地回答、可追问），同步进知识库
   tasks.py       每日事项 CRUD（规划写、复盘读）
   db.py settings.py
   modules/       一个文件一个板块：router / SCHEMA / agent_context / agent_dirs / on_job_done
