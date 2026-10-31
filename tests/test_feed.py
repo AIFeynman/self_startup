@@ -42,6 +42,7 @@ def test_feedback_affinity_and_hidden():
     items = [_it("a", "Agent memory benchmark", pop=50), _it("b", "Image diffusion trick", pop=50),
              _it("c", "Hidden thing", pop=999)]
     ex = [{"title": "Long-term agent memory", "source": "hn", "polarity": 1},
+          {"title": "Memory for coding agents", "source": "hn", "polarity": 1},      # 至少 2 条赞过才算线索
           {"title": "Diffusion image editing", "source": "hn", "polarity": -1}]
     out = rk.rank(items, now=NOW, examples=ex, feedback={"c": {"hidden": 1}})
     assert [x["id"] for x in out] == ["a", "b"]
@@ -425,6 +426,9 @@ def test_x_article_detection():
     q = src.x_item(_tw(quoted_tweet={"text": "https://t.co/zz", "entities": {"urls": []}, "author": {"userName": "b"}}), "@a")
     assert q["extra"]["x_article"] == "quoted" and "引用 @b：一篇 X 长文" in q["summary"]
     assert "x_article" not in src.x_item(_tw(), "@a")["extra"]
+    g = src.x_item(_tw(quoted_tweet={"id": "9", "text": "orig words", "user": {"screen_name": "OpenRouter"}}), "@a")
+    assert "引用 @OpenRouter：orig words" in g["summary"]                          # GetXAPI 的引用作者字段
+    assert "引用：orig" in src.x_item(_tw(quoted_tweet={"text": "orig"}), "@a")["summary"]
 
 
 def test_x_search_drops_untitled_articles(monkeypatch):
@@ -490,3 +494,134 @@ def test_upsert_keeps_enriched_article_title(client):
     from app import db
     row = db.row("SELECT title, popularity FROM feed_items WHERE id='twitter:77'")
     assert row["title"] == "@a：Real article title" and row["popularity"] == 999
+
+
+# ---------- 呈现清晰度：简介去重 / why 顺序与去重 / GitHub 标题 / HN 原文简介 ----------
+
+def test_display_summary_drops_repeated_title():
+    t = "@a：Shipping a new coding agent today"
+    assert rk.display_summary(t, "Shipping a new coding agent today. It runs evals overnight and files PRs.") == \
+        "It runs evals overnight and files PRs."
+    assert rk.display_summary(t, "Shipping a new coding agent today") == ""                 # 只剩重复 → 不显示
+    assert rk.display_summary("Paper title here", "Abstract text that differs a lot") == "Abstract text that differs a lot"
+    assert rk.display_summary("@a：Long first sentence that got cu…", "Long first sentence that got cut off here, and more.") \
+        == "cut off here, and more."
+
+
+def test_why_order_and_dedup():
+    it = _it("twitter:1", "Building a coding agent harness", source="twitter", extra={"via": "@karpathy", "x_article": "own"})
+    ex = [{"id": "e", "title": "coding agent harness tricks", "source": "hn", "polarity": 1},
+          {"id": "f", "title": "harness design notes", "source": "hn", "polarity": 1}]
+    why = rk.rank([it], now=NOW, interests=["agent", "coding agent"], examples=ex)[0]["why"]
+    assert why.startswith("X 长文 · 关注账号 @karpathy · X 100赞")
+    assert "命中 coding agent" in why and "命中 agent" not in why
+    assert "你赞过相似内容（harness）" in why          # coding / agent 已在「命中」里，不再重复
+
+
+def test_github_title_has_description_and_age():
+    items = [{**_it("github:o/r", "r：Tiny agent runtime", source="github", pop=1600, hours=24 * 5), "type": "repo"}]
+    assert "GitHub 1.6k★（建 5 天）" in rk.rank(items, now=NOW)[0]["why"]
+
+
+def test_fetch_github_title(monkeypatch):
+    body = {"items": [{"full_name": "andy/digital-human", "description": "AI talking-head videos from one photo. Plus MCP.",
+                       "html_url": "https://github.com/andy/digital-human", "stargazers_count": 10, "created_at": "2026-10-26"}]}
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))))
+    it = src.fetch_github(["llm"])[0]
+    assert it["title"] == "digital-human：AI talking-head videos from one photo" and it["extra"]["repo"] == "andy/digital-human"
+
+
+def test_fetch_hn_reads_link_description(monkeypatch):
+    hits = {"hits": [
+        {"objectID": "1", "title": "Big post", "url": "https://blog.example/a", "points": 500, "num_comments": 9, "created_at": "2026-10-30T00:00:00Z"},
+        {"objectID": "2", "title": "Known post", "url": "https://blog.example/b", "points": 400, "created_at": "2026-10-30T00:00:00Z"},
+        {"objectID": "3", "title": "Ask HN: thing", "story_text": "My own question text", "points": 50, "created_at": "2026-10-30T00:00:00Z"}]}
+    pages = []
+
+    def handler(req):
+        if req.url.host == "hn.algolia.com":
+            return httpx.Response(200, json=hits)
+        pages.append(req.url.path)
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              text='<meta property="og:description" content="A long description of what the article says in detail.">')
+
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    got = {i["id"]: i for i in src.fetch_hn(["llm"], known_ids={"hn:2"})}
+    assert got["hn:1"]["summary"] == "A long description of what the article says in detail."
+    assert got["hn:2"]["summary"].startswith("链接到") and got["hn:3"]["summary"] == "My own question text"
+    assert pages == ["/a"]
+
+
+def test_upsert_keeps_hn_description(client):
+    from app import db
+    from app.modules import feed
+    base = _it("hn:777", "Some HN post", summary="Real article description that we read once.")
+    feed.upsert([base])
+    feed.upsert([{**base, "summary": "链接到 example.com · 900 分", "popularity": 900}])
+    row = db.row("SELECT summary, popularity FROM feed_items WHERE id='hn:777'")
+    assert row["summary"] == "Real article description that we read once." and row["popularity"] == 900
+
+
+def test_same_event_merge():
+    items = [_it("hn:1", "Backdoors in official Claude Code extensions", pop=650),
+             _it("hn:2", "Backdoor in Claude Code for VS Code extension on the Cursor Marketplace", pop=300),
+             _it("twitter:1", "@GoogleDeepMind：Gemini 4 Carbon is our next frontier model", source="twitter", pop=100),
+             {**_it("blog:1", "Gemini 4 Carbon: Our next frontier model", source="blog"), "type": "blog"},
+             _it("hn:3", "10 Claude Code plugins I'd install on day one", pop=100),
+             _it("hn:4", "Backdoors in official Claude Code extensions again", pop=100, hours=24 * 9)]   # 超过 4 天：不算同一件
+    out = {x["id"]: x for x in rk.rank(items, now=NOW)}
+    assert "hn:2" not in out and "也见于 HN" in out["hn:1"]["why"]
+    assert len({"twitter:1", "blog:1"} & set(out)) == 1                       # 官方博客和官方推文是同一条新闻
+    assert "hn:3" in out and "hn:4" in out
+    assert rk.event_tokens("@a：Backdoors in Extensions") == {"backdoor", "extension"}
+
+
+# ---------- 中文一句话 ----------
+
+def _gist_handler(calls):
+    def handler(req):
+        rows = json.loads(json.loads(req.content)["messages"][1]["content"])
+        calls.append(len(rows))
+        items = [{"id": r["id"], "gist": f"中文概括{r['id']}"} for r in rows] + [{"id": "bogus", "gist": "不该出现"}]
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"items": items}, ensure_ascii=False)}}]})
+    return handler
+
+
+def test_gist_pick_and_generate(monkeypatch):
+    from app.modules import _feed_gist as g
+    a = _it("a", "Title A", summary="sum a")
+    b = {**_it("b", "Title B"), "extra": {"gist": "旧", "gist_src": g.gist_key(_it("b", "Title B"))}}
+    c = {**_it("c", "Title C changed"), "extra": {"gist": "旧", "gist_src": "stale"}}
+    zh = _it("zh", "新的创业机会，正在 Claude Code 和 Codex 周围长出来｜对谈 Treg")
+    assert g.is_chinese(zh["title"]) and not g.is_chinese("@a：Claude Code 插件 plugins I'd install on day one")
+    todo = g.pick([a, b, c, zh], {"paper": [a]}, top=10, per_type=5)
+    assert [x["id"] for x in todo] == ["a", "c"]                    # b 已有且没变；a 只算一次；c 标题变了重做
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    calls = []
+    many = [_it(f"i{n}", f"T{n}") for n in range(45)]
+    got, errs = g.generate(many, client=httpx.Client(transport=httpx.MockTransport(_gist_handler(calls))))
+    assert calls == [20, 20, 5] and len(got) == 45 and got["i3"] == "中文概括i3" and "bogus" not in got and not errs
+    assert g.fit("短句") == "短句"
+    long = "有文章称 Anthropic 官方 Claude Code 的 VS Code 扩展在 Cursor 上含恶意代码，会创建后门并上传本地文件，影响大量开发者的机器安全与凭据，社区正在讨论如何排查与清理受影响的安装"
+    assert g.fit(long).endswith("…") and len(g.fit(long)) <= g.MAX_CHARS + 1 and "，会创建" not in g.fit(long)[-6:]
+    monkeypatch.delenv("DEEPSEEK_API_KEY")
+    assert g.generate(many)[1][0].startswith("未配置 DEEPSEEK_API_KEY")
+
+
+def test_gist_runs_only_on_full_refresh(client, monkeypatch):
+    from app import db
+    from app.modules import _feed_gist as g, feed
+    monkeypatch.setattr(feed, "_collectors", lambda: {"hn": lambda: [_it("hn:g1", "Gist me please")]})
+    ran = []
+    monkeypatch.setattr(g, "generate", lambda items, **kw: (ran.append(len(items)) or {x["id"]: "一句话" for x in items}, []))
+    monkeypatch.setattr(feed, "cfg", lambda k: {"sources": ["hn"]}.get(k, feed.CFG_DEFAULTS.get(k)))
+    st = client.post("/api/feed/refresh", json={"sources": ["hn"], "wait": True}).json()
+    assert "gist" not in st["results"] and not ran                  # 只刷部分来源：不调模型
+    st = client.post("/api/feed/refresh", json={"wait": True}).json()
+    assert st["results"]["gist"]["count"] >= 1
+    item = next(x for x in client.get("/api/feed/items?q=一句话").json()["items"] if x["id"] == "hn:g1")
+    assert item["gist"] == "一句话"
+    before = len(ran)
+    client.post("/api/feed/gist")
+    assert len(ran) == before or ran[-1] < ran[0]                    # 已生成且没变的不再送
+    assert '"gist_src"' in db.row("SELECT extra FROM feed_items WHERE id='hn:g1'")["extra"]

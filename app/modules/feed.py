@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import db, settings
+from . import _feed_gist as gist
 from . import _feed_rank as rk
 from . import _feed_sources as src
 
@@ -58,6 +59,10 @@ CFG_DEFAULTS = {
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
     "x_per_account": 2,           # X 名单账号：每人每次最多收几条
     "producthunt_days": 2,
+    "gist_enabled": True,         # 完整刷新后给排序前列生成中文一句话（DeepSeek，.env 的 DEEPSEEK_API_KEY）
+    "gist_top": 60,               # 「全部」前多少条
+    "gist_per_type": 10,          # 每个分类前多少条
+    "gist_model": "deepseek-v4-flash",
     "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt"],
 }
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
@@ -114,6 +119,8 @@ def upsert(items: list[dict]) -> int:
             merged = {**_extra(old), **{k: v for k, v in extra.items() if v not in ("", None, [], {})}}
             if merged.get("article_title") and not extra.get("article_title"):
                 it = {**it, "title": old["title"], "summary": old["summary"]}   # X 长文已补过标题，别被占位文案盖掉
+            if (it.get("summary") or "").startswith("链接到") and old["summary"] and not old["summary"].startswith("链接到"):
+                it = {**it, "summary": old["summary"]}     # HN 已读到原文简介，别被占位文案盖掉
             db.execute("UPDATE feed_items SET source=?, type=?, title=?, summary=?, url=?, date=?, popularity=?, extra=?, "
                        "fetched_at=? WHERE id=?",
                        [it["source"], it["type"], it["title"], it.get("summary") or old["summary"],
@@ -193,7 +200,7 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = [x for x in out if x["type"] == type_]
     if q:
         ql = q.lower()
-        out = [x for x in out if ql in f"{x['title']} {x['summary']}".lower()]
+        out = [x for x in out if ql in f"{x['title']} {x['summary']} {x['extra'].get('gist', '')}".lower()]
     out = rk.within_days(out, days, now)
     if sort in ("new", "hot"):
         return rk.sort_items(out, sort, now)
@@ -207,7 +214,7 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
 def _collectors() -> dict:
     fc = settings.get("feed", {}) or {}
     return {
-        "hn": lambda: src.fetch_hn(list(cfg("hn_queries"))),
+        "hn": lambda: src.fetch_hn(list(cfg("hn_queries")), known_ids=_enriched_hn()),
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
         "github": lambda: src.fetch_github(list(cfg("github_queries"))),
@@ -222,6 +229,11 @@ def _collectors() -> dict:
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
     }
+
+
+def _enriched_hn() -> set[str]:
+    """已经有原文简介的 HN 条目（summary 不再是「链接到 …」占位），刷新时不再读原文页。"""
+    return {r["id"] for r in db.rows("SELECT id FROM feed_items WHERE source='hn' AND summary NOT LIKE '链接到%'")}
 
 
 def _known_articles() -> set[str]:
@@ -251,7 +263,27 @@ def refresh_sync(only: list[str] | None = None) -> dict:
     with ThreadPoolExecutor(max_workers=6) as ex:
         for name, res in ex.map(run, names):
             results[name] = res
+    if not only and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
+        results["gist"] = run_gists()
     return results
+
+
+def run_gists() -> dict:
+    """给排序前列里缺中文一句话（或标题 / 简介变了）的条目生成，写回 extra.gist。"""
+    try:
+        todo = gist.pick(ranked(), {t: ranked(type_=t) for t in TYPES}, int(cfg("gist_top")), int(cfg("gist_per_type")))
+        if not todo:
+            return {"count": 0, "errors": []}
+        got, errors = gist.generate(todo, model=str(cfg("gist_model")))
+        for it in todo:
+            if it["id"] in got:
+                row = db.row("SELECT extra FROM feed_items WHERE id=?", [it["id"]])
+                ex = {**_extra(row or {}), "gist": got[it["id"]], "gist_src": gist.gist_key(it)}
+                db.execute("UPDATE feed_items SET extra=? WHERE id=?", [json.dumps(ex, ensure_ascii=False), it["id"]])
+        return {"count": len(got), "errors": errors}
+    except Exception as e:  # noqa: BLE001
+        log.warning("feed gist failed: %s", e)
+        return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
 
 
 def _bg(only):
@@ -266,6 +298,12 @@ def _bg(only):
 class RefreshIn(BaseModel):
     sources: list[str] = []      # 空 = 全部
     wait: bool = False           # true = 同步等结果（CLI / Agent 用）
+
+
+@router.post("/gist")
+def gist_now():
+    """手动补一次中文一句话（不抓取），同步返回 {count, errors}。"""
+    return run_gists()
 
 
 @router.post("/refresh")
@@ -311,8 +349,10 @@ def source_health() -> dict:
 # ---------- 列表与反馈 ----------
 
 def _public(x: dict) -> dict:
-    return {k: x[k] for k in ("id", "source", "type", "title", "summary", "url", "date", "popularity", "score",
-                              "why", "feedback", "also")} | {"extra": x.get("extra", {}),
+    return {k: x[k] for k in ("id", "source", "type", "title", "url", "date", "popularity", "score",
+                              "why", "feedback", "also")} | {"summary": rk.display_summary(x["title"], x["summary"]),
+                                                              "gist": (x.get("extra") or {}).get("gist", ""),
+                                                              "extra": x.get("extra", {}),
                                                               "source_label": rk.SOURCE_LABEL.get(x["source"], x["source"])}
 
 

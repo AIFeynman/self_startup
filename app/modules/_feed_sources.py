@@ -60,7 +60,25 @@ def hn_link_summary(h: dict) -> str:
     return " · ".join(parts)
 
 
-def fetch_hn(queries: list[str], days: int = 7, min_points: int = 30, per_query: int = 30) -> list[dict]:
+HN_ENRICH_MAX = 40   # 每次刷新最多给多少条 HN 链接帖读原文页的简介
+
+
+def link_description(c: httpx.Client, url: str) -> str:
+    """原文页的 og:description / description（只读 meta，不解析正文）。拿不到返回空串。"""
+    try:
+        r = c.get(url, headers={"User-Agent": BROWSER_UA}, timeout=8)
+        if r.status_code != 200 or "html" not in r.headers.get("content-type", ""):
+            return ""
+        desc = clean(_meta(r.text[:200_000], "og:description", "description", "twitter:description"))
+        return "" if re.match(r"^https?://\S+$", desc) else desc      # 有的站把链接本身填进 description
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def fetch_hn(queries: list[str], days: int = 7, min_points: int = 30, per_query: int = 30,
+             known_ids: set[str] | frozenset = frozenset()) -> list[dict]:
+    """链接帖本身没有正文：按分数从高到低给前 HN_ENRICH_MAX 条（已入库的跳过）读原文页简介当 summary，
+    读不到再退回「链接到 xx · 分 · 评论」。"""
     since = int(_days_ago(days).timestamp())
     out: dict[str, dict] = {}
     with _client() as c:
@@ -79,6 +97,13 @@ def fetch_hn(queries: list[str], days: int = 7, min_points: int = 30, per_query:
                     "summary": clean(h.get("story_text") or "") or hn_link_summary(h), "url": h.get("url") or hn_url,
                     "date": h.get("created_at", ""), "popularity": float(h.get("points") or 0),
                     "extra": {"hn_url": hn_url, "comments": h.get("num_comments") or 0, "query": q}}
+        todo = [it for it in out.values() if it["id"] not in known_ids and it["url"] != it["extra"]["hn_url"]
+                and it["summary"].startswith("链接到")]
+        todo = sorted(todo, key=lambda it: -it["popularity"])[:HN_ENRICH_MAX]
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for it, desc in zip(todo, ex.map(lambda it: link_description(c, it["url"]), todo)):
+                if len(desc) >= 30:
+                    it["summary"] = desc
     return list(out.values())
 
 
@@ -145,11 +170,16 @@ def fetch_github(queries: list[str], days: int = 14, min_stars: int = 30, per_qu
                 name = it.get("full_name")
                 if not name:
                     continue
+                desc = clean(it.get("description") or "")
+                short = re.split(r"(?<=[.!?。！？])\s", desc, maxsplit=1)[0][:90].rstrip(" .。")
                 out[name] = {
-                    "id": f"github:{name}", "source": "github", "type": "repo", "title": name,
-                    "summary": clean(it.get("description") or ""), "url": it.get("html_url") or f"https://github.com/{name}",
+                    # 只有仓库名看不出是什么：标题带上一句话描述
+                    "id": f"github:{name}", "source": "github", "type": "repo",
+                    "title": f"{name.split('/', 1)[1]}：{short}" if short else name,
+                    "summary": desc, "url": it.get("html_url") or f"https://github.com/{name}",
                     "date": it.get("created_at", ""), "popularity": float(it.get("stargazers_count") or 0),
-                    "extra": {"language": it.get("language") or "", "topics": (it.get("topics") or [])[:6], "query": q}}
+                    "extra": {"language": it.get("language") or "", "topics": (it.get("topics") or [])[:6], "query": q,
+                              "repo": name}}
     return list(out.values())
 
 
@@ -314,7 +344,9 @@ def x_item(tw: dict, via: str) -> dict | None:
     summary = text
     if q.get("text"):
         qtext = _TCO.sub("", q["text"]).strip() or ("一篇 X 长文" if q_article else "")
-        summary += f" ｜ 引用 @{(q.get('author') or {}).get('userName', '')}：{qtext}"
+        # 引用推的作者：twitterapi.io 放 author.userName，GetXAPI 放 user.screen_name
+        qa = (q.get("author") or {}).get("userName") or (q.get("user") or {}).get("screen_name") or ""
+        summary += f" ｜ 引用{' @' + qa if qa else ''}：{qtext}"
     return {
         "id": f"twitter:{tid}", "source": "twitter", "type": "discussion",
         "title": clean(f"@{user}：{head}", 140), "summary": clean(summary),
