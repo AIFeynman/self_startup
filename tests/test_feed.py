@@ -30,12 +30,12 @@ def test_interest_match_word_boundary():
 
 
 def test_popularity_normalized_per_source():
-    items = [_it("g1", "repo one", source="github", pop=5000), _it("g2", "repo two", source="github", pop=50),
+    items = [_it("g1", "repo one", source="github", pop=400), _it("g2", "repo two", source="github", pop=4),
              _it("h1", "story one", source="hn", pop=300)]
     out = {x["id"]: x for x in rk.rank(items, now=NOW)}
     # 各来源的头部都拿满热度分，不会因 stars 量级大就压过 HN
     assert out["g1"]["score"] == out["h1"]["score"] > out["g2"]["score"]
-    assert "GitHub 5.0k★" in out["g1"]["why"] and "HN 300分" in out["h1"]["why"]
+    assert "GitHub 400★" in out["g1"]["why"] and "HN 300分" in out["h1"]["why"]
 
 
 def test_feedback_affinity_and_hidden():

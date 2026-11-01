@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from .. import db, settings
 from . import _feed_gist as gist
+from . import _feed_judge as judge
 from . import _feed_rank as rk
 from . import _feed_sources as src
 
@@ -56,6 +57,10 @@ CFG_DEFAULTS = {
     "github_queries": ["llm", "ai agent", "mcp", "claude code"],
     "github_min_stars": 100,      # 搜索新建仓库时的最低星数（太低全是刚建的小项目）
     "github_trending_languages": [""],  # 每日 Trending 看哪些语言："" = 全部语言，可加 "python" "typescript"
+    # 重点机构的新仓库：和官方博客一样加「官方」分；机构名对照见 _feed_rank.GITHUB_ORGS，不在里面的显示 GitHub 账号名
+    "github_watch_orgs": ["deepseek-ai", "openai", "anthropics", "google", "google-deepmind", "google-research",
+                          "meta-llama", "facebookresearch", "microsoft"],
+    "github_watch_min_stars": 5,  # 重点机构新仓库的最低星数：滤掉大厂每天建的内部空仓库
     "reddit": ["LocalLLaMA", "ClaudeAI", "MachineLearning"],
     "x_days": 3,                  # X：只要最近几天的推文
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
@@ -65,6 +70,7 @@ CFG_DEFAULTS = {
     "gist_top": 60,               # 「全部」前多少条
     "gist_per_type": 10,          # 每个分类前多少条
     "gist_model": "deepseek-v4-flash",
+    "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
     "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt"],
 }
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
@@ -228,7 +234,9 @@ def _collectors() -> dict:
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
         "github": lambda: src.fetch_github_all(list(cfg("github_queries")), min_stars=int(cfg("github_min_stars")),
-                                               trending_languages=list(cfg("github_trending_languages"))),
+                                               trending_languages=list(cfg("github_trending_languages")),
+                                               watch_orgs=list(cfg("github_watch_orgs")),
+                                               watch_min_stars=int(cfg("github_watch_min_stars"))),
         "rss": lambda: src.fetch_rss(list(fc.get("rss") or [])),
         "sites": lambda: src.fetch_sites(list(fc.get("sites") or []), known_urls=_known_urls("blog")),
         "podcast": lambda: src.fetch_rss(list(fc.get("podcasts") or []), per_feed=5, source="podcast", typ="podcast"),
@@ -274,9 +282,37 @@ def refresh_sync(only: list[str] | None = None) -> dict:
     with ThreadPoolExecutor(max_workers=6) as ex:
         for name, res in ex.map(run, names):
             results[name] = res
+    if cfg("judge_enabled"):    # 判断决定过滤和置顶，刷了哪个来源都跑；只问新的或内容变了的，量很小
+        results["judge"] = run_judge()
     if not only and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
         results["gist"] = run_gists()
     return results
+
+
+def run_judge(now: datetime | None = None) -> dict:
+    """给最近的 Trending 仓库（是否 AI）和官方内容（是否重要）补 Jev 判断，写回 extra。没判过的排序时走关键词规则。"""
+    now = now or datetime.now(timezone.utc)
+    todo = []
+    for it in _load_items():
+        ex = it["extra"]
+        if ex.get("judge_src") == judge.judge_key(it):
+            continue
+        d = rk.item_time(it, now)
+        if not d or (now - d).total_seconds() > rk.PIN_DAYS * 86400:
+            continue
+        if rk.trending_only(it):
+            todo.append((it, "ai", ""))
+        elif org := rk.official_org(it):
+            todo.append((it, "important", org))
+    if not todo:
+        return {"count": 0, "errors": []}
+    got, errors = judge.judge(todo)
+    for it, _, _ in todo:
+        if it["id"] in got:
+            row = db.row("SELECT extra FROM feed_items WHERE id=?", [it["id"]])
+            ex = {**_extra(row or {}), **got[it["id"]], "judge_src": judge.judge_key(it)}
+            db.execute("UPDATE feed_items SET extra=? WHERE id=?", [json.dumps(ex, ensure_ascii=False), it["id"]])
+    return {"count": len(got), "errors": errors}
 
 
 def run_gists() -> dict:
@@ -473,7 +509,7 @@ def deep_reads() -> int:
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
                                 "x_min_likes", "x_per_account", "producthunt_days", "sources", "github_min_stars",
-                                "github_trending_languages")} | {
+                                "github_trending_languages", "github_watch_orgs", "github_watch_min_stars")} | {
         k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 
