@@ -80,6 +80,7 @@ CFG_DEFAULTS = {
     "youtube_queries": ["claude code", "AI agents", "LLM explained", "AI engineering"],   # 只在 .env 有 YOUTUBE_API_KEY 时搜
     "bilibili": ["1567748478"],   # B 站 UP 主 uid（经 RSSHub，公共实例不稳）
     "video_days": 21,
+    "video_langs": ["en", "zh"],   # YouTube 搜索只收这些语言（音频语言）；订阅频道不受影响
     "x_days": 3,                  # X：只要最近几天的推文
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
     "x_per_account": 2,           # X 名单账号：每人每次最多收几条
@@ -288,7 +289,8 @@ def _collectors() -> dict:
         "reddit": lambda: src.fetch_reddit(src_list("reddit"), list(cfg("reddit_queries") or [])),
         "video": lambda: src.fetch_videos(src_list("youtube_channels"), list(cfg("youtube_queries") or []),
                                           bilibili=src_list("bilibili"), days=int(cfg("video_days")),
-                                          rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
+                                          rsshub_bases=list(fc.get("rsshub_bases") or []) or None,
+                                          langs=tuple(cfg("video_langs") or ())),
         "x": lambda: src.fetch_x(src_list("x_accounts"), list(fc.get("x_queries") or []),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
@@ -683,7 +685,7 @@ def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
                                 "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "trustmrr_days", "sources", "github_min_stars",
                                 "github_trending_languages", "github_watch_orgs", "github_watch_min_stars",
-                                "reddit_queries", "youtube_channels", "youtube_queries", "bilibili", "video_days")} | {
+                                "reddit_queries", "youtube_channels", "youtube_queries", "bilibili", "video_days", "video_langs")} | {
         k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 

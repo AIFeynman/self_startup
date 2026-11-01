@@ -173,3 +173,23 @@ def test_follow_video_youtube(monkeypatch):
                                  "https://www.bilibili.com/video/BV1xx411c7mD"])
 def test_detect_kind_video(url):
     assert learn.detect_kind(url) == "video"
+
+
+@pytest.mark.parametrize("sn,ok", [
+    ({"defaultAudioLanguage": "en-US", "title": "x"}, True),
+    ({"defaultAudioLanguage": "zh-Hans", "title": "x"}, True),
+    ({"defaultAudioLanguage": "pt-BR", "title": "Introdução ao Claude"}, False),
+    ({"defaultLanguage": "hi", "title": "CLAUDE tutorial"}, False),
+    ({"title": "딱 한 줄만 적었는데 AI 에이전트"}, False),
+    ({"title": "How I use LLMs"}, True),
+])
+def test_yt_lang_ok(sn, ok):
+    assert src.yt_lang_ok(sn) is ok
+
+
+def test_youtube_search_drop_threshold_stricter():
+    yt = {"id": "youtube:a", "source": "youtube", "type": "video", "title": "t", "url": "https://youtu.be/aaaaaaaaaaa",
+          "extra": {"via": "search", "judge_value": 0.45}}
+    assert rk.low_value(yt)
+    assert not rk.low_value(_reddit("some thread", judge_value=0.45))
+    assert not rk.low_value({**yt, "extra": {"via": "channel", "judge_value": 0.1}})   # 订阅频道不判
