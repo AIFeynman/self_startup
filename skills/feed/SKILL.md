@@ -63,9 +63,16 @@ curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{
 curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{"id":"hn:123","saved":true}'
 curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{"id":"hn:123","hidden":true}'
 curl -s $API/api/feed/config                                 # 当前兴趣词、半衰期、查询词、RSS / 官方站 / 播客 / X 名单
-# 修改兴趣词（整体替换列表）；其它旋钮同理写在 feed 下：half_life_hours / hn_queries / github_queries / reddit / rss / sites / podcasts / xiaoyuzhou / rsshub_bases / x_accounts / x_queries / x_min_likes / sources
+# 修改兴趣词（整体替换列表）；其它旋钮同理写在 feed 下：half_life_hours / reddit / rss / sites / podcasts / xiaoyuzhou / rsshub_bases / x_accounts / x_queries / x_min_likes / sources
 curl -s -X PUT $API/api/settings -H 'Content-Type: application/json' -d '{"feed":{"interests":["agent","llm","mcp","rl"]}}'
+# 搜索关键词：一份主题表派生 HN / GitHub / Reddit / YouTube / 知乎 的搜索词（X 仍用 x_queries 高级语法）
+curl -s $API/api/feed/topics                                 # 主题表、各来源这次搜哪些词、按词近 30 天效果（verdict：有效 / 低效 / 没搜到 / 数据不足）
+curl -s -X PUT $API/api/feed/topics -H 'Content-Type: application/json' -d '{"topics":[{"name":"KV","en":["KV cache"],"zh":["KV 缓存"]}]}'  # 整体替换；可选 "<来源>":[...] 只给该来源用、"off":true 停用
+curl -s -X POST $API/api/feed/topics/suggest                 # 从赞 / 收藏 / 深读的条目让 DeepSeek 推荐候选主题（只列出，不自动加）
+curl -s -X POST $API/api/feed/topics/suggestion -H 'Content-Type: application/json' -d '{"name":"KV","action":"accept"}'  # accept / dismiss
 ```
+
+改关键词前先 GET /topics 看效果：「低效 / 没搜到」的词会自动排到最后、超出来源上限就不搜，建议用户删掉或换词；加词、删词、接受候选都要用户确认。
 
 条目 id 形如 `hn:123`、`github:owner/repo`、`arxiv:2610.12345`、`hf:2610.12345`、`blog:<hash>`、`podcast:<hash>`、`xiaoyuzhou:<eid>`、`reddit:<id>`、`twitter:<tweet id>`、`producthunt:<id>`。
 

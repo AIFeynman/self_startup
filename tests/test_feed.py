@@ -84,7 +84,7 @@ def test_rss_parsing():
 def test_api_flow(client, monkeypatch):
     from app.modules import feed
     fake = [_it("hn:9", "Claude Code agent tips", pop=200), _it("hn:8", "Other thing", pop=10)]
-    monkeypatch.setattr(feed, "_collectors", lambda: {"hn": lambda: fake, "rss": lambda: ([], ["x: boom"]),
+    monkeypatch.setattr(feed, "_collectors", lambda stats=None: {"hn": lambda: fake, "rss": lambda: ([], ["x: boom"]),
                                                       "bad": lambda: 1 / 0})
     st = client.post("/api/feed/refresh", json={"sources": ["hn", "rss", "bad"], "wait": True}).json()
     assert st["results"]["hn"]["count"] == 2 and st["results"]["rss"]["errors"] == ["x: boom"]
@@ -402,7 +402,7 @@ def test_api_days_sort(client, monkeypatch):
     now = datetime.now(timezone.utc)
     fake = [{**_it("hn:1", "New one", pop=5), "date": (now - timedelta(hours=2)).isoformat()},
             {**_it("hn:2", "Old big", pop=900), "date": (now - timedelta(days=10)).isoformat()}]
-    monkeypatch.setattr(feed, "_collectors", lambda: {"hn": lambda: fake})
+    monkeypatch.setattr(feed, "_collectors", lambda stats=None: {"hn": lambda: fake})
     client.post("/api/feed/refresh", json={"sources": ["hn"], "wait": True})
     ids = lambda q: [x["id"] for x in client.get("/api/feed/items?" + q).json()["items"] if x["id"] in ("hn:1", "hn:2")]
     assert ids("days=1") == ["hn:1"]
@@ -611,7 +611,7 @@ def test_gist_pick_and_generate(monkeypatch):
 def test_gist_runs_only_on_full_refresh(client, monkeypatch):
     from app import db
     from app.modules import _feed_gist as g, feed
-    monkeypatch.setattr(feed, "_collectors", lambda: {"hn": lambda: [_it("hn:g1", "Gist me please")]})
+    monkeypatch.setattr(feed, "_collectors", lambda stats=None: {"hn": lambda: [_it("hn:g1", "Gist me please")]})
     ran = []
     monkeypatch.setattr(g, "generate", lambda items, **kw: (ran.append(len(items)) or {x["id"]: "一句话" for x in items}, []))
     monkeypatch.setattr(feed, "cfg", lambda k: {"sources": ["hn"]}.get(k, feed.CFG_DEFAULTS.get(k)))
