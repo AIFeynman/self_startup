@@ -30,11 +30,15 @@ Q_VALUE = {
     "reddit": ("state.items.{k} 是 Reddit 上的一个帖子。它对一个关注 AI 的工程师是否有实际价值：亲身实践经验、"
                "教程或配置分享、实测 / 对比 / 基准、开源项目展示、对新论文 / 新模型 / 技术方向的有内容的讨论？"
                "梗图、段子、单纯求助提问、吐槽、「什么时候发布」式猜测、没有内容的新闻转发回答否。"),
-    "youtube": ("state.items.{k} 是 YouTube 上搜索到的一个视频，读者是做 AI 应用 / Agent 的工程师。"
+    "youtube": ("state.items.{k} 是 YouTube 上搜索到或上了热门榜的一个视频，读者是做 AI 应用 / Agent 的工程师。"
                 "只有当它值得这位工程师花时间看时回答是：讲清了技术原理或工程做法、有具体实测 / 对比数据、"
                 "课程讲座、论文解读、和一线研究者 / 工程师的深度访谈。以下回答否：标题党（「太疯狂了」「改变一切」"
                 "「X 分钟精通」）、面向普通用户的入门或泛用技巧、用 AI 赚钱 / 涨粉 / 副业、新闻快讯和发布会复述、"
                 "噱头实验（让 AI 做生意、造机器人）、营销带货、恐慌或炒作。"),
+    "bilibili": ("state.items.{k} 是 B 站排行榜上的一个视频，读者是做 AI 应用 / Agent 的工程师。"
+                 "只有当它和 AI、计算机、数学或工程有关，且值得这位工程师花时间看时回答是：讲清了技术原理或工程做法、"
+                 "有具体实测 / 对比、课程讲座、论文解读、深度访谈。以下回答否：和技术无关的时政 / 历史 / 生活 / 应试内容、"
+                 "标题党、面向普通用户的入门技巧、用 AI 赚钱 / 副业、新闻复述、营销带货、恐慌或炒作。"),
 }
 
 
@@ -58,7 +62,7 @@ def _state(it: dict, org: str) -> dict:
                 "topics": ex.get("topics") or []}
     if it.get("source") == "reddit":
         row |= {"subreddit": ex.get("subreddit", ""), "flair": ex.get("flair", ""), "comments": ex.get("comments")}
-    if it.get("source") == "youtube":
+    if it.get("source") in ("youtube", "bilibili"):
         row |= {"channel": ex.get("channel", ""), "views": int(it.get("popularity") or 0),
                 "minutes": round((ex.get("duration") or 0) / 60)}
     if org:

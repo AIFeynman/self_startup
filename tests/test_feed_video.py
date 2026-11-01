@@ -193,3 +193,70 @@ def test_youtube_search_drop_threshold_stricter():
     assert rk.low_value(yt)
     assert not rk.low_value(_reddit("some thread", judge_value=0.45))
     assert not rk.low_value({**yt, "extra": {"via": "channel", "judge_value": 0.1}})   # 订阅频道不判
+
+
+class _Resp:
+    def __init__(self, data=None, text="", status=200):
+        self._d, self.text, self.status_code = data, text, status
+
+    def json(self):
+        return self._d
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+
+def _yt_video(vid, title, secs, lang="en"):
+    return {"id": vid, "snippet": {"title": title, "defaultAudioLanguage": lang, "channelTitle": "c", "channelId": "UC" + "x" * 22,
+                                   "publishedAt": "2026-10-31T00:00:00Z"},
+            "statistics": {"viewCount": "1000"}, "contentDetails": {"duration": f"PT{secs // 60}M{secs % 60}S"}}
+
+
+def test_youtube_trending_filters_and_ranks():
+    class C:
+        def get(self, url, params):
+            assert params["chart"] == "mostPopular" and params["regionCode"] == "US"
+            if params["videoCategoryId"] == "27":
+                return _Resp(status=404)
+            return _Resp({"items": [_yt_video("aaaaaaaaaaa", "Short clip", 60), _yt_video("bbbbbbbbbbb", "How GPUs work", 900),
+                                    _yt_video("ccccccccccc", "Vídeo", 900, "pt-BR")]})
+    [it] = src.youtube_trending(C(), "k", ["28", "27"])
+    assert it["id"] == "youtube:bbbbbbbbbbb"
+    assert it["extra"]["via"] == "trending" and it["extra"]["rank"] == 2 and it["extra"]["board"] == "YouTube 科技热门"
+
+
+BILI_RANK = """<?xml version="1.0"?><rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0"><channel><title>bilibili 排行榜-知识</title>
+<item><title>大模型是怎么推理的</title><description>&lt;iframe src="x"&gt;&lt;/iframe&gt;讲 KV cache</description>
+<link>https://www.bilibili.com/video/BV15Mxn6UEnt</link><pubDate>Sat, 31 Oct 2026 15:10:31 GMT</pubDate><dc:creator>某UP</dc:creator></item>
+</channel></rss>"""
+
+
+def test_bilibili_ranking_parse():
+    class C:
+        def get(self, url, timeout):
+            return _Resp(text=BILI_RANK, status=200 if url.startswith("https://ok") else 503)
+    [it] = src.bilibili_ranking(C(), "knowledge", ["https://bad", "https://ok"], days=0)
+    assert it["id"] == "bilibili:BV15Mxn6UEnt" and it["url"] == "https://www.bilibili.com/video/BV15Mxn6UEnt"
+    assert it["extra"]["via"] == "ranking" and it["extra"]["board"] == "B 站知识区排行" and it["extra"]["channel"] == "某UP"
+    with pytest.raises(RuntimeError):
+        src.bilibili_ranking(C(), "knowledge", ["https://bad"], days=0)
+
+
+def test_trending_and_ranking_judged_and_labeled():
+    tr = {"id": "youtube:t", "source": "youtube", "type": "video", "title": "How GPUs work", "summary": "",
+          "url": "https://www.youtube.com/watch?v=ttttttttttt", "date": "2026-11-01T00:00:00+00:00", "popularity": 1000,
+          "extra": {"via": "trending", "rank": 3, "board": "YouTube 科技热门", "judge_value": 0.8}}
+    bl = {**tr, "id": "bilibili:b", "source": "bilibili", "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+          "extra": {"via": "ranking", "rank": 1, "board": "B 站知识区排行", "judge_value": 0.2}}
+    assert rk.needs_value(tr) and rk.needs_value(bl) and not rk.needs_value({**bl, "extra": {"via": "rsshub"}})
+    [x] = rk.rank([tr, bl], now=NOW)     # B 站那条判为没价值，被滤掉
+    assert x["id"] == "youtube:t" and "YouTube 科技热门 #3" in x["why"]
+
+
+@pytest.mark.parametrize("title,ok", [
+    ("【漫士】这可能是人类提出最深刻的数学/计算机问题", True), ("How GPUs work", True), ("大模型是怎么推理的", True),
+    ("iPhone Duo Durability: Destroyed", False), ("美国中期选举大斗法", False), ("酒店现在退房为什么不查房了", False),
+])
+def test_tech_topic_prefilter(title, ok):
+    assert src.tech_topic({"title": title, "summary": ""}) is ok

@@ -57,6 +57,14 @@ KNOWN_NAMES = {
     "UC9cn0TuPq4dnbTY-CBsm8XA": "a16z", "UCWrF0oN6unbXrWsTN7RctTw": "Sequoia Capital",
     "UCjIMtrzxYc0lblGhmOgC_CA": "Every", "UCjNRVMBVI30Sak_p6HRWhIA": "Cognitive Revolution",
     "UCf0PBRjhf0rF8fWBIxTuoWA": "20VC",
+    "UCsBjURrPoezykLs9EqgamOA": "Fireship", "UCgfe2ooZD3VJPB6aJAnuQng": "bycloud",
+    "UC9-y-6csu5WGm29I7JiwpnA": "Computerphile", "UCtYLUTtgS3k1Fg4y5tAhLbw": "StatQuest",
+    "UCX7Y2qWriXpqocG97SFW2OQ": "Jeremy Howard", "UC_CzsS7UTjcxJ-xXp1ftxtA": "Sebastian Raschka",
+    "UCI5dM9hNYAXwuvhQRXwzzww": "hu-po", "UConVfxXodg78Tzh5nNu85Ew": "Welch Labs",
+    "UCZgt6AzoyjslHTC9dz0UoTw": "ByteByteGo", "UC1kBxkk2bcG78YBX7LMl9pQ": "code_report",
+    "UCbRP3c757lWg9M-U7TyEkXA": "Theo - t3.gg", "UCMwVTLZIRRUyyVrkjDpn4pA": "Cole Medin",
+    "UC_x36zCEGilGpB1m-V4gmjg": "IndyDevDan", "UCC-lyoTfSrcJzA1ab3APAgw": "LangChain",
+    "UCSI7h9hydQ40K5MJHnCrQvw": "No Priors",
     "1567748478": "B 站 跟李沐学AI",
 }
 

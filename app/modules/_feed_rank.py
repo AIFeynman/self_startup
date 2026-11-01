@@ -52,7 +52,7 @@ PR_RE = re.compile(r"\b(partner(ship)?s?|customers?|case stud(y|ies)|roi|webinar
 # Reddit / 视频搜索结果的「有没有价值」：Jev 判过（judge_value）低于 VALUE_DROP 的不推荐，≥ VALUE_GOOD 加分。
 # YouTube 搜索是全站按播放量取的、没人筛过，标题党多，门槛按 Jev 其他判断的 0.5；Reddit 帖子出自选过的版块，放宽些
 # 没判过时按 flair / 标题的关键词规则：实践经验、前沿讨论打标签加分，梗图 / 求助 / 吐槽 / 「什么时候发布」降权
-VALUE_DROP, VALUE_GOOD = {"reddit": 0.35, "youtube": 0.5}, 0.7
+VALUE_DROP, VALUE_GOOD = {"reddit": 0.35, "youtube": 0.5, "bilibili": 0.5}, 0.7
 PRACTICE_RE = re.compile(r"\b(tutorial|guide|how[- ]to|walkthrough|i (built|made|tested|benchmarked|switched|replaced)|"
                          r"benchmarks?|tested|comparison|vs\.?|lessons?( learned)?|post[- ]?mortem|my (setup|workflow|stack)|"
                          r"workflow|tips?|tricks|best practices|showcase|project|resources?|open[- ]?sourced?|"
@@ -391,9 +391,9 @@ def official_org(it: dict) -> str:
 
 
 def needs_value(it: dict) -> bool:
-    """要判断「有没有价值」的条目：Reddit 帖子、YouTube 搜索结果（订阅频道是人挑过的，不用判）。"""
-    src = it.get("source")
-    return src == "reddit" or src == "youtube" and (it.get("extra") or {}).get("via") == "search"
+    """要判断「有没有价值」的条目：Reddit 帖子、YouTube 搜索 / 热门榜、B 站排行榜（订阅频道是人挑过的，不用判）。"""
+    src, via = it.get("source"), (it.get("extra") or {}).get("via")
+    return src == "reddit" or src == "youtube" and via in ("search", "trending") or src == "bilibili" and via == "ranking"
 
 
 def value_tag(it: dict) -> str:
@@ -431,6 +431,9 @@ def _value_score(it: dict, lead: list[str], why: list[str]) -> float:
     if it.get("source") == "reddit" and rk_ and rk_ <= 5 and ex.get("subreddit"):
         s += W["top_rank"]
         why.append(f"r/{ex['subreddit']} 本周 top {rk_}")
+    if ex.get("via") in ("trending", "ranking") and ex.get("rank") and ex.get("board"):
+        s += W["top_rank"] if ex["rank"] <= 10 else 0
+        why.append(f"{ex['board']} #{ex['rank']}")
     return s
 
 
