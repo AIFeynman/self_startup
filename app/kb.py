@@ -305,7 +305,7 @@ def _learn_events_md(date: str = "", plan_id: int = 0) -> list[str]:
     try:
         from .modules import learn
         titles = {r["id"]: r["title"] for r in db.rows("SELECT id, title FROM learn_steps")}
-        lines = [f"- {learn.event_line(e, titles)}" for e in learn.events_of(plan_id=plan_id or None, date=date) if e["kind"] != "check"]
+        lines = [f"- {learn.event_line(e, titles)}" for e in learn.events_of(plan_id=plan_id or None, date=date) if e["kind"] not in ("check", "qa")]
     except Exception:  # noqa: BLE001
         return []
     return (["\n## 学习记录"] + lines) if lines else []

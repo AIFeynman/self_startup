@@ -184,7 +184,7 @@ def learning_extra(date: str) -> dict:
         try:
             from . import learn
             titles = {r["id"]: r["title"] for r in db.rows("SELECT id, title FROM learn_steps")}
-            out["events"] = [learn.event_line(e, titles) for e in learn.events_of(date=date) if e["kind"] != "check"]
+            out["events"] = [learn.event_line(e, titles) for e in learn.events_of(date=date) if e["kind"] not in ("check", "qa")]
         except Exception:  # noqa: BLE001  学习模块出错不影响复盘
             pass
         try:  # 学习习惯三项：停一下平均分 / 学完当天用到项目 / 每日论文笔记
