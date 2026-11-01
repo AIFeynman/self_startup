@@ -260,3 +260,90 @@ def test_trending_and_ranking_judged_and_labeled():
 ])
 def test_tech_topic_prefilter(title, ok):
     assert src.tech_topic({"title": title, "summary": ""}) is ok
+
+
+ZHIHU_COL = """<?xml version="1.0"?><rss version="2.0"><channel><title>知乎专栏-机器之心</title>
+<item><title>深入理解 KV cache 压缩</title><description>讲清原理</description><link>https://zhuanlan.zhihu.com/p/2099987320443237060</link>
+<pubDate>Sun, 01 Nov 2026 12:52:17 GMT</pubDate></item></channel></rss>"""
+ZHIHU_HOT = """<?xml version="1.0"?><rss version="2.0"><channel><title>知乎热榜</title>
+<item><title>如何评价某明星离婚？</title><link>https://www.zhihu.com/question/1</link></item>
+<item><title>如何看待 DeepSeek 新发布的大模型？</title><link>https://www.zhihu.com/question/2100246281591510431</link></item>
+</channel></rss>"""
+
+
+def test_fetch_zhihu(monkeypatch):
+    class C:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, url, timeout):
+            if url.endswith("/zhihu/hot"):
+                return _Resp(text=ZHIHU_HOT)
+            return _Resp(text=ZHIHU_COL) if "jiqizhixin" in url else _Resp(status=503)
+    monkeypatch.setattr(src, "_client", lambda: C())
+    items, errs = src.fetch_zhihu(["jiqizhixin", "nope"], days=0, rsshub_bases=["https://x"])
+    by = {it["id"]: it for it in items}
+    assert set(by) == {"zhihu:p2099987320443237060", "zhihu:q2100246281591510431"}   # 八卦问题被粗筛掉
+    a, q = by["zhihu:p2099987320443237060"], by["zhihu:q2100246281591510431"]
+    assert a["type"] == "blog" and a["extra"]["channel"] == "机器之心" and a["extra"]["via"] == "column"
+    assert q["type"] == "discussion" and q["extra"]["rank"] == 2 and q["extra"]["board"] == "知乎热榜"
+    assert errs == ["知乎专栏 nope: RSSHub 各实例都没取到"]
+    assert rk.needs_value(a) and rk.needs_value(q)
+
+
+@pytest.mark.parametrize("text,want", [
+    ("https://zhuanlan.zhihu.com/jiqizhixin", "jiqizhixin"), ("jiqizhixin", "jiqizhixin"),
+])
+def test_follow_zhihu_column(text, want):
+    assert follow.resolve("zhihu", text)[:2] == ("zhihu_columns", want)
+
+
+def test_follow_zhihu_rejects_article_link():
+    with pytest.raises(follow.FollowError, match="专栏"):
+        follow.resolve("zhihu", "https://zhuanlan.zhihu.com/p/2099987320443237060")
+
+
+def test_zhihu_search_normalizes_and_filters(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    d = lambda n: (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%d")   # noqa: E731
+    results = [
+        {"title": "深入理解 KV cache 压缩 - 切换模式", "url": "https://zhuanlan.zhihu.com/p/2099987320443237060#1",
+         "date": d(2), "summary": "开头讲原理", "site_name": "知乎专栏"},
+        {"title": "深入理解 KV cache 压缩", "url": "https://zhuanlan.zhihu.com/p/2099987320443237060", "date": d(2)},
+        {"title": "旧文", "url": "https://zhuanlan.zhihu.com/p/111", "date": d(60)},
+        {"title": "没日期", "url": "https://zhuanlan.zhihu.com/p/222"},
+        {"title": "问题页", "url": "https://www.zhihu.com/question/333", "date": d(1)},
+    ]
+    sent = []
+
+    class C:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def post(self, url, headers, timeout, json):
+            sent.append(json["query"])
+            return _Resp(data={"results": results})
+
+        def get(self, url, timeout):
+            return _Resp(status=503)
+    monkeypatch.setattr(src, "_client", lambda: C())
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    items, errs = src.fetch_zhihu([], hot=False, days=14, queries=["大模型", "Agent"])
+    assert len(sent) == 2 and sent[0].startswith("site:zhuanlan.zhihu.com 大模型 after:")
+    assert [it["id"] for it in items] == ["zhihu:p2099987320443237060"]
+    a = items[0]
+    assert a["title"] == "深入理解 KV cache 压缩" and a["url"] == "https://zhuanlan.zhihu.com/p/2099987320443237060"
+    assert a["extra"]["via"] == "search" and a["extra"]["query"] == "大模型" and a["summary"] == "开头讲原理"
+    assert errs == [] and rk.needs_value(a)
+
+
+def test_zhihu_search_skipped_without_key(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(src, "zhihu_search", lambda *a, **k: pytest.fail("不该调用"))
+    assert src.fetch_zhihu([], hot=False, queries=["大模型"]) == ([], [])
