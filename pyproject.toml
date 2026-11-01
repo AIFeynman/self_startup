@@ -13,3 +13,7 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+# data/learn 下有 Deep Dive 克隆的别人仓库，只收集本项目的测试
+testpaths = ["tests"]
