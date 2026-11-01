@@ -174,10 +174,12 @@ def test_github_defaults_to_quick_read(client, monkeypatch):
     it = client.post("/api/learn/items", json={"url": "https://github.com/foo/bar 帮我解析一下"}).json()
     assert it["url"] == "https://github.com/foo/bar" and it["kind"] == "github" and it["depth"] == "quick"
     assert "速读" in sent["prompt"] and "note.md" in sent["prompt"] and "阅读指南" in sent["prompt"]
+    assert "docs/、examples/" in sent["prompt"]
     sent.clear()
     client.post(f"/api/learn/items/{it['id']}/rerun", json={"depth": "full"})
     assert client.get(f"/api/learn/items/{it['id']}").json()["depth"] == "full"
     assert "github-code-walkthrough" in sent["prompt"] or "代码解读" in sent["prompt"]
+    assert "文档与例子精读" in sent["prompt"] and "逐篇通读" in sent["prompt"]
 
 
 TWO_STEPS = '```json\n{"overview_md": "o", "steps": [{"stage": 1, "title": "领域地图", "goal": "能定位新论文"}, {"stage": 3, "title": "读经典"}]}\n```'
