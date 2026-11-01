@@ -523,3 +523,15 @@ def test_item_qa_answer_and_review(client, fake_submit):
     client.post(url, json={"q": "新问题？", "answer": "新答"})
     qa = client.get(f"/api/learn/items/{it['id']}/qa").json()
     assert qa["items"][0]["answer"] == "新答" and [x["answer"] for x in qa["earlier"]] == ["改了"]
+
+
+@pytest.mark.parametrize("kind,depth", [("article", ""), ("paper", ""), ("github", "quick"), ("github", "full")])
+def test_item_prompts_require_key_figures(tmp_path, kind, depth):
+    """四类深读都要把原文关键图下载到 figs/、看过再用相对路径嵌入笔记并配说明。"""
+    it = {"id": 1, "kind": kind, "depth": depth, "url": "https://example.com/x", "focus": ""}
+    p = learn.item_prompt(it, tmp_path)
+    assert "关键图" in p and f"{tmp_path}/figs" in p and "](figs/fig1.png)" in p and "Read 工具" in p
+    if kind == "article":
+        assert "只写 note.md 和 figs/" in p
+    if kind == "paper":
+        assert "pdftoppm" in p and "arxiv.org/html" in p

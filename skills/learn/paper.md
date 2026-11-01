@@ -3,7 +3,7 @@
 基础流程与证据要求以 `~/.codex/skills/paper-library/SKILL.md` 及其 `references/deep-reading.md` 为准（读全文、机制链、证据边界、原文定位、区分作者结论/代理推断）。本平台的差异与增补：
 
 ## 产物位置
-- 只写到任务给出的输出目录：`note.md`（主笔记）。PDF 等附件也放该目录。
+- 只写到任务给出的输出目录：`note.md`（主笔记），关键图放 `figs/`（按任务里的「关键图」规则下载、查看、在正文对应位置嵌入并配说明）。PDF 等附件也放该目录。
 - 除非任务明确说「允许写入 Obsidian」，不要写入 paper-library `config.json` 里的知识库，也不要修改该 config。
 - 主笔记可沿用 paper-library 的 frontmatter 和「动机 / 关键结论 / 认知更新 / 最小机制与证据 / 论文关系」结构，但顶部和末尾按下列增补。
 

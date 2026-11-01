@@ -121,6 +121,8 @@ const CSS = `
 .ln-reader .md h3 { font-size: 17px; }
 .ln-reader .md code { background: var(--bg-2); padding: 1px 5px; border-radius: 4px; }
 .ln-reader .md pre code { background: none; padding: 0; }
+.ln-reader .md img { display: block; max-width: 100%; height: auto; margin: 18px auto 6px; border-radius: 6px; border: 1px solid var(--line); background: #fff; cursor: zoom-in; }
+.ln-reader .md img + em, .ln-reader .md p:has(> img) + blockquote { font-size: 14px; }
 .ln-tldr { background: var(--focus); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 22px; margin-bottom: 14px; }
 .ln-tldr ul { margin: 6px 0 0; padding-left: 18px; } .ln-tldr li { margin: 3px 0; }
 .ln-purpose { font-size: 13px; color: var(--muted); margin: -6px 0 12px; padding-left: 10px; border-left: 2px solid var(--accent); }
@@ -647,7 +649,7 @@ async function renderItem(el, ctx, iid) {
     if (hasNote) {
       // 追问清单那一节不在正文里列，改成下面的逐题作答区
       const note = text.replace(/^---[\s\S]*?---\s*/, '').replace(QA_SECTION, '');
-      reader.append(h('div.card', {}, annotate(ctx, md(note), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
+      reader.append(h('div.card', {}, annotate(ctx, localImgs(md(note), `/api/learn/items/${it.id}/out/`), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
       const qa = await api.get(`/api/learn/items/${it.id}/qa`).catch(() => null);
       if (qa?.items?.length || qa?.earlier?.length) reader.append(qaSection(ctx, it, qa));
     }
@@ -681,6 +683,17 @@ async function renderItem(el, ctx, iid) {
 }
 
 // ---------- 追问清单：逐题作答，提交后 Agent 对照笔记 / 原文 / 源码点评 ----------
+// 笔记里的相对路径图片（figs/fig1.png）指向条目输出目录；点图在新标签页看原尺寸
+function localImgs(el, base) {
+  for (const img of el.querySelectorAll('img')) {
+    const src = img.getAttribute('src') || '';
+    if (src && !/^([a-z]+:|\/|#)/i.test(src)) img.src = base + src.replace(/^\.\//, '').split('/').map(encodeURIComponent).join('/');
+    img.loading = 'lazy';
+    img.onclick = () => window.open(img.src, '_blank', 'noopener');
+  }
+  return el;
+}
+
 const QA_SECTION = /^#{2,4}\s*追问清单[^\n]*\n[\s\S]*?(?=^#{1,4}\s|(?![\s\S]))/m;
 
 function qaSection(ctx, it, qa) {
