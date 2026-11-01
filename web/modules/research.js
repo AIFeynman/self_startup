@@ -323,7 +323,8 @@ function engineCard(x, ctx, rerender, root) {
 
   if (x.status === 'done') {
     card.append(h('div.row', {}, [h('span.muted.grow', {}, `${fmt(x.finished_at)} 完成 · ${(x.content || '').length} 字`),
-      h('button.sm', { onclick: () => { const d = document.getElementById('rs-res-' + x.id); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } }, '看原文')]));
+      h('button.sm', { onclick: () => { const d = document.getElementById('rs-res-' + x.id); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } }, '看原文'),
+      x.doc_id ? h('button.sm', { title: '这条结果单独存的文档，可在文档库按引擎标签归档汇总', onclick: () => { location.hash = '#research/docs/' + x.doc_id; } }, [ui.icon('doc'), '单独文档']) : null]));
   } else if (x.status === 'awaiting_paste') {
     const ta = h('textarea', { rows: 7, placeholder: '把 Muse 的回答粘贴到这里，然后点「保存回答」' });
     card.append(h('div.rs-paste', {}, [
@@ -412,11 +413,11 @@ async function docs(el, ctx, openId) {
       h('button.ghost.rs-back', { onclick: back }, [ui.icon('arrow'), '文档库']),
       h('div.card.rs-reader', {}, [
         h('div.rs-read', {}, [
-          h('div.row', {}, [h('span.card-label', { style: { margin: 0 } }, d.research_id ? `调研 #${d.research_id}` : '手写笔记'), h('span.muted', {}, fmt(d.updated_at)), h('span.grow'),
+          h('div.row', {}, [h('span.card-label', { style: { margin: 0 } }, d.research_id ? `调研 #${d.research_id}${d.result_id ? ' · 引擎结果' : ''}` : '手写笔记'), h('span.muted', {}, fmt(d.updated_at)), h('span.grow'),
             d.research_id ? h('button.sm', { onclick: () => go('r/' + d.research_id) }, '打开调研') : h('button.sm', { onclick: () => editor(d) }, [ui.icon('edit'), '编辑']),
             h('button.sm', { onclick: async () => { await navigator.clipboard.writeText(d.content); toast('已复制 markdown'); } }, '复制'),
             h('button.icon', { title: '删除', onclick: async () => {
-              if (!confirm(d.research_id ? '删除文档会同时删除这条调研记录，确定？' : '删除这篇文档？')) return;
+              if (!confirm(d.research_id && !d.result_id ? '删除文档会同时删除这条调研记录，确定？' : '删除这篇文档？（调研记录保留）')) return;
               await api.del(`/api/research/docs/${id}`); back(); load();
             } }, ui.icon('trash'))]),
           h('h1.title', {}, d.title),

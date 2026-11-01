@@ -57,10 +57,12 @@ CREATE TABLE IF NOT EXISTS research_results (
     finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rr_research ON research_results(research_id);
--- 文档库：每个调研一篇（research_id 非空）+ 用户手写文档；正文同时存文件
+-- 文档库：每个调研一篇汇总（research_id 非空、result_id 空）+ 每条完成的引擎结果一篇（result_id 非空）
+-- + 用户手写文档；正文同时存文件
 CREATE TABLE IF NOT EXISTS research_docs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     research_id INTEGER,
+    result_id   INTEGER,
     title       TEXT NOT NULL,
     tags        TEXT DEFAULT '[]',
     content     TEXT DEFAULT '',
@@ -124,12 +126,17 @@ _cols_ok = False
 
 
 def _ensure_cols() -> None:
-    """research_results 后加的 used_engine：请求的引擎没跑通、由备选引擎代跑时记实际引擎（老库迁移）。"""
+    """老库迁移：research_results.used_engine（请求的引擎没跑通、由备选引擎代跑时记实际引擎）；
+    research_docs.result_id（引擎结果单独成文档，加列时给已完成的结果补建）。"""
     global _cols_ok
     if not _cols_ok:
+        _cols_ok = True
         if "used_engine" not in {r["name"] for r in db.rows("PRAGMA table_info(research_results)")}:
             db.execute("ALTER TABLE research_results ADD COLUMN used_engine TEXT DEFAULT ''")
-        _cols_ok = True
+        if "result_id" not in {r["name"] for r in db.rows("PRAGMA table_info(research_docs)")}:
+            db.execute("ALTER TABLE research_docs ADD COLUMN result_id INTEGER")
+            for x in db.rows("SELECT id FROM research_results WHERE status='done' AND content<>''"):
+                _write_result_doc(x["id"])
 
 
 def engine_label(x: dict) -> str:
@@ -156,6 +163,8 @@ def _set_result(res_id: int, **data) -> None:
     if data.get("status") in ("done", "failed", "timeout", "awaiting_paste") and "finished_at" not in data:
         data["finished_at"] = db.now() if data["status"] in ("done", "failed") else None
     db.update("research_results", res_id, data)
+    if data.get("status") == "done":
+        _write_result_doc(res_id)
     _refresh(_result(res_id)["research_id"])
 
 
@@ -448,7 +457,7 @@ def _doc_md(r: dict, results: list[dict]) -> str:
 def _write_doc(rid: int) -> None:
     r = _research(rid)
     content = _doc_md(r, _results(rid))
-    d = db.row("SELECT * FROM research_docs WHERE research_id=?", [rid])
+    d = db.row("SELECT * FROM research_docs WHERE research_id=? AND result_id IS NULL", [rid])
     path = Path(d["path"]) if d and d["path"] else DOC_DIR / f"{rid}-{_slug(r['topic'])}.md"
     DOC_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(content, "utf-8")
@@ -457,6 +466,33 @@ def _write_doc(rid: int) -> None:
         db.update("research_docs", d["id"], data)
     else:
         db.insert("research_docs", {**data, "research_id": rid, "created_at": r["created_at"]})
+
+
+ENGINE_TAGS = {"claude": "Claude Code", "codex": "Codex", "grokbot": "GrokBot", "muse": "Muse"}
+
+
+def _write_result_doc(res_id: int) -> None:
+    """一条引擎结果完成后单独存一篇文档（标签带引擎名，便于按 GrokBot / Muse 等归档汇总）；重跑或重新粘贴时覆盖同一篇。"""
+    _ensure_cols()
+    x = db.row("SELECT * FROM research_results WHERE id=?", [res_id])
+    r = db.row("SELECT * FROM research WHERE id=?", [x["research_id"]]) if x else None
+    if not x or not r or x["status"] != "done" or not x["content"]:
+        return
+    angles, label = _j(r["angles"], []), engine_label(x)
+    content = "\n".join([f"# {r['topic']} · {label}", "",
+                          f"- 来源：调研 #{r['id']}（{r['topic']}）的 {label} 结果　完成：{x.get('finished_at') or db.now()}",
+                          f"- 关注角度：{'、'.join(angles) or '—'}", "", x["content"].strip(), "",
+                          "<details><summary>提问 brief</summary>", "", x["brief"] or "", "", "</details>"]) + "\n"
+    d = db.row("SELECT * FROM research_docs WHERE result_id=?", [res_id])
+    path = Path(d["path"]) if d and d["path"] else DOC_DIR / f"{r['id']}-{_slug(r['topic'])}-{x['engine']}-{res_id}.md"
+    DOC_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, "utf-8")
+    data = {"title": f"{r['topic']} · {label}", "content": content, "path": str(path), "updated_at": db.now(),
+            "tags": ["调研", "引擎结果", ENGINE_TAGS.get(x["engine"], x["engine"]), *angles]}
+    if d:
+        db.update("research_docs", d["id"], data)
+    else:
+        db.insert("research_docs", {**data, "research_id": r["id"], "result_id": res_id, "created_at": db.now()})
 
 
 def _doc(did: int) -> dict:
@@ -602,7 +638,10 @@ def get_research(rid: int):
     _resume_waiters(rid)
     _check_muse(rid)
     r["results"] = _results(rid)
-    d = db.row("SELECT id,path FROM research_docs WHERE research_id=?", [rid])
+    docs = {d["result_id"]: d["id"] for d in db.rows("SELECT id,result_id FROM research_docs WHERE research_id=? AND result_id IS NOT NULL", [rid])}
+    for x in r["results"]:
+        x["doc_id"] = docs.get(x["id"])
+    d = db.row("SELECT id,path FROM research_docs WHERE research_id=? AND result_id IS NULL", [rid])
     r["doc_id"], r["doc_path"] = (d["id"], d["path"]) if d else (None, "")
     return r
 
@@ -636,7 +675,8 @@ class DocIn(BaseModel):
 
 @router.get("/docs")
 def list_docs(q: str = "", tag: str = "", since: str = "", until: str = "", limit: int = 100):
-    sql, args = "SELECT id,research_id,title,tags,path,created_at,updated_at,substr(content,1,300) AS excerpt FROM research_docs WHERE 1=1", []
+    _ensure_cols()
+    sql, args = "SELECT id,research_id,result_id,title,tags,path,created_at,updated_at,substr(content,1,300) AS excerpt FROM research_docs WHERE 1=1", []
     if q:
         sql, args = sql + " AND (title LIKE ? OR content LIKE ?)", args + [f"%{q}%"] * 2
     if tag:
@@ -695,7 +735,7 @@ def update_doc(did: int, body: DocIn):
 def delete_doc(did: int):
     """删除文档；调研生成的文档会连同调研记录一起删除。"""
     d = _doc(did)
-    if d["research_id"]:
+    if d["research_id"] and not d.get("result_id"):
         _delete_research(d["research_id"])
     else:
         if d["path"]:

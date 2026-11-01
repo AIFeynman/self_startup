@@ -95,6 +95,17 @@ def test_muse_paste(client, fakes, monkeypatch):
     assert client.post(f"/api/research/results/{res['id']}/paste", json={"content": "Muse 的回答"}).json()["status"] == "done"
     r2 = client.get(f"/api/research/{r['id']}").json()
     assert r2["status"] == "done" and "Muse 的回答" in Path(r2["doc_path"]).read_text("utf-8")
+    # 引擎结果单独成文档：带引擎标签可归档汇总；再次粘贴覆盖同一篇；删它不删调研
+    did = r2["results"][0]["doc_id"]
+    d = client.get(f"/api/research/docs/{did}").json()
+    assert "Muse" in d["tags"] and "引擎结果" in d["tags"] and "Muse 的回答" in Path(d["path"]).read_text("utf-8")
+    assert [x["id"] for x in client.get("/api/research/docs", params={"tag": "Muse"}).json()] == [did]
+    client.post(f"/api/research/results/{res['id']}/paste", json={"content": "Muse 的第二版回答"})
+    assert client.get(f"/api/research/{r['id']}").json()["results"][0]["doc_id"] == did
+    assert "第二版" in client.get(f"/api/research/docs/{did}").json()["content"]
+    client.delete(f"/api/research/docs/{did}")
+    r3 = client.get(f"/api/research/{r['id']}").json()
+    assert r3["doc_id"] == r2["doc_id"] and r3["results"][0]["doc_id"] is None
 
 
 def test_grokbot_unconfigured(client, fakes, monkeypatch, tmp_path):
