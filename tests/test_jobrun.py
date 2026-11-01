@@ -114,6 +114,7 @@ def test_every_job_prompt_carries_resource_rule(monkeypatch):
     db.update("jobs", jid, {"status": "done"})
 
 
+@pytest.mark.real_machine
 def test_free_mem_reads_this_machine():
     assert jobs._free_mem_gb() is None or jobs._free_mem_gb() > 0
 
