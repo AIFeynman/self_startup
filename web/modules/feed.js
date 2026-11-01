@@ -43,8 +43,12 @@ const CSS = `
 .fd-pa { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; line-height: 1.5; margin-top: 6px; padding: 6px 10px; border-left: 2px solid var(--accent, #6b8afd); background: color-mix(in srgb, var(--text) 4%, transparent); border-radius: 4px; }
 .fd-pa b { font-weight: 600; opacity: .6; white-space: nowrap; }
 .fd-pa .rev { font-variant-numeric: tabular-nums; }
-details.fd-pa-d { margin-top: 4px; font-size: 13px; }
-details.fd-pa-d > summary { cursor: pointer; opacity: .75; list-style: none; }
+details.fd-pa-d { margin-top: 5px; font-size: 13px; }
+details.fd-pa-d > summary { cursor: pointer; list-style: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+details.fd-pa-d > summary b { font-weight: 600; opacity: .55; margin-right: 4px; }
+details.fd-pa-d > summary .sep { opacity: .35; margin: 0 8px; }
+details.fd-pa-d > summary:hover { color: var(--accent); }
+details.fd-pa-d[open] > summary { opacity: .6; }
 details.fd-pa-d > summary::-webkit-details-marker { display: none; }
 details.fd-pa-d > summary::before { content: '▸ '; }
 details.fd-pa-d[open] > summary::before { content: '▾ '; }
@@ -386,15 +390,23 @@ export default {
     };
     // 产品分析（产品分类）：收入 / 商业模式 / 定位 / 价值 / 痛点；TrustMRR 收入是支付渠道验证的数字，没分析时也先显示
     const PA = [['revenue', '收入'], ['model', '商业模式'], ['position', '产品定位'], ['value', '用户价值'], ['pain', '解决痛点']];
-    const paBox = (x, fold) => {
+    // 折叠时的一行：收入取前三项（MRR / 近 30 天 / 环比），没公开就用定位；商业模式取第一个分句
+    const clause = (t, n) => { const c = String(t || '').replace(/^推测：/, '推测 ').split(/[，；。,;]/)[0]; return c.length > n ? c.slice(0, n) + '…' : c; };
+    const paBox = (entry) => {
+      const { x } = entry;
       const pa = { revenue: x.extra?.revenue || '', ...(x.extra?.pa || {}) };
       const rows = PA.filter(([k]) => pa[k]);
       if (!rows.length) return null;
       const grid = h('div.fd-pa', { title: x.extra?.pa ? '收入来自数据源（TrustMRR 为支付渠道验证）；其余由模型根据标题、简介和数据生成' : '' },
         rows.flatMap(([k, n]) => [h('b', {}, n), h('span' + (k === 'revenue' ? '.rev' : ''), {}, pa[k])]));
-      if (!fold) return grid;
-      const head = pa.revenue && pa.revenue !== '未公开' ? pa.revenue : pa.position;   // 收入没公开就先露定位
-      return h('details.fd-pa-d', {}, [h('summary', {}, '产品分析' + (head ? ' · ' + head : '')), grid]);
+      const rev = pa.revenue && pa.revenue !== '未公开';
+      const line = [rev ? ['收入', pa.revenue.split('，').slice(0, 3).join(' · ')] : pa.position && ['定位', clause(pa.position, 40)],
+        pa.model && ['模式', clause(pa.model, 30)]].filter(Boolean);
+      const d = h('details.fd-pa-d', { title: '点击展开 / 收起产品分析' }, [
+        h('summary', {}, line.flatMap(([k, v], j) => [j ? h('span.sep', {}, '|') : null, h('b', {}, k), v])), grid]);
+      d.open = !!entry.paOpen;
+      d.addEventListener('toggle', () => { entry.paOpen = d.open; });
+      return d;
     };
     const why = (x) => (x.why ? h('div.fd-why', { title: x.why }, [h('b', {}, '推荐理由'), x.why]) : null);
 
@@ -408,7 +420,7 @@ export default {
             h('div', {}, [titleLink(x), ageTag(x), i === 0 ? h('span.fd-best', {}, '最推荐') : null]),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
-            paBox(x, false),
+            paBox(entry),
             why(x),
             verdictBox(entry),
             h('div.fd-meta', {}, metaChips(x)),
@@ -421,7 +433,7 @@ export default {
             titleLink(x), ageTag(x),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
-            paBox(x, true),
+            paBox(entry),
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
               x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
