@@ -74,7 +74,8 @@ def test_paper_task_and_verdict_note(client):
     assert _habits.ensure_paper_task("2000-01-01") is None   # 只给今天加
     client.get(f"/api/plan/day?date={today}")
     assert len(db.rows("SELECT id FROM tasks WHERE date=? AND notes LIKE ?", [today, f"%{_habits.PAPER_TAG}%"])) == 1
-    assert not _habits.paper_status(today)["done"]
+    base = _habits.paper_status(today)["count"]  # 前面的用例可能留下了当天读过的论文深读
+    assert not _habits.paper_status(today)["kb_path"]
 
     db.insert("feed_items", {"id": "arxiv:hab1", "source": "arxiv", "type": "paper", "title": "A Habit Paper", "summary": "s",
                              "url": "https://arxiv.org/abs/2610.00001", "date": today, "popularity": 1, "extra": "{}",
@@ -83,7 +84,7 @@ def test_paper_task_and_verdict_note(client):
     r = client.post("/api/feed/verdict", json={"id": "arxiv:hab1", "text": "增量小，评测只有一个数据集，不跟"}).json()
     assert r["verdict"].startswith("增量小") and r["verdict_at"][:10] == today
     ps = _habits.paper_status(today)
-    assert ps["done"] and ps["count"] == 1 and ps["kb_path"] == f"learn/paper-notes/{today}.md"
+    assert ps["done"] and ps["count"] == base + 1 and ps["kb_path"] == f"learn/paper-notes/{today}.md"
     assert db.row("SELECT status FROM tasks WHERE id=?", [t["id"]])["status"] == "done"
     docs = {d["path"]: d for d in kb.build()}
     assert "增量小" in docs[f"learn/paper-notes/{today}.md"]["body"]
@@ -91,4 +92,4 @@ def test_paper_task_and_verdict_note(client):
     items = client.get("/api/feed/items?type=paper&limit=200").json()["items"]
     assert next(x for x in items if x["id"] == "arxiv:hab1")["feedback"]["verdict"].startswith("增量小")
     client.post("/api/feed/verdict", json={"id": "arxiv:hab1", "text": ""})
-    assert not _habits.paper_status(today)["done"]
+    assert _habits.paper_status(today)["count"] == base and not _habits.paper_status(today)["kb_path"]

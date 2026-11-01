@@ -2,8 +2,10 @@
 
 - 对话：条目页「继续追问」用 ref=learn:item:<id>，关掉再开会续上；以前在对话里直接「深度解析：<链接>」的会话，
   按链接认领到条目上（没有条目的，把 Agent 那次的回复存成条目的 note.md，不重跑）。
-- 事项：开始深读时在当天加一条学习事项「深读：<标题>」；文档生成好算进行中，在对话里追问 / 写感想、写笔记或打分算完成。
+- 事项：开始深读时在当天加一条学习事项「深读：<标题>」；文档生成好算进行中，在对话里追问 / 写感想、在文档上划线评论或问 Claude、
+  写笔记或打分算完成。论文类条目读完也算进当天的「每日论文」。
 - 追问与感想：用户在条目对话里发的话（不含开头那句「深度解析：链接」）。以问句结尾的算追问，其余算感想。
+  划线批注（annotations，doc=learn:item:<id>）单独算，知识库里已有自己的文件，这里只用来判断读没读、给复盘计数。
 """
 from __future__ import annotations
 
@@ -17,6 +19,8 @@ from ._feed_rank import norm_url
 TAG = "deepread:item:"
 _ASK = re.compile(r"[?？]\s*$|^(为什么|怎么|如何|什么|是不是|能不能|有没有|哪)")
 _OPENER = re.compile(r"^\s*(深度解析|深读|深度阅读|解读)[:：]?\s*\S+\s*$")
+# 论文站点：detect_kind 把 Hugging Face / AlphaXiv 的论文页当文章读，算每日论文时也认
+_PAPER_URL = re.compile(r"(arxiv\.org|alphaxiv\.org|huggingface\.co/papers/|openreview\.net|doi\.org|\.pdf$)", re.I)
 
 
 def ref_of(iid: int) -> str:
@@ -122,6 +126,15 @@ def user_lines(iid: int, date: str = "") -> list[dict]:
     return out
 
 
+def annot_lines(iid: int, date: str = "") -> list[dict]:
+    """用户在这篇深读文档上的划线评论 / 问 Claude。"""
+    rows = db.rows("SELECT m.content, m.created_at, a.quote FROM annotation_msgs m JOIN annotations a ON a.id=m.annotation_id "
+                   "WHERE a.doc=? AND m.role='user' ORDER BY m.id", [ref_of(iid)]) if db.row(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='annotation_msgs'") else []
+    return [{"text": (r["content"] or "").strip(), "at": r["created_at"] or "", "quote": r["quote"] or ""}
+            for r in rows if not date or (r["created_at"] or "")[:10] == date]
+
+
 def qa_answers(it: dict | None) -> list[dict]:
     """追问清单里写过作答的题（含 Agent 点评），按编号排。"""
     try:
@@ -169,14 +182,18 @@ def ensure_task(it: dict, date: str = "") -> dict | None:
 
 
 def sync_task(iid: int) -> None:
-    """文档好了算一半；追问 / 写感想 / 答追问清单 / 写笔记 / 打分算读完。只往前推，不改用户手动设的完成或放弃。"""
+    """文档好了算一半；追问 / 写感想 / 划线评论或提问 / 答追问清单 / 写笔记 / 打分算读完。只往前推，不改用户手动设的完成或放弃。"""
     t = task_of(iid)
     it = db.row("SELECT * FROM learn_items WHERE id=?", [iid])
     if not t or not it or t["status"] in ("done", "dropped"):
         return
-    engaged = bool(user_lines(iid)) or bool(qa_answers(it)) or bool((it.get("my_notes") or "").strip()) or bool(it.get("rating"))
+    engaged = (bool(user_lines(iid)) or bool(annot_lines(iid)) or bool(qa_answers(it))
+               or bool((it.get("my_notes") or "").strip()) or bool(it.get("rating")))
     if engaged:
         tasks.patch(t["id"], {"status": "done", "progress": 100})
+        if is_paper(it):
+            from . import _habits
+            _habits.sync_paper_task(db.today())
     elif it["status"] == "done" and (t.get("progress") or 0) < 50:
         tasks.patch(t["id"], {"progress": 50})
     if it.get("title") and t["title"] == f"深读：{it['url'][:60]}":  # 开始时只有链接，生成好后换成标题
@@ -190,13 +207,17 @@ def day_reads(date: str) -> list[dict]:
     ids |= {int(r["ref"].rsplit(":", 1)[1]) for r in db.rows(
         "SELECT DISTINCT s.ref FROM chat_sessions s JOIN chat_messages m ON m.session_id=s.id "
         "WHERE s.ref LIKE 'learn:item:%' AND m.role='user' AND substr(m.created_at,1,10)=?", [date])}
+    if db.row("SELECT name FROM sqlite_master WHERE type='table' AND name='annotation_msgs'"):
+        ids |= {int(r["doc"].rsplit(":", 1)[1]) for r in db.rows(
+            "SELECT DISTINCT a.doc FROM annotations a JOIN annotation_msgs m ON m.annotation_id=a.id "
+            "WHERE a.doc LIKE 'learn:item:%' AND m.role='user' AND substr(m.created_at,1,10)=?", [date])}
     out = []
     for iid in sorted(ids):
         it = db.row("SELECT id, kind, title, url, status, rating, my_notes FROM learn_items WHERE id=?", [iid])
         if not it:
             continue
         ls = user_lines(iid, date)
-        out.append({**it, "asks": sum(x["kind"] == "ask" for x in ls),
+        out.append({**it, "asks": sum(x["kind"] == "ask" for x in ls), "annots": len(annot_lines(iid, date)),
                     "thoughts": [x["text"][:200] for x in ls if x["kind"] == "thought"][:5]})
     return out
 
@@ -207,7 +228,39 @@ def day_lines(date: str) -> list[str]:
         s = f"深读「{r['title'] or r['url']}」（{r['kind']}，{r['status']}）"
         if r["asks"]:
             s += f"；追问 {r['asks']} 次"
+        if r["annots"]:
+            s += f"；划线讨论 {r['annots']} 条"
         if r["thoughts"]:
             s += "；感想：" + " / ".join(r["thoughts"])
         out.append(s)
+    return out
+
+
+# ---------- 算进每日论文 ----------
+
+def is_paper(it: dict) -> bool:
+    return it.get("kind") == "paper" or bool(_PAPER_URL.search(it.get("url") or ""))
+
+
+def engaged_on(it: dict, date: str) -> tuple[str, str]:
+    """这一天在条目上留下的第一句话（追问 / 感想 / 划线 / 追问清单作答）；只有当天标完成的事项（写笔记、打分、手动完成）给个占位。"""
+    xs = sorted(user_lines(it["id"], date) + annot_lines(it["id"], date), key=lambda x: x["at"])
+    xs += [{"text": v["answer"].strip(), "at": v.get("at", "")} for v in qa_answers(it) if (v.get("at") or "")[:10] == date]
+    if xs:
+        return xs[0]["text"], xs[0]["at"]
+    t = task_of(it["id"])
+    return ("读完深读文档", it.get("updated_at") or "") if t and t["date"] == date and t["status"] == "done" else ("", "")
+
+
+def day_paper_reads(date: str) -> list[dict]:
+    """这一天读完（有互动）的论文类深读，形状和信息推荐的论文笔记一致。"""
+    out = []
+    for r in day_reads(date):
+        it = db.row("SELECT * FROM learn_items WHERE id=?", [r["id"]])
+        if not it or not is_paper(it):
+            continue
+        first, at = engaged_on(it, date)
+        if first:
+            out.append({"id": it["id"], "title": it["title"] or it["url"], "url": it["url"], "verdict": first[:200],
+                        "verdict_at": at, "source": "deepread", "link": f"#learn/item/{it['id']}"})
     return out
