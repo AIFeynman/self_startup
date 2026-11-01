@@ -481,3 +481,45 @@ def test_first_chapter_must_draw_clickable_architecture(client, fake_submit):
     client.post(f"/api/learn/steps/{s2['id']}/open", json={})
     assert "本章是计划的第一步" not in fake_submit[-1]["prompt"]
     client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_item_qa_answer_and_review(client, fake_submit):
+    """追问清单：逐题作答 → Agent 点评回写；作答和点评另记学习记录；笔记换题后旧作答不丢。"""
+    it = client.post("/api/learn/items", json={"url": "https://arxiv.org/abs/2401.99999"}).json()
+    out = learn._item_dir(it)
+    (out / "note.md").write_text("# 论文\n\n## TL;DR\n- a\n\n## 追问清单\n1. 为什么要用 `pass^k`？\n   换成 pass@1 会怎样？\n2. 怎么用到我的项目？\n\n## 我的笔记\n", "utf-8")
+    learn.on_job_done(_job(fake_submit[-1]["id"], "完成"))
+    qa = client.get(f"/api/learn/items/{it['id']}/qa").json()
+    assert [x["q"] for x in qa["items"]] == ["为什么要用 `pass^k`？ 换成 pass@1 会怎样？", "怎么用到我的项目？"]
+    url = f"/api/learn/items/{it['id']}/qa/1"
+    q1 = qa["items"][0]["q"]
+    # 只保存：不起任务；空作答提交点评也不起任务
+    n = len(fake_submit)
+    assert client.post(url, json={"q": q1, "answer": "看稳定性"}).json()["status"] == "answered"
+    assert client.post(url, json={"q": q1, "answer": " ", "review": True}).json()["status"] == "empty"
+    assert len(fake_submit) == n
+    c = client.post(url, json={"q": q1, "answer": "看多次都成功的稳定性", "review": True}).json()
+    call = fake_submit[-1]
+    assert c["status"] == "reviewing" and call["ref"] == f"learn:item:{it['id']}:qa:1"
+    assert "看多次都成功的稳定性" in call["prompt"] and q1 in call["prompt"] and call["add_dirs"] == [str(out)]
+    learn.on_job_done(_job(c["job_id"], '```json\n{"covered": ["抓到稳定性"], "missing": ["没说 k 怎么选"], "better": "见 §3", "score": 0.6}\n```'))
+    item1 = client.get(f"/api/learn/items/{it['id']}/qa").json()["items"][0]
+    assert item1["status"] == "reviewed" and item1["review"]["score"] == 0.6 and item1["answer"] == "看多次都成功的稳定性"
+    assert "没说 k 怎么选" in learn.agent_context(f"learn:item:{it['id']}")
+    # 学习记录只追加：两次作答 + 一次点评
+    evs = [e for e in learn.events_of() if e["kind"] in ("qa", "qa_review") and e["data"].get("item_id") == it["id"]]
+    assert [e["kind"] for e in evs] == ["qa", "qa", "qa_review"]
+    assert "60%" in learn.event_line(evs[-1])
+    # 改答案后旧点评的 job 回来不覆盖新状态
+    c2 = client.post(url, json={"q": q1, "answer": "改了", "review": True}).json()
+    learn.on_job_done(_job(c["job_id"], '```json\n{"covered": [], "missing": ["x"], "better": "", "score": 0.1}\n```'))
+    assert client.get(f"/api/learn/items/{it['id']}/qa").json()["items"][0]["status"] == "reviewing"
+    learn.on_job_done(_job(c2["job_id"], "没有 json"))
+    assert client.get(f"/api/learn/items/{it['id']}/qa").json()["items"][0]["status"] == "failed"
+    # 重新生成笔记换了题：同一编号的旧作答挪进 earlier，不被覆盖
+    (out / "note.md").write_text("# 论文\n\n## 追问清单\n1. 新问题？\n", "utf-8")
+    qa = client.get(f"/api/learn/items/{it['id']}/qa").json()
+    assert qa["items"] == [{"n": 1, "q": "新问题？"}] and qa["earlier"][0]["answer"] == "改了"
+    client.post(url, json={"q": "新问题？", "answer": "新答"})
+    qa = client.get(f"/api/learn/items/{it['id']}/qa").json()
+    assert qa["items"][0]["answer"] == "新答" and [x["answer"] for x in qa["earlier"]] == ["改了"]

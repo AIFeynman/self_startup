@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS learn_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id     INTEGER,
     step_id     INTEGER,
-    kind        TEXT NOT NULL,              -- check 作答 / check_review 点评 / quiz 测试 / rating 理解度·反馈·状态 / chapter 章节生成 / apply 用到项目
+    kind        TEXT NOT NULL,              -- check 作答 / check_review 点评 / qa 追问清单作答 / qa_review 追问点评 / quiz 测试 / rating 理解度·反馈·状态 / chapter 章节生成 / apply 用到项目
     data        TEXT DEFAULT '{}',
     src         TEXT DEFAULT '',            -- 来源：job:<id> / backfill
     created_at  TEXT
@@ -294,9 +294,12 @@ def _ensure_step_cols() -> None:
 
 
 def _ensure_depth_col() -> None:
+    """老库补上 depth（速读 / 完整教程）和 qa（追问清单作答与点评）列。"""
     cols = {r["name"] for r in db.rows("PRAGMA table_info(learn_items)")}
     if "depth" not in cols:
         db.execute("ALTER TABLE learn_items ADD COLUMN depth TEXT DEFAULT 'quick'")
+    if "qa" not in cols:
+        db.execute("ALTER TABLE learn_items ADD COLUMN qa TEXT DEFAULT '{}'")
 
 
 class ItemPatch(BaseModel):
@@ -504,6 +507,131 @@ def item_reads(iid: int):
     _item(iid)
     t = _reads.task_of(iid)
     return {"lines": _reads.user_lines(iid), "task": {"id": t["id"], "date": t["date"], "status": t["status"]} if t else None}
+
+
+# ---------- 追问清单：逐题作答 + Agent 点评 ----------
+
+def _item_note(it: dict) -> str:
+    """条目的 markdown 笔记（GitHub 优先 summary.md，和对话上下文一致）。"""
+    for p in (_item_dir(it) / "summary.md", Path(it.get("output_path") or "")):
+        if p.is_file() and p.suffix == ".md":
+            return p.read_text("utf-8", errors="replace")
+    return ""
+
+
+def qa_questions(text: str) -> list[str]:
+    """笔记里「## 追问清单」一节的问题：编号或列表行，续行并进上一题。"""
+    m = re.search(r"^#{2,4}\s*追问清单[^\n]*\n(.*?)(?=^#{1,4}\s|\Z)", text, re.S | re.M)
+    if not m:
+        return []
+    qs: list[str] = []
+    for ln in m.group(1).splitlines():
+        if not ln.strip():
+            continue
+        if hit := re.match(r"\s*(?:\d+[.、)）]|[-*•])\s+(.*)", ln):
+            qs.append(hit.group(1).strip())
+        elif qs:
+            qs[-1] += " " + ln.strip()
+    return [q for q in qs if q][:12]
+
+
+def _item_qa(it: dict) -> dict:
+    return _loads(it.get("qa"), {}) or {}
+
+
+@router.get("/items/{iid}/qa")
+def item_qa(iid: int):
+    """追问清单：笔记里的问题 + 每题的作答与点评。笔记重新生成后问题变了，旧作答放进 earlier（不丢）。"""
+    _ensure_depth_col()
+    it = _item(iid)
+    saved = _item_qa(it)
+    qs = qa_questions(_item_note(it))
+    shown = {str(n) for n, q in enumerate(qs, 1) if (saved.get(str(n)) or {}).get("q") == q}
+    items = [{"n": n, "q": q, **({k: v for k, v in saved[str(n)].items() if k != "q"} if str(n) in shown else {})}
+             for n, q in enumerate(qs, 1)]
+    earlier = sorted(({"n": int(k.split("@")[0]), **v} for k, v in saved.items() if k not in shown and v.get("answer")),
+                     key=lambda v: v.get("at", ""))
+    return {"items": items, "earlier": earlier}
+
+
+class QaIn(BaseModel):
+    q: str
+    answer: str = ""
+    review: bool = False
+
+
+def qa_prompt(it: dict, c: dict) -> str:
+    out = _item_dir(it)
+    src = f"；源码在 {out / 'src'}" if (out / "src").is_dir() else ""
+    return f"""任务：点评用户对一道「追问清单」问题的作答，帮他看清理解到哪、差在哪。今天是 {db.today()}。
+条目：{it['title'] or it['url']}（{it['kind']}，{it['url']}）
+深读笔记在 {out}（note.md / summary.md{src}），先读笔记里和这道题相关的部分；需要核对时再读原文或源码，不要凭印象。
+
+问题：{c['q']}
+用户的作答：{c['answer']}
+
+追问清单的题大多是开放题（理解机制、质疑证据、迁移到自己的项目），没有唯一答案。
+要求：短、具体、鼓励为主。看理解和判断：讲对了核心、给了理由或证据就算抓到；有道理的不同观点也算抓到。
+只指出真正影响理解的缺口、事实错误或想偏处（对照笔记 / 原文 / 源码说明依据），细枝末节不提。
+用户写「不知道 / 不确定」时不要批评，直接在 better 里把答案讲清楚。
+better 写一个简洁的参考答案（3–6 句，结论 → 理由 / 机制 → 证据或例子），带出处（笔记小节、原文段落或 `文件:行号`）；
+原文没有答案的开放题，说明这是推断，并给出怎么验证。
+不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
+{{"covered": ["抓到了什么，每条一句"], "missing": ["漏掉、讲错或想偏的关键点，每条一句，说清为什么重要"],
+ "better": "参考答案（含出处）", "score": 0.0}}
+covered、missing 各最多 3 条，每条 40 字以内。score 取 0–1，宽松给分：核心讲对且有理由 ≥ 0.7，方向对但缺理由或证据约 0.5，基本没答到才低于 0.3。
+"""
+
+
+@router.post("/items/{iid}/qa/{n}")
+def save_qa(iid: int, n: int, body: QaIn):
+    """保存一道追问的作答；review=true 时提交后台点评。作答和点评另记进学习记录（只追加）。"""
+    _ensure_depth_col()
+    it = _item(iid)
+    qa = _item_qa(it)
+    old = qa.get(str(n)) or {}
+    if old.get("q") and old["q"] != body.q and old.get("answer"):   # 笔记重新生成后同一编号换了题：旧作答挪到别的键，不覆盖
+        qa[f"{n}@{old.get('at', '')}"] = old
+        old = {}
+    answer = body.answer.strip()[:3000]
+    c = {"q": body.q[:600], "answer": answer, "at": db.now(), "status": "answered" if answer else "empty"}
+    if old.get("review") and old.get("answer") == answer:   # 答案没改，保留上次点评
+        c.update(status=old.get("status", "reviewed"), review=old["review"])
+    if body.review and answer:
+        c["status"] = "reviewing"
+        c.pop("review", None)
+        c["job_id"] = jobs.submit("learn", qa_prompt(it, c), ref=f"learn:item:{iid}:qa:{n}", add_dirs=[str(_item_dir(it))])
+    qa[str(n)] = c
+    db.update("learn_items", iid, {"qa": qa})
+    if answer and answer != old.get("answer"):
+        log_event({}, "qa", {"item_id": iid, "title": it["title"] or it["url"], "n": n, "q": c["q"], "answer": answer})
+    _reads.sync_task(iid)
+    return c
+
+
+def _finish_qa(iid: int, n: str, job: dict) -> None:
+    it = db.row("SELECT * FROM learn_items WHERE id=?", [iid])
+    if not it:
+        return
+    qa = _item_qa(it)
+    c = qa.get(n)
+    if not c or c.get("job_id") != job.get("id"):
+        return  # 用户已改答案重新点评
+    o = extract_json(job.get("output") or "", "missing") if job.get("status") == "done" else None
+    if not o:
+        c["status"] = "failed"
+    else:
+        lst = lambda k: [str(x) for x in o.get(k) or [] if x][:4]  # noqa: E731
+        try:
+            score = max(0.0, min(1.0, float(o.get("score") or 0)))
+        except (TypeError, ValueError):
+            score = 0.0
+        c.update(status="reviewed", review={"covered": lst("covered"), "missing": lst("missing"),
+                                            "better": str(o.get("better") or ""), "score": score})
+        log_event({}, "qa_review", {"item_id": iid, "title": it["title"] or it["url"], "n": int(n), "q": c["q"],
+                                    "answer": c["answer"], "review": c["review"]}, src=f"job:{job.get('id')}")
+    qa[n] = c
+    db.update("learn_items", iid, {"qa": qa})
 
 
 def on_chat(ref: str, text: str) -> None:
@@ -1047,6 +1175,12 @@ def event_line(e: dict, titles: dict | None = None) -> str:
                 + (f"；漏：{'；'.join(rv.get('missing') or [])[:120]}" if rv.get("missing") else ""))
     if e["kind"] == "check":
         return f"{at} 停一下「{d.get('q', '')[:40]}」我答：{d.get('answer', '')[:80]}"
+    if e["kind"] == "qa_review":
+        rv = d.get("review") or {}
+        return (f"{at} 追问「{d.get('title', '')[:30]}」{d.get('q', '')[:40]} 我答：{d.get('answer', '')[:80]} → {round(100 * float(rv.get('score') or 0))}%"
+                + (f"；漏：{'；'.join(rv.get('missing') or [])[:120]}" if rv.get("missing") else ""))
+    if e["kind"] == "qa":
+        return f"{at} 追问「{d.get('title', '')[:30]}」{d.get('q', '')[:40]} 我答：{d.get('answer', '')[:80]}"
     if e["kind"] == "apply":
         return f"{at} 把「{t}」用到项目 {d.get('project', '')}：{d.get('what', '')[:120]}" + (f"（{d['evidence'][:80]}）" if d.get("evidence") else "")
     if e["kind"] == "rating":
@@ -1766,6 +1900,8 @@ def on_job_done(job: dict) -> None:
         _finish_grade(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:step:(\d+):check:(\d+)", ref):
         _finish_check(int(m.group(1)), m.group(2), job)
+    elif m := re.fullmatch(r"learn:item:(\d+):qa:(\d+)", ref):
+        _finish_qa(int(m.group(1)), m.group(2), job)
 
 
 # ---------- C. 对话上下文 ----------
@@ -1815,7 +1951,12 @@ def agent_context(ref: str) -> str:
                 f"TL;DR：{it['summary']}\n我的笔记：{it['my_notes'] or '无'}；评分：{it['rating']}/5\n"
                 f"用户在这里说的话会作为「追问与感想」进复盘和知识库；他写下感想时，帮他把感想说准、和文档里的论据对上，不要只附和。\n"
                 f"更新笔记：curl -s -X PATCH {api}/items/{it['id']} -H 'Content-Type: application/json' -d '{{\"my_notes\":\"...\"}}'\n\n"
-                f"### 产物摘录\n{body or '（HTML 产物，请直接读取文件）'}\n\n### 用户已学其他内容\n{_known_knowledge(it['id'], 10)}")
+                f"### 产物摘录\n{body or '（HTML 产物，请直接读取文件）'}\n\n"
+                + (("### 用户在追问清单里的作答\n" + "\n".join(
+                    f"- {v.get('q', '')[:120]} → 我答：{v['answer'][:300]}"
+                    + (f"（点评 {round(100 * float(v['review'].get('score') or 0))}%，漏：{'；'.join(v['review'].get('missing') or [])[:160]}）" if v.get("review") else "")
+                    for v in _reads.qa_answers(it)) + "\n\n") if _reads.qa_answers(it) else "")
+                + f"### 用户已学其他内容\n{_known_knowledge(it['id'], 10)}")
     if m := re.fullmatch(r"learn:step:(\d+)", ref or ""):
         s = db.row("SELECT * FROM learn_steps WHERE id=?", [int(m.group(1))])
         if not s:

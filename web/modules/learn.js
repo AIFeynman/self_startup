@@ -35,6 +35,24 @@ const CSS = `
 .ln-badge.article { background: var(--ok-soft); color: var(--ok); }
 .ln-reads .ln-rd { display: grid; grid-template-columns: 7.5em 3em 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
 .ln-reads .ln-rd:first-of-type { border-top: 0; }
+/* 追问清单：逐题作答 + Agent 点评 */
+.ln-qa { display: grid; gap: 10px; }
+.ln-qa .qa { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.ln-qa .qa.done { background: var(--bg); }
+.ln-qa .qa .qh { display: flex; gap: 8px; align-items: baseline; }
+.ln-qa .qa .qh .no { flex: none; font: 700 12px var(--mono); color: var(--accent); }
+.ln-qa .qa .qh .qt { flex: 1; min-width: 0; } .ln-qa .qa .qh .qt p { margin: 0; }
+.ln-qa .qa .qh .tag { flex: none; }
+.ln-qa .qa textarea { width: 100%; margin-top: 8px; }
+.ln-qa .qa .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.ln-qa .qa .mine { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--line-2); white-space: pre-wrap; font-size: 13.5px; }
+.ln-qa .qa .rv { margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); font-size: 13.5px; background: var(--panel); }
+.ln-qa .qa .rv .row2 { display: flex; gap: 8px; margin: 3px 0; } .ln-qa .qa .rv .row2 > b { flex: none; min-width: 52px; font-size: 12px; }
+.ln-qa .qa .rv .ok > b { color: var(--ok); } .ln-qa .qa .rv .miss > b { color: var(--warn); }
+.ln-qa .qa .rv .better { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line-2); } .ln-qa .qa .rv .better p { margin: 4px 0; }
+.ln-qa .qa .rv .sc { float: right; font: 700 13px var(--mono); color: var(--accent); }
+.ln-qa .qa .rv .better .md { font-size: inherit; line-height: 1.65; } .ln-qa .qa .qt .md { font-size: 14.5px; }
+.ln-qa details.old { font-size: 13px; } .ln-qa details.old .qa { margin-top: 8px; }
 .ln-stars { display: inline-flex; gap: 0; }
 .ln-stars button { border: none; background: none; padding: 1px; color: var(--line-2); border-radius: 4px; }
 .ln-stars button svg { width: 17px; height: 17px; }
@@ -627,8 +645,11 @@ async function renderItem(el, ctx, iid) {
     const hasNote = typeof text === 'string' && text.trim();
     if (tldrBox && !(hasNote && /TL;?DR/i.test(text.slice(0, 3000)))) reader.append(tldrBox);
     if (hasNote) {
-      const note = text.replace(/^---[\s\S]*?---\s*/, '');
+      // 追问清单那一节不在正文里列，改成下面的逐题作答区
+      const note = text.replace(/^---[\s\S]*?---\s*/, '').replace(QA_SECTION, '');
       reader.append(h('div.card', {}, annotate(ctx, md(note), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
+      const qa = await api.get(`/api/learn/items/${it.id}/qa`).catch(() => null);
+      if (qa?.items?.length || qa?.earlier?.length) reader.append(qaSection(ctx, it, qa));
     }
     else if (isHtml) reader.append(h('div.card', {}, ui.empty('这是一份 HTML 教程', '点上方「打开 HTML 教程」在新标签页阅读')));
   }
@@ -657,6 +678,91 @@ async function renderItem(el, ctx, iid) {
   reader.append(ui.section('我的笔记'), h('div.card', {}, [notes,
     h('div.row', { style: { marginTop: '10px' } }, [h('span.muted', {}, '评分'), stars(h, ui, rating, (v) => { rating = v; saveNotes(); }), h('span.grow'), saved,
       h('button.primary', { onclick: saveNotes }, [ui.icon('check'), '保存'])])]));
+}
+
+// ---------- 追问清单：逐题作答，提交后 Agent 对照笔记 / 原文 / 源码点评 ----------
+const QA_SECTION = /^#{2,4}\s*追问清单[^\n]*\n[\s\S]*?(?=^#{1,4}\s|(?![\s\S]))/m;
+
+function qaSection(ctx, it, qa) {
+  const { h, ui } = ctx;
+  const done = qa.items.filter((x) => x.review).length;
+  const head = h('span', {}, qa.items.length ? `已点评 ${done}/${qa.items.length}` : '');
+  const list = h('div.ln-qa');
+  list.append(...qa.items.map((x) => qaCard(ctx, it, x, () => {
+    if (list.isConnected) head.textContent = `已点评 ${list.querySelectorAll(':scope > .qa.done').length}/${qa.items.length}`;
+  })));
+  if (qa.earlier?.length) {
+    list.append(h('details.old', {}, [h('summary.muted', {}, `以前的作答 ${qa.earlier.length} 条（笔记重新生成前的题）`),
+      ...qa.earlier.map((x) => qaCard(ctx, it, x, null, true))]));
+  }
+  return h('div', {}, [ui.section('追问清单', [head]),
+    h('div.muted', { style: { fontSize: '13px', margin: '-4px 0 10px' } }, '每题先自己写判断和理由，再提交给 Agent：它会对照笔记、原文和源码点评，并给出带出处的参考答案。作答和点评都会进学习记录和复盘。'),
+    list]);
+}
+
+function qaCard(ctx, it, x, onChange, readonly = false) {
+  const { api, h, md, toast, openChat } = ctx;
+  let c = x;
+  const draftKey = `ln-qa-${it.id}-${x.n}`;
+  let draft = c.answer || '';
+  if (!draft) { try { draft = localStorage.getItem(draftKey) || ''; } catch { /* ignore */ } }
+  const ta = h('textarea', { rows: 3, value: draft, placeholder: '我的判断 + 理由（不确定也可以写「不确定，我猜……」）。⌘+Enter 提交点评' });
+  ta.addEventListener('input', () => { try { localStorage.setItem(draftKey, ta.value); } catch { /* ignore */ } });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(true); } });
+  const card = h('div.qa');
+  let editing = !c.answer;
+  const submit = async (review) => {
+    if (!ta.value.trim()) { toast('先写下你的作答', true); ta.focus(); return; }
+    try { c = { n: x.n, ...(await api.post(`/api/learn/items/${it.id}/qa/${x.n}`, { q: x.q, answer: ta.value, review })) }; }
+    catch (e) { toast('保存失败：' + e.message, true); return; }
+    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+    editing = false;
+    draw();
+    if (c.status === 'reviewing') poll();
+  };
+  const poll = async () => {
+    await api.waitJob(c.job_id, null, 3000).catch(() => {});
+    const r = await api.get(`/api/learn/items/${it.id}/qa`).catch(() => null);
+    const fresh = r?.items?.find((y) => y.n === x.n && y.q === x.q);
+    if (fresh) { c = fresh; draw(); }
+  };
+  const lst = (cls, label, arr) => (arr?.length ? h('div.row2.' + cls, {}, [h('b', {}, label), h('div', {}, arr.length > 1 ? h('ul', { style: { margin: 0, paddingLeft: '16px' } }, arr.map((y) => h('li', {}, y))) : arr[0])]) : null);
+  const statusTag = () => (c.status === 'reviewing' ? h('span.tag.warn', {}, '点评中')
+    : c.review ? h('span.tag' + (c.review.score >= 0.7 ? '.ok' : '.gray'), {}, `${Math.round(c.review.score * 100)}%`)
+      : c.status === 'failed' ? h('span.tag.err', {}, '点评失败') : c.answer ? h('span.tag.gray', {}, '已作答') : null);
+  const ask = () => openChat({ module: 'learn', ref: `learn:item:${it.id}`, title: '追问：' + (it.title || it.url).slice(0, 20) });
+  const draw = () => {
+    card.classList.toggle('done', !!c.review);
+    const kids = [h('div.qh', {}, [h('span.no', {}, `Q${x.n}`), h('div.qt', {}, md(x.q)), statusTag()])];
+    if (editing && !readonly) {
+      kids.push(ta, h('div.acts', {}, [
+        h('button.sm.primary', { onclick: () => submit(true) }, '提交，请 Agent 点评'),
+        h('button.sm', { onclick: () => submit(false) }, '只保存'),
+        c.answer ? h('button.sm.ghost', { onclick: () => { editing = false; ta.value = c.answer; draw(); } }, '取消') : null,
+      ]));
+    } else {
+      kids.push(h('div.mine', {}, c.answer));
+      const rv = c.review;
+      if (c.status === 'reviewing') kids.push(h('div.rv.muted.dots', {}, 'Agent 正在对照笔记和原文点评（约半分钟到两分钟）'));
+      else if (rv) {
+        kids.push(h('div.rv', {}, [h('span.sc', {}, `${Math.round((rv.score || 0) * 100)}%`),
+          lst('ok', '抓到了', rv.covered), lst('miss', '漏掉了', rv.missing),
+          rv.better ? h('div.better', {}, [h('b', {}, '参考答案：'), md(rv.better)]) : null]));
+      } else if (c.status === 'failed') kids.push(h('div.rv', { style: { color: 'var(--err)' } }, '点评失败，可以再提交一次'));
+      if (!readonly) {
+        kids.push(h('div.acts', {}, [
+          h('button.sm', { onclick: () => { editing = true; ta.value = c.answer; draw(); ta.focus(); } }, '改写作答'),
+          !rv && c.status !== 'reviewing' ? h('button.sm.outline', { onclick: () => { ta.value = c.answer; submit(true); } }, '请 Agent 点评') : null,
+          rv ? h('button.sm.ghost', { onclick: ask }, '接着追问') : null,
+        ]));
+      }
+    }
+    card.replaceChildren(...kids.filter(Boolean));
+    onChange?.();
+  };
+  draw();
+  if (c.status === 'reviewing') poll();
+  return card;
 }
 
 const back = (h, ui, href = '#learn', label = '深度学习') => h('a.ln-back', { href }, [ui.icon('arrow'), label]);

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -121,9 +122,19 @@ def user_lines(iid: int, date: str = "") -> list[dict]:
     return out
 
 
+def qa_answers(it: dict | None) -> list[dict]:
+    """追问清单里写过作答的题（含 Agent 点评），按编号排。"""
+    try:
+        qa = json.loads((it or {}).get("qa") or "{}")
+    except (TypeError, ValueError):
+        return []
+    return sorted((v for v in qa.values() if isinstance(v, dict) and (v.get("answer") or "").strip()), key=lambda v: v.get("at", ""))
+
+
 def kb_section(iid: int) -> str:
     ls = user_lines(iid)
-    if not ls:
+    answered = qa_answers(db.row("SELECT * FROM learn_items WHERE id=?", [iid]))
+    if not ls and not answered:
         return ""
     asks = [x for x in ls if x["kind"] == "ask"]
     thoughts = [x for x in ls if x["kind"] == "thought"]
@@ -132,6 +143,12 @@ def kb_section(iid: int) -> str:
         body += ["### 感想"] + [f"- {x['at'][:16].replace('T', ' ')} {x['text']}" for x in thoughts]
     if asks:
         body += ["### 追问"] + [f"- {x['at'][:16].replace('T', ' ')} {x['text']}" for x in asks]
+    if answered:
+        body.append("### 追问清单作答")
+        for v in answered:
+            rv = v.get("review") or {}
+            body.append(f"- **{v.get('q', '')}**\n  我答：{v['answer']}"
+                        + (f"\n  Agent 点评 {round(100 * float(rv.get('score') or 0))}%：{rv.get('better', '')}" if rv else ""))
     return "\n".join(body)
 
 
@@ -152,12 +169,12 @@ def ensure_task(it: dict, date: str = "") -> dict | None:
 
 
 def sync_task(iid: int) -> None:
-    """文档好了算一半；追问 / 写感想 / 写笔记 / 打分算读完。只往前推，不改用户手动设的完成或放弃。"""
+    """文档好了算一半；追问 / 写感想 / 答追问清单 / 写笔记 / 打分算读完。只往前推，不改用户手动设的完成或放弃。"""
     t = task_of(iid)
     it = db.row("SELECT * FROM learn_items WHERE id=?", [iid])
     if not t or not it or t["status"] in ("done", "dropped"):
         return
-    engaged = bool(user_lines(iid)) or bool((it.get("my_notes") or "").strip()) or bool(it.get("rating"))
+    engaged = bool(user_lines(iid)) or bool(qa_answers(it)) or bool((it.get("my_notes") or "").strip()) or bool(it.get("rating"))
     if engaged:
         tasks.patch(t["id"], {"status": "done", "progress": 100})
     elif it["status"] == "done" and (t.get("progress") or 0) < 50:
