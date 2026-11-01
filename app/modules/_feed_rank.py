@@ -38,6 +38,7 @@ VELOCITY_MIN_PER_DAY, VELOCITY_MAX_AGE_DAYS = 500, 7
 PIN_DAYS, PIN_MAX, PICKS_OFFICIAL = 3, 8, 2
 # 新增标识：第一次收进来不到 NEW_HOURS 小时的标「新」；在榜 STALE_DAYS 天以上的标「在榜 N 天」，一眼分出长期霸榜的
 NEW_HOURS, STALE_DAYS = 24, 3
+FIRST_SEEN_LEGACY = "2026-10-31T00:00:00+00:00"   # 上线前收的条目再被抓到时补这个时间，在榜天数从上线算起（是下限）
 PIN_MIN_STARS = 100         # 没有 Jev 判断时，机构新仓库到这个星数才算重要（大厂随手建的示例 / 内部仓库很多）
 # 没有 Jev 判断时的关键词规则：Trending 项目是否和 AI 相关；官方博客哪些是 PR 水文
 AI_RE = re.compile(r"\b(ai|llms?|gpt|agents?|agentic|mcp|rag|claude|codex|copilot|gemini|openai|anthropic|deepseek|qwen|"
@@ -104,18 +105,14 @@ def item_time(it: dict, now: datetime) -> datetime | None:
     return d or _parse_dt(it.get("fetched_at") or "")
 
 
-def first_seen(it: dict) -> datetime | None:
-    """第一次收进来的时间（upsert 写 extra.first_seen）；这个字段之前就有的条目没记，用发布时间代替。"""
-    return _parse_dt((it.get("extra") or {}).get("first_seen") or "") or _parse_dt(it.get("date") or "")
-
-
 def seen_age(it: dict, now: datetime) -> tuple[bool, int]:
-    """(是否新增, 在榜天数)。在榜天数只对记了 first_seen 的条目算，发布时间不等于在榜时间。"""
-    d = first_seen(it)
+    """(是否新增, 在榜天数)，按 upsert 写的 extra.first_seen。没记的（上线前收的、之后没再抓到）不算新增：
+    不能拿发布时间代替，Trending 仓库的日期是最近一次 push，天天在榜的会一直显示「新」。"""
+    d = _parse_dt((it.get("extra") or {}).get("first_seen") or "")
     if not d:
         return False, 0
-    days = int((now - d).total_seconds() // 86400) if (it.get("extra") or {}).get("first_seen") else 0
-    return (now - d).total_seconds() < NEW_HOURS * 3600, days
+    age = (now - d).total_seconds()
+    return age < NEW_HOURS * 3600, int(age // 86400)
 
 
 def _parse_dt(s: str) -> datetime | None:

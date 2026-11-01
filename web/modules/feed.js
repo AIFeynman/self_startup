@@ -260,7 +260,7 @@ export default {
     const logClick = (x) => { api.post('/api/feed/click', { id: x.id }).catch(() => {}); };
     // 新增 / 在榜天数：第一次收进来不到 24 小时标「新」，在榜 3 天以上标天数，长期霸榜的一眼能看出来
     const ageTag = (x) => x.new ? h('span.fd-new', { title: '24 小时内新收录' }, '新')
-      : x.seen_days >= 3 ? h('span.fd-old', { title: '第一次收录到现在的天数' }, `在榜 ${x.seen_days} 天`) : null;
+      : x.seen_days >= 3 ? h('span.fd-old', { title: '第一次收录到现在的天数（10-31 之前收的从 10-31 算起）' }, `在榜 ${x.seen_days} 天`) : null;
     const titleLink = (x) => h('a.fd-t', { href: x.url, target: '_blank', rel: 'noopener', onclick: () => logClick(x), onauxclick: () => logClick(x) }, x.title);
     // 一句话判断：已写的直接显示，点「编辑」展开输入框；论文每天写 1–2 篇是学习习惯之一
     const verdictBox = (entry) => {
