@@ -15,8 +15,9 @@ class FakeProc:
 
 
 @pytest.fixture
-def fakes(monkeypatch, client):
+def fakes(monkeypatch, client, tmp_path):
     submitted, calls = [], []
+    monkeypatch.setattr(R.grok_local, "DEFAULT_DIR", tmp_path / "grok-app")  # 不读真实的 Grok Bot 聊天记录
 
     def fake_submit(module, prompt, *, ref="", engine="", **kw):
         submitted.append({"module": module, "prompt": prompt, "ref": ref, "engine": engine})
@@ -145,6 +146,33 @@ def test_grokbot_send_and_wait(client, fakes, monkeypatch, tmp_path):
     res = client.get(f"/api/research/results/{r['results'][0]['id']}").json()
     assert seen == ["status", "send", "wait"] and res["status"] == "done" and res["content"] == "推特结论"
     assert res["request_id"] == "a" * 32
+
+
+def _grok_chat(path: Path, rid: str, answer: str, streaming=False) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    entries = [{"kind": "message", "role": "user", "content": "别的话题", "requestId": "u1"},
+               {"kind": "send-message", "message": {"type": "text", "content": f"回传失败，request_id 是 {rid}，完整结果在下一条。"},
+                "requestId": "t1", "timestampMs": 1},
+               {"kind": "send-message", "message": {"type": "text", "content": answer}, "requestId": "t1", "timestampMs": 2,
+                "isStreaming": streaming}]
+    (path / "chat.blob").write_text(json.dumps({"schemaVersion": 1, "value": {"entries": entries}}, ensure_ascii=False), "utf-8")
+
+
+def test_grokbot_reply_from_app_chat(client, fakes, monkeypatch, tmp_path):
+    """回传没到本机（wait 一直 pending）时，从 Grok Bot 桌面版聊天记录按 request_id 取回答。"""
+    rid, chat = "b" * 32, tmp_path / "grok-app"
+    answer = "# X 上的结论\n" + "要点。" * 100
+    assert R.grok_local.find_reply(rid) == ""
+    _grok_chat(chat, rid, answer, streaming=True)
+    assert R.grok_local.find_reply(rid) == ""  # 还在输出的不取
+    _grok_chat(chat, rid, answer)
+    assert R.grok_local.find_reply(rid) == answer.strip()  # 只取正文，不要带 request_id 的状态说明
+    assert R.grok_local.find_reply("c" * 32) == ""
+    r = client.post("/api/research", json={"topic": "grok 本机记录", "engines": ["muse"]}).json()
+    res_id = r["results"][0]["id"]
+    R.db.update("research_results", res_id, {"engine": "grokbot", "status": "timeout", "request_id": rid})
+    x = client.get(f"/api/research/{r['id']}").json()["results"][0]
+    assert x["status"] == "done" and x["content"] == answer.strip() and x["doc_id"]
 
 
 def test_manual_doc(client):

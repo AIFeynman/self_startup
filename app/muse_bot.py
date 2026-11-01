@@ -4,7 +4,7 @@ Muse 没有 API / CLI，这里用 Playwright 驱动本机 Google Chrome 打开�
 - 浏览器配置放在 <DATA_DIR>/muse-browser，登录一次之后一直有效；
 - 没登录（找不到输入框）时结果记为 awaiting_login，窗口保持打开，用户登录后自动继续提问；
 - 每次先点「新旁聊」开一个空对话（不混进主要聊天的旧内容），把 brief 填进输入框发送；
-- 回答按页面里给读屏用的「助手消息：」标签取，只取发送之后新出现的那些，文字连续一段时间不变视为答完；
+- 回答取对话区（role=log）里最后一条「你：」提问之后的全部消息，文字连续一段时间不变视为答完；
 - 服务重启不影响它；同一时间只有一个进程用这个浏览器配置（文件锁排队）。
 页面结构可能改版：输入框 / 回答的选择器可在 engines.muse.selectors 里覆盖；自动失败时退回手动粘贴。
 """
@@ -22,8 +22,19 @@ log = logging.getLogger("muse_bot")
 PROFILE = db.DATA_DIR / "muse-browser"
 INPUT = 'textarea[aria-label="消息"], textarea:not([aria-label="搜索"]), [contenteditable="true"]'
 NEW_CHAT = 'button[aria-label="新旁聊"], [data-testid="hatch-chat-compose"]'
-MSGS = '[role="log"] span.sr-only'
-ASSISTANT = "助手消息："
+LOG = '[role="log"]'
+# 对话区每个直接子节点是一组消息；用户消息带读屏标签「你：」（主要聊天里是「用户消息：」），回答没有或是「助手消息：」
+REPLIES_JS = r"""(sel) => {
+  const log = document.querySelector(sel); if (!log) return [];
+  const groups = [...log.children].map(c => {
+    const labels = [...c.querySelectorAll('.sr-only')].map(s => s.textContent.trim());
+    let t = c.innerText.trim();
+    for (const l of labels) if (/^(你|用户消息|助手消息)[：:]$/.test(l)) t = t.replace(l, '').trim();
+    return {user: labels.some(l => /^(你|用户消息)[：:]/.test(l)), t: t.replace(/^助手消息[：:]\s*/, '')};
+  });
+  let i = groups.map(g => g.user).lastIndexOf(true);
+  return i < 0 ? [] : groups.slice(i + 1).map(g => g.t).filter(t => t && !/^\d{1,2}:\d{2}$/.test(t));
+}"""
 STOP = 'button[aria-label*="Stop" i], button[aria-label*="停止"]'
 LOGIN_WAIT = 600     # 等用户登录的最长秒数
 ANSWER_WAIT = 900    # Muse 是 Agent，可能跑很久
@@ -40,14 +51,13 @@ def _set(res_id: int, **data) -> None:
 
 
 def _replies(page, sels: dict) -> list[str]:
-    """页面上所有助手回答；配置了 selectors.answer 时按它取，否则按「助手消息：」读屏标签取。"""
+    """最后一次提问之后的回答（可能分多条）；配置了 selectors.answer 时按它取全部匹配。"""
     try:
         if sels.get("answer"):
             return [t.strip() for t in page.locator(sels["answer"]).all_inner_texts()]
-        texts = page.locator(sels.get("messages") or MSGS).all_text_contents()
+        return page.evaluate(REPLIES_JS, sels.get("log") or LOG)
     except Exception:  # noqa: BLE001
         return []
-    return [t[len(ASSISTANT):].strip() for t in texts if t.startswith(ASSISTANT)]
 
 
 def _new_chat(page, url: str, box) -> None:
@@ -86,7 +96,6 @@ def run(res_id: int) -> None:
                     box.wait_for(state="visible", timeout=LOGIN_WAIT * 1000)
                     db.update("research_results", res_id, {"status": "running", "error": ""})
                 _new_chat(page, cfg["url"], box)
-                before = len(_replies(page, sels))
                 box.click()
                 box.fill(brief)
                 page.wait_for_timeout(500)
@@ -99,15 +108,15 @@ def run(res_id: int) -> None:
                 deadline, last, stable_since = time.monotonic() + ANSWER_WAIT, None, time.monotonic()
                 while time.monotonic() < deadline:
                     page.wait_for_timeout(3000)
-                    now = _replies(page, sels)[before:]
+                    now = _replies(page, sels)
                     if now != last:
                         last, stable_since = now, time.monotonic()
                         continue
                     busy = page.locator(sels.get("stop") or STOP).count() > 0
                     if now and not busy and time.monotonic() - stable_since >= SETTLE:
                         break
-                ans = "\n\n".join(_replies(page, sels)[before:]).strip()
-                if len(ans) < 20:
+                ans = "\n\n".join(_replies(page, sels)).strip()
+                if not ans:
                     raise RuntimeError("没取到回答（页面结构可能变了）")
                 _set(res_id, status="done", content=ans, error="")
             finally:

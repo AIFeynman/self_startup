@@ -45,7 +45,8 @@ DEFAULTS: dict = {
         # proxy：只给 Codex 用的代理，如 "http://127.0.0.1:12001"；空 = 直连；代理端口没开时自动直连
         "codex": {"bin": "codex", "model": "", "sandbox": "workspace-write", "proxy": ""},
         # 调研引擎：GrokBot 走 codex skill 里的 webhook 脚本；Muse 无 CLI，走「复制 brief → 打开网页版（mode=app 时开桌面 App）→ 粘贴结果」
-        "grokbot": {"script": str(Path.home() / ".codex/skills/grokbot-webhook/scripts/grokbot.py")},
+        # app_data：Grok Bot 桌面版聊天记录目录，回传没到本机时从这里按 request_id 取回答（留空用默认位置）
+        "grokbot": {"script": str(Path.home() / ".codex/skills/grokbot-webhook/scripts/grokbot.py"), "app_data": ""},
         # mode：auto = 用 Playwright 驱动本机 Chrome 自动提问取回答（首次在弹出窗口登录）；web / app = 只复制提问并打开，手动粘贴
         # selectors（可选）：页面改版时覆盖 input / send / stop / answer 选择器
         "muse": {"mode": "auto", "url": "https://muse.ai", "app": "Muse"},

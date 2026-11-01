@@ -22,7 +22,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import agent, db, jobs, settings
+from .. import agent, db, grok_local, jobs, settings
 
 log = logging.getLogger(__name__)
 
@@ -349,6 +349,24 @@ def _grok_handle(res_id: int, rc: int, objs: list[dict], raw: str) -> bool:
     return False
 
 
+def _grok_from_app(res_id: int) -> bool:
+    """回传没到本机时，从 Grok Bot 桌面版本机聊天记录里按 request_id 取回答；取到记为完成。"""
+    x = _result(res_id)
+    ans = grok_local.find_reply(x["request_id"])
+    if not ans:
+        return False
+    _set_result(res_id, status="done", content=ans, error="")
+    log.info("grokbot %s: 回传未到，已从 Grok Bot 聊天记录取回答", res_id)
+    return True
+
+
+def _check_grok(rid: int) -> None:
+    """等待超时的 GrokBot 结果，打开调研时再到 Grok Bot 聊天记录里找一次回答。"""
+    for x in _results(rid):
+        if x["engine"] == "grokbot" and x["status"] == "timeout" and x["request_id"]:
+            _grok_from_app(x["id"])
+
+
 _waiting: set[int] = set()
 _wait_lock = threading.Lock()
 
@@ -365,13 +383,15 @@ def _grok_wait(res_id: int, seconds: float = GROK_WAIT_SECONDS) -> None:
         while time.monotonic() < deadline:
             if _result(res_id)["status"] not in ("waiting", "running"):
                 return  # 用户已手动粘贴回答（Grok Bot 没把结果回传到本机时），不再等，也不覆盖
+            if _grok_from_app(res_id):
+                return
             left = max(1, min(50, int(deadline - time.monotonic())))
             rc, objs, raw = _grok_cmd("wait", "--request-id", req, "--timeout", str(left), timeout=left + 30)
             if _grok_handle(res_id, rc, objs, raw):
                 return
         if _result(res_id)["status"] in ("waiting", "running"):
             _set_result(res_id, status="timeout", error=f"等待超时，request_id={req} 仍在处理，可稍后「继续等待」。"
-                        "如果 Grok Bot 聊天里已经有回答，多半是它没在本机执行回传命令，把回答粘贴到这里即可。")
+                        "打开本页时会自动到 Grok Bot 聊天记录里找回答；找不到可把 Grok Bot 的回答粘贴到这里。")
     except Exception as e:  # noqa: BLE001
         log.exception("grokbot wait %s", res_id)
         _set_result(res_id, status="failed", error=f"GrokBot 等待异常：{e}")
@@ -612,8 +632,8 @@ def resume_result(res_id: int):
     x = _result(res_id)
     if x["engine"] != "grokbot" or not x["request_id"]:
         raise HTTPException(400, "只有已发送的 GrokBot 请求可以继续等待")
-    if x["status"] in ("done",):
-        return x
+    if x["status"] in ("done",) or _grok_from_app(res_id):
+        return _result(res_id)
     db.update("research_results", res_id, {"status": "waiting", "error": ""})
     _refresh(x["research_id"])
     _spawn(_grok_wait, res_id)
@@ -637,6 +657,7 @@ def get_research(rid: int):
     r = _research(rid)
     _resume_waiters(rid)
     _check_muse(rid)
+    _check_grok(rid)
     r["results"] = _results(rid)
     docs = {d["result_id"]: d["id"] for d in db.rows("SELECT id,result_id FROM research_docs WHERE research_id=? AND result_id IS NOT NULL", [rid])}
     for x in r["results"]:
