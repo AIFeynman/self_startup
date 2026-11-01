@@ -75,29 +75,56 @@ def learned_steps(date: str) -> list[dict]:
                    f"WHERE s.id IN ({','.join('?' * len(ids))}) ORDER BY s.id", list(ids))
 
 
-_SPLIT = re.compile(r"[：:·—\-|，,、（）()「」《》/]+")
+_SPLIT = re.compile(r"[：:·—|，,、（）()「」《》/&]+")
 
 
-def chapter_terms(s: dict) -> list[str]:
-    """判断「引用到这一章」用的词：章名、章名里够长的片段、知识卡标题、章节目录名 step-<id>。"""
-    title = (s.get("title") or "").strip()
-    terms = [title, f"step-{s['id']}"]
-    terms += [x.strip() for x in _SPLIT.split(title) if len(x.strip()) >= 4]
-    try:
-        cards = json.loads(s.get("cards") or "[]") if isinstance(s.get("cards"), str) else (s.get("cards") or [])
-    except ValueError:
-        cards = []
-    terms += [str(c.get("front") or "").strip() for c in cards[:8] if len(str(c.get("front") or "").strip()) >= 4]
+def _uniq(xs: list[str]) -> list[str]:
     out = []
-    for t in terms:
+    for t in xs:
         if t and t not in out:
             out.append(t)
     return out
 
 
-def _hit(text: str, terms: list[str]) -> str:
+def chapter_match(s: dict) -> tuple[list[str], list[str]]:
+    """判断「引用到这一章」用的词，分两档：
+    强词（出现一个就算）：完整章名、章节目录名 step-<id>、知识卡标题；
+    弱词（章名里的片段，如「底层逻辑」，太泛，同一处要出现两个不同的才算）。"""
+    title = (s.get("title") or "").strip()
+    try:
+        cards = json.loads(s.get("cards") or "[]") if isinstance(s.get("cards"), str) else (s.get("cards") or [])
+    except ValueError:
+        cards = []
+    strong = _uniq([title, f"step-{s['id']}"] + [str(c.get("front") or "").strip() for c in cards[:8] if len(str(c.get("front") or "").strip()) >= 6])
+    weak = _uniq([x.strip() for x in _SPLIT.split(title) if len(x.strip()) >= 4 and x.strip() != title and x.strip() not in strong])
+    return strong, weak
+
+
+def chapter_terms(s: dict) -> list[str]:
+    strong, weak = chapter_match(s)
+    return strong + weak
+
+
+def _hit(text: str, terms: tuple[list[str], list[str]]) -> str:
     low = text.lower()
-    return next((t for t in terms if t.lower() in low), "")
+    strong, weak = terms
+    t = next((t for t in strong if t.lower() in low), "")
+    if t:
+        return t
+    ws = [w for w in weak if w.lower() in low]
+    return " + ".join(ws[:2]) if len(ws) >= 2 else ""
+
+
+# 生成产物和平台自己的提示词模板不算「用到项目」：只看人写 / 人让 Agent 写的项目文档
+_GEN_DIRS = {"output", "outputs", "diagnostics", "logs", "log", "tmp", "cache", "dist", "build", "site-packages", "node_modules"}
+
+
+def _generated(d: str, rel: str) -> bool:
+    parts = Path(rel).parts[:-1]
+    if any(x.lower() in _GEN_DIRS for x in parts):
+        return True
+    # 平台仓库（含它的其它 checkout / worktree）里的 skills/ 是出章节用的提示词，不是应用
+    return parts[:1] == ("skills",) and (Path(d) / "app" / "modules" / "_habits.py").exists()
 
 
 def _day_sessions(date: str, scan: bool = True) -> list[dict]:
@@ -122,11 +149,13 @@ def _day_dirs(date: str, sessions: list[dict]) -> list[str]:
     return dirs[:12]
 
 
-def _doc_hits(d: str, date: str, terms: list[str]) -> list[dict]:
+def _doc_hits(d: str, date: str, terms: tuple[list[str], list[str]]) -> list[dict]:
     from . import review
     out = []
-    for line in review.recent_docs(d, date, limit=30):
+    for line in review.recent_docs(d, date, limit=40):
         rel = line.split(" ", 1)[1]
+        if _generated(d, rel):
+            continue
         try:
             text = (Path(d) / rel).read_text(errors="ignore")[:200_000]
         except OSError:
@@ -164,7 +193,7 @@ def apply_status(date: str, scan: bool = True) -> dict:
     dirs = _day_dirs(date, sessions)
     out = []
     for s in steps:
-        terms = chapter_terms(s)
+        terms = chapter_match(s)
         refs = list(manual.get(s["id"], []))
         for ss in sessions:
             for m in ss.get("messages") or []:

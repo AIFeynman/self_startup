@@ -56,10 +56,14 @@ def test_apply_record_and_status(client, fake_submit):
 
 def test_chapter_terms_and_hit():
     s = {"id": 7, "title": "错误分析：二元评判与 TPR/TNR", "cards": '[{"front": "二元评判为什么好"}, {"front": "短"}]'}
-    terms = _habits.chapter_terms(s)
-    assert terms[:2] == ["错误分析：二元评判与 TPR/TNR", "step-7"] and "二元评判为什么好" in terms and "短" not in terms
-    assert _habits._hit("今天给讲解评估做了错误分析", terms) == "错误分析"
-    assert _habits._hit("无关", terms) == ""
+    strong, weak = m = _habits.chapter_match(s)
+    assert strong == ["错误分析：二元评判与 TPR/TNR", "step-7", "二元评判为什么好"] and "错误分析" in weak
+    assert _habits._hit("改了 二元评判为什么好 那一段", m) == "二元评判为什么好"
+    # 章名片段太泛：只出现一个不算，两个不同片段同时出现才算
+    assert _habits._hit("今天给讲解评估做了错误分析", m) == ""
+    assert _habits._hit("错误分析之后把二元评判与 TPR 一起算", m) == "错误分析 + 二元评判与 TPR"
+    assert _habits._generated("/x/repo", "output/run1/diagnostics/recall_prompt.md")
+    assert not _habits._generated("/x/repo", "docs/eval.md")
 
 
 def test_paper_task_and_verdict_note(client):

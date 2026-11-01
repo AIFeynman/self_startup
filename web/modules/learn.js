@@ -205,11 +205,14 @@ const CSS = `
 .ln-chap .md .dg-parts { display: grid; gap: 6px; }
 .ln-chap .md .dg-parts label { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: start; }
 .ln-chap .md .dg-parts label > span { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 7px; }
-.ln-apply .ln-applyform { display: grid; grid-template-columns: 1fr 2fr 1.4fr auto; gap: 6px; margin-top: 10px; }
+.ln-apply .ln-applyform { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 10px; }
+.ln-apply .ln-applyform .what { grid-column: 1 / -1; }
 @media (max-width: 720px) { .ln-apply .ln-applyform { grid-template-columns: 1fr; } }
 .ln-refs { margin-top: 8px; font-size: 13px; display: grid; gap: 4px; }
 .ln-habits { display: grid; gap: 6px; margin: 10px 0; padding: 10px 14px; }
-.ln-habit { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: inherit; text-decoration: none; }
+.ln-habit { display: grid; grid-template-columns: auto 9em 1fr; gap: 10px; align-items: baseline; font-size: 13px; color: inherit; text-decoration: none; }
+.ln-habit .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .ln-habit { grid-template-columns: auto 1fr; } .ln-habit .muted { grid-column: 1 / -1; white-space: normal; } }
 a.ln-habit:hover b { text-decoration: underline; }
 .ln-chkstat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; font-size: 13px; }
 .ln-chap .md .dg-ptags { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; }
@@ -510,13 +513,14 @@ async function renderHome(el, ctx, scrollToPlans) {
   const doneSteps = plans.reduce((a, p) => a + p.progress.done, 0);
   el.append(
     ui.pageHead('深度学习', `${items.length} 篇深读 · ${plans.length} 个学习计划 · 已完成 ${doneSteps}/${totalSteps} 步`),
-    box, optsRow, editRow, habitsCard(ctx),
+    box, optsRow, editRow,
     ui.chips([
       { label: '继续上次的计划', icon: 'arrow', onClick: () => (latestPlan ? (location.hash = `#learn/plan/${latestPlan.id}`) : toast('还没有学习计划', true)) },
       { label: '深读一篇论文', icon: 'doc', onClick: () => { setMode('item'); box.focus(); } },
       { label: '给我一个学习计划', icon: 'plan', onClick: () => { setMode('plan'); box.focus(); } },
       { label: '根据反馈调整', icon: 'refresh', onClick: () => (latestPlan ? (location.hash = `#learn/plan/${latestPlan.id}/adapt`) : toast('还没有学习计划', true)) },
     ]),
+    habitsCard(ctx),
   );
   update();
 
@@ -1193,7 +1197,7 @@ function checkCard(ctx, card, s, idx) {
   const initial = () => c?.parts || (c?.answer ? { 结论: c.answer } : null);
   let draft = initial();
   if (!draft) { try { draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { draft = null; } }
-  const fields = Object.fromEntries(CHECK_PARTS.map(([k, , ph]) => [k, h('textarea', { rows: k === '结论' ? 1 : 2, placeholder: ph, value: draft?.[k] || '' })]));
+  const fields = Object.fromEntries(CHECK_PARTS.map(([k, , ph]) => [k, h('textarea', { rows: k === '结论' && (draft?.[k] || '').length < 30 ? 1 : 2, placeholder: ph, value: draft?.[k] || '' })]));
   const parts = () => Object.fromEntries(CHECK_PARTS.map(([k]) => [k, fields[k].value.trim()]).filter(([, v]) => v));
   const missing = () => CHECK_REQUIRED.filter((k) => !fields[k].value.trim());
   Object.values(fields).forEach((ta) => ta.addEventListener('input', () => { try { localStorage.setItem(draftKey, JSON.stringify(parts())); } catch { /* ignore */ } }));
@@ -1329,24 +1333,24 @@ function applyCard(ctx, s) {
     const t = a.today || {};
     const refs = a.records || [];
     const kindName = { manual: '手动记录', session: '会话', doc: '文档', commit: '提交' };
-    const proj = h('input', { placeholder: '项目（例如 self_startup）' });
-    const what = h('input', { placeholder: '用了这一章的哪一条、怎么用的' });
-    const ev = h('input', { placeholder: '证据（可选）：commit / 文档路径 / 会话链接' });
-    box.replaceChildren(
+    const proj = h('input', { placeholder: '项目，例如 self_startup' });
+    const what = h('input.what', { placeholder: '用了这一章的哪一条、怎么用的' });
+    const ev = h('input', { placeholder: '证据（可选）：commit / 文档 / 会话' });
+    box.replaceChildren(...[
       h('div.row', {}, [h('h3', {}, '学完今天就用一次'), h('span.grow'),
-        t.applied ? h('span.tag.ok', {}, '今天已用到项目') : t.learned ? h('span.tag.warn', {}, '今天学完了，还没用到项目') : h('span.muted', {}, '学完当天在一个项目里用一次')]),
+        t.applied ? h('span.tag.ok', {}, '今天已用到项目') : a.today ? h('span.tag.warn', {}, '今天学完了，还没用到项目') : h('span.muted', {}, '学完当天在一个项目里用一次')]),
       h('div.muted', {}, '复制下面的提示发给项目里的 Claude Code，让它把这章的一条方法用到当前工作上；会话、文档或提交里提到这一章就自动算数。'),
       h('div.row', { style: { marginTop: '8px' } }, [
         h('button.sm.primary', { onclick: async () => { try { await navigator.clipboard.writeText(a.prompt); toast('已复制，贴到项目会话里'); } catch { toast('复制失败', true); } } }, [ui.icon('doc'), ' 复制给 Claude Code 的提示']),
-        h('span.muted', {}, '识别词：' + (a.terms || []).slice(0, 4).join(' / '))]),
+        h('span.muted', { title: (a.terms || []).join('\n') }, `自动识别 ${(a.terms || []).length} 个词（章名、知识卡标题…）`)]),
       (t.refs || []).length ? h('div.ln-refs', {}, t.refs.map((r) => h('div', {}, [h('span.tag.gray', {}, kindName[r.kind] || r.kind), ' ', r.where, r.term ? h('span.muted', {}, ` · ${r.term}`) : null]))) : null,
-      h('div.ln-applyform', {}, [proj, what, ev, h('button.sm', { onclick: async () => {
+      h('div.ln-applyform', {}, [what, proj, ev, h('button.sm', { onclick: async () => {
         if (!what.value.trim()) { toast('写一句用了哪一条', true); return; }
         try { await api.post(`/api/learn/steps/${s.id}/apply`, { project: proj.value.trim(), what: what.value.trim(), evidence: ev.value.trim() }); toast('已记录'); load(); }
         catch (e) { toast('记录失败：' + e.message, true); }
       } }, '手动记一条')]),
-      refs.length ? h('div.ln-refs', {}, [h('div.card-label', {}, '历次应用'), ...refs.slice(0, 6).map((r) => h('div', {}, [h('span.muted', {}, (r.at || '').slice(0, 16) + ' '), r.project ? h('b', {}, r.project + ' ') : null, r.what, r.evidence ? h('span.muted', {}, ` · ${r.evidence}`) : null]))]) : null,
-    );
+      refs.length ? h('div.ln-refs', {}, [h('div.card-label', {}, '历次应用'), ...refs.slice(0, 6).map((r) => h('div', {}, [h('span.muted', {}, (r.at || '').slice(0, 16).replace('T', ' ') + ' '), r.project ? h('b', {}, r.project + ' ') : null, r.what, r.evidence ? h('span.muted', {}, ` · ${r.evidence}`) : null]))]) : null,
+    ].filter(Boolean));
   };
   load();
   return box;
@@ -1359,12 +1363,16 @@ function habitsCard(ctx) {
   api.get('/api/learn/habits').then((x) => {
     const k = x.check || {}, a = x.apply || {}, p = x.paper || {};
     const recent = k.recent_avg ?? null;
-    const item = (ok, title, text, href) => h(href ? 'a.ln-habit' : 'div.ln-habit', href ? { href } : {}, [h('span.tag' + (ok === null ? '.gray' : ok ? '.ok' : '.warn'), {}, ok === null ? '—' : ok ? '达标' : '未达标'), h('b', {}, title), h('span.muted', {}, text)]);
+    const item = (ok, title, text, href) => h(href ? 'a.ln-habit' : 'div.ln-habit', href ? { href } : {}, [h('span.tag' + (ok === null ? '.gray' : ok ? '.ok' : '.warn'), {}, ok === null ? '—' : ok ? '达标' : '未达标'), h('b', {}, title), h('span.muted', { title: text }, text)]);
     box.replaceChildren(h('div.card.ln-habits', {}, [
       item(recent === null ? null : recent >= k.target, '停一下', recent === null ? `近 ${k.days || 7} 天没作答 · 目标 ≥ ${k.target || 65}%`
         : `近 ${k.days} 天 ${recent}% · 目标 ≥ ${k.target}%` + (k.weakest ? ` · 最弱：${(CHECK_PARTS.find(([key]) => key === k.weakest) || [])[1] || k.weakest}` : '')),
-      item(a.total ? a.applied >= a.total : null, '学完当天用到项目', a.total ? `今天学完 ${a.total} 章，已用 ${a.applied} 章` + (a.applied < a.total ? '：' + a.learned.filter((c) => !c.applied).map((c) => c.title).join('、').slice(0, 40) : '') : '今天还没学完新章节',
-        a.total && a.applied < a.total ? chapterHref(a.learned.find((c) => !c.applied).plan_id, a.learned.find((c) => !c.applied).step_id) : ''),
+      (() => {
+        const miss = (a.learned || []).filter((c) => !c.applied);
+        const first = miss[0];
+        return item(a.total ? !miss.length : null, '学完当天用到项目', a.total ? `今天学完 ${a.total} 章，已用到项目 ${a.applied} 章` + (first ? ` · 下一章去用：${first.title.split(/[：:]/)[0]}` : '') : '今天还没学完新章节',
+          first ? chapterHref(first.plan_id, first.step_id) : '');
+      })(),
       item(p.done, '每日论文', p.done ? `已写 ${p.count}/${p.goal} 篇一句话判断 → ${p.kb_path}` : `今天还没读 · ${p.minutes} 分钟，在信息推荐里挑 1–${p.goal} 篇写一句话判断`, '#feed'),
     ]));
   }).catch(() => {});
