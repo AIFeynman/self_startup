@@ -519,7 +519,7 @@ def test_item_qa_answer_and_review(client, fake_submit):
     # 重新生成笔记换了题：同一编号的旧作答挪进 earlier，不被覆盖
     (out / "note.md").write_text("# 论文\n\n## 追问清单\n1. 新问题？\n", "utf-8")
     qa = client.get(f"/api/learn/items/{it['id']}/qa").json()
-    assert qa["items"] == [{"n": 1, "q": "新问题？"}] and qa["earlier"][0]["answer"] == "改了"
+    assert qa["items"] == [{"n": 1, "q": "新问题？"}] and qa["earlier"][0]["answer"] == "改了" and qa["mode"] == "open"
     client.post(url, json={"q": "新问题？", "answer": "新答"})
     qa = client.get(f"/api/learn/items/{it['id']}/qa").json()
     assert qa["items"][0]["answer"] == "新答" and [x["answer"] for x in qa["earlier"]] == ["改了"]
@@ -532,6 +532,75 @@ def test_item_prompts_require_key_figures(tmp_path, kind, depth):
     p = learn.item_prompt(it, tmp_path)
     assert "关键图" in p and f"{tmp_path}/figs" in p and "](figs/fig1.png)" in p and "Read 工具" in p
     if kind == "article":
-        assert "只写 note.md 和 figs/" in p
+        assert "只写 note.md、qa.json 和 figs/" in p
     if kind == "paper":
         assert "pdftoppm" in p and "arxiv.org/html" in p
+
+
+@pytest.mark.parametrize("kind,depth", [("article", ""), ("paper", ""), ("github", "quick"), ("github", "full")])
+def test_item_prompts_require_choice_quiz(tmp_path, kind, depth):
+    """四类深读都要写 qa.json 练习题：选择题为主，开放题最多 2 道。"""
+    it = {"id": 1, "kind": kind, "depth": depth, "url": "https://example.com/x", "focus": ""}
+    p = learn.item_prompt(it, tmp_path)
+    assert f"{tmp_path}/qa.json" in p and "4 道选择题 + 1 道开放题" in p and "最多 2 道" in p
+
+
+ITEM_QUIZ = {"questions": [
+    {"id": "q1", "type": "choice", "q": "pass^k 衡量什么？", "options": ["单次成功率", "k 次都成功的稳定性", "延迟", "成本"], "answer": 1,
+     "explain": "见 §3：k 次全部成功。", "section": "作者在说什么", "dim": "理解"},
+    {"id": "q2", "type": "choice", "q": "坏题", "options": ["只有一个"], "answer": 0},
+    {"id": "q3", "type": "choice", "q": "作者最弱的证据是？", "options": ["a", "b", "c", "d"], "answer": 3, "explain": "d"},
+    {"id": "q4", "type": "short", "q": "怎么用到我的项目？", "reference": "先测稳定性", "rubric": ["给出 k"]},
+    {"id": "q5", "type": "short", "q": "开放题二？", "reference": "x"},
+    {"id": "q6", "type": "short", "q": "开放题三（超出上限）？"},
+]}
+
+
+def test_item_choice_quiz(client, fake_submit):
+    """练习题：选择题当场判、答过锁定、只在答过后给答案；开放题走 Agent 点评；老笔记可以让 Agent 出题。"""
+    it = client.post("/api/learn/items", json={"url": "https://arxiv.org/abs/2401.88888"}).json()
+    out = learn._item_dir(it)
+    (out / "note.md").write_text("# 论文\n\n## 追问清单\n1. 老问题？\n", "utf-8")
+    learn.on_job_done(_job(fake_submit[-1]["id"], "完成"))
+    base = f"/api/learn/items/{it['id']}/qa"
+    client.post(base + "/1", json={"q": "老问题？", "answer": "老答"})
+    # 老笔记：没有练习题，出题任务跑起来；不重复起
+    qa = client.get(base).json()
+    assert qa["mode"] == "open" and qa["gen"] is None and qa["items"][0]["answer"] == "老答"
+    g = client.post(base + "/generate").json()
+    assert g["status"] == "generating" and fake_submit[-1]["ref"] == f"learn:item:{it['id']}:qagen"
+    assert str(out / "qa.json") in fake_submit[-1]["prompt"]
+    assert client.post(base + "/generate").json()["job_id"] == g["job_id"]
+    assert client.get(base).json()["gen"]["status"] == "generating"
+    # 写坏了 → 删掉、显示失败
+    (out / "qa.json").write_text("{坏", "utf-8")
+    learn.on_job_done(_job(g["job_id"], "已写好"))
+    assert not (out / "qa.json").exists() and client.get(base).json()["gen"]["status"] == "failed"
+    # 写好了：坏题丢掉，开放题最多 2 道；选择题不提前给答案
+    (out / "qa.json").write_text(json.dumps(ITEM_QUIZ, ensure_ascii=False), "utf-8")
+    qa = client.get(base).json()
+    assert qa["mode"] == "quiz" and qa["gen"] is None
+    assert [x["type"] for x in qa["items"]] == ["choice", "choice", "short", "short"]
+    c1 = qa["items"][0]
+    assert c1["options"][1] == "k 次都成功的稳定性" and "right" not in c1 and "explain" not in c1 and "answer" not in c1
+    assert qa["earlier"][0]["answer"] == "老答"   # 老开放题的作答不丢
+    # 选择题：判对错、给解析，答过锁定
+    r = client.post(base + "/1", json={"q": c1["q"], "choice": 0}).json()
+    assert r["correct"] is False and r["right"] == 1 and "§3" in r["explain"] and r["review"]["score"] == 0
+    assert client.post(base + "/1", json={"q": c1["q"], "choice": 1}).json()["correct"] is False
+    assert client.post(base + "/2", json={"q": "作者最弱的证据是？", "choice": 3}).json()["correct"] is True
+    assert client.post(base + "/2", json={"q": "作者最弱的证据是？"}).status_code == 200   # 已答过直接返回
+    assert client.post(base + "/1", json={"q": "别的题", "choice": 0}).status_code == 409
+    qa = client.get(base).json()
+    assert qa["items"][0]["right"] == 1 and qa["items"][0]["choice"] == 0 and qa["items"][1]["correct"] is True
+    # 开放题：带上出题时的参考要点交给 Agent 点评
+    c = client.post(base + "/3", json={"q": "怎么用到我的项目？", "answer": "测 k=5", "review": True}).json()
+    assert c["status"] == "reviewing" and "先测稳定性" in fake_submit[-1]["prompt"] and "给出 k" in fake_submit[-1]["prompt"]
+    # 学习记录只追加：选择题各一条点评记录
+    evs = [e for e in learn.events_of() if e["data"].get("item_id") == it["id"] and e["kind"] == "qa_review"]
+    assert len(evs) == 2 and "→ 0%" in learn.event_line(evs[0])
+    assert "pass^k 衡量什么" in learn.agent_context(f"learn:item:{it['id']}")
+    # 重新生成笔记：旧练习题清掉，作答还在
+    learn.start_item_job(learn._item(it["id"]))
+    assert not (out / "qa.json").exists()
+    assert len([e for e in client.get(base).json()["earlier"]]) >= 3

@@ -343,9 +343,10 @@ QUICK_GITHUB = """任务：GitHub 项目速读（目标 5 分钟内完成，不�
 ## 最小上手实验
 代码项目写 3–8 步命令和预期观察；文档项目写一个读完后可以动手做的小练习。只写步骤，不要实际运行。
 ## 追问清单
-5 个可以直接复制到对话里的问题。
+3 个最值得继续追问、可以直接复制到对话里的问题（练习题另写在 qa.json）。
 
 {figs}
+{qa}
 完成后，最终回复末尾附一个 ```json 代码块：
 {{"title": "项目名 · 一句话", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
 """
@@ -362,6 +363,18 @@ FIGS = """关键图（默认必做，不是可选项）：原文里承载论证�
 - 嵌入：在笔记正文里讲到它的位置插入 `![图1：图的标题](figs/fig1.png)`（必须是相对路径），紧接一行 `> 图1 说明：…`，写清图在比较什么、
   坐标 / 图例怎么读、关键数字、它支撑了作者哪个论点。HTML 产物里用 `<figure><img src="figs/fig1.png"><figcaption>…</figcaption></figure>`。
 - 实在下载不了（防爬、要登录）：嵌入原图的远程 URL，并在图注里写明「未能下载，显示原站图片」；连 URL 都拿不到时文字描述图的内容并注明。
+"""
+
+
+QA_SPEC = """练习题（默认必做）：读完笔记后写 {out}/qa.json，帮用户检验有没有读懂，页面上逐题作答。以选择题为主，少打字：
+{{"questions": [
+  {{"id": "q1", "type": "choice", "q": "题干", "options": ["A 的内容", "B…", "C…", "D…"], "answer": 0,
+    "explain": "为什么对、其它选项错在哪（2–3 句，带出处：笔记小节 / 原文段落 / `文件:行号`）", "section": "笔记里对应的小节标题", "dim": "理解"}},
+  {{"id": "q5", "type": "short", "q": "开放题", "reference": "参考要点（3–5 句）", "rubric": ["得分点1", "得分点2"], "section": "…", "dim": "应用"}}
+]}}
+- 4 道选择题 + 1 道开放题（开放题最多 2 道）。选择题 4 个选项、只有一个对，answer 是正确选项的下标（从 0 开始），正确答案的位置要打散。
+- 考核心机制、关键证据与数字、最容易误读的地方，dim 取 理解 / 判断 / 应用；干扰项要像真的（常见误解、把条件说反、张冠李戴），不出凭常识就能选对或纯记忆细节的题。
+- 开放题留给最值得自己动手想的问题：迁移到用户自己的项目，或质疑作者的关键论证。
 """
 
 
@@ -387,12 +400,13 @@ ARTICLE = """任务：文章深读（博客 / X 长文 / gist / 讨论帖 / 官�
 ## 可迁移结论 / 对我的启发
 2–4 条，注明适用边界。
 ## 追问清单
-5 个可以直接复制到对话里的问题。
+3 个最值得继续追问、可以直接复制到对话里的问题（练习题另写在 qa.json）。
 ## 我的笔记
 （留空，给用户写）
 
 {figs}
-只写 note.md 和 figs/ 下的图片，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
+{qa}
+只写 note.md、qa.json 和 figs/ 下的图片，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
 {{"title": "原文标题（作者）", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
 """
 
@@ -418,10 +432,11 @@ def item_prompt(it: dict, out: Path) -> str:
     if kind == "article":
         return ARTICLE.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
                               feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]),
-                              figs=FIGS.format(out=out))
+                              figs=FIGS.format(out=out), qa=QA_SPEC.format(out=out))
     if kind == "github" and (it.get("depth") or "quick") == "quick":
         return QUICK_GITHUB.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
-                                   out=out, known=_known_knowledge(it["id"]), figs=FIGS.format(out=out))
+                                   out=out, known=_known_knowledge(it["id"]), figs=FIGS.format(out=out),
+                                   qa=QA_SPEC.format(out=out))
     skill = settings.get("learn.paper_skill" if kind == "paper" else "learn.github_skill")
     main = "note.md" if kind == "paper" else "index.html"
     obsidian = "允许按 paper-library 格式同时归档到其 config.json 指定的 Obsidian 库。" \
@@ -444,6 +459,7 @@ def item_prompt(it: dict, out: Path) -> str:
 {{"title": "论文/项目标题", "tldr": ["第1行", "第2行", "第3行"], "output": "{main}"}}
 
 6. {FIGS.format(out=out)}
+7. {QA_SPEC.format(out=out)}
 {'若仓库主要是文档 / 书籍 / 教程（大部分是 .md）而非代码，不要硬套代码架构讲解：改为「阅读指南」式 HTML，包括全书结构、每章一句话、概念关系图、推荐阅读顺序和最值得读的章节，不写实验脚本。' if kind == 'github' else ''}
 
 ---- 本平台增补 ----
@@ -454,6 +470,7 @@ def item_prompt(it: dict, out: Path) -> str:
 def start_item_job(it: dict) -> int:
     out = _item_dir(it)
     out.mkdir(parents=True, exist_ok=True)
+    (out / "qa.json").unlink(missing_ok=True)   # 练习题跟着笔记重出；以前的作答在 qa 列里，换题后进「以前的作答」
     dirs = [str(SKILL_DIR)] if it["kind"] == "article" else [str(_skill_dir(it["kind"])), str(SKILL_DIR)]
     jid = jobs.submit("learn", item_prompt(it, out), ref=f"learn:item:{it['id']}", cwd=str(out), add_dirs=dirs)
     db.update("learn_items", it["id"], {"job_id": jid, "status": "running", "updated_at": db.now()})
@@ -557,25 +574,79 @@ def _item_qa(it: dict) -> dict:
     return _loads(it.get("qa"), {}) or {}
 
 
+def item_quiz(it: dict) -> list[dict]:
+    """条目输出目录里的 qa.json（选择题为主 + 1–2 道开放题），格式和章末测试一样；没有或不合格时为空。"""
+    p = _item_dir(it) / "qa.json"
+    if not p.is_file():
+        return []
+    try:
+        return _clean_quiz(json.loads(p.read_text("utf-8")))
+    except ValueError:
+        return []
+
+
+QA_GEN = """任务：给一篇深读笔记出练习题。条目：{title}（{url}）。今天是 {today}。
+深读笔记在 {out}（note.md / summary.md；有 src/ 是源码），先完整读笔记，需要核对时再读原文或源码。
+
+{spec}
+只写 {out}/qa.json，不要改其它文件、不要调用平台 API。写完后最终回复只说一句「已写好」。
+"""
+
+
+def _qa_gen_job(iid: int) -> dict | None:
+    return db.row("SELECT id, status FROM jobs WHERE ref=? ORDER BY id DESC LIMIT 1", [f"learn:item:{iid}:qagen"])
+
+
+@router.post("/items/{iid}/qa/generate")
+def gen_qa(iid: int):
+    """老笔记没有练习题（或要换一套）：后台让 Agent 读笔记出题，写进 qa.json。"""
+    it = _item(iid)
+    if it["status"] != "done":
+        raise HTTPException(400, "笔记还没生成好")
+    j = _qa_gen_job(iid)
+    if j and j["status"] in ("queued", "running"):
+        return {"job_id": j["id"], "status": "generating"}
+    out = _item_dir(it)
+    prompt = QA_GEN.format(title=it["title"] or it["url"], url=it["url"], today=db.today(), out=out, spec=QA_SPEC.format(out=out))
+    jid = jobs.submit("learn", prompt, ref=f"learn:item:{iid}:qagen", cwd=str(out), add_dirs=[str(out)])
+    return {"job_id": jid, "status": "generating"}
+
+
 @router.get("/items/{iid}/qa")
 def item_qa(iid: int):
     """追问清单：笔记里的问题 + 每题的作答与点评。笔记重新生成后问题变了，旧作答放进 earlier（不丢）。"""
     _ensure_depth_col()
     it = _item(iid)
     saved = _item_qa(it)
-    qs = qa_questions(_item_note(it))
-    shown = {str(n) for n, q in enumerate(qs, 1) if (saved.get(str(n)) or {}).get("q") == q}
-    items = [{"n": n, "q": q, **({k: v for k, v in saved[str(n)].items() if k != "q"} if str(n) in shown else {})}
-             for n, q in enumerate(qs, 1)]
+    quiz = item_quiz(it)
+    if quiz:   # 练习题：选择题答过才给答案和解析
+        qs = [{"q": q["q"], "type": q["type"], "dim": q.get("dim", ""), "section": q.get("section", ""),
+               **({"options": q["options"]} if q["type"] == "choice" else {})} for q in quiz]
+    else:      # 老笔记：追问清单里的开放题
+        qs = [{"q": q} for q in qa_questions(_item_note(it))]
+    shown = {str(n) for n, q in enumerate(qs, 1) if (saved.get(str(n)) or {}).get("q") == q["q"]}
+    items = []
+    for n, q in enumerate(qs, 1):
+        c = {**q, "n": n, **({k: v for k, v in saved[str(n)].items() if k != "q"} if str(n) in shown else {})}
+        if quiz and q["type"] == "choice" and "choice" in c:
+            c.update(right=quiz[n - 1]["answer"], explain=quiz[n - 1]["explain"])
+        items.append(c)
     earlier = sorted(({"n": int(k.split("@")[0]), **v} for k, v in saved.items() if k not in shown and v.get("answer")),
                      key=lambda v: v.get("at", ""))
-    return {"items": items, "earlier": earlier}
+    j = _qa_gen_job(iid)
+    gen = None
+    if j and j["status"] in ("queued", "running"):
+        gen = {"status": "generating", "job_id": j["id"]}
+    elif j and not quiz:
+        gen = {"status": "failed", "job_id": j["id"]}
+    return {"mode": "quiz" if quiz else "open", "gen": gen, "items": items, "earlier": earlier}
 
 
 class QaIn(BaseModel):
     q: str
     answer: str = ""
     review: bool = False
+    choice: int | None = None   # 选择题：选了第几个选项（从 0 开始），当场判对错
 
 
 def qa_prompt(it: dict, c: dict) -> str:
@@ -587,6 +658,7 @@ def qa_prompt(it: dict, c: dict) -> str:
 
 问题：{c['q']}
 用户的作答：{c['answer']}
+{('出题时的参考要点：' + c['reference']) if c.get('reference') else ''}
 
 追问清单的题大多是开放题（理解机制、质疑证据、迁移到自己的项目），没有唯一答案。
 要求：短、具体、鼓励为主。看理解和判断：讲对了核心、给了理由或证据就算抓到；有道理的不同观点也算抓到。
@@ -607,12 +679,20 @@ def save_qa(iid: int, n: int, body: QaIn):
     _ensure_depth_col()
     it = _item(iid)
     qa = _item_qa(it)
+    quiz = item_quiz(it)
+    q = quiz[n - 1] if 0 < n <= len(quiz) and quiz[n - 1]["q"] == body.q else None
+    if quiz and not q:
+        raise HTTPException(409, "练习题已更新，刷新页面再答")
+    if q and q["type"] == "choice":
+        return _answer_choice(it, qa, n, q, body.choice)
     old = qa.get(str(n)) or {}
     if old.get("q") and old["q"] != body.q and old.get("answer"):   # 笔记重新生成后同一编号换了题：旧作答挪到别的键，不覆盖
         qa[f"{n}@{old.get('at', '')}"] = old
         old = {}
     answer = body.answer.strip()[:3000]
     c = {"q": body.q[:600], "answer": answer, "at": db.now(), "status": "answered" if answer else "empty"}
+    if q:
+        c["reference"] = "；".join(filter(None, [q.get("reference", ""), *q.get("rubric", [])]))[:800]
     if old.get("review") and old.get("answer") == answer:   # 答案没改，保留上次点评
         c.update(status=old.get("status", "reviewed"), review=old["review"])
     if body.review and answer:
@@ -625,6 +705,36 @@ def save_qa(iid: int, n: int, body: QaIn):
         log_event({}, "qa", {"item_id": iid, "title": it["title"] or it["url"], "n": n, "q": c["q"], "answer": answer})
     _reads.sync_task(iid)
     return c
+
+
+def _answer_choice(it: dict, qa: dict, n: int, q: dict, choice: int | None) -> dict:
+    """选择题当场判：答过就锁定（换题前不改），作答和对错记进学习记录。"""
+    old = qa.get(str(n)) or {}
+    if old.get("q") == q["q"] and "choice" in old:
+        return {**old, "n": n, "right": q["answer"], "explain": q["explain"]}
+    if choice is None or not 0 <= choice < len(q["options"]):
+        raise HTTPException(400, "选一个选项")
+    if old.get("answer"):   # 同一编号原来是别的题的作答：挪走，不覆盖
+        qa[f"{n}@{old.get('at', '')}"] = old
+    ok = choice == q["answer"]
+    right = f"{'ABCDEFG'[q['answer']]}. {q['options'][q['answer']]}"
+    c = {"q": q["q"], "type": "choice", "choice": choice, "answer": f"{'ABCDEFG'[choice]}. {q['options'][choice]}",
+         "correct": ok, "at": db.now(), "status": "reviewed",
+         "review": {"covered": [], "missing": [] if ok else [f"正确答案是 {right}"], "better": q["explain"], "score": 1.0 if ok else 0.0}}
+    qa[str(n)] = c
+    db.update("learn_items", it["id"], {"qa": qa})
+    log_event({}, "qa_review", {"item_id": it["id"], "title": it["title"] or it["url"], "n": n, "q": q["q"],
+                                "answer": c["answer"], "review": c["review"]})
+    _reads.sync_task(it["id"])
+    return {**c, "n": n, "right": q["answer"], "explain": q["explain"]}
+
+
+def _finish_qa_gen(iid: int, job: dict) -> None:
+    """出题任务结束：qa.json 不合格就删掉，页面显示出题失败、可重试。"""
+    it = db.row("SELECT * FROM learn_items WHERE id=?", [iid])
+    p = _item_dir(it) / "qa.json" if it else None
+    if p and p.is_file() and not item_quiz(it):
+        p.unlink()
 
 
 def _finish_qa(iid: int, n: str, job: dict) -> None:
@@ -1920,6 +2030,8 @@ def on_job_done(job: dict) -> None:
         _finish_check(int(m.group(1)), m.group(2), job)
     elif m := re.fullmatch(r"learn:item:(\d+):qa:(\d+)", ref):
         _finish_qa(int(m.group(1)), m.group(2), job)
+    elif m := re.fullmatch(r"learn:item:(\d+):qagen", ref):
+        _finish_qa_gen(int(m.group(1)), job)
 
 
 # ---------- C. 对话上下文 ----------
