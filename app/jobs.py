@@ -73,14 +73,16 @@ RESOURCE_RULE = """【机器资源约定】平台同时只跑少数几个后台�
 
 def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system: str = "",
            cwd: str | None = None, add_dirs: list[str] | None = None, chat_session_id: int | None = None,
-           session: str = "") -> int:
+           session: str = "", tier: str = "") -> int:
     """提交后台 Agent 任务，返回 job id。完成后调用 modules.<module>.on_job_done(job)，
-    有 chat_session_id 时再把结果回帖到那个对话（对话里让 Agent 提交的任务，见 chat.link_jobs）。"""
+    有 chat_session_id 时再把结果回帖到那个对话（对话里让 Agent 提交的任务，见 chat.link_jobs）。
+    tier：任务难度档（light / standard，见设置 model_tiers），定下这个任务用哪个 Claude 模型；空 = 板块默认。"""
     engine = engine or settings.get("engines.default", "claude")
     prompt = prompt.rstrip() + "\n\n" + RESOURCE_RULE
     jid = db.insert("jobs", {"module": module, "ref": ref, "engine": engine, "prompt": prompt,
                              "status": "queued", "created_at": db.now(), "chat_session_id": chat_session_id, "cwd": cwd or "",
-                             "system": system, "add_dirs": json.dumps([*(add_dirs or []), str(kb.KB_DIR)]), "session_in": session})
+                             "system": system, "add_dirs": json.dumps([*(add_dirs or []), str(kb.KB_DIR)]), "session_in": session,
+                             "model": agent.tier_model(tier, engine)})
     kick()
     return jid
 
@@ -164,7 +166,8 @@ def _on_proc(jid: int):
     return track
 
 
-def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_dirs, session_in: str = "") -> None:
+def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_dirs, session_in: str = "",
+         model: str = "") -> None:
     if jid in _paused:  # 排队时就被暂停了
         _paused.discard(jid)
         return
@@ -174,7 +177,7 @@ def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_
     try:
         for ev in agent.run_stream(prompt, engine=engine, system=system, session=session_in, cwd=cwd, add_dirs=add_dirs,
                                    fallback=not session_in, on_proc=_on_proc(jid),
-                                   model=agent.module_model(module, engine)):
+                                   model=model or agent.module_model(module, engine)):
             if jid in _paused:
                 break
             if ev["type"] == "session":

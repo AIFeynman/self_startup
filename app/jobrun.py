@@ -27,7 +27,7 @@ def main(jid: int) -> None:
             agent.stop(proc)
     signal.signal(signal.SIGTERM, on_term)
     jobs._run(jid, j["module"], j["prompt"], j["engine"], j["system"] or "", j["cwd"] or None,
-              json.loads(j["add_dirs"] or "[]"), j["session_in"] or "")
+              json.loads(j["add_dirs"] or "[]"), j["session_in"] or "", j.get("model") or "")
     kb._safe_sync()
     jobs.kick()
 

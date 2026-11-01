@@ -335,7 +335,7 @@ const saveDraft = (sid, d) => { try { localStorage.setItem(draftKey(sid), JSON.s
 const chapterHref = (pid, sid) => `#learn/plan/${pid}/step/${sid}`;
 const EXTRA_TXT = { interest: '深入', confused: '补课' };
 // 新计划三轮（「第 1 轮」），老计划六阶段（「阶段 1」）
-const stageNo = (p, no) => (p.unit === '轮' ? `第 ${no} 轮` : `阶段 ${no}`);
+const stageNo = (p, no) => (p.unit === '轮' ? `第 ${no} 轮` : p.unit === '单元' ? `单元 ${no}` : `阶段 ${no}`);
 // 「停一下」点评只分两项：抓到了（含要点外的合理补充）/ 漏掉了（含想偏的）。老记录的 off / extra 并进来
 const reviewLists = (rv) => ({ got: [...(rv.covered || []), ...(rv.extra || [])], miss: [...(rv.missing || []), ...(rv.off || [])] });
 const quizScore = (s) => (s.quiz_result?.status === 'graded' ? s.quiz_result.score : null);
@@ -343,7 +343,7 @@ function chapterTag(h, s) {
   const sc = quizScore(s);
   if (sc !== null) return h('span.tag.ln-cs' + (s.quiz_result.passed ? '.ok' : '.err'), {}, `测试 ${sc} 分`);
   if (s.quiz_result?.status === 'grading') return h('span.tag.warn.ln-cs', {}, '批改中');
-  if (s.chapter_status === 'generating') return h('span.tag.warn.ln-cs', {}, '章节生成中');
+  if (s.chapter_status === 'generating') return h('span.tag.warn.ln-cs', {}, s.material_status === 'generating' ? '整理课件中' : '章节生成中');
   if (s.chapter_status === 'ready') return h('span.tag.gray.ln-cs', {}, '章节就绪');
   return null;
 }
@@ -460,6 +460,7 @@ async function renderHome(el, ctx, scrollToPlans) {
     placeholder: '粘贴 arXiv / PDF / DOI / GitHub / YouTube 链接深读，或输入想系统学习的主题…', autofocus: true,
     modes: [{ id: 'auto', label: '自动' }, { id: 'item', label: '深读', placeholder: 'arXiv / PDF / DOI 链接，或 GitHub owner/repo' },
       { id: 'plan', label: '学习计划', placeholder: '想系统学习的主题，例如：世界模型、RL 用于 LLM 推理' },
+      { id: 'course', label: '导入课程', placeholder: '课程官网链接，例如 https://cs336.stanford.edu/' },
       { id: 'ask', label: '问 Agent', placeholder: '问学习 Agent，例如：ReAct 和 Reflexion 的区别？' }],
     onSubmit: async (text) => {
       try {
@@ -473,6 +474,12 @@ async function renderHome(el, ctx, scrollToPlans) {
           return;
         }
         saveDefaults({ background: opt.background, hours: opt.hours });
+        if (intent === 'course') {
+          const c = await api.post('/api/learn/courses', { url: text, background: opt.background, goal: opt.goal, hours_per_week: +opt.hours || 5 });
+          toast('Agent 正在读课表、整理成单元（几分钟）；每讲的课件和录像在开始学时再整理');
+          location.hash = `#learn/plan/${c.id}`;
+          return;
+        }
         const p = await api.post('/api/learn/plans', { topic: text, background: opt.background, goal: opt.goal, hours_per_week: +opt.hours || 5 });
         toast('Agent 正在检索资料生成计划（几分钟）');
         location.hash = `#learn/plan/${p.id}`;
@@ -513,21 +520,24 @@ async function renderHome(el, ctx, scrollToPlans) {
     if (mode === 'ask') intent = 'ask';
     else if (mode === 'item') intent = 'item';
     else if (mode === 'plan') intent = 'plan';
+    else if (mode === 'course') intent = 'course';
     else intent = det ? 'item' : /[?？]$/.test(text) ? 'ask' : 'plan';
     const existing = intent === 'item' && det && items.find((it) => it.url.trim() === det.url.trim());
     if (existing) { intent = 'open'; target = { ...det, existing }; }
     let hint;
     if (!text) hint = mode === 'ask' ? 'Enter 发给学习 Agent' : mode === 'item' ? '粘贴链接，Enter 开始深读' : mode === 'plan' ? '输入主题，Enter 生成学习计划'
+      : mode === 'course' ? '粘贴课程官网链接，Enter 导入成学习计划（按课程单元学，课件和录像整理成中文精讲）'
       : '链接 → 深读 · 主题 → 学习计划 · 问句 → 问 Agent';
     else if (intent === 'ask') hint = 'Enter → 问学习 Agent';
+    else if (intent === 'course') hint = /^https?:\/\//.test(text) ? `Enter → 导入课程 ${text.slice(0, 50)} · 每周 ${opt.hours}h` : '填课程官网链接（http/https）';
     else if (intent === 'open') hint = `已深读过「${(existing.title || existing.url).slice(0, 30)}」，Enter 打开笔记`;
     else if (intent === 'item') hint = `Enter → 将${(opt.kind || det?.kind) === 'github' && opt.depth !== 'full' ? '速读' : '深读'}${det ? det.label : '：' + text.slice(0, 40)}`;
     else hint = `Enter → 将生成「${text.slice(0, 24)}${text.length > 24 ? '…' : ''}」学习计划 · 每周 ${opt.hours}h`;
     box.setHint(hint);
     if (editing === 'focus' && intent !== 'item') editing = null;
-    if (['background', 'goal', 'hours'].includes(editing) && intent !== 'plan') editing = null;
+    if (['background', 'goal', 'hours'].includes(editing) && !['plan', 'course'].includes(intent)) editing = null;
     const kindTxt = { '': '自动识别', paper: '论文', github: 'GitHub 项目' };
-    optsRow.replaceChildren(...(intent === 'plan' ? [h('span.lbl', {}, '计划选项'),
+    optsRow.replaceChildren(...(['plan', 'course'].includes(intent) ? [h('span.lbl', {}, '计划选项'),
       pill('background', 'user', '背景', opt.background, '我的背景'), pill('goal', 'bulb', '目标', opt.goal, '学习目标'),
       h('button.ln-pill' + (editing === 'hours' ? '.on' : ''), { onclick: () => { editing = editing === 'hours' ? null : 'hours'; update(); } }, [ui.icon('clock'), h('span', {}, `每周 ${opt.hours}h`)])]
       : intent === 'item' ? [h('span.lbl', {}, '深读选项'), pill('focus', 'search', '关注点', opt.focus, '关注点'),
@@ -542,7 +552,7 @@ async function renderHome(el, ctx, scrollToPlans) {
   };
   ta.addEventListener('input', update);
   box.querySelector('.modes')?.addEventListener('click', () => setTimeout(update, 0));
-  const setMode = (id) => { const i = ['auto', 'item', 'plan', 'ask'].indexOf(id); box.querySelectorAll('.modes button')[i]?.click(); };
+  const setMode = (id) => { const i = ['auto', 'item', 'plan', 'course', 'ask'].indexOf(id); box.querySelectorAll('.modes button')[i]?.click(); };
 
   const plansSec = h('div', { id: 'ln-plans' });
   const totalSteps = plans.reduce((a, p) => a + p.progress.total, 0);
@@ -554,6 +564,7 @@ async function renderHome(el, ctx, scrollToPlans) {
       { label: '继续上次的计划', icon: 'arrow', onClick: () => (latestPlan ? (location.hash = `#learn/plan/${latestPlan.id}`) : toast('还没有学习计划', true)) },
       { label: '深读一篇论文', icon: 'doc', onClick: () => { setMode('item'); box.focus(); } },
       { label: '给我一个学习计划', icon: 'plan', onClick: () => { setMode('plan'); box.focus(); } },
+      { label: '导入名校课程', icon: 'learn', onClick: () => { setMode('course'); box.focus(); } },
       { label: '根据反馈调整', icon: 'refresh', onClick: () => (latestPlan ? (location.hash = `#learn/plan/${latestPlan.id}/adapt`) : toast('还没有学习计划', true)) },
     ]),
     habitsCard(ctx),
@@ -575,7 +586,7 @@ function planCard(p, ctx) {
     h('h3', {}, p.topic),
     h('div.row', {}, [h('div.grow', {}, ui.progress(p.progress.pct)), h('span.muted', {}, `${p.progress.done}/${p.progress.total} · ${p.progress.pct}%`)]),
     p.goal ? h('div.muted.clamp2', { style: { marginTop: '8px' } }, '目标：' + p.goal) : null,
-    BUSY.includes(p.status) ? h('div.muted.dots', { style: { marginTop: '6px' } }, p.status === 'generating' ? 'Agent 正在生成计划' : 'Agent 正在调整计划') : null,
+    BUSY.includes(p.status) ? h('div.muted.dots', { style: { marginTop: '6px' } }, p.status === 'generating' ? (p.layout === 'course' ? 'Agent 正在读课表' : 'Agent 正在生成计划') : (p.layout === 'course' ? 'Agent 正在同步课表' : 'Agent 正在调整计划')) : null,
   ]);
 }
 
@@ -890,7 +901,7 @@ async function renderPlan(el, ctx, pid) {
     el.append(h('div.card.ln-banner', {}, [h('div.t', {}, [h('b', {}, '由老计划精简成三轮'),
       h('div.muted', {}, `跳过了「${p.from_topic || p.topic}」里已经学会的，补上了测试和反馈里的薄弱处`)]),
       h('a', { href: `#learn/plan/${p.from_plan}` }, '查看老计划')]));
-  } else if (p.unit !== '轮' && p.steps.length && !p.rounds_plan) {
+  } else if (p.unit === '阶段' && p.steps.length && !p.rounds_plan) {
     el.append(h('div.card.ln-banner', {}, [h('div.t', {}, [h('b', {}, '这是老的六阶段计划，比较长'),
       h('div.muted', {}, '可以精简成三轮由浅入深：最新全貌 + 主干 → 会判断 → 跟前沿、项目和产品实践，主线约 15–20 小时；已学的跳过、薄弱处补上，老计划保留')]),
       h('button.outline', { disabled: busy, onclick: async (e) => {
@@ -898,7 +909,7 @@ async function renderPlan(el, ctx, pid) {
         try { const n = await api.post(`/api/learn/plans/${pid}/rounds`); toast('Agent 正在生成三轮计划（几分钟），生成好后老计划自动归档'); location.hash = `#learn/plan/${n.id}`; }
         catch (err) { toast('没成功：' + err.message, true); e.target.disabled = false; }
       } }, [ui.icon('refresh'), '精简成三轮'])]));
-  } else if (p.unit !== '轮' && p.rounds_plan) {
+  } else if (p.unit === '阶段' && p.rounds_plan) {
     el.append(h('div.card.ln-banner', {}, [h('div.t', {}, h('b', {}, '三轮精简版正在生成')),
       h('a', { href: `#learn/plan/${p.rounds_plan}` }, '去看看')]));
   }
@@ -910,7 +921,7 @@ async function renderPlan(el, ctx, pid) {
   ]));
 
   // 阶段时间线 + 调整
-  const adaptNote = h('input', { placeholder: p.unit === '轮' ? '怎么调整？如「第 2 轮太难」「想多做产品实践」· Enter 提交' : '怎么调整？如「第 4 阶段太难」「想多做实践」· Enter 提交', title: '会结合每步的反馈与理解度一起调整',
+  const adaptNote = h('input', { placeholder: p.unit === '单元' ? '怎么调整？如「单元 3 的作业太难，想先补 PyTorch」· Enter 提交' : p.unit === '轮' ? '怎么调整？如「第 2 轮太难」「想多做产品实践」· Enter 提交' : '怎么调整？如「第 4 阶段太难」「想多做实践」· Enter 提交', title: '会结合每步的反馈与理解度一起调整',
     onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); doAdapt(); } } });
   const doAdapt = async () => {
     if (busy || !p.steps.length) return;
@@ -930,7 +941,9 @@ async function renderPlan(el, ctx, pid) {
     })),
     h('div.ln-adapt', {}, [adaptNote,
       h('button.primary', { disabled: busy || !p.steps.length, onclick: doAdapt }, [ui.icon('refresh'), '根据反馈调整']),
-      h('button.ghost', { disabled: busy, onclick: async () => {
+      p.layout === 'course' ? h('button.ghost', { disabled: busy, title: '重新看一遍课程官网，只追加新发布的讲次和作业，已有步骤和学习记录不动', onclick: async () => {
+        await api.post(`/api/learn/plans/${pid}/sync_course`); toast('Agent 正在同步课表'); softRefresh();
+      } }, [ui.icon('refresh'), '同步课表']) : h('button.ghost', { disabled: busy, onclick: async () => {
         if (!confirm('重新生成会清空现有步骤与反馈，继续？')) return; await api.post(`/api/learn/plans/${pid}/regenerate`); softRefresh();
       } }, '重新生成'),
       h('button.ghost', { onclick: async () => { if (!confirm('删除计划？')) return; await api.del(`/api/learn/plans/${pid}`); location.hash = '#learn'; } }, [ui.icon('trash'), '删除']),
@@ -1024,6 +1037,7 @@ function stepView(s, p, ctx, isCur) {
       h('span.ln-st-title', { onclick: toggle }, s.title),
       isCur ? h('span.tag', {}, '当前') : null,
       s.origin ? h('span.tag.ln-xtag.ln-cs', { title: s.request || '' }, '按需' + (EXTRA_TXT[s.origin] || '')) : null,
+      s.step_kind === 'assignment' ? h('span.tag.ln-cs', { title: '课程作业：章节写成实践指导 + 自检清单，Agent 只点评、不代写' }, '作业') : null,
       chapterTag(h, s),
       s.understanding && !expanded ? stars(h, ui, s.understanding, null, { readonly: true }) : null,
       h('span.muted', {}, `${s.est_hours}h`), status,
