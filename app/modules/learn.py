@@ -345,8 +345,23 @@ QUICK_GITHUB = """任务：GitHub 项目速读（目标 5 分钟内完成，不�
 ## 追问清单
 5 个可以直接复制到对话里的问题。
 
+{figs}
 完成后，最终回复末尾附一个 ```json 代码块：
 {{"title": "项目名 · 一句话", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
+"""
+
+
+FIGS = """关键图（默认必做，不是可选项）：原文里承载论证的图——结果图表、架构 / 流程图、实验设置示意、关键表格截图——要下载进笔记，读者不点原文也能看到。
+- 找图：网页从 HTML 的 <img> / <figure> / srcset / og:image 里收集（r.jina.ai 的输出里是 `![](url)`）；论文优先 arXiv HTML 版
+  `https://arxiv.org/html/<id>` 里的 figure 图片，没有 HTML 版就下 PDF 到输出目录，用 `pdfimages -png` 抽图，抽不出（矢量图）就
+  `pdftoppm -png -r 150 -f <页> -l <页>` 渲染图所在页，再用 `magick` 裁到图的区域；GitHub 项目找 README / docs 里的架构图、效果图。
+- 跳过 logo、头像、图标、装饰性头图、广告和相关文章缩略图。一般 2–8 张，宁缺毋滥；原文没有实质性的图就写一句「原文无关键图」。
+- 下载：`mkdir -p {out}/figs && curl -sSL --max-filesize 8000000 -o {out}/figs/fig1.png <url>`，按出现顺序命名 fig1、fig2…，扩展名跟原图
+  （webp / svg 也行）；下载后用 `file` 确认确实是图片而不是 HTML 错误页，失败的删掉。
+- 每张图都要用 Read 工具打开看一遍，读出图里的真实数字和结论，不要只凭图注猜。
+- 嵌入：在笔记正文里讲到它的位置插入 `![图1：图的标题](figs/fig1.png)`（必须是相对路径），紧接一行 `> 图1 说明：…`，写清图在比较什么、
+  坐标 / 图例怎么读、关键数字、它支撑了作者哪个论点。HTML 产物里用 `<figure><img src="figs/fig1.png"><figcaption>…</figcaption></figure>`。
+- 实在下载不了（防爬、要登录）：嵌入原图的远程 URL，并在图注里写明「未能下载，显示原站图片」；连 URL 都拿不到时文字描述图的内容并注明。
 """
 
 
@@ -376,7 +391,8 @@ ARTICLE = """任务：文章深读（博客 / X 长文 / gist / 讨论帖 / 官�
 ## 我的笔记
 （留空，给用户写）
 
-只写 note.md，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
+{figs}
+只写 note.md 和 figs/ 下的图片，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
 {{"title": "原文标题（作者）", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
 """
 
@@ -401,10 +417,11 @@ def item_prompt(it: dict, out: Path) -> str:
     kind = it["kind"]
     if kind == "article":
         return ARTICLE.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
-                              feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]))
+                              feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]),
+                              figs=FIGS.format(out=out))
     if kind == "github" and (it.get("depth") or "quick") == "quick":
         return QUICK_GITHUB.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
-                                   out=out, known=_known_knowledge(it["id"]))
+                                   out=out, known=_known_knowledge(it["id"]), figs=FIGS.format(out=out))
     skill = settings.get("learn.paper_skill" if kind == "paper" else "learn.github_skill")
     main = "note.md" if kind == "paper" else "index.html"
     obsidian = "允许按 paper-library 格式同时归档到其 config.json 指定的 Obsidian 库。" \
@@ -426,6 +443,7 @@ def item_prompt(it: dict, out: Path) -> str:
 5. 完成后，最终回复末尾附一个 ```json 代码块：
 {{"title": "论文/项目标题", "tldr": ["第1行", "第2行", "第3行"], "output": "{main}"}}
 
+6. {FIGS.format(out=out)}
 {'若仓库主要是文档 / 书籍 / 教程（大部分是 .md）而非代码，不要硬套代码架构讲解：改为「阅读指南」式 HTML，包括全书结构、每章一句话、概念关系图、推荐阅读顺序和最值得读的章节，不写实验脚本。' if kind == 'github' else ''}
 
 ---- 本平台增补 ----
