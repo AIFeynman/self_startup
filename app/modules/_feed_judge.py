@@ -66,7 +66,8 @@ def _state(it: dict, org: str) -> dict:
         row |= {"stars": int(it.get("popularity") or 0), "language": ex.get("language", ""),
                 "topics": ex.get("topics") or []}
     if it.get("source") == "zhihu":
-        row |= {"column": ex.get("channel", ""), "kind": "热榜问题" if ex.get("via") == "hot" else "专栏文章"}
+        row |= {"column": ex.get("channel", ""), "kind": "热榜问题" if ex.get("via") == "hot" else "专栏文章",
+                "summary_note": "summary 是文章开头"}
     if it.get("source") == "reddit":
         row |= {"subreddit": ex.get("subreddit", ""), "flair": ex.get("flair", ""), "comments": ex.get("comments")}
     if it.get("source") in ("youtube", "bilibili"):

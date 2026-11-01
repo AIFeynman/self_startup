@@ -1117,10 +1117,45 @@ def bilibili_ranking(c: httpx.Client, board: str, bases: list[str], days: int = 
 ZHIHU_COLUMN_RE = re.compile(r"zhuanlan\.zhihu\.com/(?!p/)([\w-]+)|^([\w-]{3,})$")
 
 
+DEEPSEEK_SEARCH = "https://api.deepseek.com/v1/tools/search"
+ZHIHU_P_RE = re.compile(r"zhuanlan\.zhihu\.com/p/(\d+)")
+
+
+def zhihu_search(c: httpx.Client, key: str, queries: list[str], days: int = 14, count: int = 10) -> list[dict]:
+    """DeepSeek 搜索（和模型共用 DEEPSEEK_API_KEY）：site:zhuanlan.zhihu.com + after: 找最近的专栏文章。
+    只用搜索引擎给的标题 / 日期 / 页面开头，不去抓知乎页面（直连 403）。"""
+    since = _days_ago(days)
+    out: dict[str, dict] = {}
+    for q in queries:
+        r = c.post(DEEPSEEK_SEARCH, headers={"Authorization": f"Bearer {key}"}, timeout=30, json={
+            "query": f"site:zhuanlan.zhihu.com {q} after:{since:%Y-%m-%d}", "count": count, "need_content": False})
+        r.raise_for_status()
+        for res in r.json().get("results") or []:
+            m = ZHIHU_P_RE.search(res.get("url") or "")
+            if not m or f"zhihu:p{m.group(1)}" in out:
+                continue
+            try:
+                dt = datetime.fromisoformat(str(res.get("date") or "")[:10]).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue   # 没日期的不知道新不新，不收
+            if dt < since:
+                continue
+            title = res.get("title") or ""
+            if "#" in (res.get("url") or ""):   # 带 #n 的结果是文中某一节，标题后面拼了小节名
+                title = title.rsplit(" - ", 1)[0]
+            out[f"zhihu:p{m.group(1)}"] = {
+                "id": f"zhihu:p{m.group(1)}", "source": "zhihu", "type": "blog", "title": clean(title, 200),
+                "summary": clean(res.get("summary") or res.get("snippet") or "", 600),
+                "url": f"https://zhuanlan.zhihu.com/p/{m.group(1)}", "date": _iso(dt), "popularity": 0.0,
+                "extra": {"via": "search", "query": q, "channel": clean(res.get("site_name") or "", 40)}}
+    return list(out.values())
+
+
 def fetch_zhihu(columns: list[str], hot: bool = True, days: int = 14, per_column: int = 8,
-                rsshub_bases: list[str] | None = None) -> tuple[list[dict], list[str]]:
-    """知乎：专栏文章（RSSHub /zhihu/zhuanlan/:id）+ 热榜里技术相关的问题（/zhihu/hot）。
-    知乎直连要登录（403），只走 RSSHub；公共实例对知乎限流很狠，专栏挨个取、不并发。都交给 Jev 判有没有深度。"""
+                rsshub_bases: list[str] | None = None, queries: list[str] = ()) -> tuple[list[dict], list[str]]:
+    """知乎：关键词搜最近的专栏文章（DeepSeek 搜索，要 DEEPSEEK_API_KEY）+ 订阅专栏（RSSHub /zhihu/zhuanlan/:id）
+    + 热榜里技术相关的问题（/zhihu/hot）。知乎直连要登录（403）；公共 RSSHub 对知乎限流很狠，专栏挨个取、不并发。
+    都交给 Jev 判有没有深度。"""
     bases = rsshub_bases or RSSHUB_BASES
 
     def get(c, path, **kw):
@@ -1136,16 +1171,23 @@ def fetch_zhihu(columns: list[str], hot: bool = True, days: int = 14, per_column
 
     items, errors = [], []
     with _client() as c:
+        key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        if queries and key:
+            try:
+                items += zhihu_search(c, key, list(queries), days=days)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"知乎搜索: {type(e).__name__}: {str(e)[:120]}")
+        seen = {it["id"] for it in items}
         for col in columns:
             got = get(c, f"/zhihu/zhuanlan/{col}", typ="blog", days=days, limit=per_column)
             if got is None:
                 errors.append(f"知乎专栏 {col}: RSSHub 各实例都没取到")
                 continue
             for it in got:
-                if m := re.search(r"zhuanlan\.zhihu\.com/p/(\d+)", it["url"]):
+                if m := ZHIHU_P_RE.search(it["url"]):
                     it["id"] = f"zhihu:p{m.group(1)}"
                 it["extra"] |= {"column": col, "channel": it["extra"].get("feed", "").replace("知乎专栏-", ""), "via": "column"}
-            items += got
+            items += [it for it in got if it["id"] not in seen]
         if hot:
             got = get(c, "/zhihu/hot", typ="discussion", days=0, limit=50)
             if got is None:

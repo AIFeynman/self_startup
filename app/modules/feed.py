@@ -90,6 +90,7 @@ CFG_DEFAULTS = {
     "bilibili": ["1567748478"],   # B 站 UP 主 uid（经 RSSHub，公共实例不稳）
     "video_days": 21,
     # 知乎：专栏 id（zhuanlan.zhihu.com/<id>，经 RSSHub；公共实例限流狠，别加太多）+ 热榜里技术相关的问题；都过 Jev 价值判断
+    "zhihu_queries": ["大模型", "Agent", "Claude Code", "AI Infra", "强化学习"],   # DeepSeek 搜索（DEEPSEEK_API_KEY），每词 1 次
     "zhihu_columns": ["jiqizhixin"],
     "zhihu_hot": True,
     "zhihu_days": 14,
@@ -311,6 +312,7 @@ def _collectors() -> dict:
                                           region=str(cfg("youtube_region") or "US"),
                                           bili_boards=tuple(cfg("bilibili_ranking") or ())),
         "zhihu": lambda: src.fetch_zhihu(src_list("zhihu_columns"), hot=bool(cfg("zhihu_hot")),
+                                         queries=list(cfg("zhihu_queries") or []),
                                          days=int(cfg("zhihu_days")),
                                          rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
         "x": lambda: src.fetch_x(src_list("x_accounts"), list(fc.get("x_queries") or []),
@@ -709,7 +711,7 @@ def config():
                                 "github_trending_languages", "github_watch_orgs", "github_watch_min_stars",
                                 "reddit_queries", "youtube_channels", "youtube_queries", "bilibili", "video_days", "video_langs",
                                 "youtube_trending", "youtube_region", "bilibili_ranking",
-                                "zhihu_columns", "zhihu_hot", "zhihu_days")} | {
+                                "zhihu_queries", "zhihu_columns", "zhihu_hot", "zhihu_days")} | {
         k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 
