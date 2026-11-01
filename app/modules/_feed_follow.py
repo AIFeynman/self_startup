@@ -2,6 +2,7 @@
 
 关注源按类别分组，每组落到 feed 设置里的一个或两个列表：
 - x → x_accounts；github → github_watch_orgs；reddit → reddit
+- video → youtube_channels（@handle / 频道链接解析成 UC 开头的频道 id）或 bilibili（B 站 UP 主 uid）
 - site → rss（能找到 RSS / Atom）或 sites（没有 RSS 的列表页，自动推断文章链接规则 link_re）
 - podcast → podcasts（RSS；Apple Podcasts 链接或节目名经 iTunes 接口换成 RSS）或 xiaoyuzhou（小宇宙节目页）
 默认名单写在 settings 里，用户增删记在 feed.follow：{"add": {列表: [...]}, "remove": {列表: [键]}, "names": {键: 显示名}}，
@@ -28,11 +29,29 @@ GROUPS = {
     "podcast": {"label": "播客", "lists": ["podcasts", "xiaoyuzhou"], "collector": None,
                 "hint": "RSS、Apple Podcasts、小宇宙节目页链接，或直接输节目名"},
     "reddit": {"label": "Reddit 版块", "lists": ["reddit"], "collector": "reddit", "hint": "r/LocalLLaMA"},
+    "video": {"label": "视频频道", "lists": ["youtube_channels", "bilibili"], "collector": "video",
+              "hint": "YouTube @handle / 频道链接，或 B 站 space.bilibili.com/uid"},
 }
 # 列表 → 采集器（refresh_sync 的来源名）
 LIST_COLLECTOR = {"x_accounts": "x", "github_watch_orgs": "github", "rss": "rss", "sites": "sites",
-                  "podcasts": "podcast", "xiaoyuzhou": "xiaoyuzhou", "reddit": "reddit"}
+                  "podcasts": "podcast", "xiaoyuzhou": "xiaoyuzhou", "reddit": "reddit",
+                  "youtube_channels": "video", "bilibili": "video"}
 CASELESS = {"x_accounts", "github_watch_orgs", "reddit"}
+
+
+# 默认名单里频道 id 的显示名（用户自己加的，名字记在 feed.follow.names）
+KNOWN_NAMES = {
+    "UCXUPKJO5MZQN11PqgIvyuvQ": "Andrej Karpathy", "UCYO_jab_esuFRV4b17AJtAw": "3Blue1Brown",
+    "UCbfYPyITQ-7l4upoX8nvctg": "Two Minute Papers", "UCZHmQk67mSJgfCCTn7xBfew": "Yannic Kilcher",
+    "UCNJ1Ymd5yFuUPtn21xtRbbw": "AI Explained", "UCXl4i9dYBrFOabk0xGmbkRA": "Dwarkesh Patel",
+    "UCMLtBahI5DMrt0NPvDSoIRQ": "Machine Learning Street Talk", "UCrDwWp7EBBv4NwvScIpBDOA": "Anthropic",
+    "UCXZCJLdBC09xxGZ6gcdrc6A": "OpenAI", "UCP7jMXSY2xbc3KCAE0MHQ-A": "Google DeepMind",
+    "UCBa5G_ESCn8Yd4vw5U-gIcg": "Stanford Online", "UCSHZKyawb77ixDdsGog4iWA": "Lex Fridman",
+    "UCLKPca3kwwd-B59HNr-_lvA": "AI Engineer", "UCxBcwypKK-W3GHd_RZ9FZrQ": "Latent Space",
+    "UC2ggjtuuWvxrHHHiaDH1dlQ": "李宏毅 Hung-yi Lee", "UCcefcZRL2oaA_uBNeo5UOWg": "Y Combinator",
+    "UCtAcpQcYerN8xxZJYTfWBMw": "Umar Jamil", "UC55ODQSvARtgSyc8ThfiepQ": "Sam Witteveen",
+    "1567748478": "B 站 跟李沐学AI",
+}
 
 
 class FollowError(ValueError):
@@ -61,12 +80,14 @@ def label(lst: str, v, names: dict) -> str:
     k = entry_key(lst, v)
     if isinstance(v, dict):
         return v.get("name") or k
-    if names.get(k):
-        return names[k]
+    if names.get(k) or KNOWN_NAMES.get(k):
+        return names.get(k) or KNOWN_NAMES[k]
     if lst in ("x_accounts",):
         return "@" + v
     if lst == "reddit":
         return "r/" + v
+    if lst == "bilibili":
+        return "B 站 " + v
     if lst in ("rss", "podcasts", "xiaoyuzhou"):
         p = urlsplit(v)
         return (p.netloc.removeprefix("www.") + p.path.rstrip("/"))[:60]
@@ -105,6 +126,8 @@ def resolve(group: str, text: str, client: httpx.Client | None = None) -> tuple[
         if not m:
             raise FollowError("Reddit 版块写成 r/版块名")
         return "reddit", m.group(1), "r/" + m.group(1)
+    if group == "video":
+        return _video(text)
     own = client is None
     c = client or _client()
     try:
@@ -118,6 +141,18 @@ def resolve(group: str, text: str, client: httpx.Client | None = None) -> tuple[
         if own:
             c.close()
     raise FollowError(f"未知类别：{group}")
+
+
+def _video(text: str):
+    if m := re.search(r"(?:space\.bilibili\.com/|^(?:bili(?:bili)?:?\s*))(\d{3,})", text, re.I):
+        return "bilibili", m.group(1), "B 站 " + m.group(1)
+    if not re.search(r"youtube\.com|youtu\.be|^@[\w.-]{3,}$|^UC[\w-]{22}$", text):
+        raise FollowError("视频频道写成 YouTube @handle / 频道链接，或 B 站 space.bilibili.com/uid")
+    try:
+        cid, name = src.resolve_youtube_channel(text)
+    except Exception as e:  # noqa: BLE001
+        raise FollowError(f"没找到这个 YouTube 频道：{type(e).__name__}") from e
+    return "youtube_channels", cid, name or cid
 
 
 def _github(c: httpx.Client, text: str):

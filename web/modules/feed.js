@@ -3,9 +3,11 @@
 // 键盘：j/k 移动选中，l 赞，s 收藏，o 打开，d 深读，x 隐藏。
 import { toMs } from '../api.js';
 
-const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['x_article', 'X 长文'], ['saved', '已收藏']];
-const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'x_article'];
-const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论' };
+const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['video', '视频'], ['x_article', 'X 长文'], ['saved', '已收藏']];
+const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'video', 'x_article'];
+const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论', video: '视频' };
+const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+const fmtDur = (s) => s ? (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}` : `${Math.round(s / 60)} 分钟`) : '';
 const PAGE = 40;
 const TOP_N = 5;
 const DAYS = [['0', '不限时间'], ['1', '24 小时内'], ['3', '3 天内'], ['7', '7 天内'], ['30', '30 天内']];
@@ -335,7 +337,11 @@ export default {
     const metaChips = (x) => [
       TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
       h('span.fd-chip', {}, [ui.icon('doc'), x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')]),
-      (x.extra?.feed || x.extra?.subreddit) && h('span.fd-chip', {}, x.extra.feed || `r/${x.extra.subreddit}`),
+      (x.extra?.feed || x.extra?.subreddit || x.extra?.channel) && h('span.fd-chip', {}, x.extra.channel || x.extra.feed || `r/${x.extra.subreddit}`),
+      x.extra?.flair && h('span.fd-chip', {}, x.extra.flair),
+      x.extra?.duration && h('span.fd-chip', {}, fmtDur(x.extra.duration)),
+      x.source === 'reddit' && x.extra?.comments ? h('span.fd-chip', {}, [ui.icon('chat'), `评论 ${x.extra.comments}`]) : null,
+      x.extra?.link && h('a.fd-chip', { href: x.extra.link, target: '_blank', rel: 'noopener', title: '帖子指向的外部链接' }, [ui.icon('arrow'), host(x.extra.link) || '外链']),
       x.extra?.x_article && h('span.fd-chip.art', { title: '长文正文未抓取，点标题去 X 上看' }, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
       x.extra?.origin === 'learn_evolve' && h('span.fd-chip', {}, 'learn_evolve'),
       x.extra?.hn_url && h('a.fd-chip', { href: x.extra.hn_url, target: '_blank', rel: 'noopener' }, [ui.icon('chat'), `HN 讨论${x.extra.comments ? ' ' + x.extra.comments : ''}`]),
@@ -404,6 +410,8 @@ export default {
               x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
               x.extra?.hn_url && h('a.muted', { href: x.extra.hn_url, target: '_blank', rel: 'noopener', style: { whiteSpace: 'nowrap' } }, 'HN 讨论'),
+              (x.extra?.channel || x.extra?.subreddit) && h('span', { style: { whiteSpace: 'nowrap' } }, x.extra.channel || `r/${x.extra.subreddit}`),
+              x.extra?.link && h('a.muted', { href: x.extra.link, target: '_blank', rel: 'noopener', style: { whiteSpace: 'nowrap' } }, host(x.extra.link) || '外链'),
               x.why ? h('span.fd-why', { title: x.why }, '· ' + x.why) : null]),
             verdictBox(entry),
           ]),
@@ -411,7 +419,7 @@ export default {
         ]);
       }
       node.addEventListener('mousedown', (e) => { if (!e.target.closest('button, a')) select(entries.indexOf(entry), false); });
-      node._hay = norm([x.title, x.gist, x.summary, x.source_label, x.why, x.extra?.feed, TYPE_NAME[x.type]].join(' '));
+      node._hay = norm([x.title, x.gist, x.summary, x.source_label, x.why, x.extra?.feed, x.extra?.channel, x.extra?.subreddit, x.extra?.flair, TYPE_NAME[x.type]].join(' '));
       if (st.q && !matches(node)) node.classList.add('fd-hidden');
       return node;
     }
