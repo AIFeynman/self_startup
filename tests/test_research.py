@@ -226,3 +226,35 @@ def test_fallback_keeps_requested_engine_and_is_labeled(client, fakes):
     assert "Codex（未跑通，由 Claude Code 代跑）" in doc
     client.post(f"/api/research/{r['id']}/synthesize")
     assert "由 Claude Code 代跑" in submitted[-1]["prompt"] and "不是独立来源" in submitted[-1]["prompt"]
+
+
+def test_grokbot_recover_after_restart(client, fakes, monkeypatch, tmp_path):
+    """send 已投递但服务重启、request_id 没落库：按 brief 从请求记录找回，不重发；找不到就标失败可重试。"""
+    script, state = tmp_path / "grokbot.py", tmp_path / "grok-state"
+    script.write_text("")
+    (state / "requests").mkdir(parents=True)
+    monkeypatch.setattr(R, "_grok_script", lambda: str(script))
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd[2])
+        if cmd[2] == "status":
+            return FakeProc(0, json.dumps({"configured": {"A": True}, "state_dir": str(state)}))
+        return FakeProc(0, json.dumps({"status": "completed", "request_id": "d" * 32, "answer": "找回的结论"}))
+
+    monkeypatch.setattr(R.subprocess, "run", fake_run)
+    r = client.post("/api/research", json={"topic": "grok 重启", "engines": ["muse"]}).json()
+    res_id = r["results"][0]["id"]
+    R.db.update("research_results", res_id, {"engine": "grokbot", "status": "running", "request_id": ""})
+    brief = R._result(res_id)["brief"]
+    for rid, t, task in (("e" * 32, 1, brief), ("d" * 32, 2, brief), ("f" * 32, 3, "别的任务")):
+        (state / "requests" / f"{rid}.json").write_text(json.dumps(
+            {"request_id": rid, "task": task, "created_at": t, "delivery": "accepted"}))
+    x = client.get(f"/api/research/{r['id']}").json()["results"][0]
+    assert "send" not in seen and x["request_id"] == "d" * 32 and x["status"] == "done" and x["content"] == "找回的结论"
+    assert not R._sending
+
+    R.db.update("research_results", res_id, {"status": "running", "request_id": ""})
+    R.db.update("research_results", res_id, {"brief": "没投递过的 brief"})
+    x = client.get(f"/api/research/{r['id']}").json()["results"][0]
+    assert x["status"] == "failed" and "重试" in x["error"] and "send" not in seen
