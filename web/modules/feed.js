@@ -85,6 +85,8 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-int button svg { width: 12px; height: 12px; }
 .fd-tabref { white-space: nowrap; }
 .fd-tabref svg { width: 13px; height: 13px; }
+.fd-fresh { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.fd-fresh.ok { color: var(--ok); }
 .fd-follow { margin: 0 0 16px; padding: 16px 20px; }
 .fd-follow .fg { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 14px; padding: 12px 0; border-top: 1px solid var(--line); }
 .fd-follow .fg:first-of-type { border-top: none; padding-top: 4px; }
@@ -188,16 +190,19 @@ export default {
 
     // 时间筛选 + 排序：只作用于下面的列表（今日精选固定按综合分）
     const optSel = (opts, key, title) => {
-      const s = h('select', { title, onchange: (e) => { st[key] = e.target.value; s.classList.toggle('on', st[key] !== opts[0][0]); loadList(); } },
+      const s = h('select', { title, onchange: (e) => { st[key] = e.target.value; clearFresh(); s.classList.toggle('on', st[key] !== opts[0][0]); loadList(); } },
         opts.map(([v, name]) => h('option', { value: v, selected: st[key] === v }, name)));
       return s;
     };
     const opts = h('div.fd-opts', {}, [optSel(DAYS, 'days', '按发布时间筛选'), optSel(SORTS, 'sort', '列表排序方式')]);
 
     const tabRefresh = h('button.ghost.sm.fd-tabref', { onclick: () => doRefresh(st.tab) });
+    // 刚刷完的结果常驻在按钮旁；有新增时本次新收的排到列表最前（否则按综合分常落到几十名开外，看着像没刷）
+    const freshNote = h('span.fd-fresh');
+    let fresh = null;   // { since, added, label }
     el.append(h('style', {}, CSS), head, followBox, comp, intsEl, quick,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条'), topBox,
-      h('div.fd-bar', {}, [tabs, tabRefresh, opts, kbd]), listBox, sentinel);
+      h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), listBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
     function renderStatus() {
@@ -235,7 +240,13 @@ export default {
       renderStatus();
       await watchRefresh(type ? TABS.find(([id]) => id === type)?.[1] : '');
     }
+    function renderFresh() {
+      freshNote.classList.toggle('ok', !!fresh?.added);
+      freshNote.textContent = !fresh ? '' : fresh.added ? `${fresh.label}刚刷新 · 新增 ${fresh.added} 条，已排在最前` : `${fresh.label}刚刷新 · 没有新内容`;
+    }
+    function clearFresh() { if (fresh) { fresh = null; renderFresh(); } }
     async function watchRefresh(label) {
+      const since = status.started_utc;
       while (status.running) {
         await new Promise((r) => setTimeout(r, 2000));
         if (!el.isConnected) return;
@@ -246,6 +257,8 @@ export default {
       const added = res.reduce((n, [, r]) => n + (r.new || 0), 0);
       const errs = res.filter(([, r]) => r.errors?.length).map(([k]) => k);
       toast(`${label ? label + '：' : ''}刷新完成，新增 ${added} 条${errs.length ? `（${errs.join('、')} 有报错，悬停「刷新」看详情）` : ''}`);
+      fresh = { since, added, label: label ? label + ' · ' : '' };
+      renderFresh();
       reloadAll();
     }
 
@@ -491,7 +504,7 @@ export default {
     // ---------- 数据 ----------
     function renderTabs() {
       tabs.replaceChildren(...TABS.map(([id, name]) => h('button' + (st.tab === id ? '.active' : ''), {
-        onclick: () => { if (st.tab === id) return; st.tab = id; renderTabs(); renderTabRefresh(); loadList(); },
+        onclick: () => { if (st.tab === id) return; st.tab = id; clearFresh(); renderTabs(); renderTabRefresh(); loadList(); },
       }, name)));
     }
     async function loadTop() {
@@ -504,10 +517,11 @@ export default {
       if (st.q) for (const e of tops) e.el.classList.toggle('fd-hidden', !matches(e.el));
     }
     // 「全部」、综合排序、不限时间且无筛选时，列表从第 6 条开始，避免与精选重复
-    const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' ? TOP_N : 0);
+    const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' && !fresh?.added ? TOP_N : 0);
     function params(offset) {
       const p = new URLSearchParams({ limit: PAGE, offset, q: st.q, days: st.days, sort: st.sort });
       if (st.tab === 'saved') p.set('saved', 'true'); else if (st.tab) p.set('type', st.tab);
+      if (fresh?.added && fresh.since) p.set('since', fresh.since);
       return p;
     }
     async function loadList() {
