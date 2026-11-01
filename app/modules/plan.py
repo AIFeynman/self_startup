@@ -780,6 +780,11 @@ def _tree(ts: list[dict]) -> list[dict]:
 @router.get("/day")
 def day(date: str = ""):
     date = date or db.today()
+    try:  # 每日论文：今天固定有一个 30 分钟的读论文学习块
+        from . import _habits
+        _habits.ensure_paper_task(date)
+    except Exception:  # noqa: BLE001
+        pass
     ts = tasks.list_for(date)
     return {"date": date, "tasks": ts, "tree": _tree(ts), "config": _cfg(), "schedule": last_schedule(date),
             "runs": runs(date=date),

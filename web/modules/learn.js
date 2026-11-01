@@ -202,6 +202,21 @@ const CSS = `
 .ln-chap .md .dg-flash .dg-q { font-weight: 500; margin: 2px 0 8px; }
 .ln-chap .md .dg-flash > .dg-a { display: none; }
 .ln-chap .md .dg-flash textarea { width: 100%; font-size: 14px; background: var(--panel); }
+.ln-chap .md .dg-parts { display: grid; gap: 6px; }
+.ln-chap .md .dg-parts label { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: start; }
+.ln-chap .md .dg-parts label > span { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 7px; }
+.ln-apply .ln-applyform { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 10px; }
+.ln-apply .ln-applyform .what { grid-column: 1 / -1; }
+@media (max-width: 720px) { .ln-apply .ln-applyform { grid-template-columns: 1fr; } }
+.ln-refs { margin-top: 8px; font-size: 13px; display: grid; gap: 4px; }
+.ln-habits { display: grid; gap: 6px; margin: 10px 0; padding: 10px 14px; }
+.ln-habit { display: grid; grid-template-columns: auto 9em 1fr; gap: 10px; align-items: baseline; font-size: 13px; color: inherit; text-decoration: none; }
+.ln-habit .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .ln-habit { grid-template-columns: auto 1fr; } .ln-habit .muted { grid-column: 1 / -1; white-space: normal; } }
+a.ln-habit:hover b { text-decoration: underline; }
+.ln-chkstat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; font-size: 13px; }
+.ln-chap .md .dg-ptags { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; }
+@media (max-width: 640px) { .ln-chap .md .dg-parts label { grid-template-columns: 1fr; gap: 2px; } .ln-chap .md .dg-parts label > span { padding-top: 0; } }
 .ln-chap .md .dg-flash .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .ln-chap .md .dg-flash .acts .muted { font-size: 12px; }
 .ln-chap .md .dg-flash.open { border-style: solid; background: var(--panel); }
@@ -505,6 +520,7 @@ async function renderHome(el, ctx, scrollToPlans) {
       { label: '给我一个学习计划', icon: 'plan', onClick: () => { setMode('plan'); box.focus(); } },
       { label: '根据反馈调整', icon: 'refresh', onClick: () => (latestPlan ? (location.hash = `#learn/plan/${latestPlan.id}/adapt`) : toast('还没有学习计划', true)) },
     ]),
+    habitsCard(ctx),
   );
   update();
 
@@ -925,6 +941,7 @@ async function renderChapter(el, ctx, pid, sid) {
     show(tab);
   } else main.append(qv);
 
+  main.append(applyCard(ctx, s));
   main.append(historyView(ctx, s));
   // 我的笔记 / 理解度 / 反馈（与计划页同一份数据）
   const saved = h('span.ln-saved');
@@ -1160,19 +1177,34 @@ function keyPoints(ctx, s) {
     h('div.hd', {}, [h('b', {}, c.front), c.tag ? h('span.tg', {}, c.tag) : null]), md(c.back)])));
 }
 
+// 停一下的固定作答格式：结论 + 为什么（机制）+ 一个例子 + 在我项目里怎么用（前三栏必填才能请 Agent 点评）
+const CHECK_PARTS = [
+  ['结论', '结论', '一句话下判断'],
+  ['机制', '为什么', '背后的机制 / 因果：为什么成立，不是复述结论'],
+  ['例子', '例子', '一个具体例子或数字（哪个产品 / 论文 / 场景）'],
+  ['应用', '用到我的项目', '在我的项目里怎么用（暂时用不上就写为什么）'],
+];
+const CHECK_REQUIRED = ['结论', '机制', '例子'];
+
 function checkCard(ctx, card, s, idx) {
   const { api, h, toast } = ctx;
   const qEl = card.querySelector('.dg-q'), aEl = card.querySelector('.dg-a');
   if (!qEl || !aEl) return;
   const q = qEl.textContent.trim(), points = aEl.innerText.trim(), pointsHtml = aEl.innerHTML;
   let c = (s.checks || {})[idx] || null;
-  const ta = h('textarea', { rows: 3, placeholder: '先写下你的判断和理由（不用写全，写你真实的第一反应），再对照要点', value: c?.answer || '' });
   const draftKey = `ln-chk-${s.id}-${idx}`;
-  if (!c?.answer) { try { ta.value = localStorage.getItem(draftKey) || ''; } catch { /* ignore */ } }
-  ta.addEventListener('input', () => { try { localStorage.setItem(draftKey, ta.value); } catch { /* ignore */ } });
+  // 老作答没有分栏：整段放进「结论」，改写时再拆
+  const initial = () => c?.parts || (c?.answer ? { 结论: c.answer } : null);
+  let draft = initial();
+  if (!draft) { try { draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { draft = null; } }
+  const fields = Object.fromEntries(CHECK_PARTS.map(([k, , ph]) => [k, h('textarea', { rows: k === '结论' && (draft?.[k] || '').length < 30 ? 1 : 2, placeholder: ph, value: draft?.[k] || '' })]));
+  const parts = () => Object.fromEntries(CHECK_PARTS.map(([k]) => [k, fields[k].value.trim()]).filter(([, v]) => v));
+  const missing = () => CHECK_REQUIRED.filter((k) => !fields[k].value.trim());
+  Object.values(fields).forEach((ta) => ta.addEventListener('input', () => { try { localStorage.setItem(draftKey, JSON.stringify(parts())); } catch { /* ignore */ } }));
+  const form = h('div.dg-parts', {}, CHECK_PARTS.map(([k, label]) => h('label', {}, [h('span', {}, label + (CHECK_REQUIRED.includes(k) ? '' : '（选填）')), fields[k]])));
   const box = h('div');
   const save = async (review) => {
-    try { c = await api.post(`/api/learn/steps/${s.id}/checks/${idx}`, { q, points, answer: ta.value.trim(), review }); }
+    try { c = await api.post(`/api/learn/steps/${s.id}/checks/${idx}`, { q, points, parts: parts(), review }); }
     catch (e) { toast('保存失败：' + e.message, true); return; }
     try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     draw();
@@ -1183,24 +1215,38 @@ function checkCard(ctx, card, s, idx) {
     const st = await api.get(`/api/learn/steps/${s.id}`).catch(() => null);
     if (st?.checks?.[idx]) { c = st.checks[idx]; draw(); }
   };
+  const askReview = () => {
+    const miss = missing();
+    if (miss.length) { toast('按格式补上：' + miss.map((k) => CHECK_PARTS.find((x) => x[0] === k)[1]).join('、'), true); fields[miss[0]].focus(); return; }
+    save(true);
+  };
   const list = (cls, label, arr) => (arr?.length ? h('div.row2.' + cls, {}, [h('b', {}, label), h('div', {}, arr.length > 1 ? h('ul', { style: { margin: 0, paddingLeft: '16px' } }, arr.map((x) => h('li', {}, x))) : arr[0])]) : null);
+  const partTags = (ps) => {
+    const ks = CHECK_PARTS.filter(([k]) => ps?.[k] !== undefined);
+    if (!ks.length) return null;
+    const low = Math.min(...ks.map(([k]) => ps[k]));
+    return h('div.dg-ptags', {}, ks.map(([k, label]) => h('span.tag' + (ps[k] >= 0.7 ? '.ok' : ps[k] === low && low < 0.7 ? '.warn' : '.gray'), {}, `${label} ${Math.round(ps[k] * 100)}%`)));
+  };
   const draw = () => {
     const shown = c && ['viewed', 'answered', 'reviewing', 'reviewed', 'failed'].includes(c.status);
     card.classList.toggle('open', !!shown);
     const kids = [];
     if (!shown) {
       const plain = h('button.sm', { onclick: () => save(false) });
-      const label = () => { plain.textContent = ta.value.trim() ? '只对照要点' : '直接看要点'; };
-      ta.oninput = label;
+      const label = () => { plain.textContent = Object.keys(parts()).length ? '只对照要点' : '直接看要点'; };
+      Object.values(fields).forEach((ta) => { ta.oninput = label; });
       label();
-      kids.push(ta, h('div.acts', {}, [
-        h('button.sm.primary', { onclick: () => (ta.value.trim() ? save(true) : toast('先写下你的判断，哪怕一句话', true)) }, '对照要点 + Agent 点评差异'),
+      kids.push(form, h('div.acts', {}, [
+        h('button.sm.primary', { onclick: askReview }, '对照要点 + Agent 点评差异'),
         plain,
-        h('span.muted', {}, '写下来再对照，差距才看得见'),
+        h('span.muted', {}, '结论、为什么、例子都写上再对照，差距才看得见'),
       ]));
     } else {
+      const mine = c.parts
+        ? h('div', {}, CHECK_PARTS.filter(([k]) => c.parts[k]).map(([k, label]) => h('div', {}, [h('b', {}, label + '：'), c.parts[k]])))
+        : (c.answer || h('span.muted', {}, '（没写，直接看了要点）'));
       kids.push(h('div.dg-cmp', {}, [
-        h('div.mine', {}, [h('div.k', {}, '我的判断'), c.answer || h('span.muted', {}, '（没写，直接看了要点）')]),
+        h('div.mine', {}, [h('div.k', {}, '我的判断'), mine]),
         h('div.pts', {}, [h('div.k', {}, '要点'), h('div', { html: pointsHtml })]),
       ]));
       const rv = c.review;
@@ -1208,18 +1254,19 @@ function checkCard(ctx, card, s, idx) {
       else if (rv) {
         kids.push(h('div.dg-rv', {}, [
           h('span.sc', {}, `${Math.round((rv.score || 0) * 100)}%`),
+          partTags(rv.parts),
           list('ok', '抓到了', reviewLists(rv).got), list('miss', '漏掉了', reviewLists(rv).miss),
           rv.better ? h('div.better', {}, [h('b', {}, '高手会这样想：'), rv.better]) : null,
         ]));
       } else if (c.status === 'failed') kids.push(h('div.dg-rv', { style: { color: 'var(--err)' } }, '点评失败，可以重写后再试'));
       kids.push(h('div.acts', {}, [
-        h('button.sm', { onclick: () => { c = { ...c, status: 'editing' }; ta.value = c.answer || ''; draw(); ta.focus(); } }, c.answer ? '改写我的判断' : '补写我的判断'),
-        c.answer && !rv && c.status !== 'reviewing' ? h('button.sm.outline', { onclick: () => save(true) }, '请 Agent 点评差异') : null,
+        h('button.sm', { onclick: () => { c = { ...c, status: 'editing' }; draw(); fields[missing()[0] || '结论'].focus(); } }, c.answer ? '改写我的判断' : '补写我的判断'),
+        c.answer && !rv && c.status !== 'reviewing' ? h('button.sm.outline', { onclick: askReview }, '请 Agent 点评差异') : null,
       ]));
     }
     box.replaceChildren(...kids.filter(Boolean));
   };
-  card.replaceChildren(h('div.lbl', {}, '停一下'), qEl, aEl, box);
+  card.replaceChildren(h('div.lbl', {}, '停一下 · 结论 → 为什么 → 例子 → 用到我的项目'), qEl, aEl, box);
   draw();
   if (c?.status === 'reviewing') poll();
 }
@@ -1263,6 +1310,7 @@ function histItem(ctx, e) {
     const li = (label, arr) => (arr?.length ? h('div.sub', {}, [h('b', {}, label), arr.join('；')]) : null);
     return h('div.ln-hi', {}, [h('div.hd', {}, [at, h('b', {}, '停一下'), h('span.tag', {}, `${Math.round((rv.score || 0) * 100)}%`), d.backfill ? h('span.muted', {}, '（从任务记录补回）') : null]),
       h('div', {}, d.q), h('div.mine', {}, '我答：' + (d.answer || '')),
+      rv.parts && Object.keys(rv.parts).length ? h('div.sub', {}, CHECK_PARTS.filter(([k]) => rv.parts[k] !== undefined).map(([k, l]) => `${l} ${Math.round(rv.parts[k] * 100)}%`).join(' · ')) : null,
       li('抓到了：', reviewLists(rv).got), li('漏掉了：', reviewLists(rv).miss),
       rv.better ? h('div.sub', {}, [h('b', {}, '高手会这样想：'), rv.better]) : null]);
   }
@@ -1273,6 +1321,76 @@ function histItem(ctx, e) {
     return h('div.ln-hi', {}, h('div.hd', {}, [at, ...Object.entries(d).filter(([k]) => k !== 'prev').map(([k, v]) => h('span', {}, `${names[k] || k}：${String(v).slice(0, 80)}`))]));
   }
   return h('div.ln-hi', {}, h('div.hd', {}, [at, e.kind]));
+}
+
+// 学完当天用到项目：复制一段给 Claude Code 的提示，自动找当天会话 / 文档 / 提交里的引用，也能手动记一条
+function applyCard(ctx, s) {
+  const { api, h, toast, ui } = ctx;
+  const box = h('div.card.ln-apply', { id: 'ln-apply' });
+  const load = async () => {
+    let a;
+    try { a = await api.get(`/api/learn/steps/${s.id}/apply`); } catch { box.replaceChildren(); return; }
+    const t = a.today || {};
+    const refs = a.records || [];
+    const kindName = { manual: '手动记录', session: '会话', doc: '文档', commit: '提交' };
+    const proj = h('input', { placeholder: '项目，例如 self_startup' });
+    const what = h('input.what', { placeholder: '用了这一章的哪一条、怎么用的' });
+    const ev = h('input', { placeholder: '证据（可选）：commit / 文档 / 会话' });
+    box.replaceChildren(...[
+      h('div.row', {}, [h('h3', {}, '学完今天就用一次'), h('span.grow'),
+        t.applied ? h('span.tag.ok', {}, '今天已用到项目') : a.today ? h('span.tag.warn', {}, '今天学完了，还没用到项目') : h('span.muted', {}, '学完当天在一个项目里用一次')]),
+      h('div.muted', {}, '复制下面的提示发给项目里的 Claude Code，让它把这章的一条方法用到当前工作上；会话、文档或提交里提到这一章就自动算数。'),
+      h('div.row', { style: { marginTop: '8px' } }, [
+        h('button.sm.primary', { onclick: async () => { try { await navigator.clipboard.writeText(a.prompt); toast('已复制，贴到项目会话里'); } catch { toast('复制失败', true); } } }, [ui.icon('doc'), ' 复制给 Claude Code 的提示']),
+        h('span.muted', { title: (a.terms || []).join('\n') }, `自动识别 ${(a.terms || []).length} 个词（章名、知识卡标题…）`)]),
+      (t.refs || []).length ? h('div.ln-refs', {}, t.refs.map((r) => h('div', {}, [h('span.tag.gray', {}, kindName[r.kind] || r.kind), ' ', r.where, r.term ? h('span.muted', {}, ` · ${r.term}`) : null]))) : null,
+      h('div.ln-applyform', {}, [what, proj, ev, h('button.sm', { onclick: async () => {
+        if (!what.value.trim()) { toast('写一句用了哪一条', true); return; }
+        try { await api.post(`/api/learn/steps/${s.id}/apply`, { project: proj.value.trim(), what: what.value.trim(), evidence: ev.value.trim() }); toast('已记录'); load(); }
+        catch (e) { toast('记录失败：' + e.message, true); }
+      } }, '手动记一条')]),
+      refs.length ? h('div.ln-refs', {}, [h('div.card-label', {}, '历次应用'), ...refs.slice(0, 6).map((r) => h('div', {}, [h('span.muted', {}, (r.at || '').slice(0, 16).replace('T', ' ') + ' '), r.project ? h('b', {}, r.project + ' ') : null, r.what, r.evidence ? h('span.muted', {}, ` · ${r.evidence}`) : null]))]) : null,
+    ].filter(Boolean));
+  };
+  load();
+  return box;
+}
+
+// 总览顶部：三个习惯今天的状态
+function habitsCard(ctx) {
+  const { api, h } = ctx;
+  const box = h('div');
+  api.get('/api/learn/habits').then((x) => {
+    const k = x.check || {}, a = x.apply || {}, p = x.paper || {};
+    const recent = k.recent_avg ?? null;
+    const item = (ok, title, text, href) => h(href ? 'a.ln-habit' : 'div.ln-habit', href ? { href } : {}, [h('span.tag' + (ok === null ? '.gray' : ok ? '.ok' : '.warn'), {}, ok === null ? '—' : ok ? '达标' : '未达标'), h('b', {}, title), h('span.muted', { title: text }, text)]);
+    box.replaceChildren(h('div.card.ln-habits', {}, [
+      item(recent === null ? null : recent >= k.target, '停一下', recent === null ? `近 ${k.days || 7} 天没作答 · 目标 ≥ ${k.target || 65}%`
+        : `近 ${k.days} 天 ${recent}% · 目标 ≥ ${k.target}%` + (k.weakest ? ` · 最弱：${(CHECK_PARTS.find(([key]) => key === k.weakest) || [])[1] || k.weakest}` : '')),
+      (() => {
+        const miss = (a.learned || []).filter((c) => !c.applied);
+        const first = miss[0];
+        return item(a.total ? !miss.length : null, '学完当天用到项目', a.total ? `今天学完 ${a.total} 章，已用到项目 ${a.applied} 章` + (first ? ` · 下一章去用：${first.title.split(/[：:]/)[0]}` : '') : '今天还没学完新章节',
+          first ? chapterHref(first.plan_id, first.step_id) : '');
+      })(),
+      item(p.done, '每日论文', p.done ? `已写 ${p.count}/${p.goal} 篇一句话判断 → ${p.kb_path}` : `今天还没读 · ${p.minutes} 分钟，在信息推荐里挑 1–${p.goal} 篇写一句话判断`, '#feed'),
+    ]));
+  }).catch(() => {});
+  return box;
+}
+
+// 停一下：近 7 天平均对照目标，四栏各自平均，标出最弱的一栏
+function checkStatsRow(ctx, k) {
+  const { h } = ctx;
+  if (!k || k.avg === null || k.avg === undefined) return null;
+  const label = Object.fromEntries(CHECK_PARTS.map(([key, l]) => [key, l]));
+  const recent = k.recent_avg ?? null;
+  return h('div.ln-chkstat', {}, [
+    h('b', {}, '停一下'),
+    h('span.tag' + (recent !== null && recent >= k.target ? '.ok' : '.warn'), {}, recent !== null ? `近 ${k.days} 天 ${recent}%（${k.recent_n} 次）` : `近 ${k.days} 天没作答`),
+    h('span.muted', {}, `目标 ≥ ${k.target}% · 累计平均 ${k.avg}%`),
+    ...Object.entries(k.parts || {}).map(([key, v]) => h('span.tag' + (key === k.weakest ? '.warn' : '.gray'), { title: key === k.weakest ? '最弱的一栏，下一次重点补' : '' }, `${label[key] || key} ${v}%`)),
+  ]);
 }
 
 // 成长档案：每章最近一次测试、三个维度平均、最近的薄弱点
@@ -1287,6 +1405,7 @@ function growthView(ctx, pid) {
         `测试 ${g.counts.quiz} 次 · 停一下点评 ${g.counts.check} 次` + (g.counts.check_avg !== null ? `（平均 ${g.counts.check_avg}%）` : ''))]),
       Object.keys(g.dims).length ? h('div.ln-dims', {}, Object.entries(g.dims).map(([d, v]) => h('div.ln-dimrow', {}, [
         h('b', {}, d), h('div.bar', {}, h('i', { style: { width: v + '%' } })), h('span.v', {}, v + '%'), h('span.t', {}, { 理解: '对这个方向的理解', 判断: '判断力', 应用: '用到自己的论文 / 项目' }[d])]))) : null,
+      checkStatsRow(ctx, g.checks),
       g.chapters.length ? h('div.ln-gch', {}, g.chapters.map((c) => h('a', { href: chapterHref(pid, c.step_id) }, [
         h('span', {}, c.title), h('b', {}, c.score !== null && c.score !== undefined ? `${c.score}` : '—')]))) : null,
       g.weak.length ? h('div', { style: { marginTop: '10px' } }, [h('div.card-label', {}, '最近要补的地方（来自测试和停一下点评）'),

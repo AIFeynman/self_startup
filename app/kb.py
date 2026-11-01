@@ -23,11 +23,11 @@ MANIFEST = ".manifest.json"
 
 TYPE_DIRS = {
     "daily": "daily", "note": "notes", "research": "research", "product": "products",
-    "paper": "learn/papers", "repo": "learn/repos", "plan": "learn/plans", "feed": "feed", "annotation": "annotations",
+    "paper": "learn/papers", "papernote": "learn/paper-notes", "repo": "learn/repos", "plan": "learn/plans", "feed": "feed", "annotation": "annotations",
 }
 TYPE_NAMES = {
     "daily": "每日记录", "note": "问题与经验", "research": "调研", "product": "产品体验",
-    "paper": "论文深读", "repo": "项目解读", "plan": "学习计划", "feed": "收藏的信息", "annotation": "阅读批注",
+    "paper": "论文深读", "papernote": "论文笔记", "repo": "项目解读", "plan": "学习计划", "feed": "收藏的信息", "annotation": "阅读批注",
 }
 
 README = """# 本地知识库（自动生成，勿手改）
@@ -250,6 +250,23 @@ def _feed_saved() -> list[dict]:
                  summary=f"{len(rs)} 条点赞/收藏，最近：{rs[0]['title']}", path="feed/saved.md")]
 
 
+def _paper_notes() -> list[dict]:
+    """每日论文笔记：信息推荐里读完写下的一句话判断，按天一篇。"""
+    if not _has("feed_feedback") or "verdict" not in {r["name"] for r in db.rows("PRAGMA table_info(feed_feedback)")}:
+        return []
+    rs = db.rows("SELECT i.title, i.url, i.source, i.type, f.verdict, f.verdict_at FROM feed_feedback f JOIN feed_items i ON i.id=f.item_id "
+                 "WHERE f.verdict<>'' AND f.verdict_at<>'' ORDER BY f.verdict_at")
+    by: dict[str, list[dict]] = {}
+    for r in rs:
+        by.setdefault(r["verdict_at"][:10], []).append(r)
+    out = []
+    for d, xs in by.items():
+        body = "\n".join(f"- [{r['title']}]({r['url']}) · {r['source']}（{r['verdict_at'][11:16]}）\n  **判断**：{r['verdict']}" for r in xs)
+        out.append(_doc("papernote", d, f"{d} 论文笔记", body, date=d, updated=xs[-1]["verdict_at"], tags=["论文", "每日论文"],
+                        summary=f"{len(xs)} 篇：{xs[0]['title'][:40]}", path=f"learn/paper-notes/{d}.md"))
+    return out
+
+
 def _annotations() -> list[dict]:
     """一份材料一个文件：每条划线（或针对全文）一节，下面是评论和问答。"""
     if not _has("annotations"):
@@ -357,7 +374,7 @@ def _daily(docs: list[dict]) -> list[dict]:
 
 def build() -> list[dict]:
     docs: list[dict] = []
-    for fn in (_notes, _research, _products, _learn_items, _plans, _feed_saved, _annotations):
+    for fn in (_notes, _research, _products, _learn_items, _plans, _feed_saved, _paper_notes, _annotations):
         try:
             docs += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它

@@ -95,6 +95,10 @@ def _ensure_cols() -> None:
         db.execute("ALTER TABLE feed_feedback ADD COLUMN clicks INTEGER DEFAULT 0")
     if "last_click" not in cols:
         db.execute("ALTER TABLE feed_feedback ADD COLUMN last_click TEXT DEFAULT ''")
+    if "verdict" not in cols:  # 读完论文写的一句话判断（每日论文习惯，进知识库）
+        db.execute("ALTER TABLE feed_feedback ADD COLUMN verdict TEXT DEFAULT ''")
+    if "verdict_at" not in cols:
+        db.execute("ALTER TABLE feed_feedback ADD COLUMN verdict_at TEXT DEFAULT ''")
     _cols_ok = True
 
 
@@ -154,7 +158,9 @@ def _load_items(limit: int = 5000) -> list[dict]:
 
 
 def _feedback() -> dict[str, dict]:
-    return {r["item_id"]: {"vote": r["vote"], "saved": r["saved"], "hidden": r["hidden"]}
+    _ensure_cols()
+    return {r["item_id"]: {"vote": r["vote"], "saved": r["saved"], "hidden": r["hidden"], "verdict": r.get("verdict") or "",
+                           "verdict_at": r.get("verdict_at") or ""}
             for r in db.rows("SELECT * FROM feed_feedback")}
 
 
@@ -391,6 +397,39 @@ def feedback(body: FeedbackIn):
                "ON CONFLICT(item_id) DO UPDATE SET vote=excluded.vote, saved=excluded.saved, hidden=excluded.hidden, "
                "updated_at=excluded.updated_at", [body.id, new["vote"], new["saved"], new["hidden"], db.now()])
     return {"id": body.id, **new}
+
+
+class VerdictIn(BaseModel):
+    id: str
+    text: str = ""
+
+
+@router.post("/verdict")
+def verdict(body: VerdictIn):
+    """读完一篇写一句话判断（值不值得跟、增量在哪、证据可不可信）；空字符串 = 删掉。当天的判断汇成知识库里的论文笔记。"""
+    _ensure_cols()
+    if not db.row("SELECT id FROM feed_items WHERE id=?", [body.id]):
+        raise HTTPException(404, "条目不存在")
+    text = body.text.strip()[:500]
+    at = db.now() if text else ""
+    db.execute("INSERT INTO feed_feedback (item_id, verdict, verdict_at, updated_at) VALUES (?,?,?,?) "
+               "ON CONFLICT(item_id) DO UPDATE SET verdict=excluded.verdict, verdict_at=excluded.verdict_at, "
+               "updated_at=excluded.updated_at", [body.id, text, at, db.now()])
+    try:
+        from .. import kb
+        from . import _habits
+        _habits.sync_paper_task(db.today())
+        kb.schedule_sync()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"id": body.id, "verdict": text, "verdict_at": at}
+
+
+def paper_notes(date: str) -> list[dict]:
+    """某天写了一句话判断的条目（每日论文习惯的证据）。"""
+    _ensure_cols()
+    return db.rows("SELECT i.id, i.type, i.title, i.url, i.source, i.date, f.verdict, f.verdict_at FROM feed_feedback f "
+                   "JOIN feed_items i ON i.id=f.item_id WHERE f.verdict<>'' AND substr(f.verdict_at,1,10)=? ORDER BY f.verdict_at", [date])
 
 
 class ClickIn(BaseModel):

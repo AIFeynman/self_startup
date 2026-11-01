@@ -378,8 +378,10 @@ export default {
         h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
         await deliveries({ api, h, ui }, { date: state.date }),
       ];
-      if (d.learning.length || lx.steps.length || lx.items.length || lx.events?.length) {
+      if (d.learning.length || lx.steps.length || lx.items.length || lx.events?.length || lx.habits?.length) {
         nodes.push(ui.section('学习'), h('div.card', {}, [
+          lx.habits?.length ? h('div', { style: { marginBottom: '8px' } }, [h('span.card-label', {}, '学习习惯（停一下 / 学完当天用到项目 / 每日论文）'),
+            ...lx.habits.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
           d.learning.length ? taskList(d.learning) : null,
           lx.steps.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '深度学习步骤'),
             ...lx.steps.map((s) => h('div.item', {}, [h('span.tag' + (s.status === 'done' ? '.ok' : '.gray'), {}, s.status), s.plan_topic ? h('span.muted', {}, s.plan_topic + ' · ') : null, s.title,

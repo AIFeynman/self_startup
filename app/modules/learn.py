@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS learn_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id     INTEGER,
     step_id     INTEGER,
-    kind        TEXT NOT NULL,              -- check 作答 / check_review 点评 / quiz 测试 / rating 理解度·反馈·状态 / chapter 章节生成
+    kind        TEXT NOT NULL,              -- check 作答 / check_review 点评 / quiz 测试 / rating 理解度·反馈·状态 / chapter 章节生成 / apply 用到项目
     data        TEXT DEFAULT '{}',
     src         TEXT DEFAULT '',            -- 来源：job:<id> / backfill
     created_at  TEXT
@@ -949,6 +949,8 @@ def event_line(e: dict, titles: dict | None = None) -> str:
                 + (f"；漏：{'；'.join(rv.get('missing') or [])[:120]}" if rv.get("missing") else ""))
     if e["kind"] == "check":
         return f"{at} 停一下「{d.get('q', '')[:40]}」我答：{d.get('answer', '')[:80]}"
+    if e["kind"] == "apply":
+        return f"{at} 把「{t}」用到项目 {d.get('project', '')}：{d.get('what', '')[:120]}" + (f"（{d['evidence'][:80]}）" if d.get("evidence") else "")
     if e["kind"] == "rating":
         return f"{at} 「{t}」" + "，".join(f"{k}→{v}" for k, v in d.items() if k != "prev")[:200]
     if e["kind"] == "chapter":
@@ -1011,6 +1013,47 @@ def step_events(sid: int):
     return events_of(step_id=sid)
 
 
+class ApplyIn(BaseModel):
+    project: str = ""
+    what: str
+    evidence: str = ""  # commit / PR / 文档路径 / 会话链接
+
+
+@router.post("/steps/{sid}/apply")
+def record_apply(sid: int, body: ApplyIn):
+    """记一次「把这章用到项目里」（只追加）：哪个项目、做了什么、证据。"""
+    s = _step(sid)
+    if not body.what.strip():
+        raise HTTPException(400, "写一句做了什么")
+    log_event(s, "apply", {"project": body.project.strip()[:120], "what": body.what.strip()[:1000], "evidence": body.evidence.strip()[:500]})
+    return {"ok": True}
+
+
+@router.get("/steps/{sid}/apply")
+def apply_info(sid: int, date: str = ""):
+    """今天把这章用到项目：给一段可直接贴进 Claude Code / Codex 的提示（带章名和章节路径，便于自动识别引用），和今天的应用记录 / 自动发现的引用。"""
+    from . import _habits
+    s = _step(sid)
+    p = _plan(s["plan_id"])
+    cards = "\n".join(f"- {c.get('front', '')}：{re.sub(r'<[^>]+>', '', str(c.get('back', '')))[:160]}" for c in s["cards"][:6])
+    prompt = (f"我刚学完《{s['title']}》（学习计划「{p['topic']}」，章节全文：{_step_dir(s) / 'chapter.md'}）。\n"
+              f"本章要点：\n{cards or '（见章节全文）'}\n\n"
+              "请在当前项目里找一个今天就能做完的地方用上其中一条（比如给评估加一个二元评判、补一段错误分析、改一处设计），"
+              "先说你选哪条、为什么适合这个项目，再动手；做完在总结里写明「应用了《" + s["title"] + "》的哪一条」。")
+    date = date or db.today()
+    st = next((x for x in _habits.apply_status(date)["learned"] if x["step_id"] == sid), None)
+    manual = [e for e in events_of(step_id=sid) if e["kind"] == "apply"]
+    return {"prompt": prompt, "terms": _habits.chapter_terms(s), "today": st,
+            "records": [{"at": e["created_at"], **e["data"]} for e in manual]}
+
+
+@router.get("/habits")
+def habits(date: str = "", apply: bool = True):
+    """学习习惯三项的达成情况：停一下平均分对目标、学完当天用到项目、每日论文笔记。"""
+    from . import _habits
+    return _habits.status(date or db.today(), with_apply=apply)
+
+
 @router.get("/plans/{pid}/growth")
 def plan_growth(pid: int):
     """成长档案：每章最近一次测试的分数和三个维度、各维度平均、最近的薄弱点和停一下漏掉的点。"""
@@ -1041,7 +1084,23 @@ def plan_growth(pid: int):
     return {"chapters": chapters, "dims": dims, "weak": weak[:12], "counts": {
         "quiz": sum(e["kind"] == "quiz" for e in evs), "check": len(checks),
         "check_avg": round(100 * sum(ck) / len(ck)) if ck else None, "events": len(evs)},
-        "titles": {k: v["title"] for k, v in steps.items()}}
+        "checks": check_stats(checks), "titles": {k: v["title"] for k, v in steps.items()}}
+
+
+def check_stats(reviews: list[dict], days: int = 7) -> dict:
+    """停一下点评的统计：总平均、近 N 天平均（对照目标）、四栏各自平均和最弱的一栏（只算用了固定格式的作答）。"""
+    sc = lambda e: float((e["data"].get("review") or {}).get("score") or 0)  # noqa: E731
+    since = (date.fromisoformat(db.today()) - timedelta(days=days - 1)).isoformat()
+    recent = [sc(e) for e in reviews if (e["created_at"] or "")[:10] >= since]
+    parts: dict[str, list[float]] = {k: [] for k in CHECK_PARTS}
+    for e in reviews:
+        for k, v in ((e["data"].get("review") or {}).get("parts") or {}).items():
+            if k in parts:
+                parts[k].append(float(v))
+    part_avg = {k: round(100 * sum(v) / len(v)) for k, v in parts.items() if v}
+    avg = lambda xs: round(100 * sum(xs) / len(xs)) if xs else None  # noqa: E731
+    return {"avg": avg([sc(e) for e in reviews]), "recent_avg": avg(recent), "recent_n": len(recent), "days": days,
+            "target": CHECK_TARGET, "parts": part_avg, "weakest": min(part_avg, key=part_avg.get) if part_avg else ""}
 
 
 # ---------- B2. 章节教程 + 章末测试 ----------
@@ -1452,7 +1511,19 @@ class CheckIn(BaseModel):
     q: str
     points: str = ""
     answer: str = ""
+    parts: dict[str, str] = {}  # 固定格式的四栏，键见 CHECK_PARTS；answer 是拼好的全文
     review: bool = False
+
+
+# 「停一下」固定作答格式：结论 + 为什么（机制）+ 一个例子 + 在我项目里怎么用（2026-10-31：丢分最多的是缺机制和缺例子）
+CHECK_PARTS = {"结论": "一句话下判断", "机制": "为什么成立：背后的因果 / 机制", "例子": "一个具体例子或数字",
+               "应用": "在我的项目里怎么用"}
+CHECK_TARGET = 65  # 停一下平均分目标（%）
+
+
+def check_answer(parts: dict) -> str:
+    """四栏拼成一段作答全文（存档、点评、复盘都看它）。"""
+    return "\n".join(f"{k}：{str(parts.get(k) or '').strip()}" for k in CHECK_PARTS if str(parts.get(k) or "").strip())
 
 
 def check_prompt(s: dict, c: dict) -> str:
@@ -1466,12 +1537,19 @@ def check_prompt(s: dict, c: dict) -> str:
 要点（参考答案）：{c['points'] or '（未提供，按本章内容判断）'}
 用户的判断：{c['answer']}
 
+用户按固定格式作答：结论（一句话判断）/ 机制（为什么成立）/ 例子（一个具体例子或数字）/ 应用（在他自己的项目里怎么用）。
+某一栏没写就当这一栏缺。
+
 要求：短、具体、鼓励为主，不要逐字逐句对要点。看的是理解和判断力：意思对、抓住了核心判断就算抓到，换了说法、举了别的例子都算；
 要点之外说得有道理的也算抓到（要点不是唯一答案）。只指出真正影响理解的缺口或想偏处，细枝末节不提。
+机制和例子是这类作答最常丢分的两项：机制没讲因果（只有结论）、例子空泛（没有具体对象或数字）时要在 missing 里点明，并在 better 里示范补上。
 不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
 {{"covered": ["抓到了什么（含要点之外有道理的），每条一句"], "missing": ["漏掉或想偏的关键点，每条一句，说清为什么重要"],
- "better": "高手会怎么想：一两句示范推理路径", "score": 0.0}}
-covered、missing 各最多 3 条，每条一句话、40 字以内（展开的道理放进 better）。score 取 0–1，宽松给分：核心判断对了就 ≥ 0.7，方向对但缺依据约 0.5，基本没抓住才低于 0.3。
+ "better": "高手会怎么想：一两句示范推理路径（结论 → 机制 → 例子）",
+ "parts": {{"结论": 0.0, "机制": 0.0, "例子": 0.0, "应用": 0.0}}, "score": 0.0}}
+covered、missing 各最多 3 条，每条一句话、40 字以内（展开的道理放进 better）。
+parts 每栏 0–1：结论 = 判断对不对；机制 = 因果讲没讲清；例子 = 有没有具体、贴切的例子；应用 = 落到项目里是否具体可做（空着给 0）。
+score 取 0–1，宽松给分：核心判断对了且讲了机制就 ≥ 0.7，判断对但缺机制或例子约 0.5，基本没抓住才低于 0.3。
 """
 
 
@@ -1480,12 +1558,16 @@ def save_check(sid: int, idx: int, body: CheckIn):
     """保存一个「停一下」的作答；review=true 时提交后台点评（对照要点看差异）。"""
     s = _step(sid)
     checks = s["checks"]
-    c = {"q": body.q[:600], "points": body.points[:3000], "answer": body.answer[:3000], "at": db.now(),
-         "status": "answered" if body.answer.strip() else "viewed"}
+    parts = {k: str(body.parts.get(k) or "").strip()[:1500] for k in CHECK_PARTS if str(body.parts.get(k) or "").strip()}
+    answer = (check_answer(parts) if parts else body.answer)[:3000]
+    c = {"q": body.q[:600], "points": body.points[:3000], "answer": answer, "at": db.now(),
+         "status": "answered" if answer.strip() else "viewed"}
+    if parts:
+        c["parts"] = parts
     old = checks.get(str(idx)) or {}
     if old.get("review") and old.get("answer") == c["answer"]:  # 答案没改，保留上次点评
         c.update(status=old.get("status", "reviewed"), review=old["review"])
-    if body.review and body.answer.strip():
+    if body.review and answer.strip():
         c["status"] = "reviewing"
         c.pop("review", None)
         c["job_id"] = jobs.submit("learn", check_prompt(s, c), ref=f"learn:step:{sid}:check:{idx}",
@@ -1493,7 +1575,7 @@ def save_check(sid: int, idx: int, body: CheckIn):
     checks[str(idx)] = c
     db.update("learn_steps", sid, {"checks": checks})
     if c["answer"].strip() and c["answer"] != old.get("answer"):
-        log_event(s, "check", {"idx": idx, "q": c["q"], "points": c["points"], "answer": c["answer"]})
+        log_event(s, "check", {"idx": idx, "q": c["q"], "points": c["points"], "answer": c["answer"], "parts": parts})
     return c
 
 
@@ -1516,11 +1598,22 @@ def _finish_check(sid: int, idx: str, job: dict) -> None:
             score = 0.0
         # 两项：抓到了（含要点外的合理补充）/ 漏掉了（含想偏的）；模型仍按老格式给 off / extra 时并进去
         c.update(status="reviewed", review={"covered": (lst("covered") + lst("extra"))[:4], "missing": (lst("missing") + lst("off"))[:4],
-                                            "better": str(o.get("better") or ""), "score": score})
+                                            "better": str(o.get("better") or ""), "score": score, "parts": _part_scores(o.get("parts"))})
         log_event(s, "check_review", {"idx": int(idx), "q": c["q"], "points": c.get("points", ""), "answer": c["answer"],
                                       "review": c["review"]}, src=f"job:{job.get('id')}")
     checks[idx] = c
     db.update("learn_steps", sid, {"checks": checks})
+
+
+def _part_scores(v) -> dict:
+    """点评给的四栏分数（0–1）；老点评没有就是空。"""
+    out = {}
+    for k in CHECK_PARTS:
+        try:
+            out[k] = max(0.0, min(1.0, float((v or {}).get(k))))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return out
 
 
 def _finish_grade(sid: int, job: dict) -> None:
