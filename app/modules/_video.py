@@ -1,12 +1,16 @@
 """视频深读的素材准备：用 yt-dlp 取元数据和一条字幕（YouTube / B 站等 yt-dlp 支持的站点），转成带时间点的文字稿。
 
-不下载视频；没有字幕时可选用本机 whisper 转写音频（慢，按需开）。不依赖 app 包，深读 Agent 直接这样跑：
+不下载视频；没有字幕时可加 --whisper 转写音频，按配了哪个 key 依次试云端：
+xAI（XAI_API_KEY，grok-voice-transcribe，1 小时约 $0.1）→ Groq（GROQ_API_KEY，whisper-large-v3-turbo，1 小时约 $0.04，
+约 200 倍速）；GROK_API_KEY 按前缀认（xai- 归 xAI、gsk_ 归 Groq，两家名字容易混）。都失败或没配再用本机 whisper（base 约 6 倍速）。
+不依赖 app 包，深读 Agent 直接这样跑：
     python app/modules/_video.py <视频链接> <输出目录> [--whisper]
 产物：<输出目录>/transcript.md（按 ~45 秒分段、每段带 [hh:mm:ss] 跳转链接）与 video.json（标题、频道、时长、章节、字幕来源）。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -21,6 +25,14 @@ VIDEO_URL_RE = re.compile(r"(youtube\.com/(watch|shorts/|live/)|youtu\.be/|bilib
 LANG_PREF = ("en", "en-US", "en-GB", "zh-Hans", "zh-CN", "zh", "zh-Hant", "zh-TW")
 SEG_SECONDS = 45
 WHISPER_MAX_SECONDS = 3 * 3600
+XAI_STT_URL = "https://api.x.ai/v1/stt"
+XAI_STT_MODEL = "grok-voice-transcribe-2.0"
+XAI_LANGS = {"ar", "bs", "bg", "yue", "ca", "zh", "hr", "cs", "da", "nl", "en", "fil", "fi", "fr", "de", "el", "hi", "hu", "id",
+             "it", "ja", "ko", "mk", "ms", "nb", "fa", "pl", "pt", "ro", "ru", "sk", "es", "sv", "th", "tr", "uk", "ur", "vi"}
+GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_STT_MODEL = "whisper-large-v3-turbo"
+GROQ_MAX_BYTES = 24 * 1024 * 1024   # 免费档单文件上限 25MB，超了按小时切段
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 
 
 def is_video_url(url: str) -> bool:
@@ -177,7 +189,7 @@ def fetch(url: str, out: Path, whisper: bool = False) -> dict:
     if not cues and whisper:
         cues = _whisper(ytdlp, url, out, info, meta)
     if not cues:
-        meta["error"] = meta.get("error") or "没有可用字幕" + ("" if whisper else "（可加 --whisper 用本机 whisper 转写音频）")
+        meta["error"] = meta.get("error") or "没有可用字幕" + ("" if whisper else "（可加 --whisper 转写音频）")
     meta["segments"] = len(cues)
     (out / "video.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
     if cues:
@@ -185,28 +197,182 @@ def fetch(url: str, out: Path, whisper: bool = False) -> dict:
     return meta
 
 
+def _env(name: str) -> str:
+    """环境变量优先；Agent 直接跑本脚本时环境里可能没有，再读项目根目录的 .env。"""
+    if v := os.environ.get(name, "").strip():
+        return v
+    try:
+        for line in ENV_PATH.read_text("utf-8").splitlines():
+            k, _, v = line.strip().removeprefix("export ").partition("=")
+            if k.strip() == name:
+                return v.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
 def _whisper(ytdlp: str, url: str, out: Path, info: dict, meta: dict) -> list[tuple[float, str]]:
-    exe = shutil.which("whisper")
-    if not exe:
-        meta["error"] = "没有字幕，本机也没有 whisper"
-        return []
+    """没有字幕时转写音频：有 XAI_API_KEY 先走 xAI 云端，失败再用本机 whisper。"""
     if (info.get("duration") or 0) > WHISPER_MAX_SECONDS:
-        meta["error"] = "没有字幕，视频超过 3 小时，不做本机转写"
+        meta["error"] = "没有字幕，视频超过 3 小时，不做转写"
         return []
-    r = _run([ytdlp, "-f", "bestaudio", "-x", "--audio-format", "m4a", "--no-playlist", "-o", str(out / "audio.%(ext)s"), url],
-             timeout=900)
+    keys, local = stt_keys(), shutil.which("whisper")
+    if not keys and not local:
+        meta["error"] = "没有字幕，没配 XAI_API_KEY / GROQ_API_KEY，本机也没有 whisper"
+        return []
+    # 单声道 16kHz 低码率 mp3：语音够用，1 小时约 20MB，上传快
+    r = _run([ytdlp, "-f", "bestaudio", "-x", "--audio-format", "mp3", "--postprocessor-args", "ExtractAudio:-ac 1 -ar 16000 -b:a 40k",
+              "--no-playlist", "-o", str(out / "audio.%(ext)s"), url], timeout=900)
     audio = next(iter(sorted(out.glob("audio.*"))), None)
     if not audio:
         meta["error"] = f"音频下载失败：{r.stderr.strip()[-300:]}"
         return []
-    r = _run([exe, str(audio), "--model", "base", "--output_format", "vtt", "--output_dir", str(out)], timeout=3 * 3600)
-    vtt = out / (audio.stem + ".vtt")
-    audio.unlink(missing_ok=True)
-    if not vtt.is_file():
-        meta["error"] = f"whisper 转写失败：{r.stderr.strip()[-300:]}"
-        return []
-    meta["track"] = "本机 whisper 转写"
-    return parse_vtt(vtt.read_text("utf-8", errors="replace"))
+    try:
+        errs, cues = [], []
+        for name, key in keys:
+            cues, err = (_xai_stt if name == "xAI" else _groq_stt)(audio, info, key)
+            if cues:
+                meta["track"] = f"{name} 云端转写"
+                break
+            errs.append(f"{name}：{err}")
+        if errs:
+            meta["asr_error"] = "；".join(errs)   # 前面的服务失败过也记下来，方便看 key 是否失效
+        if cues:
+            return cues
+        if not local:
+            meta["error"] = f"云端转写失败，本机也没有 whisper：{meta.get('asr_error', '')}"
+            return []
+        r = _run([local, str(audio), "--model", "base", "--output_format", "vtt", "--output_dir", str(out)], timeout=3 * 3600)
+        vtt = out / (audio.stem + ".vtt")
+        if not vtt.is_file():
+            meta["error"] = f"whisper 转写失败：{r.stderr.strip()[-300:]}"
+            return []
+        meta["track"] = "本机 whisper 转写"
+        return parse_vtt(vtt.read_text("utf-8", errors="replace"))
+    finally:
+        audio.unlink(missing_ok=True)
+
+
+def stt_keys() -> list[tuple[str, str]]:
+    """[(服务名, key)]，按尝试顺序。"""
+    xai, groq, grok = _env("XAI_API_KEY"), _env("GROQ_API_KEY"), _env("GROK_API_KEY")
+    if grok.startswith("gsk_"):
+        groq = groq or grok
+    elif grok:
+        xai = xai or grok
+    return [(n, k) for n, k in (("xAI", xai), ("Groq", groq)) if k]
+
+
+def keyterms(info: dict) -> list[str]:
+    """给转写的专有名词提示：频道名 + 视频标签（xAI 最多 100 个、每个 ≤ 50 字）。"""
+    out, seen = [], set()
+    for t in [info.get("channel") or info.get("uploader") or "", *(info.get("tags") or [])]:
+        t = str(t).strip()
+        if t and len(t) <= 50 and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out[:40]
+
+
+def _xai_stt(audio: Path, info: dict, key: str, client=None) -> tuple[list[tuple[float, str]], str]:
+    """→ (cues, 错误)。xAI /v1/stt 返回逐词时间戳，按停顿 / 句末拼成 cue。"""
+    import httpx
+
+    lang = (info.get("language") or "").split("-")[0].lower()
+    data: dict = {"model": XAI_STT_MODEL}   # httpx 的表单字段要 dict，同名多值写成列表
+    if lang in XAI_LANGS:
+        data["language"] = lang
+    if terms := keyterms(info):
+        data["keyterm"] = terms
+    own = client is None
+    c = client or httpx.Client(timeout=httpx.Timeout(900.0, connect=15.0))
+    try:
+        with audio.open("rb") as f:   # httpx 先写表单字段再写文件，符合「file 放最后」的要求
+            r = c.post(XAI_STT_URL, headers={"Authorization": f"Bearer {key}"}, data=data,
+                       files={"file": (audio.name, f, "audio/mpeg")})
+        if r.status_code >= 400:
+            return [], f"HTTP {r.status_code}：{r.text[:300]}"
+        words = r.json().get("words") or []
+    except Exception as e:  # noqa: BLE001
+        return [], f"{type(e).__name__}: {str(e)[:200]}"
+    finally:
+        if own:
+            c.close()
+    return words_to_cues(words), ("" if words else "转写结果为空")
+
+
+def _groq_stt(audio: Path, info: dict, key: str, client=None) -> tuple[list[tuple[float, str]], str]:
+    """→ (cues, 错误)。Groq 的 OpenAI 兼容转写接口，verbose_json 自带分段时间戳；超过单文件上限就切段、时间加偏移。"""
+    import httpx
+
+    lang = (info.get("language") or "").split("-")[0].lower()
+    data: dict = {"model": GROQ_STT_MODEL, "response_format": "verbose_json", "temperature": "0"}
+    if len(lang) == 2:
+        data["language"] = lang
+    if terms := keyterms(info):
+        data["prompt"] = ", ".join(terms)[:600]   # 只用来提示拼写，上限 224 token
+    parts = [(audio, 0.0)] if audio.stat().st_size <= GROQ_MAX_BYTES else _split(audio)
+    own = client is None
+    c = client or httpx.Client(timeout=httpx.Timeout(600.0, connect=15.0))
+    cues: list[tuple[float, str]] = []
+    try:
+        for part, offset in parts:
+            with part.open("rb") as f:
+                r = c.post(GROQ_STT_URL, headers={"Authorization": f"Bearer {key}"}, data=data,
+                           files={"file": (part.name, f, "audio/mpeg")})
+            if r.status_code >= 400:
+                return [], f"HTTP {r.status_code}：{r.text[:300]}"
+            cues += [(float(sg.get("start") or 0) + offset, str(sg.get("text") or "").strip())
+                     for sg in r.json().get("segments") or [] if str(sg.get("text") or "").strip()]
+    except Exception as e:  # noqa: BLE001
+        return [], f"{type(e).__name__}: {str(e)[:200]}"
+    finally:
+        if own:
+            c.close()
+        for part, _ in parts:
+            if part != audio:
+                part.unlink(missing_ok=True)
+    return cues, ("" if cues else "转写结果为空")
+
+
+def _split(audio: Path, seconds: int = 3600) -> list[tuple[Path, float]]:
+    """按 seconds 切段（不重编码），→ [(段文件, 开始秒)]；偏移用每段实际时长累加。"""
+    _run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(audio), "-f", "segment", "-segment_time", str(seconds),
+          "-c", "copy", str(audio.with_name(audio.stem + "_part%02d" + audio.suffix))], timeout=600)
+    out, offset = [], 0.0
+    for p in sorted(audio.parent.glob(audio.stem + "_part*" + audio.suffix)):
+        out.append((p, offset))
+        r = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(p)], timeout=60)
+        offset += float((r.stdout or "0").strip() or 0)
+    return out or [(audio, 0.0)]
+
+
+_CJK = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
+
+
+def words_to_cues(words: list[dict], max_seconds: float = 12.0, gap: float = 1.0) -> list[tuple[float, str]]:
+    """逐词 → [(开始秒, 一句)]：句末标点、停顿超过 gap 秒或一句超过 max_seconds 秒就断开。中日文词之间不加空格。"""
+    cues: list[tuple[float, str]] = []
+    start, text, last_end = None, "", 0.0
+    for w in words:
+        t = str(w.get("text") or "").strip()
+        if not t:
+            continue
+        ws, we = float(w.get("start") or 0), float(w.get("end") or w.get("start") or 0)
+        if start is not None and (ws - last_end > gap or ws - start > max_seconds):
+            cues.append((start, text))
+            start, text = None, ""
+        if start is None:
+            start, text = ws, t
+        else:
+            text += t if _CJK.match(t[0]) or _CJK.search(text[-1]) else " " + t
+        last_end = we
+        if re.search(r"[.!?。！？]$", t):
+            cues.append((start, text))
+            start, text = None, ""
+    if start is not None:
+        cues.append((start, text))
+    return cues
 
 
 if __name__ == "__main__":
