@@ -173,8 +173,13 @@ def learning_extra(date: str) -> dict:
                + " ORDER BY s.plan_id, s.id LIMIT 50")
         out["steps"] = db.rows(sql, [date])
     if _has_table("learn_items") and {"title", "status", "updated_at"} <= _cols("learn_items"):
-        out["items"] = db.rows("SELECT id, kind, title, url, status, rating FROM learn_items "
-                               "WHERE status='done' AND substr(updated_at,1,10)=? LIMIT 30", [date])
+        try:  # 当天开始 / 生成好 / 追问过的深读，带追问次数和感想
+            from . import _reads
+            out["items"] = _reads.day_reads(date)[:30]
+            out["reads"] = _reads.day_lines(date)[:30]
+        except Exception:  # noqa: BLE001
+            out["items"] = db.rows("SELECT id, kind, title, url, status, rating FROM learn_items "
+                                   "WHERE status='done' AND substr(updated_at,1,10)=? LIMIT 30", [date])
     if _has_table("learn_events"):  # 学习记录：测试、停一下作答与点评、理解度 / 反馈变化
         try:
             from . import learn
@@ -381,6 +386,8 @@ def check_prompt(date: str) -> str:
     learn_txt = "\n".join(f"- 学习步骤 {s['title']}（{s['status']}）" for s in learn["steps"]) or ""
     if learn["events"]:
         learn_txt += "\n学习记录（测试、停一下作答与点评）：\n" + "\n".join(f"- {x}" for x in learn["events"][-20:])
+    if learn.get("reads"):
+        learn_txt += "\n深读（追问次数、用户写下的感想）：\n" + "\n".join(f"- {x}" for x in learn["reads"])
     if learn.get("habits"):
         learn_txt += "\n学习习惯（停一下 / 学完当天用到项目 / 每日论文）：\n" + "\n".join(f"- {x}" for x in learn["habits"])
     return f"""请检查 {date} 的事项完成情况。只读分析：不要修改任何文件或平台数据，不要运行测试、不要启动服务（会污染平台数据），用 git / Read / Grep 看证据即可。
@@ -794,6 +801,7 @@ def learning_feedback(date: str) -> list[str]:
     """学习平台当天的反馈：测试 / 停一下的批改、对步骤的理解度与反馈、读材料时划线问的问题。"""
     lx = learning_extra(date)
     out = [f"- 学习习惯 · {x}" for x in lx.get("habits") or []] + [f"- {x}" for x in lx["events"]]
+    out += [f"- {x}" for x in lx.get("reads") or []]
     if _has_table("learn_steps") and {"feedback", "understanding"} <= _cols("learn_steps"):
         for s in db.rows("SELECT title, status, understanding, feedback FROM learn_steps "
                          "WHERE substr(done_at,1,10)=? AND (feedback!='' OR understanding>0) LIMIT 20", [date]):
@@ -886,6 +894,8 @@ def agent_context(ref: str) -> str:
              "### 事项\n" + _task_lines([t for t in tasks.list_for(date)])]
     if d["learning_extra"]["steps"]:
         parts.append("### 学习步骤\n" + "\n".join(f"- [{s['id']}] {s['title']}（{s['status']}）" for s in d["learning_extra"]["steps"]))
+    if d["learning_extra"].get("reads"):
+        parts.append("### 深读（追问次数、用户写下的感想）\n" + "\n".join(f"- {x}" for x in d["learning_extra"]["reads"]))
     if d["learning_extra"].get("events"):
         parts.append("### 学习记录（测试 / 停一下 / 理解度变化；复盘学习时据此评价理解、判断、应用，并给出怎么提升）\n"
                      + "\n".join(f"- {x}" for x in d["learning_extra"]["events"][-30:]))

@@ -386,8 +386,11 @@ export default {
           lx.steps.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '深度学习步骤'),
             ...lx.steps.map((s) => h('div.item', {}, [h('span.tag' + (s.status === 'done' ? '.ok' : '.gray'), {}, s.status), s.plan_topic ? h('span.muted', {}, s.plan_topic + ' · ') : null, s.title,
               s.understanding ? h('span.muted', {}, ` 理解 ${s.understanding}/5`) : null]))]) : null,
-          lx.items.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '完成的论文 / 代码解析'),
-            ...lx.items.map((i) => h('div.item', {}, [h('span.tag', {}, i.kind), i.title || i.url]))]) : null,
+          lx.items.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '深读（论文 / 项目 / 文章）'),
+            ...lx.items.map((i) => h('div.item', {}, [h('span.tag' + (i.status === 'done' ? '.ok' : '.gray'), {}, i.kind),
+              h('a', { href: `#learn/item/${i.id}` }, i.title || i.url),
+              i.asks ? h('span.muted', {}, ` · 追问 ${i.asks}`) : null,
+              ...(i.thoughts || []).map((t) => h('div.muted', { style: { fontSize: '13px', marginLeft: '8px' } }, '感想：' + t))]))]) : null,
           lx.events?.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '学习记录（测试 / 停一下 / 理解度）'),
             ...lx.events.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
         ]));

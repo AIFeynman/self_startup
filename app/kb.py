@@ -177,7 +177,7 @@ def _learn_items() -> list[dict]:
         return []
     out = []
     for it in db.rows("SELECT * FROM learn_items ORDER BY id"):
-        type_ = "paper" if it["kind"] == "paper" else "repo"
+        type_ = "repo" if it["kind"] == "github" else "paper"  # 文章深读和论文放一起
         body = [f"- 链接：{it['url']}", f"- 状态：{it['status']}"]
         if it.get("rating"):
             body.append(f"- 评分：{'★' * int(it['rating'])}")
@@ -190,6 +190,11 @@ def _learn_items() -> list[dict]:
         # 论文笔记 / 项目摘要直接内嵌，一个文件就能读全
         op = Path(it.get("output_path") or "")
         full = op if op.suffix == ".md" else op.parent / "summary.md" if op.suffix == ".html" else None
+        try:  # 条目对话里的追问与感想
+            from .modules import _reads
+            body.append(_reads.kb_section(it["id"]))
+        except Exception:  # noqa: BLE001
+            pass
         if full and full.exists():
             body.append("\n## 全文\n" + full.read_text("utf-8", errors="ignore"))
         out.append(_doc(type_, it["id"], it["title"] or it["url"], "\n".join(body), date=it["created_at"],

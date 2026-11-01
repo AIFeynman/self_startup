@@ -32,6 +32,9 @@ const CSS = `
 .ln-step { font: 12px/1.5 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ln-step:last-child { color: var(--accent); }
 .ln-badge.github { background: var(--dark); color: var(--bg); }
+.ln-badge.article { background: var(--ok-soft); color: var(--ok); }
+.ln-reads .ln-rd { display: grid; grid-template-columns: 7.5em 3em 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
+.ln-reads .ln-rd:first-of-type { border-top: 0; }
 .ln-stars { display: inline-flex; gap: 0; }
 .ln-stars button { border: none; background: none; padding: 1px; color: var(--line-2); border-radius: 4px; }
 .ln-stars button svg { width: 17px; height: 17px; }
@@ -360,7 +363,8 @@ async function softRefresh() {
 }
 
 const tag = (h, status) => h('span.tag' + (STATUS_TAG[status] ? '.' + STATUS_TAG[status] : ''), {}, STATUS_TXT[status] || status);
-const badge = (h, kind) => h('span.ln-badge.' + (kind === 'github' ? 'github' : 'paper'), {}, kind === 'github' ? 'REPO' : 'PAPER');
+const BADGE = { github: 'REPO', paper: 'PAPER', article: '文章' };
+const badge = (h, kind) => h('span.ln-badge.' + (BADGE[kind] ? kind : 'paper'), {}, BADGE[kind] || 'PAPER');
 
 function watchJob(ctx, jobId, status) {
   if (!jobId || watching.has(jobId) || !BUSY.includes(status)) return;
@@ -602,7 +606,7 @@ async function renderItem(el, ctx, iid) {
     // 实时进度：已用时 + Agent 最近几步（读了哪些文件、跑了什么命令）
     const steps = h('div.ln-steps');
     const head = h('div.serif', {}, '后台深读中');
-    reader.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, (it.depth || 'quick') === 'quick' && it.kind === 'github' ? '速读 · 通常几分钟' : it.kind === 'github' ? '完整教程 · 通常 10–20 分钟' : '论文深读 · 通常 2–5 分钟')]), steps]));
+    reader.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, (it.depth || 'quick') === 'quick' && it.kind === 'github' ? '速读 · 通常几分钟' : it.kind === 'github' ? '完整教程 · 通常 10–20 分钟' : it.kind === 'article' ? '文章深读 · 通常 2–5 分钟' : '论文深读 · 通常 2–5 分钟')]), steps]));
     const tick = async () => {
       if (!steps.isConnected) return;
       const j = await api.get(`/api/jobs/${it.job_id}`).catch(() => null);
@@ -627,6 +631,21 @@ async function renderItem(el, ctx, iid) {
       reader.append(h('div.card', {}, annotate(ctx, md(note), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
     }
     else if (isHtml) reader.append(h('div.card', {}, ui.empty('这是一份 HTML 教程', '点上方「打开 HTML 教程」在新标签页阅读')));
+  }
+
+  // 追问与感想：条目对话里自己说过的话（进复盘和知识库），点开接着聊
+  const rd = await api.get(`/api/learn/items/${it.id}/reads`).catch(() => null);
+  if (rd) {
+    const lines = rd.lines || [];
+    const nThought = lines.filter((x) => x.kind === 'thought').length;
+    reader.append(ui.section('追问与感想', [lines.length ? `感想 ${nThought} · 追问 ${lines.length - nThought}` : '',
+      rd.task ? h('a.muted', { href: `#plan`, style: { marginLeft: '10px' } }, `${rd.task.date} 深读事项 · ${rd.task.status === 'done' ? '已完成' : '进行中'}`) : null]),
+    h('div.card.ln-reads', {}, lines.length ? [
+      ...lines.map((x) => h('div.ln-rd', {}, [h('span.muted', {}, x.at.slice(5, 16).replace('T', ' ')),
+        h('span.tag' + (x.kind === 'thought' ? '.ok' : '.gray'), {}, x.kind === 'thought' ? '感想' : '追问'), h('span', {}, x.text)])),
+      h('div.row', { style: { marginTop: '10px' } }, [h('span.grow'), h('button.sm', { onclick: chat }, [ui.icon('chat'), '接着聊'])]),
+    ] : [h('div.row', {}, [h('span.muted', {}, '读的时候想到什么、哪里不认同，就在对话里写下来：会记成感想，进复盘和知识库。'), h('span.grow'),
+      h('button.sm.primary', { onclick: chat }, [ui.icon('chat'), '写感想 / 追问'])])]));
   }
 
   // 我的笔记 / 评分

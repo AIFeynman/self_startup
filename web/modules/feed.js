@@ -103,7 +103,7 @@ const norm = (s) => String(s || '').toLowerCase();
 
 export default {
   async render(el, ctx) {
-    const { api, h, toast, openChat, ui, ask } = ctx;
+    const { api, h, toast, ui, ask } = ctx;
     const [settings, status0] = await Promise.all([api.get('/api/settings'), api.get('/api/feed/status')]);
     let interests = [...(settings.feed?.interests || [])];
     let status = status0;
@@ -336,7 +336,13 @@ export default {
         mount(entry);
       } catch (e) { toast('操作失败：' + e.message, true); }
     }
-    const deep = (x) => openChat({ module: 'learn', title: '深度学习', prefill: `深度解析：${x.url}` });
+    // 深读 = 深度学习里的一个条目：Agent 写成本地文档（可划线评论、追问），追问对话绑在条目上，关掉再开能续上；同一链接已读过就直接打开
+    const deep = async (x) => {
+      try {
+        const it = await api.post('/api/learn/items', { url: x.url, reuse: true });
+        location.hash = `#learn/item/${it.id}`;
+      } catch (e) { toast('开始深读失败：' + e.message, true); }
+    };
 
     // ---------- 选择与键盘 ----------
     const visible = () => entries.map((e, i) => [e, i]).filter(([e]) => e.el.isConnected && !e.el.classList.contains('fd-hidden')).map(([, i]) => i);

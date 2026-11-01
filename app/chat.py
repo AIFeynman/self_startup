@@ -76,6 +76,12 @@ def chat(module: str, body: ChatIn):
         sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [sid])
     sid = sess["id"]
     db.insert("chat_messages", {"session_id": sid, "role": "user", "content": body.message, "created_at": db.now()})
+    mod = modules.get(module)
+    if mod and hasattr(mod, "on_chat"):  # 板块按用户的话更新自己的记录（如深读条目的追问 / 感想推进当天事项）
+        try:
+            mod.on_chat(sess["ref"] or "", body.message)
+        except Exception:  # noqa: BLE001
+            log.exception("on_chat %s", module)
 
     # 每轮都带上最新数据快照，让 Agent 看到平台的当前状态
     ctx, dirs = _context(module, sess["ref"] or body.ref)

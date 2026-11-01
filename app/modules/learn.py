@@ -1,4 +1,4 @@
-"""深度学习：A. 单篇论文 / GitHub 项目深读；B. 主题学习计划（分阶段步骤 + 反馈调整）。
+"""深度学习：A. 单篇论文 / GitHub 项目 / 文章（博客、X 长文、gist、讨论帖）深读；B. 主题学习计划（分阶段步骤 + 反馈调整）。
 
 后台 job 的 ref 约定：
     learn:item:<id>          条目深读
@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 from datetime import date, timedelta
@@ -25,6 +26,9 @@ from pydantic import BaseModel
 
 from .. import agent, db, jobs, settings, tasks
 from ..db import ROOT
+from . import _reads
+
+log = logging.getLogger(__name__)
 
 TITLE = "深度学习"
 ORDER = 50
@@ -128,6 +132,7 @@ STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapte
              "origin": "TEXT DEFAULT ''", "parent_id": "INTEGER", "request": "TEXT DEFAULT ''"}
 EXTRA = {"interest": "深入", "confused": "补课"}  # 按需加一节的两种：感兴趣 → 往深处展开；没懂 → 换个讲法讲透
 SKILL_DIR = ROOT / "skills" / "learn"
+KINDS = ("paper", "github", "article")
 STEP_STATUS = ("todo", "doing", "done", "skipped")
 router = APIRouter()
 
@@ -138,12 +143,14 @@ def detect_kind(url: str) -> str:
     u = url.strip().lower()
     if re.search(r"(arxiv\.org|doi\.org|openreview\.net|\.pdf$|^10\.\d{4,9}/)", u):
         return "paper"
-    if "github.com" in u or re.fullmatch(r"[a-z0-9][\w.-]*/[\w.-]+", u):
+    if re.search(r"(^|//|\.)github\.com/[\w.-]+/[\w.-]+", u) and "gist.github.com" not in u or re.fullmatch(r"[a-z0-9][\w.-]*/[\w.-]+", u):
         return "github"
     p = Path(url.strip()).expanduser()
     if p.is_dir():
         return "github"  # 本地 checkout
-    return "paper"  # arxiv / pdf / doi / openreview / 其他论文链接
+    if u.startswith("http"):
+        return "article"  # 博客 / X 长文 / gist / 讨论帖 / 官方文章
+    return "paper"
 
 
 def slugify(url: str) -> str:
@@ -250,6 +257,7 @@ class ItemIn(BaseModel):
     kind: str = ""
     focus: str = ""
     depth: str = ""      # quick / full；空 = 论文 full、GitHub quick
+    reuse: bool = False  # 同一链接已有条目就直接用（信息推荐里点「深读」）
 
 
 def layout_of(p: dict | None) -> tuple[dict, dict, str]:
@@ -339,8 +347,58 @@ QUICK_GITHUB = """任务：GitHub 项目速读（目标 5 分钟内完成，不�
 """
 
 
+ARTICLE = """任务：文章深读（博客 / X 长文 / gist / 讨论帖 / 官方文章），写成一份可评论、可追问的本地文档
+对象：{url}
+{focus}
+{feed}
+做法：
+- 先读全文：普通网页用 WebFetch 或 curl；X / Twitter 的帖子和长文直接抓常常拿不到，依次试 `https://api.fxtwitter.com/<用户>/status/<id>`、
+  `https://r.jina.ai/<原链接>`；gist 用 `https://api.github.com/gists/<id>`；HN 用 `https://hn.algolia.com/api/v1/items/<id>`（顺带看讨论里有分量的反驳）。
+  实在拿不到全文，就基于上面的推荐摘要写，并在文档开头写明「未读到全文」。
+- 用户已学过的内容（用于「与我已有知识的联系」）：
+{known}
+
+写 {out}/note.md（中文，markdown，一到两屏，保留英文术语和原文关键句），结构：
+## TL;DR
+正好 3 条 `- `：作者的核心主张 / 最有说服力的论据或例子 / 最值得怀疑或最容易误读的地方
+## 作者在说什么
+按原文顺序把论证主线讲清楚：问题 → 主张 → 论据 → 结论。关键处附原文短引用。
+## 论据可信吗
+哪些是数据 / 实验 / 一手经验，哪些只是观点；作者的立场和利益相关；与主流看法的分歧。
+## 与我已有知识的联系
+## 可迁移结论 / 对我的启发
+2–4 条，注明适用边界。
+## 追问清单
+5 个可以直接复制到对话里的问题。
+## 我的笔记
+（留空，给用户写）
+
+只写 note.md，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
+{{"title": "原文标题（作者）", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
+"""
+
+
+def _feed_hint(url: str) -> str:
+    """从信息推荐里点进来的：带上推荐时抓到的标题、摘要、作者，X 长文抓不到全文时至少有个底。"""
+    try:
+        key, tail = _reads.norm_url(url), url.rstrip("/").rsplit("/", 1)[-1][:60]
+        r = next((r for r in db.rows("SELECT url, title, summary, source, extra FROM feed_items WHERE url LIKE ?", [f"%{tail}%"])
+                  if _reads.norm_url(r["url"]) == key), None)
+    except Exception:  # noqa: BLE001  信息推荐的表还没建
+        return ""
+    if not r:
+        return ""
+    ex = _loads(r.get("extra"), {})
+    who = " · ".join(str(ex[k]) for k in ("name", "author") if ex.get(k))
+    return (f"推荐时抓到的信息（来源 {r['source']}{' · ' + who if who else ''}）：\n标题：{ex.get('article_title') or r['title']}\n"
+            f"摘要：{(r['summary'] or '')[:1500]}")
+
+
 def item_prompt(it: dict, out: Path) -> str:
     kind = it["kind"]
+    if kind == "article":
+        return ARTICLE.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
+                              feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]))
     if kind == "github" and (it.get("depth") or "quick") == "quick":
         return QUICK_GITHUB.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
                                    out=out, known=_known_knowledge(it["id"]))
@@ -375,14 +433,30 @@ def item_prompt(it: dict, out: Path) -> str:
 def start_item_job(it: dict) -> int:
     out = _item_dir(it)
     out.mkdir(parents=True, exist_ok=True)
-    jid = jobs.submit("learn", item_prompt(it, out), ref=f"learn:item:{it['id']}", cwd=str(out),
-                      add_dirs=[str(_skill_dir(it["kind"])), str(SKILL_DIR)])
+    dirs = [str(SKILL_DIR)] if it["kind"] == "article" else [str(_skill_dir(it["kind"])), str(SKILL_DIR)]
+    jid = jobs.submit("learn", item_prompt(it, out), ref=f"learn:item:{it['id']}", cwd=str(out), add_dirs=dirs)
     db.update("learn_items", it["id"], {"job_id": jid, "status": "running", "updated_at": db.now()})
     return jid
 
 
+_imported = False
+
+
+def import_chat_reads() -> list[int]:
+    """对话里直接做过的「深度解析：链接」补成深读条目（每个进程第一次列条目时做一次，之后新建条目时按链接认领）。"""
+    global _imported
+    _imported = True
+    _ensure_depth_col()
+    return _reads.import_chat_reads(_out_root(), detect_kind, slugify, _tldr_from_md)
+
+
 @router.get("/items")
 def list_items():
+    if not _imported:
+        try:
+            import_chat_reads()
+        except Exception:  # noqa: BLE001  补导入失败不影响列表
+            log.exception("import chat reads")
     return db.rows("SELECT * FROM learn_items ORDER BY id DESC")
 
 
@@ -392,12 +466,18 @@ def create_item(body: ItemIn):
     url, extra = normalize_target(body.url)
     if not url:
         raise HTTPException(400, "url required")
-    kind = body.kind if body.kind in ("paper", "github") else detect_kind(url)
+    if body.reuse and (old := _reads.find_item(url)):
+        _reads.bind_chats(old)
+        return old
+    kind = body.kind if body.kind in KINDS else detect_kind(url)
     depth = body.depth if body.depth in ("quick", "full") else ("quick" if kind == "github" else "full")
     focus = "；".join(x for x in (body.focus.strip(), extra) if x)
     iid = db.insert("learn_items", {"kind": kind, "url": url, "focus": focus, "depth": depth, "status": "queued",
                                     "created_at": db.now(), "updated_at": db.now()})
-    start_item_job(_item(iid))
+    it = _item(iid)
+    start_item_job(it)
+    _reads.bind_chats(it)
+    _reads.ensure_task(it)
     return _item(iid)
 
 
@@ -414,7 +494,22 @@ def patch_item(iid: int, body: ItemPatch):
         data["rating"] = max(0, min(5, int(data["rating"])))
     data["updated_at"] = db.now()
     db.update("learn_items", iid, data)
+    _reads.sync_task(iid)
     return _item(iid)
+
+
+@router.get("/items/{iid}/reads")
+def item_reads(iid: int):
+    """条目对话里的追问与感想、对应的当天事项。"""
+    _item(iid)
+    t = _reads.task_of(iid)
+    return {"lines": _reads.user_lines(iid), "task": {"id": t["id"], "date": t["date"], "status": t["status"]} if t else None}
+
+
+def on_chat(ref: str, text: str) -> None:
+    """对话里用户发了一句话（app/chat.py 调）：条目对话里的追问 / 感想推进当天的深读事项。"""
+    if m := re.fullmatch(r"learn:item:(\d+)", ref or ""):
+        _reads.sync_task(int(m.group(1)))
 
 
 @router.post("/items/{iid}/rerun")
@@ -483,9 +578,9 @@ def _finish_item(iid: int, job: dict) -> None:
         cand = cand if cand.is_absolute() else out / cand
         main = cand if cand.is_file() else None
     if not main:
-        quick = it["kind"] == "github" and (it.get("depth") or "quick") == "quick"
-        names = ["note.md"] if it["kind"] == "paper" or quick else ["index.html"]
-        globs = ["*.md"] if it["kind"] == "paper" or quick else ["*.html", "*.md"]
+        md_only = it["kind"] in ("paper", "article") or (it.get("depth") or "quick") == "quick"
+        names = ["note.md"] if md_only else ["index.html"]
+        globs = ["*.md"] if md_only else ["*.html", "*.md"]
         found = [out / n for n in names if (out / n).is_file()]
         for g in globs:
             found += sorted(p for p in out.glob(g) if p.name != "summary.md")
@@ -505,7 +600,10 @@ def _finish_item(iid: int, job: dict) -> None:
             "updated_at": db.now()}
     if meta.get("title") and not it["title"]:
         data["title"] = str(meta["title"])[:200]
+    elif not it["title"] and main is not None and main.suffix == ".md":
+        data["title"] = _reads.md_title(main.read_text("utf-8", errors="replace"))
     db.update("learn_items", iid, data)
+    _reads.sync_task(iid)
 
 
 # ---------- B. 主题学习计划 ----------
@@ -1715,6 +1813,7 @@ def agent_context(ref: str) -> str:
         return (f"正在追问条目 {it['id']}（{it['kind']}）：{it['title'] or it['url']}\n来源：{it['url']}\n"
                 f"状态：{it['status']}；产物：{it['output_path'] or '无'}（目录 {out}，可用 Read 读取全文）\n"
                 f"TL;DR：{it['summary']}\n我的笔记：{it['my_notes'] or '无'}；评分：{it['rating']}/5\n"
+                f"用户在这里说的话会作为「追问与感想」进复盘和知识库；他写下感想时，帮他把感想说准、和文档里的论据对上，不要只附和。\n"
                 f"更新笔记：curl -s -X PATCH {api}/items/{it['id']} -H 'Content-Type: application/json' -d '{{\"my_notes\":\"...\"}}'\n\n"
                 f"### 产物摘录\n{body or '（HTML 产物，请直接读取文件）'}\n\n### 用户已学其他内容\n{_known_knowledge(it['id'], 10)}")
     if m := re.fullmatch(r"learn:step:(\d+)", ref or ""):
