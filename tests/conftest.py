@@ -29,5 +29,16 @@ def _no_runner(request, monkeypatch):
     monkeypatch.setattr(jobs, "_spawn", lambda jid: None)
 
 
+@pytest.fixture(autouse=True)
+def _idle_machine(request, monkeypatch):
+    """默认当机器空闲：kick 会看本机真实负载 / 内存，跑测试时机器忙就不起任务，测试时好时坏；标了 real_machine 的测试除外。"""
+    if request.node.get_closest_marker("real_machine"):
+        return
+    from app import jobs
+    monkeypatch.setattr(jobs.os, "getloadavg", lambda: (0.1, 0.1, 0.1))
+    monkeypatch.setattr(jobs, "_free_mem_gb", lambda: 64.0)
+
+
 def pytest_configure(config):
+    config.addinivalue_line("markers", "real_machine: 读本机真实的负载 / 内存")
     config.addinivalue_line("markers", "real_runner: 真的起 app.jobrun 进程（配合假的 claude CLI）")
