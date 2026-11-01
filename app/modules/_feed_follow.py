@@ -5,6 +5,7 @@
 - video → youtube_channels（@handle / 频道链接解析成 UC 开头的频道 id）或 bilibili（B 站 UP 主 uid）
 - site → rss（能找到 RSS / Atom）或 sites（没有 RSS 的列表页，自动推断文章链接规则 link_re）
 - podcast → podcasts（RSS；Apple Podcasts 链接或节目名经 iTunes 接口换成 RSS）或 xiaoyuzhou（小宇宙节目页）
+- product → product_rss（产品分析文章的 RSS / Atom，比如 a16z）
 默认名单写在 settings 里，用户增删记在 feed.follow：{"add": {列表: [...]}, "remove": {列表: [键]}, "names": {键: 显示名}}，
 默认名单以后更新也不会被冻结。
 """
@@ -28,6 +29,8 @@ GROUPS = {
              "hint": "网站或博客列表页地址，有 RSS 自动用 RSS"},
     "podcast": {"label": "播客", "lists": ["podcasts", "xiaoyuzhou"], "collector": None,
                 "hint": "RSS、Apple Podcasts、小宇宙节目页链接，或直接输节目名"},
+    "product": {"label": "产品分析", "lists": ["product_rss"], "collector": "analysis",
+                "hint": "分析文章的网站或 RSS，比如 a16z.news"},
     "reddit": {"label": "Reddit 版块", "lists": ["reddit"], "collector": "reddit", "hint": "r/LocalLLaMA"},
     "video": {"label": "视频频道", "lists": ["youtube_channels", "bilibili"], "collector": "video",
               "hint": "YouTube @handle / 频道链接，或 B 站 space.bilibili.com/uid"},
@@ -35,7 +38,8 @@ GROUPS = {
 # 列表 → 采集器（refresh_sync 的来源名）
 LIST_COLLECTOR = {"x_accounts": "x", "github_watch_orgs": "github", "rss": "rss", "sites": "sites",
                   "podcasts": "podcast", "xiaoyuzhou": "xiaoyuzhou", "reddit": "reddit",
-                  "youtube_channels": "video", "bilibili": "video"}
+                  "youtube_channels": "video", "bilibili": "video", "product_rss": "analysis"}
+URL_LISTS = ("rss", "podcasts", "xiaoyuzhou", "product_rss")   # 条目本身是地址的列表
 CASELESS = {"x_accounts", "github_watch_orgs", "reddit"}
 
 
@@ -50,6 +54,9 @@ KNOWN_NAMES = {
     "UCLKPca3kwwd-B59HNr-_lvA": "AI Engineer", "UCxBcwypKK-W3GHd_RZ9FZrQ": "Latent Space",
     "UC2ggjtuuWvxrHHHiaDH1dlQ": "李宏毅 Hung-yi Lee", "UCcefcZRL2oaA_uBNeo5UOWg": "Y Combinator",
     "UCtAcpQcYerN8xxZJYTfWBMw": "Umar Jamil", "UC55ODQSvARtgSyc8ThfiepQ": "Sam Witteveen",
+    "UC9cn0TuPq4dnbTY-CBsm8XA": "a16z", "UCWrF0oN6unbXrWsTN7RctTw": "Sequoia Capital",
+    "UCjIMtrzxYc0lblGhmOgC_CA": "Every", "UCjNRVMBVI30Sak_p6HRWhIA": "Cognitive Revolution",
+    "UCf0PBRjhf0rF8fWBIxTuoWA": "20VC",
     "1567748478": "B 站 跟李沐学AI",
 }
 
@@ -88,7 +95,7 @@ def label(lst: str, v, names: dict) -> str:
         return "r/" + v
     if lst == "bilibili":
         return "B 站 " + v
-    if lst in ("rss", "podcasts", "xiaoyuzhou"):
+    if lst in URL_LISTS:
         p = urlsplit(v)
         return (p.netloc.removeprefix("www.") + p.path.rstrip("/"))[:60]
     return str(v)
@@ -137,6 +144,8 @@ def resolve(group: str, text: str, client: httpx.Client | None = None) -> tuple[
             return _site(c, text)
         if group == "podcast":
             return _podcast(c, text)
+        if group == "product":
+            return _product(c, text)
     finally:
         if own:
             c.close()
@@ -273,3 +282,12 @@ def _podcast(c: httpx.Client, text: str):
     if not hit:
         raise FollowError("这个节目在 Apple Podcasts 上没有公开 RSS")
     return "podcasts", hit["feedUrl"], hit.get("collectionName") or hit["feedUrl"]
+
+
+def _product(c: httpx.Client, text: str):
+    url = _url(text)
+    feed, title, _ = _find_feed(c, url)
+    if not feed:
+        raise FollowError("没找到 RSS / Atom；贴文章站点或它的 RSS 地址")
+    name = title or urlsplit(url).netloc
+    return "product_rss", {"name": name, "url": feed}, name

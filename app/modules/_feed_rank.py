@@ -68,9 +68,10 @@ LE_PRIOR = {"star": 0.5, "good": 0.3, "skip": -0.3, "bad": -0.6}
 LE_LABEL = {"star": "learn_evolve 标星", "good": "learn_evolve 好评", "skip": "learn_evolve 跳过", "bad": "learn_evolve 差评"}
 SOURCE_LABEL = {"hn": "HN", "github": "GitHub", "hf": "HF Papers", "arxiv": "AlphaXiv", "reddit": "Reddit",
                 "blog": "博客", "producthunt": "Product Hunt", "twitter": "X", "podcast": "播客", "xiaoyuzhou": "小宇宙",
-                "openrouter": "OpenRouter", "youtube": "YouTube", "bilibili": "B 站", "yc": "YC", "huggingface": "HF"}
+                "openrouter": "OpenRouter", "youtube": "YouTube", "bilibili": "B 站", "yc": "Launch YC", "huggingface": "HF",
+                "analysis": "产品分析", "trustmrr": "TrustMRR"}
 POP_UNIT = {"hn": "分", "github": "★", "hf": "赞", "arxiv": "赞", "reddit": "赞", "producthunt": "票",
-            "twitter": "赞", "huggingface": "赞",
+            "twitter": "赞", "huggingface": "赞", "yc": "票",
             "xiaoyuzhou": "播放", "youtube": "播放", "bilibili": "播放"}
 
 _STOP = set("""the and for with from that this into your you are was were has have how what why when who our its
@@ -150,6 +151,8 @@ def _interest_re(term: str) -> re.Pattern:
 def fmt_pop(source: str, pop: float) -> str:
     if not pop:
         return ""
+    if source == "trustmrr":       # 热度 = 支付渠道验证的近 30 天收入（美元）
+        return f"TrustMRR 近 30 天收入 ${pop / 1000:.1f}k" if pop >= 1000 else f"TrustMRR 近 30 天收入 ${int(pop)}"
     v = f"{pop / 1000:.1f}k" if pop >= 1000 else str(int(pop))
     return f"{SOURCE_LABEL.get(source, source)} {v}{POP_UNIT.get(source, '')}"
 

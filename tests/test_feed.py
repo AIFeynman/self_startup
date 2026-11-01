@@ -625,3 +625,77 @@ def test_gist_runs_only_on_full_refresh(client, monkeypatch):
     client.post("/api/feed/gist")
     assert len(ran) == before or ran[-1] < ran[0]                    # 已生成且没变的不再送
     assert '"gist_src"' in db.row("SELECT extra FROM feed_items WHERE id='hn:g1'")["extra"]
+
+
+def test_yc_launches_parse_and_filter(monkeypatch):
+    now = datetime.now(timezone.utc)
+    hit = lambda i, title, tags, days: {"id": i, "title": title, "tagline": "t", "slug": f"s{i}", "total_vote_count": i,
+                                        "created_at": (now - timedelta(days=days)).isoformat(),
+                                        "company": {"name": "C", "batch": "Fall 2026", "tags": tags}}
+    page = 'x<div data-x={"hits":%s,"nbHits":3}>' % json.dumps([hit(1, "Agentic QA", ["AI"], 0), hit(2, "Cargo planes", ["Aerospace"], 1),
+                                                                hit(3, "Old AI thing", ["AI"], 10)])
+
+    def handler(req):
+        return httpx.Response(200, text=page)
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    items = src.fetch_yc_launches(days=3)
+    assert [i["id"] for i in items] == ["yc:1"]
+    assert items[0]["type"] == "product" and items[0]["url"].endswith("/launches/s1") and items[0]["popularity"] == 1
+
+
+def _rsc_page(objs: list[dict]) -> str:
+    payload = json.dumps('1:' + json.dumps(objs, separators=(',', ':')))[1:-1]
+    return f'<script>self.__next_f.push([1,"{payload}"])</script>'
+
+
+def test_trustmrr_list_detail_and_known_merge(monkeypatch):
+    now = datetime.now(timezone.utc)
+    lst = lambda slug, rev, days, **kw: {"_id": slug, "slug": slug, "name": slug.upper(), "askingPrice": 50000,
+                                         "currentLast30DaysRevenue": rev, "description": "short",
+                                         "firstListedForSaleAt": (now - timedelta(days=days)).isoformat(), **kw}
+    listing = [lst("new", 3000, 1), lst("old", 900, 2, profitMarginLast30Days=70), lst("zero", 0, 1),
+               lst("stale", 500, 90), lst("hidden", 800, 1, stealthMode=True)]
+    detail = {"_id": "new", "slug": "new", "description": "full description", "currentMrr": 4800,
+              "aiEnrichment": {"problemSolved": "manual invoicing", "pricingModel": "subscription"}}
+    calls = []
+
+    def handler(req):
+        calls.append(req.url.path)
+        return httpx.Response(200, text=_rsc_page(listing if req.url.path == "/acquire" else [detail]))
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    known = {"trustmrr:old": {"facts_full": True, "facts": {"description": "old full", "problem": "p"}}}
+    items, errors = src.fetch_trustmrr(days=30, known=known)
+    by = {i["id"]: i for i in items}
+    assert set(by) == {"trustmrr:new", "trustmrr:old"} and not errors
+    assert calls == ["/acquire", "/startup/new"]                  # 已读过详情的不再读
+    new, old = by["trustmrr:new"], by["trustmrr:old"]
+    assert new["summary"] == "full description" and new["extra"]["facts"]["problem"] == "manual invoicing"
+    assert new["popularity"] == 3000 and "MRR $4,800" in new["extra"]["revenue"]
+    # 旧条目：保留详情页描述，列表页数字更新
+    assert old["summary"] == "old full" and old["extra"]["facts"]["profit_margin"] == 70 and old["extra"]["facts"]["problem"] == "p"
+    assert "利润率 70%" in old["extra"]["revenue"]
+
+
+def test_product_analysis_pick_and_generate(monkeypatch):
+    from app.modules import _feed_product as pa
+    items = [{"id": "a", "source": "analysis", "title": "essay"},
+             {"id": "t", "source": "trustmrr", "title": "T", "summary": "s",
+              "extra": {"facts": {"revenue_30d": 100}, "revenue": "近 30 天 $100"}},
+             {"id": "p", "source": "producthunt", "title": "P", "summary": "s", "popularity": 50}]
+    done = {**items[2], "extra": {"pa": {"model": "x"}}}
+    done["extra"]["pa_src"] = pa.pa_key(done)
+    assert [i["id"] for i in pa.pick(items)] == ["t", "p"]
+    assert [i["id"] for i in pa.pick([items[0], items[1], done])] == ["t"]      # 输入没变的不重算
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    sent = {}
+
+    def handler(req):
+        sent["body"] = json.loads(req.content)
+        rows = [{"id": i, "revenue": "模型编的 $1M", "model": "订阅", "position": "小团队", "value": "省时间", "pain": "手工"}
+                for i in ("t", "p")]
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"items": rows})}}]})
+    got, errors = pa.generate(items[1:], client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert not errors and got["t"]["revenue"] == "近 30 天 $100"            # 验证过的收入不让模型改
+    assert got["p"]["revenue"] == "模型编的 $1M" and got["p"]["pain"] == "手工"
+    assert '"revenue_30d": 100' in sent["body"]["messages"][1]["content"]

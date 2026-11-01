@@ -655,6 +655,160 @@ def fetch_producthunt(days: int = 2, first: int = 40, ai_only: bool = True) -> l
     return out
 
 
+# ---------- Launch YC：列表页内嵌 Algolia 结果（含发布时间、票数、公司标签） ----------
+YC_LAUNCHES = "https://www.ycombinator.com/launches"
+
+
+def parse_yc_launches(page: str) -> list[dict]:
+    """列表页里的 {"hits": [...]} → 统一形状（不按日期过滤）。"""
+    i = page.find('{"hits"')
+    if i < 0:
+        return []
+    hits = json.JSONDecoder().raw_decode(page[i:])[0].get("hits") or []
+    out = []
+    for h in hits:
+        co = h.get("company") or {}
+        if not h.get("id") or not h.get("title") or not h.get("slug"):
+            continue
+        out.append({
+            "id": f"yc:{h['id']}", "source": "yc", "type": "product", "title": clean(h["title"], 200),
+            "summary": clean(h.get("tagline")), "url": f"{YC_LAUNCHES}/{h['slug']}", "date": h.get("created_at") or "",
+            "popularity": float(h.get("total_vote_count") or 0),
+            "extra": {"feed": f"YC {co.get('batch') or ''}".strip(), "company": co.get("name") or "",
+                      "website": co.get("url") or "", "topics": co.get("tags") or []}})
+    return out
+
+
+def fetch_yc_launches(days: int = 3, pages: int = 3, ai_only: bool = True) -> list[dict]:
+    """YC 公司的产品发布（按时间倒序，每页 20 条）；翻到超出 days 为止。"""
+    cutoff, out = _iso(_days_ago(days)), []
+    with _client() as c:
+        for p in range(1, pages + 1):
+            r = c.get(YC_LAUNCHES, params={"page": p} if p > 1 else None, headers={"User-Agent": BROWSER_UA})
+            r.raise_for_status()
+            got = parse_yc_launches(r.text)
+            if not got and p == 1:
+                raise RuntimeError("Launch YC 页面里没找到 hits 数据（页面结构变了？）")
+            fresh = [it for it in got if it["date"] >= cutoff]
+            out += [it for it in fresh if not ai_only or
+                    AI_HINT_RE.search(" ".join([it["title"], it["summary"], *it["extra"]["topics"]]))]
+            if len(fresh) < len(got) or not got:
+                break
+    return out
+
+
+# ---------- TrustMRR：在售产品（收入经支付渠道验证）；列表页 + 详情页的 Next.js RSC 数据 ----------
+TRUSTMRR = "https://trustmrr.com"
+_RSC_PUSH = re.compile(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', re.S)
+
+
+def rsc_objects(page: str, need: str = "slug") -> list[dict]:
+    """Next.js 页面内嵌的 RSC 流里所有以 {"_id": 开头、带 need 字段的对象。"""
+    s = "".join(json.loads(f'"{c}"') for c in _RSC_PUSH.findall(page))
+    dec, out = json.JSONDecoder(), []
+    for m in re.finditer(r'\{"_id":"', s):
+        try:
+            o = dec.raw_decode(s[m.start():])[0]
+        except ValueError:
+            continue
+        if isinstance(o, dict) and o.get(need):
+            out.append(o)
+    return out
+
+
+def _usd(v) -> str:
+    v = float(v or 0)
+    return f"${v / 1e6:.1f}M" if v >= 1e6 else f"${v / 1e3:.1f}k" if v >= 1e4 else f"${v:,.0f}"
+
+
+def trustmrr_facts(o: dict) -> dict:
+    """详情页对象 → 产品分析用的事实（收入数字是支付渠道验证过的，金额单位美元）。"""
+    ai = o.get("aiEnrichment") or {}
+    slugs = lambda k: [x.get("slug") for x in o.get(k) or [] if isinstance(x, dict) and x.get("slug")]
+    f = {"mrr": o.get("currentMrr"), "revenue_30d": o.get("currentLast30DaysRevenue"),
+         "total_revenue": o.get("currentTotalRevenue"), "subscriptions": o.get("currentActiveSubscriptions"),
+         "profit_margin": o.get("profitMarginLast30Days"), "growth_30d": o.get("cachedGrowth30d"),
+         "asking_price": o.get("askingPrice"), "multiple": o.get("cachedMultiple"),
+         "traffic_30d": o.get("trafficLast30Days"), "audience": o.get("targetAudience") or ai.get("businessType"),
+         "persona": ai.get("targetPersona"), "value_prop": ai.get("valueProposition"),
+         "problem": ai.get("problemSolved"), "pricing": ai.get("pricingModel"), "channels": slugs("marketingChannels"),
+         "seller_note": clean(o.get("sellerMessage"), 300), "description": clean(o.get("description"), 800),
+         "website": o.get("website"), "founded": (o.get("foundedDate") or "")[:10], "country": o.get("country"),
+         "payment": o.get("paymentProvider")}
+    return {k: v for k, v in f.items() if v not in (None, "", [])}
+
+
+def revenue_line(f: dict) -> str:
+    """TrustMRR 事实 → 一行收入摘要（不经模型，数字原样）。"""
+    parts = []
+    if f.get("mrr"):
+        parts.append(f"MRR {_usd(f['mrr'])}")
+    if f.get("revenue_30d") is not None:
+        parts.append(f"近 30 天 {_usd(f['revenue_30d'])}")
+    if f.get("growth_30d") is not None:
+        parts.append(f"环比 {f['growth_30d']:+.0f}%")
+    if f.get("profit_margin") is not None:
+        parts.append(f"利润率 {f['profit_margin']:.0f}%")
+    if f.get("subscriptions"):
+        parts.append(f"{f['subscriptions']} 个付费订阅")
+    if f.get("total_revenue"):
+        parts.append(f"累计 {_usd(f['total_revenue'])}")
+    if f.get("asking_price"):
+        parts.append(f"要价 {_usd(f['asking_price'])}" + (f"（{f['multiple']:.1f}x 年收入）" if f.get("multiple") else ""))
+    return "，".join(parts)
+
+
+def fetch_trustmrr(days: int = 30, known: dict | None = None, detail_max: int = 30) -> tuple[list[dict], list[str]]:
+    """/acquire 列表页的在售产品（最近 days 天挂牌、有收入）；没读过详情的再读 /startup/<slug> 补事实。
+    known: {条目 id: 已有 extra}，已有 facts 的不再读详情页。"""
+    known, cutoff, errors = known or {}, _iso(_days_ago(days)), []
+    with _client() as c:
+        c.headers["User-Agent"] = BROWSER_UA
+        r = c.get(f"{TRUSTMRR}/acquire")
+        r.raise_for_status()
+        rows = {o["slug"]: o for o in rsc_objects(r.text) if "askingPrice" in o}
+        if not rows:
+            raise RuntimeError("acquire 页面里没找到在售产品数据（页面结构变了？）")
+        items = []
+        for o in rows.values():
+            listed = o.get("firstListedForSaleAt") or o.get("createdAt") or ""
+            if o.get("stealthMode") or not (o.get("currentLast30DaysRevenue") or 0) > 0 or listed < cutoff:
+                continue
+            iid, old = f"trustmrr:{o['slug']}", known.get(f"trustmrr:{o['slug']}") or {}
+            # 列表页的数字最新、描述截断；读过详情页的保留详情里的完整描述、MRR、价值主张等
+            fresh = {k: v for k, v in trustmrr_facts(o).items() if k != "description" or not old.get("facts_full")}
+            facts = {**(old.get("facts") or {}), **fresh} if old.get("facts_full") else fresh
+            items.append({
+                "id": iid, "source": "trustmrr", "type": "product", "title": clean(o.get("name"), 200),
+                "summary": clean(facts.get("description") or o.get("description")),
+                "url": f"{TRUSTMRR}/startup/{o['slug']}", "date": listed,
+                "popularity": float(o.get("currentLast30DaysRevenue") or 0),
+                "extra": {"feed": o.get("userCategory") or "TrustMRR", "facts": facts,
+                          **({"facts_full": True} if old.get("facts_full") else {})},
+                "_detail": not old.get("facts_full")})
+
+        def detail(it):
+            slug = it["id"].split(":", 1)[1]
+            try:
+                obj = next((o for o in rsc_objects(c.get(it["url"]).text) if o.get("slug") == slug and "aiEnrichment" in o), None)
+                return it, (trustmrr_facts(obj) if obj else None), None
+            except Exception as e:  # noqa: BLE001
+                return it, None, f"{slug}: {type(e).__name__}: {str(e)[:80]}"
+
+        todo = [it for it in items if it["_detail"]][:detail_max]
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for it, facts, err in ex.map(detail, todo):
+                if facts:
+                    it["extra"].update(facts=facts, facts_full=True)
+                    it["summary"] = clean(facts.get("description") or it["summary"])
+                if err:
+                    errors.append(err)
+    for it in items:
+        it.pop("_detail", None)
+        it["extra"]["revenue"] = revenue_line(it["extra"]["facts"])
+    return items, errors
+
+
 # ---------- 没有 RSS 的官方站：列表页 → 文章链接 → 文章页 meta ----------
 
 def _meta(page: str, *names: str) -> str:

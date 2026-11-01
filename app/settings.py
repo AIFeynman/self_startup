@@ -136,6 +136,10 @@ DEFAULTS: dict = {
             "https://feeds.fireside.fm/sv101/rss",                  # 硅谷101
             "https://feeds.fireside.fm/shengdongjixi/rss",          # 声东击西
         ],
+        # 产品分析：投资机构 / 孵化器的分析文章 RSS（进「产品」分类；YC 的产品发布另由 Launch YC 采集）
+        "product_rss": [
+            {"name": "a16z", "url": "https://www.a16z.news/feed"},
+        ],
         # 小宇宙节目页（直读页面内嵌数据，带播放数；失败时走 rsshub_bases 里的公共 RSSHub）
         "xiaoyuzhou": [
             "https://www.xiaoyuzhoufm.com/podcast/626b46ea9cbbf0451cf5a962",   # 张小珺Jùn｜商业访谈录
