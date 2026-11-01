@@ -57,7 +57,8 @@ def start(extra: list[str]) -> subprocess.Popen:
     cmd = [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(PORT),
            "--timeout-graceful-shutdown", "30", *extra]
     log("启动服务：" + " ".join(cmd[2:]))
-    return subprocess.Popen(cmd, cwd=str(ROOT))
+    from .agent import clean_env  # 服务本身（信息源抓取等）也不走继承来的 Claude Code 沙箱代理
+    return subprocess.Popen(cmd, cwd=str(ROOT), env=clean_env())
 
 
 def stop(proc: subprocess.Popen) -> None:

@@ -1,5 +1,6 @@
 """调研板块：不调用真实 LLM / GrokBot / Muse（jobs.submit、subprocess、线程全部替换）。"""
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,8 +15,9 @@ class FakeProc:
 
 
 @pytest.fixture
-def fakes(monkeypatch, client):
+def fakes(monkeypatch, client, tmp_path):
     submitted, calls = [], []
+    monkeypatch.setattr(R.grok_local, "DEFAULT_DIR", tmp_path / "grok-app")  # 不读真实的 Grok Bot 聊天记录
 
     def fake_submit(module, prompt, *, ref="", engine="", **kw):
         submitted.append({"module": module, "prompt": prompt, "ref": ref, "engine": engine})
@@ -28,6 +30,7 @@ def fakes(monkeypatch, client):
     monkeypatch.setattr(R.jobs, "submit", fake_submit)
     monkeypatch.setattr(R.subprocess, "run", fake_run)
     monkeypatch.setattr(R, "_spawn", lambda fn, *a: fn(*a))  # 线程改同步
+    monkeypatch.setattr(R.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd) or type("P", (), {"pid": os.getpid()})())
     return submitted, calls
 
 
@@ -69,15 +72,41 @@ def test_create_and_job_done(client, fakes):
     assert not Path(r4["doc_path"]).exists()
 
 
-def test_muse_paste(client, fakes):
+def test_muse_auto(client, fakes):
     _, calls = fakes
+    r = client.post("/api/research", json={"topic": "Muse 自动", "engines": ["muse"]}).json()
+    res = r["results"][0]
+    assert res["status"] == "running" and res["request_id"] == f"pid:{os.getpid()}"
+    assert any(c[-2:] == ["app.muse_bot", str(res["id"])] for c in calls)
+    # 进程不在了 → 打开详情时收尾成待粘贴，可重试
+    R.db.update("research_results", res["id"], {"request_id": "pid:999999"})
+    r2 = client.get(f"/api/research/{r['id']}").json()
+    assert r2["results"][0]["status"] == "awaiting_paste" and "意外退出" in r2["results"][0]["error"]
+    assert client.post(f"/api/research/results/{res['id']}/muse_auto").json()["status"] == "running"
+
+
+def test_muse_paste(client, fakes, monkeypatch):
+    _, calls = fakes
+    real_get = R.settings.get
+    monkeypatch.setattr(R.settings, "get", lambda k, d=None: "web" if k == "engines.muse.mode" else real_get(k, d))
     r = client.post("/api/research", json={"topic": "Muse 测试", "engines": ["muse"]}).json()
     res = r["results"][0]
     assert res["status"] == "awaiting_paste" and r["status"] == "awaiting_paste" and "Muse 测试" in res["brief"]
-    assert ["pbcopy"] in calls and any(c[0] == "open" for c in calls)
+    assert ["pbcopy"] in calls and ["open", "https://muse.ai"] in calls
     assert client.post(f"/api/research/results/{res['id']}/paste", json={"content": "Muse 的回答"}).json()["status"] == "done"
     r2 = client.get(f"/api/research/{r['id']}").json()
     assert r2["status"] == "done" and "Muse 的回答" in Path(r2["doc_path"]).read_text("utf-8")
+    # 引擎结果单独成文档：带引擎标签可归档汇总；再次粘贴覆盖同一篇；删它不删调研
+    did = r2["results"][0]["doc_id"]
+    d = client.get(f"/api/research/docs/{did}").json()
+    assert "Muse" in d["tags"] and "引擎结果" in d["tags"] and "Muse 的回答" in Path(d["path"]).read_text("utf-8")
+    assert [x["id"] for x in client.get("/api/research/docs", params={"tag": "Muse"}).json()] == [did]
+    client.post(f"/api/research/results/{res['id']}/paste", json={"content": "Muse 的第二版回答"})
+    assert client.get(f"/api/research/{r['id']}").json()["results"][0]["doc_id"] == did
+    assert "第二版" in client.get(f"/api/research/docs/{did}").json()["content"]
+    client.delete(f"/api/research/docs/{did}")
+    r3 = client.get(f"/api/research/{r['id']}").json()
+    assert r3["doc_id"] == r2["doc_id"] and r3["results"][0]["doc_id"] is None
 
 
 def test_grokbot_unconfigured(client, fakes, monkeypatch, tmp_path):
@@ -117,6 +146,33 @@ def test_grokbot_send_and_wait(client, fakes, monkeypatch, tmp_path):
     res = client.get(f"/api/research/results/{r['results'][0]['id']}").json()
     assert seen == ["status", "send", "wait"] and res["status"] == "done" and res["content"] == "推特结论"
     assert res["request_id"] == "a" * 32
+
+
+def _grok_chat(path: Path, rid: str, answer: str, streaming=False) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    entries = [{"kind": "message", "role": "user", "content": "别的话题", "requestId": "u1"},
+               {"kind": "send-message", "message": {"type": "text", "content": f"回传失败，request_id 是 {rid}，完整结果在下一条。"},
+                "requestId": "t1", "timestampMs": 1},
+               {"kind": "send-message", "message": {"type": "text", "content": answer}, "requestId": "t1", "timestampMs": 2,
+                "isStreaming": streaming}]
+    (path / "chat.blob").write_text(json.dumps({"schemaVersion": 1, "value": {"entries": entries}}, ensure_ascii=False), "utf-8")
+
+
+def test_grokbot_reply_from_app_chat(client, fakes, monkeypatch, tmp_path):
+    """回传没到本机（wait 一直 pending）时，从 Grok Bot 桌面版聊天记录按 request_id 取回答。"""
+    rid, chat = "b" * 32, tmp_path / "grok-app"
+    answer = "# X 上的结论\n" + "要点。" * 100
+    assert R.grok_local.find_reply(rid) == ""
+    _grok_chat(chat, rid, answer, streaming=True)
+    assert R.grok_local.find_reply(rid) == ""  # 还在输出的不取
+    _grok_chat(chat, rid, answer)
+    assert R.grok_local.find_reply(rid) == answer.strip()  # 只取正文，不要带 request_id 的状态说明
+    assert R.grok_local.find_reply("c" * 32) == ""
+    r = client.post("/api/research", json={"topic": "grok 本机记录", "engines": ["muse"]}).json()
+    res_id = r["results"][0]["id"]
+    R.db.update("research_results", res_id, {"engine": "grokbot", "status": "timeout", "request_id": rid})
+    x = client.get(f"/api/research/{r['id']}").json()["results"][0]
+    assert x["status"] == "done" and x["content"] == answer.strip() and x["doc_id"]
 
 
 def test_manual_doc(client):

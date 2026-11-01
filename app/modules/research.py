@@ -4,14 +4,17 @@
 引擎：
     claude / codex  走 jobs.submit（后台 Agent，联网检索）
     grokbot         后台线程调 GrokBot webhook 脚本（send 一次，wait 轮询，request_id 落库可续等）
-    muse            桌面 App 无 CLI：生成 brief → pbcopy → open -a Muse → 用户把回答粘贴回来
+    muse            无 API / CLI。mode=auto（默认）：独立进程用 Playwright 驱动本机 Chrome 打开网页版自动提问、取回答（app/muse_bot.py）；
+                    mode=web / app 或自动失败：brief → pbcopy → 打开网页版 / 桌面 App → 用户把回答粘贴回来
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,7 +22,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import agent, db, jobs, settings
+from .. import agent, db, grok_local, jobs, settings
 
 log = logging.getLogger(__name__)
 
@@ -54,10 +57,12 @@ CREATE TABLE IF NOT EXISTS research_results (
     finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rr_research ON research_results(research_id);
--- 文档库：每个调研一篇（research_id 非空）+ 用户手写文档；正文同时存文件
+-- 文档库：每个调研一篇汇总（research_id 非空、result_id 空）+ 每条完成的引擎结果一篇（result_id 非空）
+-- + 用户手写文档；正文同时存文件
 CREATE TABLE IF NOT EXISTS research_docs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     research_id INTEGER,
+    result_id   INTEGER,
     title       TEXT NOT NULL,
     tags        TEXT DEFAULT '[]',
     content     TEXT DEFAULT '',
@@ -82,8 +87,8 @@ CREATE TABLE IF NOT EXISTS products (
 """
 
 ANGLES = ["技术原理", "关键玩家与竞品", "用户口碑与体验", "商业模式", "风险与局限", "最新进展", "对我的启发"]
-ENGINES = {"claude": "Claude Code", "codex": "Codex", "grokbot": "GrokBot (X/Twitter)", "muse": "Muse（手动粘贴）"}
-PENDING = ("queued", "running", "waiting")
+ENGINES = {"claude": "Claude Code", "codex": "Codex", "grokbot": "GrokBot (X/Twitter)", "muse": "Muse"}
+PENDING = ("queued", "running", "waiting", "awaiting_login")
 GROK_WAIT_SECONDS = 9 * 60
 DOC_DIR = db.DATA_DIR / "research"
 
@@ -121,12 +126,17 @@ _cols_ok = False
 
 
 def _ensure_cols() -> None:
-    """research_results 后加的 used_engine：请求的引擎没跑通、由备选引擎代跑时记实际引擎（老库迁移）。"""
+    """老库迁移：research_results.used_engine（请求的引擎没跑通、由备选引擎代跑时记实际引擎）；
+    research_docs.result_id（引擎结果单独成文档，加列时给已完成的结果补建）。"""
     global _cols_ok
     if not _cols_ok:
+        _cols_ok = True
         if "used_engine" not in {r["name"] for r in db.rows("PRAGMA table_info(research_results)")}:
             db.execute("ALTER TABLE research_results ADD COLUMN used_engine TEXT DEFAULT ''")
-        _cols_ok = True
+        if "result_id" not in {r["name"] for r in db.rows("PRAGMA table_info(research_docs)")}:
+            db.execute("ALTER TABLE research_docs ADD COLUMN result_id INTEGER")
+            for x in db.rows("SELECT id FROM research_results WHERE status='done' AND content<>''"):
+                _write_result_doc(x["id"])
 
 
 def engine_label(x: dict) -> str:
@@ -153,6 +163,8 @@ def _set_result(res_id: int, **data) -> None:
     if data.get("status") in ("done", "failed", "timeout", "awaiting_paste") and "finished_at" not in data:
         data["finished_at"] = db.now() if data["status"] in ("done", "failed") else None
     db.update("research_results", res_id, data)
+    if data.get("status") == "done":
+        _write_result_doc(res_id)
     _refresh(_result(res_id)["research_id"])
 
 
@@ -234,7 +246,7 @@ def _launch(r: dict, engine: str) -> int:
         db.update("research_results", res_id, {"status": "running"})
         _spawn(_grok_run, res_id)
     elif engine == "muse":
-        _muse_open(res_id, brief)
+        _muse_auto(res_id) if settings.get("engines.muse.mode", "auto") == "auto" else _muse_open(res_id, brief)
     else:
         db.update("research_results", res_id, {"status": "failed", "error": f"未知引擎 {engine}"})
     return res_id
@@ -337,6 +349,24 @@ def _grok_handle(res_id: int, rc: int, objs: list[dict], raw: str) -> bool:
     return False
 
 
+def _grok_from_app(res_id: int) -> bool:
+    """回传没到本机时，从 Grok Bot 桌面版本机聊天记录里按 request_id 取回答；取到记为完成。"""
+    x = _result(res_id)
+    ans = grok_local.find_reply(x["request_id"])
+    if not ans:
+        return False
+    _set_result(res_id, status="done", content=ans, error="")
+    log.info("grokbot %s: 回传未到，已从 Grok Bot 聊天记录取回答", res_id)
+    return True
+
+
+def _check_grok(rid: int) -> None:
+    """等待超时的 GrokBot 结果，打开调研时再到 Grok Bot 聊天记录里找一次回答。"""
+    for x in _results(rid):
+        if x["engine"] == "grokbot" and x["status"] == "timeout" and x["request_id"]:
+            _grok_from_app(x["id"])
+
+
 _waiting: set[int] = set()
 _wait_lock = threading.Lock()
 
@@ -351,11 +381,17 @@ def _grok_wait(res_id: int, seconds: float = GROK_WAIT_SECONDS) -> None:
         db.update("research_results", res_id, {"status": "waiting"})
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
+            if _result(res_id)["status"] not in ("waiting", "running"):
+                return  # 用户已手动粘贴回答（Grok Bot 没把结果回传到本机时），不再等，也不覆盖
+            if _grok_from_app(res_id):
+                return
             left = max(1, min(50, int(deadline - time.monotonic())))
             rc, objs, raw = _grok_cmd("wait", "--request-id", req, "--timeout", str(left), timeout=left + 30)
             if _grok_handle(res_id, rc, objs, raw):
                 return
-        _set_result(res_id, status="timeout", error=f"等待超时，request_id={req} 仍在处理，可稍后「继续等待」。")
+        if _result(res_id)["status"] in ("waiting", "running"):
+            _set_result(res_id, status="timeout", error=f"等待超时，request_id={req} 仍在处理，可稍后「继续等待」。"
+                        "打开本页时会自动到 Grok Bot 聊天记录里找回答；找不到可把 Grok Bot 的回答粘贴到这里。")
     except Exception as e:  # noqa: BLE001
         log.exception("grokbot wait %s", res_id)
         _set_result(res_id, status="failed", error=f"GrokBot 等待异常：{e}")
@@ -371,20 +407,53 @@ def _resume_waiters(rid: int) -> None:
             _spawn(_grok_wait, x["id"])
 
 
+def _muse_auto(res_id: int) -> None:
+    """独立进程跑（服务重启不中断）；pid 记在 request_id，进程意外没了由 _check_muse 收尾。"""
+    db.update("research_results", res_id, {"status": "running", "error": "正在打开 Muse 网页版自动提问…", "request_id": ""})
+    try:
+        p = subprocess.Popen([sys.executable, "-m", "app.muse_bot", str(res_id)], cwd=str(db.ROOT), env=agent.clean_env(),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        db.update("research_results", res_id, {"request_id": f"pid:{p.pid}"})
+    except Exception as e:  # noqa: BLE001
+        _set_result(res_id, status="awaiting_paste", error=f"自动提问启动失败：{e}，请手动粘贴。")
+
+
+def _check_muse(rid: int) -> None:
+    for x in _results(rid):
+        if x["engine"] == "muse" and x["status"] in ("running", "awaiting_login") and x["request_id"].startswith("pid:"):
+            try:
+                os.kill(int(x["request_id"][4:]), 0)
+            except (ProcessLookupError, ValueError):
+                _set_result(x["id"], status="awaiting_paste", error="自动提问进程意外退出，可点「自动提问」重试，或手动粘贴回答。")
+            except PermissionError:
+                pass
+
+
 def _muse_open(res_id: int, brief: str) -> None:
-    app = settings.get("engines.muse.app", "Muse")
+    cfg = {"mode": "web", "url": "https://muse.ai", "app": "Muse", **(settings.get("engines.muse", {}) or {})}
     note = []
     try:
         subprocess.run(["pbcopy"], input=brief.encode("utf-8"), check=True, timeout=10)
         note.append("brief 已复制到剪贴板")
     except Exception as e:  # noqa: BLE001
         note.append(f"复制失败：{e}")
-    path = Path(app if app.endswith(".app") else f"/Applications/{app}.app")
-    try:  # 优先按路径打开：部分环境下 Launch Services 按名字解析不到（Muse 的 bundle id 是 com.meta.endo）
-        p = subprocess.run(["open", str(path)] if path.exists() else ["open", "-a", app], timeout=15, capture_output=True, text=True)
-        note.append(f"已打开 {path.stem}" if p.returncode == 0 else f"打开 {app} 失败：{(p.stderr or '').strip()[:200]}，请手动打开")
-    except Exception as e:  # noqa: BLE001
-        note.append(f"打开 {app} 失败：{e}，请手动打开")
+    opened = False
+    if cfg["mode"] == "app":
+        app = cfg["app"]
+        path = Path(app if app.endswith(".app") else f"/Applications/{app}.app")
+        try:  # 优先按路径打开：部分环境下 Launch Services 按名字解析不到（Muse 的 bundle id 是 com.meta.endo）
+            p = subprocess.run(["open", str(path)] if path.exists() else ["open", "-a", app], timeout=15, capture_output=True, text=True)
+            opened = p.returncode == 0
+            # 常见失败：App 二进制要求的 macOS 比本机新（-10825），这时退回网页版
+            note.append(f"已打开 {path.stem}" if opened else f"桌面 App 打不开（{(p.stderr or '').strip()[:120]}），改开网页版")
+        except Exception as e:  # noqa: BLE001
+            note.append(f"桌面 App 打不开（{e}），改开网页版")
+    if not opened:
+        try:
+            p = subprocess.run(["open", cfg["url"]], timeout=15, capture_output=True, text=True)
+            note.append(f"已打开 {cfg['url']}" if p.returncode == 0 else f"打开 {cfg['url']} 失败，请手动打开")
+        except Exception as e:  # noqa: BLE001
+            note.append(f"打开 {cfg['url']} 失败：{e}，请手动打开")
     db.update("research_results", res_id, {"status": "awaiting_paste", "error": "；".join(note) + "。在 Muse 中粘贴提问，把回答粘贴回来。"})
 
 
@@ -408,7 +477,7 @@ def _doc_md(r: dict, results: list[dict]) -> str:
 def _write_doc(rid: int) -> None:
     r = _research(rid)
     content = _doc_md(r, _results(rid))
-    d = db.row("SELECT * FROM research_docs WHERE research_id=?", [rid])
+    d = db.row("SELECT * FROM research_docs WHERE research_id=? AND result_id IS NULL", [rid])
     path = Path(d["path"]) if d and d["path"] else DOC_DIR / f"{rid}-{_slug(r['topic'])}.md"
     DOC_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(content, "utf-8")
@@ -417,6 +486,33 @@ def _write_doc(rid: int) -> None:
         db.update("research_docs", d["id"], data)
     else:
         db.insert("research_docs", {**data, "research_id": rid, "created_at": r["created_at"]})
+
+
+ENGINE_TAGS = {"claude": "Claude Code", "codex": "Codex", "grokbot": "GrokBot", "muse": "Muse"}
+
+
+def _write_result_doc(res_id: int) -> None:
+    """一条引擎结果完成后单独存一篇文档（标签带引擎名，便于按 GrokBot / Muse 等归档汇总）；重跑或重新粘贴时覆盖同一篇。"""
+    _ensure_cols()
+    x = db.row("SELECT * FROM research_results WHERE id=?", [res_id])
+    r = db.row("SELECT * FROM research WHERE id=?", [x["research_id"]]) if x else None
+    if not x or not r or x["status"] != "done" or not x["content"]:
+        return
+    angles, label = _j(r["angles"], []), engine_label(x)
+    content = "\n".join([f"# {r['topic']} · {label}", "",
+                          f"- 来源：调研 #{r['id']}（{r['topic']}）的 {label} 结果　完成：{x.get('finished_at') or db.now()}",
+                          f"- 关注角度：{'、'.join(angles) or '—'}", "", x["content"].strip(), "",
+                          "<details><summary>提问 brief</summary>", "", x["brief"] or "", "", "</details>"]) + "\n"
+    d = db.row("SELECT * FROM research_docs WHERE result_id=?", [res_id])
+    path = Path(d["path"]) if d and d["path"] else DOC_DIR / f"{r['id']}-{_slug(r['topic'])}-{x['engine']}-{res_id}.md"
+    DOC_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, "utf-8")
+    data = {"title": f"{r['topic']} · {label}", "content": content, "path": str(path), "updated_at": db.now(),
+            "tags": ["调研", "引擎结果", ENGINE_TAGS.get(x["engine"], x["engine"]), *angles]}
+    if d:
+        db.update("research_docs", d["id"], data)
+    else:
+        db.insert("research_docs", {**data, "research_id": r["id"], "result_id": res_id, "created_at": db.now()})
 
 
 def _doc(did: int) -> dict:
@@ -460,7 +556,7 @@ def _engine_ok(e: str) -> bool:
         return agent.available(e)
     if e == "grokbot":
         return Path(_grok_script()).exists()
-    return Path(f"/Applications/{settings.get('engines.muse.app', 'Muse')}.app").exists()
+    return True  # Muse 默认走网页版，总能打开
 
 
 @router.get("")
@@ -513,6 +609,16 @@ def paste_result(res_id: int, body: PasteIn):
     return _result(res_id)
 
 
+@router.post("/results/{res_id}/muse_auto")
+def muse_auto(res_id: int):
+    x = _result(res_id)
+    if x["status"] in PENDING:
+        raise HTTPException(400, "仍在运行")
+    _muse_auto(res_id)
+    _refresh(x["research_id"])
+    return _result(res_id)
+
+
 @router.post("/results/{res_id}/muse")
 def reopen_muse(res_id: int):
     x = _result(res_id)
@@ -526,8 +632,8 @@ def resume_result(res_id: int):
     x = _result(res_id)
     if x["engine"] != "grokbot" or not x["request_id"]:
         raise HTTPException(400, "只有已发送的 GrokBot 请求可以继续等待")
-    if x["status"] in ("done",):
-        return x
+    if x["status"] in ("done",) or _grok_from_app(res_id):
+        return _result(res_id)
     db.update("research_results", res_id, {"status": "waiting", "error": ""})
     _refresh(x["research_id"])
     _spawn(_grok_wait, res_id)
@@ -550,8 +656,13 @@ def retry_result(res_id: int):
 def get_research(rid: int):
     r = _research(rid)
     _resume_waiters(rid)
+    _check_muse(rid)
+    _check_grok(rid)
     r["results"] = _results(rid)
-    d = db.row("SELECT id,path FROM research_docs WHERE research_id=?", [rid])
+    docs = {d["result_id"]: d["id"] for d in db.rows("SELECT id,result_id FROM research_docs WHERE research_id=? AND result_id IS NOT NULL", [rid])}
+    for x in r["results"]:
+        x["doc_id"] = docs.get(x["id"])
+    d = db.row("SELECT id,path FROM research_docs WHERE research_id=? AND result_id IS NULL", [rid])
     r["doc_id"], r["doc_path"] = (d["id"], d["path"]) if d else (None, "")
     return r
 
@@ -585,7 +696,8 @@ class DocIn(BaseModel):
 
 @router.get("/docs")
 def list_docs(q: str = "", tag: str = "", since: str = "", until: str = "", limit: int = 100):
-    sql, args = "SELECT id,research_id,title,tags,path,created_at,updated_at,substr(content,1,300) AS excerpt FROM research_docs WHERE 1=1", []
+    _ensure_cols()
+    sql, args = "SELECT id,research_id,result_id,title,tags,path,created_at,updated_at,substr(content,1,300) AS excerpt FROM research_docs WHERE 1=1", []
     if q:
         sql, args = sql + " AND (title LIKE ? OR content LIKE ?)", args + [f"%{q}%"] * 2
     if tag:
@@ -644,7 +756,7 @@ def update_doc(did: int, body: DocIn):
 def delete_doc(did: int):
     """删除文档；调研生成的文档会连同调研记录一起删除。"""
     d = _doc(did)
-    if d["research_id"]:
+    if d["research_id"] and not d.get("result_id"):
         _delete_research(d["research_id"])
     else:
         if d["path"]:

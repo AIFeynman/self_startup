@@ -2,11 +2,11 @@
 import { annotate } from './_annotate.js';
 const STATUS = {
   queued: ['排队中', 'gray'], running: ['调研中', 'warn'], waiting: ['等待 GrokBot', 'warn'], timeout: ['等待超时', 'warn'],
-  awaiting_paste: ['待粘贴', ''], done: ['完成', 'ok'], failed: ['失败', 'err'],
+  awaiting_paste: ['待粘贴', ''], awaiting_login: ['等待登录', 'warn'], done: ['完成', 'ok'], failed: ['失败', 'err'],
 };
 const ENGINE_NAMES = { claude: 'Claude Code', codex: 'Codex', grokbot: 'GrokBot', muse: 'Muse' };
 const ENGINE_PILLS = { claude: 'Claude', codex: 'Codex', grokbot: 'GrokBot·X', muse: 'Muse·手动' };
-const ENGINE_DESC = { claude: '联网检索网页与文档', codex: '联网检索网页与文档', grokbot: 'X/Twitter 上的讨论', muse: '复制提问并打开 App，回答手动粘贴回来' };
+const ENGINE_DESC = { claude: '联网检索网页与文档', codex: '联网检索网页与文档', grokbot: 'X/Twitter 上的讨论', muse: '自动打开 Muse 网页版提问并取回答（首次需登录）' };
 const ENGINE_ICON = { claude: 'robot', codex: 'bolt', grokbot: 'chat', muse: 'edit' };
 const DEFAULT_ANGLES = ['技术原理', '关键玩家与竞品', '最新进展'];
 const PREFILL_KEY = 'research-prefill';
@@ -323,13 +323,15 @@ function engineCard(x, ctx, rerender, root) {
 
   if (x.status === 'done') {
     card.append(h('div.row', {}, [h('span.muted.grow', {}, `${fmt(x.finished_at)} 完成 · ${(x.content || '').length} 字`),
-      h('button.sm', { onclick: () => { const d = document.getElementById('rs-res-' + x.id); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } }, '看原文')]));
+      h('button.sm', { onclick: () => { const d = document.getElementById('rs-res-' + x.id); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } } }, '看原文'),
+      x.doc_id ? h('button.sm', { title: '这条结果单独存的文档，可在文档库按引擎标签归档汇总', onclick: () => { location.hash = '#research/docs/' + x.doc_id; } }, [ui.icon('doc'), '单独文档']) : null]));
   } else if (x.status === 'awaiting_paste') {
     const ta = h('textarea', { rows: 7, placeholder: '把 Muse 的回答粘贴到这里，然后点「保存回答」' });
     card.append(h('div.rs-paste', {}, [
       h('div.muted', {}, x.error),
       h('div.row', {}, [
         h('button.sm', { onclick: async () => { await navigator.clipboard.writeText(x.brief); toast('已复制提问'); } }, [ui.icon('doc'), '复制提问']),
+        h('button.sm', { onclick: () => act('muse_auto') }, [ui.icon('bolt'), '自动提问']),
         h('button.sm', { onclick: () => act('muse') }, [ui.icon('refresh'), '重新复制并打开 Muse']),
         h('details', { style: { flex: '1 1 100%' } }, [h('summary', {}, '查看提问 brief'), h('pre', { style: { maxHeight: '200px' } }, x.brief)]),
       ]),
@@ -341,12 +343,25 @@ function engineCard(x, ctx, rerender, root) {
       h('div', {}, h('button.sm', { onclick: () => { if (x.engine !== 'grokbot' || confirm('将向 GrokBot 发送一个新请求，确定？')) act('retry'); } }, [ui.icon('refresh'), '重试'])));
   } else if (x.status === 'timeout') {
     card.append(h('div.muted', {}, x.error), h('div', {}, h('button.sm', { onclick: () => act('resume') }, [ui.icon('clock'), '继续等待（不重发）'])));
+    if (x.engine === 'grokbot') card.append(grokPaste(h, toast, ui, act));
   } else {
-    card.append(h('div.muted.dots', {}, x.engine === 'grokbot' ? (x.request_id ? '已发送，等待 GrokBot 回复' : '检查配置并发送') : ENGINE_DESC[x.engine] || '后台 Agent 调研中'), logEl);
+    card.append(h('div.muted.dots', {}, x.engine === 'grokbot' ? (x.request_id ? '已发送，等待 GrokBot 回复' : '检查配置并发送') : x.engine === 'muse' ? (x.error || 'Muse 自动提问中') : ENGINE_DESC[x.engine] || '后台 Agent 调研中'), logEl);
+    if (x.engine === 'grokbot' && x.request_id) card.append(grokPaste(h, toast, ui, act));
     if (x.job_id) watchJob(api, x.job_id, root, rerender, logEl);
-    else if (x.engine === 'grokbot') pollResult(api, x, root, rerender);
+    else if (x.engine === 'grokbot' || x.engine === 'muse') pollResult(api, x, root, rerender);
   }
   return card;
+}
+
+// Grok Bot 回答了但没在本机执行 reply 回传时，手动把聊天里的回答粘贴回来
+function grokPaste(h, toast, ui, act) {
+  const ta = h('textarea', { rows: 6, placeholder: '把 Grok Bot 聊天里的回答粘贴到这里' });
+  return h('details.rs-paste', {}, [
+    h('summary', {}, 'Grok Bot 已经回答了但这里没收到？'),
+    h('div.muted', {}, '回答要靠 Grok Bot 在本机执行 reply 命令才能回传；它没执行（或在等你批准本机执行）时，可以直接粘贴。'),
+    ta,
+    h('div', {}, h('button.primary', { onclick: () => (ta.value.trim() ? act('paste', { content: ta.value }) : toast('内容为空', true)) }, [ui.icon('check'), '保存回答'])),
+  ]);
 }
 
 // 轮询 job（Claude/Codex/综合），结束后重绘；离开页面即停止
@@ -398,11 +413,11 @@ async function docs(el, ctx, openId) {
       h('button.ghost.rs-back', { onclick: back }, [ui.icon('arrow'), '文档库']),
       h('div.card.rs-reader', {}, [
         h('div.rs-read', {}, [
-          h('div.row', {}, [h('span.card-label', { style: { margin: 0 } }, d.research_id ? `调研 #${d.research_id}` : '手写笔记'), h('span.muted', {}, fmt(d.updated_at)), h('span.grow'),
+          h('div.row', {}, [h('span.card-label', { style: { margin: 0 } }, d.research_id ? `调研 #${d.research_id}${d.result_id ? ' · 引擎结果' : ''}` : '手写笔记'), h('span.muted', {}, fmt(d.updated_at)), h('span.grow'),
             d.research_id ? h('button.sm', { onclick: () => go('r/' + d.research_id) }, '打开调研') : h('button.sm', { onclick: () => editor(d) }, [ui.icon('edit'), '编辑']),
             h('button.sm', { onclick: async () => { await navigator.clipboard.writeText(d.content); toast('已复制 markdown'); } }, '复制'),
             h('button.icon', { title: '删除', onclick: async () => {
-              if (!confirm(d.research_id ? '删除文档会同时删除这条调研记录，确定？' : '删除这篇文档？')) return;
+              if (!confirm(d.research_id && !d.result_id ? '删除文档会同时删除这条调研记录，确定？' : '删除这篇文档？（调研记录保留）')) return;
               await api.del(`/api/research/docs/${id}`); back(); load();
             } }, ui.icon('trash'))]),
           h('h1.title', {}, d.title),

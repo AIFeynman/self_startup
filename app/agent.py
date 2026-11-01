@@ -134,9 +134,41 @@ def _parse_codex(obj: dict) -> list[dict]:
     return []
 
 
-def _child_env() -> dict:
+_PROXY_KEYS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+
+
+def clean_env(env: dict | None = None) -> dict:
+    """去掉从 Claude Code 会话里继承来的沙箱代理。
+
+    平台在 Claude Code 会话里用 ./run.sh 启动时，会带上该会话的 HTTPS_PROXY=127.0.0.1:<port>；
+    那个代理只放行 Anthropic 的域名，Codex 连 OpenAI 会一直 tls handshake eof，会话结束后代理没了 Claude 也会断。
+    只在确有 Claude Code 会话标记（CLAUDECODE）时去掉指向本机的代理，用户自己配的远程代理保留。"""
+    env = dict(os.environ if env is None else env)
+    if env.get("CLAUDECODE"):
+        for k in _PROXY_KEYS:
+            if any(h in env.get(k, "") for h in ("://127.0.0.1:", "://localhost:", "://[::1]:")):
+                env.pop(k)
+    return env
+
+
+def _proxy_up(url: str) -> bool:
+    import socket
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    try:
+        socket.create_connection((u.hostname or "127.0.0.1", u.port or 80), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
+def _child_env(engine: str = "") -> dict:
     # 子进程不继承数据目录，避免 Agent 在项目里跑测试/服务时写进真实数据库
-    env = {k: v for k, v in os.environ.items() if k != "SELF_STARTUP_DATA"}
+    env = {k: v for k, v in clean_env().items() if k != "SELF_STARTUP_DATA"}
+    # engines.<engine>.proxy：给该引擎单独指定代理（如 http://127.0.0.1:12001）；代理没开时直连，不让任务卡在重连
+    proxy = settings.get(f"engines.{engine}.proxy", "") if engine else ""
+    if proxy and _proxy_up(proxy):
+        env.update({k: proxy for k in _PROXY_KEYS[:4]})
     env["SELF_STARTUP_API"] = API_BASE
     return env
 
@@ -146,7 +178,7 @@ def _run(engine: str, cmd: list[str], cwd: str, on_proc=None) -> Iterator[dict]:
     try:
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, bufsize=1,
-                                env=_child_env(), start_new_session=True)  # 自成进程组，停的时候连它起的子进程一起停
+                                env=_child_env(engine), start_new_session=True)  # 自成进程组，停的时候连它起的子进程一起停
     except FileNotFoundError as e:
         yield {"type": "error", "text": f"{engine} 未安装: {e}", "fatal": True}
         return
