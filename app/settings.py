@@ -136,6 +136,21 @@ DEFAULTS: dict = {
             "https://feeds.fireside.fm/sv101/rss",                  # 硅谷101
             "https://feeds.fireside.fm/shengdongjixi/rss",          # 声东击西
         ],
+        # YouTube 频道（官方 RSS，带播放数，去掉 Shorts）：只放音频 RSS 里没有的高质量访谈 / 播客频道，
+        # Latent Space、Dwarkesh、No Priors、Lenny、Lex 已在上面的播客 RSS 里，不重复
+        "youtube": [
+            {"name": "Y Combinator", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCcefcZRL2oaA_uBNeo5UOWg"},
+            {"name": "a16z", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9cn0TuPq4dnbTY-CBsm8XA"},
+            {"name": "Sequoia Capital", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWrF0oN6unbXrWsTN7RctTw"},
+            {"name": "Every", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjIMtrzxYc0lblGhmOgC_CA"},
+            {"name": "Cognitive Revolution", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjNRVMBVI30Sak_p6HRWhIA"},
+            {"name": "AI Engineer", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCLKPca3kwwd-B59HNr-_lvA"},
+            {"name": "20VC", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCf0PBRjhf0rF8fWBIxTuoWA"},
+        ],
+        # 产品分析：投资机构 / 孵化器的分析文章 RSS（进「产品」分类；YC 的产品发布另由 Launch YC 采集）
+        "product_rss": [
+            {"name": "a16z", "url": "https://www.a16z.news/feed"},
+        ],
         # 小宇宙节目页（直读页面内嵌数据，带播放数；失败时走 rsshub_bases 里的公共 RSSHub）
         "xiaoyuzhou": [
             "https://www.xiaoyuzhoufm.com/podcast/626b46ea9cbbf0451cf5a962",   # 张小珺Jùn｜商业访谈录

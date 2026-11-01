@@ -583,6 +583,96 @@ def fetch_producthunt(days: int = 2, first: int = 40, ai_only: bool = True) -> l
     return out
 
 
+# ---------- Launch YC：列表页内嵌 Algolia 结果（含发布时间、票数、公司标签） ----------
+YC_LAUNCHES = "https://www.ycombinator.com/launches"
+
+
+def parse_yc_launches(page: str) -> list[dict]:
+    """列表页里的 {"hits": [...]} → 统一形状（不按日期过滤）。"""
+    i = page.find('{"hits"')
+    if i < 0:
+        return []
+    hits = json.JSONDecoder().raw_decode(page[i:])[0].get("hits") or []
+    out = []
+    for h in hits:
+        co = h.get("company") or {}
+        if not h.get("id") or not h.get("title") or not h.get("slug"):
+            continue
+        out.append({
+            "id": f"yc:{h['id']}", "source": "yc", "type": "product", "title": clean(h["title"], 200),
+            "summary": clean(h.get("tagline")), "url": f"{YC_LAUNCHES}/{h['slug']}", "date": h.get("created_at") or "",
+            "popularity": float(h.get("total_vote_count") or 0),
+            "extra": {"feed": f"YC {co.get('batch') or ''}".strip(), "company": co.get("name") or "",
+                      "website": co.get("url") or "", "topics": co.get("tags") or []}})
+    return out
+
+
+def fetch_yc_launches(days: int = 3, pages: int = 3, ai_only: bool = True) -> list[dict]:
+    """YC 公司的产品发布（按时间倒序，每页 20 条）；翻到超出 days 为止。"""
+    cutoff, out = _iso(_days_ago(days)), []
+    with _client() as c:
+        for p in range(1, pages + 1):
+            r = c.get(YC_LAUNCHES, params={"page": p} if p > 1 else None, headers={"User-Agent": BROWSER_UA})
+            r.raise_for_status()
+            got = parse_yc_launches(r.text)
+            if not got and p == 1:
+                raise RuntimeError("Launch YC 页面里没找到 hits 数据（页面结构变了？）")
+            fresh = [it for it in got if it["date"] >= cutoff]
+            out += [it for it in fresh if not ai_only or
+                    AI_HINT_RE.search(" ".join([it["title"], it["summary"], *it["extra"]["topics"]]))]
+            if len(fresh) < len(got) or not got:
+                break
+    return out
+
+
+# ---------- YouTube 频道：官方 RSS（最近 15 条，含播放数），去掉 Shorts ----------
+
+def youtube_feed(channel_id: str) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+
+def parse_youtube(text: str, feed_url: str = "", name: str = "", days: int = 30, limit: int = 5) -> list[dict]:
+    f = feedparser.parse(text)
+    name = name or clean(f.feed.get("title", ""), 80)
+    cutoff, out = _days_ago(days) if days else None, []
+    for e in f.entries:
+        link, vid = e.get("link") or "", e.get("yt_videoid") or ""
+        if not vid or not e.get("title") or "/shorts/" in link:
+            continue
+        tm = e.get("published_parsed")
+        dt = datetime(*tm[:6], tzinfo=timezone.utc) if tm else None
+        if cutoff and dt and dt < cutoff:
+            continue
+        out.append({
+            "id": f"youtube:{vid}", "source": "youtube", "type": "podcast", "title": clean(e["title"], 200),
+            "summary": clean(e.get("summary") or ""), "url": f"https://www.youtube.com/watch?v={vid}", "date": _iso(dt),
+            "popularity": float((e.get("media_statistics") or {}).get("views") or 0),
+            "extra": {"feed": name, "feed_url": feed_url}})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def fetch_youtube(channels: list, days: int = 30, per_channel: int = 5) -> tuple[list[dict], list[str]]:
+    """channels: [{name, url}] 或 feed 地址字符串（youtube.com/feeds/videos.xml?channel_id=…）。"""
+    def one(c, ch):
+        url, name = (ch.get("url", ""), ch.get("name", "")) if isinstance(ch, dict) else (str(ch), "")
+        try:
+            r = c.get(url)
+            r.raise_for_status()
+            return parse_youtube(r.text, url, name, days, per_channel), None
+        except Exception as e:  # noqa: BLE001
+            return [], f"{name or url}: {type(e).__name__}: {str(e)[:120]}"
+
+    items, errors = [], []
+    with _client() as c, ThreadPoolExecutor(max_workers=6) as ex:
+        for got, err in ex.map(lambda ch: one(c, ch), channels):
+            items += got
+            if err:
+                errors.append(err)
+    return items, errors
+
+
 # ---------- 没有 RSS 的官方站：列表页 → 文章链接 → 文章页 meta ----------
 
 def _meta(page: str, *names: str) -> str:

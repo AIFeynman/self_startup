@@ -90,7 +90,7 @@ def test_refresh_by_type(client, monkeypatch):
     calls = []
     monkeypatch.setattr(feed, "refresh_sync", lambda only=None, gists=None: calls.append((only, gists)) or {})
     client.post("/api/feed/refresh", json={"type": "podcast", "wait": True})
-    assert calls == [(["podcast", "xiaoyuzhou"], True)]
+    assert calls == [(["podcast", "xiaoyuzhou", "youtube"], True)]
     assert client.post("/api/feed/refresh", json={"type": "nope"}).status_code == 400
 
 

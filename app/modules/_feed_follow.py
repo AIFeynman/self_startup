@@ -3,7 +3,8 @@
 关注源按类别分组，每组落到 feed 设置里的一个或两个列表：
 - x → x_accounts；github → github_watch_orgs；reddit → reddit
 - site → rss（能找到 RSS / Atom）或 sites（没有 RSS 的列表页，自动推断文章链接规则 link_re）
-- podcast → podcasts（RSS；Apple Podcasts 链接或节目名经 iTunes 接口换成 RSS）或 xiaoyuzhou（小宇宙节目页）
+- podcast → podcasts（RSS；Apple Podcasts 链接或节目名经 iTunes 接口换成 RSS）、xiaoyuzhou（小宇宙节目页）或 youtube（频道 RSS）
+- product → product_rss（产品分析文章的 RSS / Atom，比如 a16z）
 默认名单写在 settings 里，用户增删记在 feed.follow：{"add": {列表: [...]}, "remove": {列表: [键]}, "names": {键: 显示名}}，
 默认名单以后更新也不会被冻结。
 """
@@ -25,13 +26,17 @@ GROUPS = {
                "hint": "deepseek-ai 或 github.com/karpathy（盯他们新建的仓库）"},
     "site": {"label": "网站 / 博客", "lists": ["rss", "sites"], "collector": None,
              "hint": "网站或博客列表页地址，有 RSS 自动用 RSS"},
-    "podcast": {"label": "播客", "lists": ["podcasts", "xiaoyuzhou"], "collector": None,
-                "hint": "RSS、Apple Podcasts、小宇宙节目页链接，或直接输节目名"},
+    "podcast": {"label": "播客", "lists": ["podcasts", "xiaoyuzhou", "youtube"], "collector": None,
+                "hint": "RSS、Apple Podcasts、小宇宙节目页、YouTube 频道链接，或直接输节目名"},
+    "product": {"label": "产品分析", "lists": ["product_rss"], "collector": "analysis",
+                "hint": "分析文章的网站或 RSS，比如 a16z.news"},
     "reddit": {"label": "Reddit 版块", "lists": ["reddit"], "collector": "reddit", "hint": "r/LocalLLaMA"},
 }
 # 列表 → 采集器（refresh_sync 的来源名）
 LIST_COLLECTOR = {"x_accounts": "x", "github_watch_orgs": "github", "rss": "rss", "sites": "sites",
-                  "podcasts": "podcast", "xiaoyuzhou": "xiaoyuzhou", "reddit": "reddit"}
+                  "podcasts": "podcast", "xiaoyuzhou": "xiaoyuzhou", "youtube": "youtube",
+                  "product_rss": "analysis", "reddit": "reddit"}
+URL_LISTS = ("rss", "podcasts", "xiaoyuzhou", "youtube", "product_rss")   # 条目本身是地址的列表
 CASELESS = {"x_accounts", "github_watch_orgs", "reddit"}
 
 
@@ -67,7 +72,7 @@ def label(lst: str, v, names: dict) -> str:
         return "@" + v
     if lst == "reddit":
         return "r/" + v
-    if lst in ("rss", "podcasts", "xiaoyuzhou"):
+    if lst in URL_LISTS:
         p = urlsplit(v)
         return (p.netloc.removeprefix("www.") + p.path.rstrip("/"))[:60]
     return str(v)
@@ -114,6 +119,8 @@ def resolve(group: str, text: str, client: httpx.Client | None = None) -> tuple[
             return _site(c, text)
         if group == "podcast":
             return _podcast(c, text)
+        if group == "product":
+            return _product(c, text)
     finally:
         if own:
             c.close()
@@ -222,6 +229,8 @@ def _podcast(c: httpx.Client, text: str):
         except httpx.HTTPError:
             pass
         return "xiaoyuzhou", url, (name.split("|")[0].strip() or "小宇宙节目")
+    if re.search(r"(?:^|[/.])(?:youtube\.com|youtu\.be)/", text, re.I):
+        return _youtube(c, text)
     if m := re.search(r"podcasts\.apple\.com/.*?\bid(\d+)", text):
         hits = c.get("https://itunes.apple.com/lookup", params={"id": m.group(1), "entity": "podcast"}).json().get("results") or []
     elif not re.match(r"https?://|[\w-]+(\.[\w-]+)+/", text):
@@ -238,3 +247,42 @@ def _podcast(c: httpx.Client, text: str):
     if not hit:
         raise FollowError("这个节目在 Apple Podcasts 上没有公开 RSS")
     return "podcasts", hit["feedUrl"], hit.get("collectionName") or hit["feedUrl"]
+
+
+YT_CHANNEL = re.compile(r"\b(UC[\w-]{22})\b")
+
+
+def _youtube(c: httpx.Client, text: str):
+    """YouTube 频道 / @handle / 视频链接 → 频道 RSS。"""
+    url = _url(text)
+    m = re.search(r"[?&]channel_id=(UC[\w-]{22})|/channel/(UC[\w-]{22})", url)
+    cid, name = (m.group(1) or m.group(2)) if m else "", ""
+    try:
+        page = c.get(url, headers={"Accept-Language": "en"}).text
+    except httpx.HTTPError as e:
+        if not cid:
+            raise FollowError(f"打不开 {url}：{type(e).__name__}") from e
+        page = ""
+    if not cid:
+        # 频道页 / @handle 页带 externalId；视频页带上传者的 channelId
+        hit = re.search(r'"externalId":"(UC[\w-]{22})"', page) or re.search(r'"channelId":"(UC[\w-]{22})"', page)
+        cid = hit.group(1) if hit else ""
+    if not cid:
+        raise FollowError("认不出 YouTube 频道；贴频道主页（youtube.com/@名字）链接试试")
+    name = src.clean(html.unescape(src._meta(page, "og:title") or ""), 60) if "/watch" not in url else ""
+    feed = src.youtube_feed(cid)
+    if not name:
+        try:
+            name = src.clean(feedparser.parse(c.get(feed).text).feed.get("title", ""), 60)
+        except httpx.HTTPError:
+            pass
+    return "youtube", {"name": name or cid, "url": feed}, name or cid
+
+
+def _product(c: httpx.Client, text: str):
+    url = _url(text)
+    feed, title, _ = _find_feed(c, url)
+    if not feed:
+        raise FollowError("没找到 RSS / Atom；贴文章站点或它的 RSS 地址")
+    name = title or urlsplit(url).netloc
+    return "product_rss", {"name": name, "url": feed}, name

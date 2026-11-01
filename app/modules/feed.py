@@ -68,16 +68,18 @@ CFG_DEFAULTS = {
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
     "x_per_account": 2,           # X 名单账号：每人每次最多收几条
     "producthunt_days": 2,
+    "yc_days": 3,                 # Launch YC：只要最近几天的产品发布（只留 AI 相关）
     "gist_enabled": True,         # 完整刷新后给排序前列生成中文一句话（DeepSeek，.env 的 DEEPSEEK_API_KEY）
     "gist_top": 60,               # 「全部」前多少条
     "gist_per_type": 10,          # 每个分类前多少条
     "gist_model": "deepseek-v4-flash",
     "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
-    "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt"],
+    "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt",
+                "yc", "analysis", "youtube"],
 }
 # 分类 → 采集器：分类页上的「刷新」只跑这些来源
-TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites"], "podcast": ["podcast", "xiaoyuzhou"],
-                "product": ["producthunt"], "repo": ["github"], "discussion": ["hn", "reddit", "x"], "x_article": ["x"]}
+TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites"], "podcast": ["podcast", "xiaoyuzhou", "youtube"],
+                "product": ["producthunt", "yc", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x"], "x_article": ["x"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
          "news": "资讯"}
 
@@ -269,7 +271,15 @@ def _collectors() -> dict:
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
+        "yc": lambda: src.fetch_yc_launches(days=int(cfg("yc_days"))),
+        "analysis": lambda: src.fetch_rss([_url_of(v) for v in src_list("product_rss")], per_feed=10,
+                                          source="analysis", typ="product"),
+        "youtube": lambda: src.fetch_youtube(src_list("youtube")),
     }
+
+
+def _url_of(v) -> str:
+    return v.get("url", "") if isinstance(v, dict) else str(v)
 
 
 def _enriched_hn() -> set[str]:
@@ -417,7 +427,7 @@ def follow_groups() -> list[dict]:
     for gid, g in follow.GROUPS.items():
         items = [{"list": lst, "key": follow.entry_key(lst, v), "label": follow.label(lst, v, names),
                   "custom": follow.entry_key(lst, v) in added.get(lst, set()),
-                  "url": v.get("url") if isinstance(v, dict) else (v if lst in ("rss", "podcasts", "xiaoyuzhou") else "")}
+                  "url": v.get("url") if isinstance(v, dict) else (v if lst in follow.URL_LISTS else "")}
                  for lst in g["lists"] for v in src_list(lst)]
         out.append({"id": gid, "label": g["label"], "hint": g["hint"], "items": items})
     return out
@@ -624,9 +634,9 @@ def deep_reads() -> int:
 @router.get("/config")
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
-                                "x_min_likes", "x_per_account", "producthunt_days", "sources", "github_min_stars",
+                                "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "sources", "github_min_stars",
                                 "github_trending_languages", "github_watch_orgs", "github_watch_min_stars")} | {
-        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
+        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "youtube", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 
 # ---------- 定时刷新 ----------

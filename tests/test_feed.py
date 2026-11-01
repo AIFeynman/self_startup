@@ -625,3 +625,31 @@ def test_gist_runs_only_on_full_refresh(client, monkeypatch):
     client.post("/api/feed/gist")
     assert len(ran) == before or ran[-1] < ran[0]                    # 已生成且没变的不再送
     assert '"gist_src"' in db.row("SELECT extra FROM feed_items WHERE id='hn:g1'")["extra"]
+
+
+def test_yc_launches_parse_and_filter(monkeypatch):
+    now = datetime.now(timezone.utc)
+    hit = lambda i, title, tags, days: {"id": i, "title": title, "tagline": "t", "slug": f"s{i}", "total_vote_count": i,
+                                        "created_at": (now - timedelta(days=days)).isoformat(),
+                                        "company": {"name": "C", "batch": "Fall 2026", "tags": tags}}
+    page = 'x<div data-x={"hits":%s,"nbHits":3}>' % json.dumps([hit(1, "Agentic QA", ["AI"], 0), hit(2, "Cargo planes", ["Aerospace"], 1),
+                                                                hit(3, "Old AI thing", ["AI"], 10)])
+
+    def handler(req):
+        return httpx.Response(200, text=page)
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    items = src.fetch_yc_launches(days=3)
+    assert [i["id"] for i in items] == ["yc:1"]
+    assert items[0]["type"] == "product" and items[0]["url"].endswith("/launches/s1") and items[0]["popularity"] == 1
+
+
+def test_youtube_skips_shorts():
+    d = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    entry = lambda vid, path: f"""<entry><yt:videoId>{vid}</yt:videoId><title>T{vid}</title>
+<link rel="alternate" href="https://www.youtube.com/{path}"/><published>{d}</published>
+<media:group><media:description>desc</media:description><media:community><media:statistics views="1234"/></media:community></media:group></entry>"""
+    xml = f"""<?xml version="1.0"?><feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/"
+xmlns="http://www.w3.org/2005/Atom"><title>Chan</title>{entry("aaa", "watch?v=aaa")}{entry("bbb", "shorts/bbb")}</feed>"""
+    items = src.parse_youtube(xml, name="YC")
+    assert [i["id"] for i in items] == ["youtube:aaa"]
+    assert items[0]["type"] == "podcast" and items[0]["popularity"] == 1234 and items[0]["extra"]["feed"] == "YC"
