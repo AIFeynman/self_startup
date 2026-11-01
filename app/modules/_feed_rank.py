@@ -33,6 +33,18 @@ PICKS_N, PICKS_PER_SOURCE, PICKS_PER_TYPE = 5, 1, 2     # 今日精选：每个�
 SOURCE_SHARE = 0.2          # diversify：前 N 条里同一来源最多占的比例
 # 刚建的仓库还没上 Trending（榜单滞后）但星涨得飞快：平均每天涨这么多星就按 Trending 同等加分，只看建库一周内的
 VELOCITY_MIN_PER_DAY, VELOCITY_MAX_AGE_DAYS = 500, 7
+# 重要官方更新（官方博客 / 重点机构新仓库里的实质内容）：发布 PIN_DAYS 天内，分最高的 PICKS_OFFICIAL 条进今日精选，
+# 其余紧接在精选之后，合计最多 PIN_MAX 条，不受来源配额限制
+PIN_DAYS, PIN_MAX, PICKS_OFFICIAL = 3, 8, 2
+PIN_MIN_STARS = 100         # 没有 Jev 判断时，机构新仓库到这个星数才算重要（大厂随手建的示例 / 内部仓库很多）
+# 没有 Jev 判断时的关键词规则：Trending 项目是否和 AI 相关；官方博客哪些是 PR 水文
+AI_RE = re.compile(r"\b(ai|llms?|gpt|agents?|agentic|mcp|rag|claude|codex|copilot|gemini|openai|anthropic|deepseek|qwen|"
+                   r"llama|mistral|ml|machine[- ]learning|deep[- ]learning|neural|transformers?|diffusion|inference|"
+                   r"embeddings?|prompts?|chatbot|nlp|fine-?tun\w*|vlm|multimodal|speech|tts|asr)\b|大模型|人工智能|智能体",
+                   re.I)
+PR_RE = re.compile(r"\b(partner(ship)?s?|customers?|case stud(y|ies)|roi|webinar|summit|hiring|nonprofits?|government|"
+                   r"enterprise|adopts?|achieves|expands?|brings?|uses (openai|claude|chatgpt|gemini|gpt)|"
+                   r"how \w+ (uses|is|cut|streamlines?|builds?|built)|for (financial|legal|healthcare|education))\b", re.I)
 STALE_DAYS = 14             # 发布超过这么多天算「旧」：在推荐里降权，避免几个月前的高赞条目霸榜
 TYPE_SHARE = 0.4            # diversify：前 N 条里同一类型最多占的比例
 NO_POP_BASE = 0.35          # 整个来源都没有热度数据（博客 RSS 等）时的中性热度分
@@ -250,10 +262,16 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
         fb = feedback.get(it["id"], {})
         if fb.get("hidden") and not include_hidden:
             continue
+        if trending_only(it) and not is_ai(it, interests) and not fb.get("saved"):
+            continue    # Trending 是全站榜：和 AI 无关的不推荐（收藏过的照样留着）
         pn = pop_norm(pops, it)
         s, why = score_item(it, pop_norm=pn, now=now, half_life_h=half_life_h, interests=list(interests),
                             aff=aff, fb=fb)
-        scored.append({**it, "score": round(s, 3), "pop_norm": round(pn, 3), "why": " · ".join(why), "feedback": fb})
+        pin = important_official(it, now)
+        if pin:
+            why.insert(1, "重要更新")    # 紧跟在「X 官方」后面
+        scored.append({**it, "score": round(s, 3), "pop_norm": round(pn, 3), "why": " · ".join(why), "feedback": fb,
+                       "pinned": pin})
     scored.sort(key=lambda x: (-x["score"], x["id"]))
 
     out, seen_url, seen_title = [], {}, {}
@@ -337,6 +355,36 @@ def official_org(it: dict) -> str:
     return next((org for d, org in OFFICIAL_BLOGS.items() if host == d or host.endswith("." + d)), "")
 
 
+def trending_only(it: dict) -> bool:
+    """只因为上了 GitHub Trending 才进来的仓库（关键词搜索、机构监控都没收它）。"""
+    ex = it.get("extra") or {}
+    return it.get("source") == "github" and bool(ex.get("trending")) and not ex.get("query") and not ex.get("watch_org")
+
+
+def is_ai(it: dict, interests: list[str] = ()) -> bool:
+    """Jev 判过就用它的结论；没判过按关键词 / 兴趣词。"""
+    ex = it.get("extra") or {}
+    if ex.get("judge_ai") is not None:
+        return ex["judge_ai"] >= 0.5
+    text = f"{it.get('title', '')} {it.get('summary', '')} {' '.join(ex.get('topics') or [])}"
+    return bool(AI_RE.search(text)) or any(t and _interest_re(t).search(text.lower()) for t in interests)
+
+
+def important_official(it: dict, now: datetime) -> bool:
+    """官方发布的实质更新（不是 PR 水文），且在 PIN_DAYS 天内。Jev 判过用它；没判过：仓库看星数，博客排除 PR 标题。"""
+    if not official_org(it):
+        return False
+    d = item_time(it, now)
+    if not d or (now - d).total_seconds() > PIN_DAYS * 86400:
+        return False
+    ex = it.get("extra") or {}
+    if ex.get("judge_important") is not None:
+        return ex["judge_important"] >= 0.5
+    if it.get("source") == "github":
+        return (it.get("popularity") or 0) >= PIN_MIN_STARS
+    return not PR_RE.search(it.get("title", ""))
+
+
 def pop_index(items: list[dict], now: datetime) -> dict[str, list[float]]:
     """每个来源最近 POP_WINDOW_DAYS 天的热度（升序），供百分位用；窗口内没有条目的来源退回用全部。"""
     recent, every = {}, {}
@@ -396,11 +444,21 @@ def _take(items: list[dict], k: int, type_cap: int, src_cap: int, nt: Counter | 
 def diversify(items: list[dict], top: int = 30, max_share: float = TYPE_SHARE,
               src_share: float = SOURCE_SHARE) -> list[dict]:
     """前 PICKS_N 条（今日精选）每个来源最多 1 条、每类最多 2 条；前 top 条里同一类型不超过 max_share、
-    同一来源不超过 src_share（各至少 2 条）。超出的顺延到后面，相对顺序不变；凑不满就放宽，不丢条目。"""
+    同一来源不超过 src_share（各至少 2 条）。超出的顺延到后面，相对顺序不变；凑不满就放宽，不丢条目。
+    重要官方更新（rank 标的 pinned）优先：前 PICKS_OFFICIAL 条进精选，其余紧接在精选后，合计至多 PIN_MAX 条。"""
     nt, ns = Counter(), Counter()
-    picks, rest = _take(items, PICKS_N, PICKS_PER_TYPE, PICKS_PER_SOURCE, nt, ns)
+    pins = [x for x in items if x.get("pinned")][:PIN_MAX]
+    pin_ids = {x["id"] for x in pins}
+    pinned, pinned_rest = pins[:PICKS_OFFICIAL], pins[PICKS_OFFICIAL:]
+    for x in pins:
+        nt[x.get("type")] += 1
+        ns[x.get("source")] += 1
+    picks, rest = _take([x for x in items if x["id"] not in pin_ids], PICKS_N - len(pinned),
+                        PICKS_PER_TYPE, PICKS_PER_SOURCE, nt, ns)
+    picks = pinned + picks
     if len(picks) < PICKS_N:                       # 来源 / 类型太少时放宽，保证精选凑满
         more, rest = _take(rest, PICKS_N - len(picks), PICKS_N, PICKS_N, nt, ns)
         picks += more
-    body, tail = _take(rest, max(0, top - len(picks)), max(2, int(top * max_share)), max(2, int(top * src_share)), nt, ns)
-    return picks + body + tail
+    body, tail = _take(rest, max(0, top - len(picks) - len(pinned_rest)), max(2, int(top * max_share)),
+                       max(2, int(top * src_share)), nt, ns)
+    return picks + pinned_rest + body + tail

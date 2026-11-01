@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from .. import db, settings
 from . import _feed_gist as gist
+from . import _feed_judge as judge
 from . import _feed_rank as rk
 from . import _feed_sources as src
 
@@ -69,6 +70,7 @@ CFG_DEFAULTS = {
     "gist_top": 60,               # 「全部」前多少条
     "gist_per_type": 10,          # 每个分类前多少条
     "gist_model": "deepseek-v4-flash",
+    "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
     "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt"],
 }
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
@@ -280,9 +282,37 @@ def refresh_sync(only: list[str] | None = None) -> dict:
     with ThreadPoolExecutor(max_workers=6) as ex:
         for name, res in ex.map(run, names):
             results[name] = res
+    if cfg("judge_enabled"):    # 判断决定过滤和置顶，刷了哪个来源都跑；只问新的或内容变了的，量很小
+        results["judge"] = run_judge()
     if not only and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
         results["gist"] = run_gists()
     return results
+
+
+def run_judge(now: datetime | None = None) -> dict:
+    """给最近的 Trending 仓库（是否 AI）和官方内容（是否重要）补 Jev 判断，写回 extra。没判过的排序时走关键词规则。"""
+    now = now or datetime.now(timezone.utc)
+    todo = []
+    for it in _load_items():
+        ex = it["extra"]
+        if ex.get("judge_src") == judge.judge_key(it):
+            continue
+        d = rk.item_time(it, now)
+        if not d or (now - d).total_seconds() > rk.PIN_DAYS * 86400:
+            continue
+        if rk.trending_only(it):
+            todo.append((it, "ai", ""))
+        elif org := rk.official_org(it):
+            todo.append((it, "important", org))
+    if not todo:
+        return {"count": 0, "errors": []}
+    got, errors = judge.judge(todo)
+    for it, _, _ in todo:
+        if it["id"] in got:
+            row = db.row("SELECT extra FROM feed_items WHERE id=?", [it["id"]])
+            ex = {**_extra(row or {}), **got[it["id"]], "judge_src": judge.judge_key(it)}
+            db.execute("UPDATE feed_items SET extra=? WHERE id=?", [json.dumps(ex, ensure_ascii=False), it["id"]])
+    return {"count": len(got), "errors": errors}
 
 
 def run_gists() -> dict:
