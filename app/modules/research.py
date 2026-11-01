@@ -4,7 +4,7 @@
 引擎：
     claude / codex  走 jobs.submit（后台 Agent，联网检索）
     grokbot         后台线程调 GrokBot webhook 脚本（send 一次，wait 轮询，request_id 落库可续等）
-    muse            桌面 App 无 CLI：生成 brief → pbcopy → open -a Muse → 用户把回答粘贴回来
+    muse            无 CLI：生成 brief → pbcopy → 打开 Muse 网页版（mode=app 时开桌面 App，打不开退回网页）→ 用户把回答粘贴回来
 """
 from __future__ import annotations
 
@@ -372,19 +372,30 @@ def _resume_waiters(rid: int) -> None:
 
 
 def _muse_open(res_id: int, brief: str) -> None:
-    app = settings.get("engines.muse.app", "Muse")
+    cfg = {"mode": "web", "url": "https://muse.ai", "app": "Muse", **(settings.get("engines.muse", {}) or {})}
     note = []
     try:
         subprocess.run(["pbcopy"], input=brief.encode("utf-8"), check=True, timeout=10)
         note.append("brief 已复制到剪贴板")
     except Exception as e:  # noqa: BLE001
         note.append(f"复制失败：{e}")
-    path = Path(app if app.endswith(".app") else f"/Applications/{app}.app")
-    try:  # 优先按路径打开：部分环境下 Launch Services 按名字解析不到（Muse 的 bundle id 是 com.meta.endo）
-        p = subprocess.run(["open", str(path)] if path.exists() else ["open", "-a", app], timeout=15, capture_output=True, text=True)
-        note.append(f"已打开 {path.stem}" if p.returncode == 0 else f"打开 {app} 失败：{(p.stderr or '').strip()[:200]}，请手动打开")
-    except Exception as e:  # noqa: BLE001
-        note.append(f"打开 {app} 失败：{e}，请手动打开")
+    opened = False
+    if cfg["mode"] == "app":
+        app = cfg["app"]
+        path = Path(app if app.endswith(".app") else f"/Applications/{app}.app")
+        try:  # 优先按路径打开：部分环境下 Launch Services 按名字解析不到（Muse 的 bundle id 是 com.meta.endo）
+            p = subprocess.run(["open", str(path)] if path.exists() else ["open", "-a", app], timeout=15, capture_output=True, text=True)
+            opened = p.returncode == 0
+            # 常见失败：App 二进制要求的 macOS 比本机新（-10825），这时退回网页版
+            note.append(f"已打开 {path.stem}" if opened else f"桌面 App 打不开（{(p.stderr or '').strip()[:120]}），改开网页版")
+        except Exception as e:  # noqa: BLE001
+            note.append(f"桌面 App 打不开（{e}），改开网页版")
+    if not opened:
+        try:
+            p = subprocess.run(["open", cfg["url"]], timeout=15, capture_output=True, text=True)
+            note.append(f"已打开 {cfg['url']}" if p.returncode == 0 else f"打开 {cfg['url']} 失败，请手动打开")
+        except Exception as e:  # noqa: BLE001
+            note.append(f"打开 {cfg['url']} 失败：{e}，请手动打开")
     db.update("research_results", res_id, {"status": "awaiting_paste", "error": "；".join(note) + "。在 Muse 中粘贴提问，把回答粘贴回来。"})
 
 
@@ -460,7 +471,7 @@ def _engine_ok(e: str) -> bool:
         return agent.available(e)
     if e == "grokbot":
         return Path(_grok_script()).exists()
-    return Path(f"/Applications/{settings.get('engines.muse.app', 'Muse')}.app").exists()
+    return True  # Muse 默认走网页版，总能打开
 
 
 @router.get("")

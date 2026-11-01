@@ -31,7 +31,7 @@ description: 调研板块：对任意主题按用户选的关注角度（技术�
 
 - **claude / codex**：通用联网调研（网页、官方文档、论文、GitHub）。默认 claude；想要第二视角或 claude 不可用时加 codex。
 - **grokbot**：X/Twitter 上的讨论、KOL 观点、实时舆情。每次只发一个请求（脚本只 POST 一次），超时只能「继续等待」同一 request_id，绝不自动重发。未配置时请用户在终端运行 `python3 ~/.codex/skills/grokbot-webhook/scripts/grokbot.py setup`，不要在对话里索要密钥。
-- **muse**：桌面 App，无 CLI。平台把提问复制到剪贴板并打开 Muse，用户手动把回答粘贴回来（结果状态 `awaiting_paste`）。
+- **muse**：无 CLI。平台把提问复制到剪贴板并打开 Muse 网页版（https://muse.ai；`engines.muse.mode` 设为 `app` 时开桌面 App，打不开自动退回网页），用户手动把回答粘贴回来（结果状态 `awaiting_paste`）。
 - 多引擎完成后用「综合」合并：一致点、冲突、开放问题、去重来源。
 
 ## 对话中

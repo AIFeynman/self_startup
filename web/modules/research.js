@@ -6,7 +6,7 @@ const STATUS = {
 };
 const ENGINE_NAMES = { claude: 'Claude Code', codex: 'Codex', grokbot: 'GrokBot', muse: 'Muse' };
 const ENGINE_PILLS = { claude: 'Claude', codex: 'Codex', grokbot: 'GrokBot·X', muse: 'Muse·手动' };
-const ENGINE_DESC = { claude: '联网检索网页与文档', codex: '联网检索网页与文档', grokbot: 'X/Twitter 上的讨论', muse: '复制提问并打开 App，回答手动粘贴回来' };
+const ENGINE_DESC = { claude: '联网检索网页与文档', codex: '联网检索网页与文档', grokbot: 'X/Twitter 上的讨论', muse: '复制提问并打开 Muse 网页版，回答手动粘贴回来' };
 const ENGINE_ICON = { claude: 'robot', codex: 'bolt', grokbot: 'chat', muse: 'edit' };
 const DEFAULT_ANGLES = ['技术原理', '关键玩家与竞品', '最新进展'];
 const PREFILL_KEY = 'research-prefill';
