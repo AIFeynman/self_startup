@@ -341,12 +341,25 @@ function engineCard(x, ctx, rerender, root) {
       h('div', {}, h('button.sm', { onclick: () => { if (x.engine !== 'grokbot' || confirm('将向 GrokBot 发送一个新请求，确定？')) act('retry'); } }, [ui.icon('refresh'), '重试'])));
   } else if (x.status === 'timeout') {
     card.append(h('div.muted', {}, x.error), h('div', {}, h('button.sm', { onclick: () => act('resume') }, [ui.icon('clock'), '继续等待（不重发）'])));
+    if (x.engine === 'grokbot') card.append(grokPaste(h, toast, ui, act));
   } else {
     card.append(h('div.muted.dots', {}, x.engine === 'grokbot' ? (x.request_id ? '已发送，等待 GrokBot 回复' : '检查配置并发送') : ENGINE_DESC[x.engine] || '后台 Agent 调研中'), logEl);
+    if (x.engine === 'grokbot' && x.request_id) card.append(grokPaste(h, toast, ui, act));
     if (x.job_id) watchJob(api, x.job_id, root, rerender, logEl);
     else if (x.engine === 'grokbot') pollResult(api, x, root, rerender);
   }
   return card;
+}
+
+// Grok Bot 回答了但没在本机执行 reply 回传时，手动把聊天里的回答粘贴回来
+function grokPaste(h, toast, ui, act) {
+  const ta = h('textarea', { rows: 6, placeholder: '把 Grok Bot 聊天里的回答粘贴到这里' });
+  return h('details.rs-paste', {}, [
+    h('summary', {}, 'Grok Bot 已经回答了但这里没收到？'),
+    h('div.muted', {}, '回答要靠 Grok Bot 在本机执行 reply 命令才能回传；它没执行（或在等你批准本机执行）时，可以直接粘贴。'),
+    ta,
+    h('div', {}, h('button.primary', { onclick: () => (ta.value.trim() ? act('paste', { content: ta.value }) : toast('内容为空', true)) }, [ui.icon('check'), '保存回答'])),
+  ]);
 }
 
 // 轮询 job（Claude/Codex/综合），结束后重绘；离开页面即停止

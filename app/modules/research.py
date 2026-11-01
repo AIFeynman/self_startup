@@ -351,11 +351,15 @@ def _grok_wait(res_id: int, seconds: float = GROK_WAIT_SECONDS) -> None:
         db.update("research_results", res_id, {"status": "waiting"})
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
+            if _result(res_id)["status"] not in ("waiting", "running"):
+                return  # 用户已手动粘贴回答（Grok Bot 没把结果回传到本机时），不再等，也不覆盖
             left = max(1, min(50, int(deadline - time.monotonic())))
             rc, objs, raw = _grok_cmd("wait", "--request-id", req, "--timeout", str(left), timeout=left + 30)
             if _grok_handle(res_id, rc, objs, raw):
                 return
-        _set_result(res_id, status="timeout", error=f"等待超时，request_id={req} 仍在处理，可稍后「继续等待」。")
+        if _result(res_id)["status"] in ("waiting", "running"):
+            _set_result(res_id, status="timeout", error=f"等待超时，request_id={req} 仍在处理，可稍后「继续等待」。"
+                        "如果 Grok Bot 聊天里已经有回答，多半是它没在本机执行回传命令，把回答粘贴到这里即可。")
     except Exception as e:  # noqa: BLE001
         log.exception("grokbot wait %s", res_id)
         _set_result(res_id, status="failed", error=f"GrokBot 等待异常：{e}")
