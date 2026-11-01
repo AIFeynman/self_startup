@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from .. import db, settings
 from . import _feed_follow as follow
 from . import _feed_gist as gist
+from . import _feed_product as pa
 from . import _feed_judge as judge
 from . import _feed_rank as rk
 from . import _feed_sources as src
@@ -73,13 +74,15 @@ CFG_DEFAULTS = {
     "gist_top": 60,               # 「全部」前多少条
     "gist_per_type": 10,          # 每个分类前多少条
     "gist_model": "deepseek-v4-flash",
+    "product_analysis_top": 20,   # 「产品」分类前多少条生成产品分析（收入 / 商业模式 / 定位 / 价值 / 痛点）
+    "trustmrr_days": 30,          # TrustMRR：只要最近几天挂牌出售的产品
     "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
     "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt",
-                "yc", "analysis", "youtube"],
+                "yc", "trustmrr", "analysis", "youtube"],
 }
 # 分类 → 采集器：分类页上的「刷新」只跑这些来源
 TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites"], "podcast": ["podcast", "xiaoyuzhou", "youtube"],
-                "product": ["producthunt", "yc", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x"], "x_article": ["x"]}
+                "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x"], "x_article": ["x"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
          "news": "资讯"}
 
@@ -272,6 +275,7 @@ def _collectors() -> dict:
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
         "yc": lambda: src.fetch_yc_launches(days=int(cfg("yc_days"))),
+        "trustmrr": lambda: src.fetch_trustmrr(days=int(cfg("trustmrr_days")), known=_known_extra("trustmrr")),
         "analysis": lambda: src.fetch_rss([_url_of(v) for v in src_list("product_rss")], per_feed=10,
                                           source="analysis", typ="product"),
         "youtube": lambda: src.fetch_youtube(src_list("youtube")),
@@ -290,6 +294,10 @@ def _enriched_hn() -> set[str]:
 def _known_articles() -> set[str]:
     """已补过标题的 X 长文（标题不再是占位文案），刷新时不再调 twitterapi.io。"""
     return {r["id"] for r in db.rows("SELECT id FROM feed_items WHERE source='twitter' AND extra LIKE '%article_title%'")}
+
+
+def _known_extra(source: str) -> dict[str, dict]:
+    return {r["id"]: _extra(r) for r in db.rows("SELECT id, extra FROM feed_items WHERE source=?", [source])}
 
 
 def _known_urls(source: str) -> set[str]:
@@ -320,6 +328,7 @@ def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> di
         results["judge"] = run_judge()
     if (not only if gists is None else gists) and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
         results["gist"] = run_gists()
+        results["product_analysis"] = run_product_analysis()
     return results
 
 
@@ -366,6 +375,24 @@ def run_gists() -> dict:
         return {"count": len(got), "errors": errors}
     except Exception as e:  # noqa: BLE001
         log.warning("feed gist failed: %s", e)
+        return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
+
+
+def run_product_analysis() -> dict:
+    """给「产品」分类前列生成产品分析，写回 extra.pa。"""
+    try:
+        todo = pa.pick(ranked(type_="product"), int(cfg("product_analysis_top")))
+        if not todo:
+            return {"count": 0, "errors": []}
+        got, errors = pa.generate(todo, model=str(cfg("gist_model")))
+        for it in todo:
+            if it["id"] in got:
+                row = db.row("SELECT extra FROM feed_items WHERE id=?", [it["id"]])
+                ex = {**_extra(row or {}), "pa": got[it["id"]], "pa_src": pa.pa_key(it)}
+                db.execute("UPDATE feed_items SET extra=? WHERE id=?", [json.dumps(ex, ensure_ascii=False), it["id"]])
+        return {"count": len(got), "errors": errors}
+    except Exception as e:  # noqa: BLE001
+        log.warning("feed product analysis failed: %s", e)
         return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
 
 
@@ -634,7 +661,7 @@ def deep_reads() -> int:
 @router.get("/config")
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
-                                "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "sources", "github_min_stars",
+                                "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "trustmrr_days", "sources", "github_min_stars",
                                 "github_trending_languages", "github_watch_orgs", "github_watch_min_stars")} | {
         k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "youtube", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 

@@ -40,6 +40,14 @@ const CSS = `
 .fd-sum { color: var(--text); opacity: .82; font-size: 13.5px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .fd-gist { color: var(--text); font-size: 14.5px; font-weight: 500; line-height: 1.5; margin-top: 4px; }
 .fd-gist + .fd-sum { opacity: .6; font-size: 12.5px; }
+.fd-pa { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; line-height: 1.5; margin-top: 6px; padding: 6px 10px; border-left: 2px solid var(--accent, #6b8afd); background: color-mix(in srgb, var(--text) 4%, transparent); border-radius: 4px; }
+.fd-pa b { font-weight: 600; opacity: .6; white-space: nowrap; }
+.fd-pa .rev { font-variant-numeric: tabular-nums; }
+details.fd-pa-d { margin-top: 4px; font-size: 13px; }
+details.fd-pa-d > summary { cursor: pointer; opacity: .75; list-style: none; }
+details.fd-pa-d > summary::-webkit-details-marker { display: none; }
+details.fd-pa-d > summary::before { content: '▸ '; }
+details.fd-pa-d[open] > summary::before { content: '▾ '; }
 .fd-why { color: var(--muted); font-size: 12.5px; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .fd-why b { font-weight: 500; color: var(--muted); margin-right: 4px; }
 .fd-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
@@ -253,7 +261,7 @@ export default {
         status = await api.get('/api/feed/status');
         renderStatus();
       }
-      const res = Object.entries(status.results || {}).filter(([k]) => !['judge', 'gist'].includes(k));
+      const res = Object.entries(status.results || {}).filter(([k]) => !['judge', 'gist', 'product_analysis'].includes(k));
       const added = res.reduce((n, [, r]) => n + (r.new || 0), 0);
       const errs = res.filter(([, r]) => r.errors?.length).map(([k]) => k);
       toast(`${label ? label + '：' : ''}刷新完成，新增 ${added} 条${errs.length ? `（${errs.join('、')} 有报错，悬停「刷新」看详情）` : ''}`);
@@ -376,6 +384,18 @@ export default {
       };
       return h('div.fd-verdict.edit', {}, [inp, h('button.sm.primary', { onclick: save }, '保存')]);
     };
+    // 产品分析（产品分类）：收入 / 商业模式 / 定位 / 价值 / 痛点；TrustMRR 收入是支付渠道验证的数字，没分析时也先显示
+    const PA = [['revenue', '收入'], ['model', '商业模式'], ['position', '产品定位'], ['value', '用户价值'], ['pain', '解决痛点']];
+    const paBox = (x, fold) => {
+      const pa = { revenue: x.extra?.revenue || '', ...(x.extra?.pa || {}) };
+      const rows = PA.filter(([k]) => pa[k]);
+      if (!rows.length) return null;
+      const grid = h('div.fd-pa', { title: x.extra?.pa ? '收入来自数据源（TrustMRR 为支付渠道验证）；其余由模型根据标题、简介和数据生成' : '' },
+        rows.flatMap(([k, n]) => [h('b', {}, n), h('span' + (k === 'revenue' ? '.rev' : ''), {}, pa[k])]));
+      if (!fold) return grid;
+      const head = pa.revenue && pa.revenue !== '未公开' ? pa.revenue : pa.position;   // 收入没公开就先露定位
+      return h('details.fd-pa-d', {}, [h('summary', {}, '产品分析' + (head ? ' · ' + head : '')), grid]);
+    };
     const why = (x) => (x.why ? h('div.fd-why', { title: x.why }, [h('b', {}, '推荐理由'), x.why]) : null);
 
     function build(entry) {
@@ -388,6 +408,7 @@ export default {
             h('div', {}, [titleLink(x), ageTag(x), i === 0 ? h('span.fd-best', {}, '最推荐') : null]),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
+            paBox(x, false),
             why(x),
             verdictBox(entry),
             h('div.fd-meta', {}, metaChips(x)),
@@ -400,6 +421,7 @@ export default {
             titleLink(x), ageTag(x),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
+            paBox(x, true),
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
               x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
@@ -411,7 +433,7 @@ export default {
         ]);
       }
       node.addEventListener('mousedown', (e) => { if (!e.target.closest('button, a')) select(entries.indexOf(entry), false); });
-      node._hay = norm([x.title, x.gist, x.summary, x.source_label, x.why, x.extra?.feed, TYPE_NAME[x.type]].join(' '));
+      node._hay = norm([x.title, x.gist, x.summary, x.source_label, x.why, x.extra?.feed, TYPE_NAME[x.type], x.extra?.revenue, ...Object.values(x.extra?.pa || {})].join(' '));
       if (st.q && !matches(node)) node.classList.add('fd-hidden');
       return node;
     }
