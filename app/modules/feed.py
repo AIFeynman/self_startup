@@ -141,6 +141,7 @@ def upsert(items: list[dict]) -> int:
                         if it["source"] == old["source"] else float(it.get("popularity") or 0),
                         json.dumps(merged, ensure_ascii=False), ts, it["id"]])
         else:
+            extra.setdefault("first_seen", datetime.now(timezone.utc).isoformat(timespec="seconds"))   # 新增标识用；更新时 merged 保留旧值
             db.insert("feed_items", {"id": it["id"], "source": it["source"], "type": it["type"], "title": it["title"],
                                      "summary": it.get("summary") or "", "url": it.get("url") or "",
                                      "date": it.get("date") or "", "popularity": float(it.get("popularity") or 0),
@@ -399,7 +400,7 @@ def source_health() -> dict:
 
 def _public(x: dict) -> dict:
     return {k: x[k] for k in ("id", "source", "type", "title", "url", "date", "popularity", "score",
-                              "why", "feedback", "also")} | {"summary": rk.display_summary(x["title"], x["summary"]),
+                              "why", "feedback", "also")} | {k: x.get(k) for k in ("new", "seen_days")} | {"summary": rk.display_summary(x["title"], x["summary"]),
                                                               "gist": (x.get("extra") or {}).get("gist", ""),
                                                               "extra": x.get("extra", {}),
                                                               "source_label": rk.SOURCE_LABEL.get(x["source"], x["source"])}
