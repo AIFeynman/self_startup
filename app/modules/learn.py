@@ -2,7 +2,7 @@
 
 后台 job 的 ref 约定：
     learn:item:<id>          条目深读
-    learn:item:<id>:deepdive GitHub 项目的 Deep Dive（按需：拉仓库、写测试、做实验，见 _deepdive.py）
+    learn:item:<id>:deepdive:<stage> GitHub 项目的 Deep Dive，分理解 / 实验 / 写作 / 审稿四个阶段串行（见 _deepdive.py）
     learn:plan:<id>          生成学习计划
     learn:plan:<id>:adapt    根据反馈调整计划
     learn:course:<id>        导入课程：解析官网课表成单元 + 步骤（轻量模型）；:sync = 同步新发布的讲次（只追加）
@@ -319,8 +319,9 @@ def _ensure_step_cols() -> None:
             db.execute(f"ALTER TABLE learn_steps ADD COLUMN {k} {decl}")
 
 
-# Deep Dive：dd_status '' / running / done / failed；dd_error 失败原因；dd_experiments 校验过的实验清单 JSON
-DD_COLS = {"dd_status": "TEXT DEFAULT ''", "dd_job": "INTEGER", "dd_error": "TEXT DEFAULT ''",
+# Deep Dive：dd_status '' / running / done / failed；dd_stage 当前（或失败停在的）阶段；dd_error 失败原因；
+# dd_experiments 校验过的实验清单 JSON
+DD_COLS = {"dd_status": "TEXT DEFAULT ''", "dd_stage": "TEXT DEFAULT ''", "dd_job": "INTEGER", "dd_error": "TEXT DEFAULT ''",
            "dd_experiments": "TEXT DEFAULT '[]'", "dd_title": "TEXT DEFAULT ''", "dd_at": "TEXT DEFAULT ''"}
 
 
@@ -952,11 +953,15 @@ def _finish_item(iid: int, job: dict) -> None:
 def deepdive_info(it: dict) -> dict:
     dd = _deepdive.dd_dir(_item_dir(it))
     md = dd / "deepdive.md"
-    return {"status": it.get("dd_status") or "", "job_id": it.get("dd_job"), "error": it.get("dd_error") or "",
+    stage = it.get("dd_stage") or ""
+    return {"status": it.get("dd_status") or "", "stage": stage, "job_id": it.get("dd_job"), "error": it.get("dd_error") or "",
+            "stages": [{"key": k, "name": _deepdive.STAGE_NAMES[k]} for k in _deepdive.STAGES],
             "title": it.get("dd_title") or "", "at": it.get("dd_at") or "",
             "experiments": _loads(it.get("dd_experiments"), []), "ready": md.is_file(),
             "path": str(md) if md.is_file() else "",
-            "versions": sorted((p.name for p in dd.glob("deepdive.*.md")), reverse=True) if dd.is_dir() else []}
+            "review": _deepdive.review_scores(dd) if dd.is_dir() else {},
+            "versions": sorted((p.name for p in dd.glob("deepdive.*.md") if p.name != "deepdive.draft.md"), reverse=True)
+            if dd.is_dir() else []}
 
 
 @router.get("/items/{iid}/deepdive")
@@ -965,9 +970,19 @@ def get_deepdive(iid: int):
     return deepdive_info(_item(iid))
 
 
+def _submit_dd_stage(it: dict, stage: str) -> int:
+    out = _item_dir(it)
+    dd = _deepdive.dd_dir(out)
+    jid = jobs.submit("learn", _deepdive.prompt(stage, it, out, _known_knowledge(it["id"])),
+                      ref=f"learn:item:{it['id']}:deepdive:{stage}", cwd=str(dd), add_dirs=[str(out)], tier=_tier(f"deepdive_{stage}"))
+    db.update("learn_items", it["id"], {"dd_status": "running", "dd_stage": stage, "dd_job": jid, "dd_error": "", "updated_at": db.now()})
+    return jid
+
+
 @router.post("/items/{iid}/deepdive")
-def start_deepdive(iid: int):
-    """点了才生成：拉仓库、写测试、做实验，写 deepdive/deepdive.md。正在生成时重复点只返回当前状态。"""
+def start_deepdive(iid: int, resume: bool = False):
+    """点了才生成：理解 → 实验 → 写作 → 审稿四个阶段串行。正在生成时重复点只返回当前状态。
+    resume：上次失败停在某个阶段时，从这个阶段接着跑（前面阶段的产物保留）；否则整篇重新生成，上一版留作历史。"""
     _ensure_depth_col()
     it = _item(iid)
     if it["kind"] != "github":
@@ -976,11 +991,14 @@ def start_deepdive(iid: int):
         j = db.row("SELECT status FROM jobs WHERE id=?", [it["dd_job"]])
         if j and j["status"] in ("queued", "running"):
             return deepdive_info(it)
-    out = _item_dir(it)
-    dd = _deepdive.prepare(out)
-    jid = jobs.submit("learn", _deepdive.prompt(it, out, _known_knowledge(it["id"])), ref=f"learn:item:{iid}:deepdive",
-                      cwd=str(dd), add_dirs=[str(out)])
-    db.update("learn_items", iid, {"dd_status": "running", "dd_job": jid, "dd_error": "", "updated_at": db.now()})
+    stage = it.get("dd_stage") or ""
+    if resume and it.get("dd_status") == "failed" and stage in _deepdive.STAGES:
+        (_deepdive.dd_dir(_item_dir(it)) / "lab").mkdir(parents=True, exist_ok=True)
+    else:
+        _deepdive.prepare(_item_dir(it))
+        stage = _deepdive.STAGES[0]
+        db.update("learn_items", iid, {"dd_experiments": "[]"})
+    _submit_dd_stage(it, stage)
     return deepdive_info(_item(iid))
 
 
@@ -994,23 +1012,32 @@ def deepdive_file(iid: int, version: str = ""):
     return PlainTextResponse(p.read_text("utf-8", errors="replace"))
 
 
-def _finish_deepdive(iid: int, job: dict) -> None:
+def _finish_deepdive(iid: int, stage: str, job: dict) -> None:
+    """一个阶段结束：校验这一阶段的产物，合格就提交下一阶段，最后一个阶段合格才算完成；不合格停在这个阶段等重试。"""
     _ensure_depth_col()
     it = db.row("SELECT * FROM learn_items WHERE id=?", [iid])
     if not it or it.get("dd_job") != job.get("id"):
         return  # 条目删了，或者已经换了一个新任务
     dd = _deepdive.dd_dir(_item_dir(it))
-    ok, reason, exps = _deepdive.check(dd)
+    stage = stage or _deepdive.STAGES[-1]   # 老的单阶段任务按最后一个阶段校验
+    ok, reason = _deepdive.check_stage(stage, dd)
     if job.get("status") != "done":
         ok, reason = False, _deepdive.fail_reason(job)
-    meta = extract_json(job.get("output") or "", "experiments") or {}
-    data = {"dd_status": "done" if ok else "failed", "dd_error": reason, "dd_experiments": json.dumps(exps, ensure_ascii=False),
-            "dd_at": db.now(), "updated_at": db.now()}
+    data = {"dd_error": "" if ok else f"「{_deepdive.STAGE_NAMES.get(stage, stage)}」阶段：{reason}",
+            "dd_experiments": json.dumps(_deepdive.experiments(dd), ensure_ascii=False), "updated_at": db.now()}
+    meta = extract_json(job.get("output") or "", "stage") or {}
     if meta.get("title"):
         data["dd_title"] = str(meta["title"])[:200]
     elif (dd / "deepdive.md").is_file():
         data["dd_title"] = _reads.md_title((dd / "deepdive.md").read_text("utf-8", errors="replace"))[:200]
+    nxt = _deepdive.next_stage(stage) if ok else ""
+    if not ok:
+        data.update({"dd_status": "failed", "dd_at": db.now()})
+    elif not nxt:
+        data.update({"dd_status": "done", "dd_at": db.now()})
     db.update("learn_items", iid, data)
+    if nxt:
+        _submit_dd_stage(db.row("SELECT * FROM learn_items WHERE id=?", [iid]), nxt)
 
 
 # ---------- B. 主题学习计划 ----------
@@ -2461,8 +2488,8 @@ def on_job_done(job: dict) -> None:
     ref = job.get("ref") or ""
     if m := re.fullmatch(r"learn:item:(\d+)", ref):
         _finish_item(int(m.group(1)), job)
-    elif m := re.fullmatch(r"learn:item:(\d+):deepdive", ref):
-        _finish_deepdive(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:item:(\d+):deepdive(?::(\w+))?", ref):
+        _finish_deepdive(int(m.group(1)), m.group(2) or "", job)
     elif m := re.fullmatch(r"learn:plan:(\d+)(:adapt)?", ref):
         _finish_plan(int(m.group(1)), job, bool(m.group(2)))
     elif m := re.fullmatch(r"learn:course:(\d+)(:sync)?", ref):

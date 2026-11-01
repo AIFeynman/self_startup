@@ -725,7 +725,7 @@ function jobProgress(ctx, jobId, title, hint, n = 6) {
   return card;
 }
 
-// ---------- Deep Dive：按需生成，拉仓库、写测试、做实验，命令 / 原样输出 / 结论都在文档里 ----------
+// ---------- Deep Dive：按需生成，理解 → 实验 → 写作 → 审稿四个阶段串行，每个阶段单独校验、可从失败的阶段重试 ----------
 const VERDICT_TAG = { 证实: 'ok', 推翻: 'err', 意外: 'warn', 部分: 'gray' };
 
 async function deepDivePane(ctx, it) {
@@ -733,23 +733,34 @@ async function deepDivePane(ctx, it) {
   const box = h('div.ln-reader');
   const d = await api.get(`/api/learn/items/${it.id}/deepdive`).catch(() => null);
   if (!d) { box.append(ui.empty('读取 Deep Dive 状态失败')); return box; }
-  const start = async (e) => {
-    if (d.ready && !confirm('重新生成 Deep Dive？当前版本会保留为历史版本。')) return;
-    e.target.disabled = true;
-    try { await api.post(`/api/learn/items/${it.id}/deepdive`); toast('已开始生成 Deep Dive'); } catch (err) { toast('启动失败：' + err.message, true); }
+  const start = async (e, resume = false) => {
+    if (!resume && d.ready && !confirm('重新生成 Deep Dive？当前版本会保留为历史版本。')) return;
+    e.currentTarget.disabled = true;
+    try { await api.post(`/api/learn/items/${it.id}/deepdive${resume ? '?resume=true' : ''}`); toast(resume ? '已从失败的阶段接着生成' : '已开始生成 Deep Dive'); } catch (err) { toast('启动失败：' + err.message, true); }
     softRefresh();
   };
-  const intro = '比深读笔记深一层：Agent 在本机隔离目录里单独克隆仓库，自己写测试、做消融 / 边界实验并真的跑出结果，命令、原样输出和结论都写进文档；同步进知识库。通常 30–60 分钟。';
+  const stageName = (k) => (d.stages.find((x) => x.key === k) || {}).name || k;
+  // 阶段条：已完成 / 进行中 / 失败停在这里 / 未开始
+  const stageBar = () => {
+    const cur = d.stages.findIndex((x) => x.key === d.stage);
+    return h('div.row.ln-dd-stages', { style: { gap: '6px', flexWrap: 'wrap', margin: '6px 0' } }, d.stages.map((x, i) => {
+      const st = d.status === 'done' || i < cur ? 'ok' : i === cur ? (d.status === 'failed' ? 'err' : 'warn') : 'gray';
+      return h('span.tag.' + st, {}, `${i + 1} ${x.name}${i === cur && d.status === 'running' ? ' · 进行中' : i === cur && d.status === 'failed' ? ' · 失败' : ''}`);
+    }));
+  };
+  const intro = '讲到工程设计长文的程度：先读仓库并找作者的设计文章，理清动机、术语、设计取舍和可检验主张；再在本机隔离目录里做对照 / 消融 / 参数扫描实验并画成图；然后写成每个机制配图的叙事长文；最后由独立审稿按评分表审一遍并改稿。同步进知识库。四个阶段合计通常 1–2 小时。';
   const jobLink = d.job_id ? h('a.muted', { href: `/api/jobs/${d.job_id}`, target: '_blank' }, `job ${d.job_id}`) : null;
   if (d.status === 'running') {
     watchJob(ctx, d.job_id, 'running');
-    box.append(jobProgress(ctx, d.job_id, 'Deep Dive 生成中', '拉仓库 → 读代码 → 写测试 / 做实验 → 写文档 · 通常 30–60 分钟', 10));
+    box.append(stageBar(), jobProgress(ctx, d.job_id, `Deep Dive · ${stageName(d.stage)}阶段`, '理解 → 实验 → 写作 → 审稿返修 · 合计通常 1–2 小时', 10));
     return box;
   }
   if (d.status === 'failed') {
-    box.append(h('div.card', {}, [h('div.serif', { style: { color: 'var(--err)' } }, 'Deep Dive 生成失败'),
+    box.append(h('div.card', {}, [h('div.serif', { style: { color: 'var(--err)' } }, 'Deep Dive 生成失败'), d.stage ? stageBar() : null,
       h('div', { style: { margin: '8px 0' } }, d.error || '未知原因'),
-      h('div.row', {}, [jobLink, h('span.muted', {}, d.ready ? '（下面是这次写出的部分内容）' : ''), h('span.grow'), h('button.primary', { onclick: start }, [ui.icon('refresh'), '重试'])])]));
+      h('div.row', {}, [jobLink, h('span.muted', {}, d.ready ? '（下面是这次写出的部分内容）' : ''), h('span.grow'),
+        d.stage ? h('button.ghost', { onclick: (e) => start(e) }, [ui.icon('refresh'), '全部重新生成']) : null,
+        h('button.primary', { onclick: (e) => start(e, !!d.stage) }, [ui.icon('refresh'), d.stage ? `从「${stageName(d.stage)}」阶段重试` : '重试'])])]));
   }
   if (!d.ready) {
     if (d.status !== 'failed') box.append(h('div.card', {}, [h('div.serif', {}, '还没有 Deep Dive'), h('p.muted', {}, intro),
@@ -768,11 +779,17 @@ async function deepDivePane(ctx, it) {
     [h('option', { value: '' }, '当前版本'), ...d.versions.map((v) => h('option', { value: v }, v.replace(/^deepdive\.|\.md$/g, '')))]) : null;
   box.append(h('div.row', { style: { marginBottom: '12px' } }, [
     h('span.muted', {}, `${d.experiments.length} 个实验 · ${(d.at || '').slice(0, 16).replace('T', ' ')}`), versions, h('span.grow'), jobLink,
-    h('button.ghost', { onclick: start }, [ui.icon('refresh'), '重新生成']),
+    h('button.ghost', { onclick: (e) => start(e) }, [ui.icon('refresh'), '重新生成']),
   ]));
+  const rv = Object.entries(d.review || {});
+  if (rv.length) {
+    box.append(h('div.card.ln-dd-review', {}, [h('span.card-label', {}, '审稿评分（改稿前 → 改稿后，满分 5）'),
+      h('div.row', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '6px' } }, rv.map(([k, x]) =>
+        h('span.tag.' + ((x.after ?? 0) >= 4 ? 'ok' : (x.after ?? 0) >= 3 ? 'warn' : 'err'), { title: k }, `${x.name} ${x.before ?? '—'}→${x.after ?? '—'}`)))]));
+  }
   if (d.experiments.length) {
     box.append(h('div.card.ln-dd-exps', {}, d.experiments.map((x) => h('div.ln-rd', { title: x.cmd || '' }, [
-      h('b', {}, x.id || ''), h('span.tag.' + (VERDICT_TAG[x.verdict] || 'gray'), {}, x.verdict || '—'), h('span.muted', {}, x.type || ''),
+      h('b', {}, x.id || ''), h('span.tag.' + (VERDICT_TAG[x.verdict] || 'gray'), {}, x.verdict || '—'), h('span.muted', {}, [x.type || '', x.claim ? ` · ${x.claim}` : '', x.runs ? ` · ${x.runs} 次` : ''].join('')),
       h('span', {}, x.finding || x.title || ''),
       h('a.muted', { href: `/api/learn/items/${it.id}/out/deepdive/${String(x.out).split('/').map(encodeURIComponent).join('/')}`, target: '_blank' }, '原样输出'),
     ]))));
