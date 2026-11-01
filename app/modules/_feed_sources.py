@@ -967,7 +967,10 @@ def fetch_xiaoyuzhou(urls: list[str], days: int = 30, per_feed: int = 5,
 # ---------- 视频：YouTube 频道 RSS（免 key）+ YouTube Data API 关键词搜索（可选）+ B 站（经 RSSHub） ----------
 YT_FEED = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 YT_CHANNEL_RE = re.compile(r"\bUC[\w-]{22}\b")
-YT_MIN_SECONDS = 240        # API 搜索：短于 4 分钟的（Shorts、预告）不收
+YT_MIN_SECONDS = 480        # API 搜索：短于 8 分钟的（Shorts、预告、快讯）不收；有知识密度的讲解 / 访谈基本都更长
+YT_LANGS = ("en", "zh")     # API 搜索只收这些语言的视频（按音频语言；没标语言的看标题文字）
+# 标题里出现这些文字系统就当作不是中英文（没标音频语言时的近似）：韩文、日文假名、天城文、阿拉伯文、泰文、西里尔文
+_FOREIGN_SCRIPT_RE = re.compile(r"[\uac00-\ud7af\u3040-\u30ff\u0900-\u097f\u0600-\u06ff\u0e00-\u0e7f\u0400-\u04ff]")
 
 
 def _yt_item(vid: str, title: str, desc: str, date: str, views: float, channel: str, channel_id: str, via: str,
@@ -1008,7 +1011,16 @@ def _iso_dur(s: str) -> int:
     return d * 86400 + h * 3600 + mi * 60 + se
 
 
-def youtube_search(c: httpx.Client, key: str, queries: list[str], days: int = 7, per_query: int = 10) -> list[dict]:
+def yt_lang_ok(sn: dict, langs=YT_LANGS) -> bool:
+    """视频语言是否在 langs 里：先看音频语言，再看元数据语言；都没标就看标题有没有别的文字系统。"""
+    lang = (sn.get("defaultAudioLanguage") or sn.get("defaultLanguage") or "").lower()
+    if lang:
+        return any(lang == l or lang.startswith(l + "-") for l in langs)
+    return not _FOREIGN_SCRIPT_RE.search(sn.get("title") or "")
+
+
+def youtube_search(c: httpx.Client, key: str, queries: list[str], days: int = 7, per_query: int = 10,
+                   langs=YT_LANGS) -> list[dict]:
     """YouTube Data API v3：每个关键词取最近 days 天按播放量排的前 per_query 个，再批量补播放量和时长（search 100 配额 / 次，
     videos 1 配额 / 次；默认 4 个词每天跑 4 次 ≈ 1600，免费额度 10000 / 天）。"""
     since = _days_ago(days).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1032,7 +1044,7 @@ def youtube_search(c: httpx.Client, key: str, queries: list[str], days: int = 7,
             sn, q = found[v["id"]]
             sn = v.get("snippet") or sn
             secs = _iso_dur((v.get("contentDetails") or {}).get("duration", ""))
-            if secs and secs < YT_MIN_SECONDS:
+            if secs and secs < YT_MIN_SECONDS or langs and not yt_lang_ok(sn, langs):
                 continue
             st = v.get("statistics") or {}
             out.append(_yt_item(v["id"], sn.get("title", ""), sn.get("description", ""), sn.get("publishedAt", ""),
@@ -1042,7 +1054,8 @@ def youtube_search(c: httpx.Client, key: str, queries: list[str], days: int = 7,
 
 
 def fetch_videos(channels: list[str], queries: list[str] = (), bilibili: list[str] = (), days: int = 21,
-                 per_channel: int = 5, rsshub_bases: list[str] | None = None) -> tuple[list[dict], list[str]]:
+                 per_channel: int = 5, rsshub_bases: list[str] | None = None,
+                 langs=YT_LANGS) -> tuple[list[dict], list[str]]:
     """channels：YouTube 频道 id（UC 开头 24 位），关注列表里加 @handle / 频道链接时已解析成 id。
     queries：配了 YOUTUBE_API_KEY 才搜。bilibili：B 站 UP 主 uid，经 RSSHub 取投稿。"""
     def chan(c, cid):
@@ -1077,7 +1090,7 @@ def fetch_videos(channels: list[str], queries: list[str] = (), bilibili: list[st
         key = os.environ.get("YOUTUBE_API_KEY", "").strip()
         if queries and key:
             try:
-                items += youtube_search(c, key, list(queries))
+                items += youtube_search(c, key, list(queries), langs=langs)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"YouTube 搜索: {type(e).__name__}: {str(e)[:120]}")
     return items, errors
