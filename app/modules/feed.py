@@ -129,6 +129,7 @@ def upsert(items: list[dict]) -> int:
         extra = dict(it.get("extra") or {})
         if old:
             merged = {**_extra(old), **{k: v for k, v in extra.items() if v not in ("", None, [], {})}}
+            merged.setdefault("first_seen", rk.FIRST_SEEN_LEGACY)
             if merged.get("article_title") and not extra.get("article_title"):
                 it = {**it, "title": old["title"], "summary": old["summary"]}   # X 长文已补过标题，别被占位文案盖掉
             if (it.get("summary") or "").startswith("链接到") and old["summary"] and not old["summary"].startswith("链接到"):
