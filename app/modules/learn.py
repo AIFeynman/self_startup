@@ -4,6 +4,8 @@
     learn:item:<id>          条目深读
     learn:plan:<id>          生成学习计划
     learn:plan:<id>:adapt    根据反馈调整计划
+    learn:course:<id>        导入课程：解析官网课表成单元 + 步骤（轻量模型）；:sync = 同步新发布的讲次（只追加）
+    learn:step:<id>:material 课程计划的一讲：先把课件 / 字幕 / 阅读材料整理成素材包 material.md（轻量模型），完成后接着写章节
     learn:step:<id>:chapter  把计划的一步写成章节教程 + 章末测试（:prefetch = 用户读上一章时后台预生成）
     learn:step:<id>:grade    批改章末测试的简答题
     learn:step:<id>:check:<n> 点评第 n 个「停一下」：用户的判断和要点差在哪
@@ -61,7 +63,10 @@ CREATE TABLE IF NOT EXISTS learn_plans (
     created_at     TEXT,
     updated_at     TEXT,
     layout         TEXT DEFAULT '',            -- rounds 三轮由浅入深（2026-10-31 起的默认）/ '' 老计划的六阶段
-    from_plan      INTEGER                     -- 由哪个老计划「精简成三轮」而来（老计划保留，状态 archived）
+    from_plan      INTEGER,                    -- 由哪个老计划「精简成三轮」而来（老计划保留，状态 archived）
+    units          TEXT DEFAULT '[]',          -- 课程计划（layout=course）的单元 JSON [{name,goal}]，步骤的 stage = 单元序号
+    source_url     TEXT DEFAULT '',            -- 课程计划：课程官网
+    synced_at      TEXT DEFAULT ''             -- 课程计划：上次同步课表的时间
 );
 CREATE TABLE IF NOT EXISTS learn_steps (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,7 +93,10 @@ CREATE TABLE IF NOT EXISTS learn_steps (
     quiz_result   TEXT DEFAULT '',            -- JSON {answers,items:{qid:{score,feedback}},score,status:grading|graded|failed,...}
     origin        TEXT DEFAULT '',            -- '' 计划里的步骤 / interest 按需深入 / confused 按需补课
     parent_id     INTEGER,                    -- 按需加的一节：从哪一章加出来的
-    request       TEXT DEFAULT ''             -- 按需加的一节：用户的原话（感兴趣的子方向 / 没懂的地方）+ 划线原文
+    request       TEXT DEFAULT '',            -- 按需加的一节：用户的原话（感兴趣的子方向 / 没懂的地方）+ 划线原文
+    step_kind     TEXT DEFAULT '',            -- 课程计划：lecture 讲次 / assignment 作业（实践步骤）
+    material_status TEXT DEFAULT '',          -- 课程计划：素材包 '' / generating / ready / failed
+    material_job  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_learn_steps_plan ON learn_steps(plan_id);
 -- 学习记录：只追加、不覆盖（作答、Agent 点评、每次测试连同当时的题目、理解度 / 反馈变化、章节重新生成），用于复盘和成长评价
@@ -111,7 +119,9 @@ ROUND_GOALS = {
     2: "一篇经典讲透一个机制，知道主干怎么来的、为什么有效；看懂一线人物的判断和依据，能对新方案做出有依据的判断",
     3: "消化最新论文并判断价值；读懂代表性开源项目怎么落地，亲手用对标产品 / 工具并写出有依据的使用评估",
 }
-PLAN_COLS = {"layout": "TEXT DEFAULT ''", "from_plan": "INTEGER"}
+PLAN_COLS = {"layout": "TEXT DEFAULT ''", "from_plan": "INTEGER", "units": "TEXT DEFAULT '[]'",
+             "source_url": "TEXT DEFAULT ''", "synced_at": "TEXT DEFAULT ''"}
+COURSE_MAX_UNITS = 40  # 课程计划的单元数上限（一门课 15 讲左右，按主题合并后十几个单元）
 # 老计划的六个阶段（2026-10-31 之前生成的计划）
 STAGES = {1: "领域综述", 2: "核心人物与观点", 3: "关键书籍 / 经典论文",
           4: "核心机制 / 概念精学", 5: "前沿进展", 6: "实践与输出"}
@@ -129,7 +139,8 @@ PASS_SCORE = 70  # 章末测试及格线：及格自动标记完成
 STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapter_status": "TEXT DEFAULT ''",
              "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''",
              "cards": "TEXT DEFAULT '[]'", "checks": "TEXT DEFAULT '{}'",
-             "origin": "TEXT DEFAULT ''", "parent_id": "INTEGER", "request": "TEXT DEFAULT ''"}
+             "origin": "TEXT DEFAULT ''", "parent_id": "INTEGER", "request": "TEXT DEFAULT ''",
+             "step_kind": "TEXT DEFAULT ''", "material_status": "TEXT DEFAULT ''", "material_job": "INTEGER"}
 EXTRA = {"interest": "深入", "confused": "补课"}  # 按需加一节的两种：感兴趣 → 往深处展开；没懂 → 换个讲法讲透
 SKILL_DIR = ROOT / "skills" / "learn"
 KINDS = ("paper", "github", "article")
@@ -261,13 +272,18 @@ class ItemIn(BaseModel):
 
 
 def layout_of(p: dict | None) -> tuple[dict, dict, str]:
-    """计划用哪套结构：(各轮 / 阶段名, 目的, 单位)。"""
+    """计划用哪套结构：(各轮 / 阶段 / 单元名, 目的, 单位)。"""
+    if (p or {}).get("layout") == "course":
+        units = [u for u in _loads(p.get("units"), []) if isinstance(u, dict)]
+        return ({i: str(u.get("name") or "") for i, u in enumerate(units, 1)},
+                {i: str(u.get("goal") or "") for i, u in enumerate(units, 1)}, "单元")
     return (ROUNDS, ROUND_GOALS, "轮") if (p or {}).get("layout") == "rounds" else (STAGES, STAGE_GOALS, "阶段")
 
 
 def stage_label(p: dict | None, no: int, with_goal: bool = False) -> str:
     names, goals, unit = layout_of(p)
-    label = f"第 {no} 轮 · {names.get(no, '')}" if unit == "轮" else f"阶段 {no} · {names.get(no, '')}"
+    label = (f"第 {no} 轮 · {names.get(no, '')}" if unit == "轮" else f"单元 {no} · {names.get(no, '')}" if unit == "单元"
+             else f"阶段 {no} · {names.get(no, '')}")
     return label + (f" —— 本{unit}目的：{goals.get(no, '')}" if with_goal else "")
 
 
@@ -973,8 +989,8 @@ def _step_fields(d: dict) -> dict:
                 out[k] = conv(d[k])
             except (TypeError, ValueError):
                 pass
-    if "stage" in out:
-        out["stage"] = max(1, min(6, out["stage"]))
+    if "stage" in out:  # 上限按计划结构在 add_step 里再收：三轮 3、老计划 6、课程按单元数
+        out["stage"] = max(1, min(COURSE_MAX_UNITS, out["stage"]))
     if "understanding" in out:
         out["understanding"] = max(0, min(5, out["understanding"]))
     for k in ("feedback", "notes"):
@@ -986,14 +1002,20 @@ def _step_fields(d: dict) -> dict:
     return out
 
 
+def _stage_max(pid: int) -> int:
+    """stage 上限：三轮 3、老计划 6、课程按单元数。"""
+    p = db.row("SELECT layout, units FROM learn_plans WHERE id=?", [pid]) or {}
+    if p.get("layout") == "course":
+        return max(1, len(layout_of(p)[0]))
+    return len(ROUNDS) if p.get("layout") == "rounds" else len(STAGES)
+
+
 def add_step(pid: int, d: dict, after_step_id: int | None = None) -> int:
     _ensure_step_cols()
     f = _step_fields(d)
     if not f.get("title"):
         raise HTTPException(400, "title required")
-    f.setdefault("stage", 1)
-    if (db.row("SELECT layout FROM learn_plans WHERE id=?", [pid]) or {}).get("layout") == "rounds":
-        f["stage"] = min(f["stage"], len(ROUNDS))
+    f["stage"] = min(f.get("stage", 1), _stage_max(pid))
     after = db.row("SELECT * FROM learn_steps WHERE id=? AND plan_id=?", [after_step_id, pid]) if after_step_id else None
     if after:
         f["stage"], f["ord"] = after["stage"], after["ord"] + 1
@@ -1054,6 +1076,8 @@ def apply_edits(pid: int, text: str) -> dict:
                          e.get("after_step_id"))
             elif op == "modify" and cur and cur["status"] != "done":
                 f = _step_fields({k: v for k, v in e.items() if k not in ("op", "step_id", "understanding", "feedback")})
+                if "stage" in f:
+                    f["stage"] = min(f["stage"], _stage_max(pid))
                 if f:
                     db.update("learn_steps", sid, f)
             elif op == "skip" and cur and cur["status"] != "done":
@@ -1104,9 +1128,16 @@ def plan_prompt(p: dict) -> str:
 """
 
 
+def _adapt_layout(p: dict) -> str:
+    if p.get("layout") == "course":
+        return (f"课程计划（按课程的 {len(layout_of(p)[0])} 个单元组织，stage 填单元序号；步骤来自课程的讲次和作业，"
+                "不要跳过或改写讲次本身，调整只加补课 / 补资源步骤、修改说明和资源）")
+    return '三轮（stage 填 1–3）' if p.get('layout') == 'rounds' else '老计划的六阶段（stage 仍按六阶段填 1–6，见方法论末尾「老计划」）'
+
+
 def adapt_prompt(p: dict, note: str = "") -> str:
     return f"""任务：根据我的学习进度和反馈，调整学习计划（主题：{p['topic']}）。今天是 {db.today()}。
-计划结构：{'三轮（stage 填 1–3）' if p.get('layout') == 'rounds' else '老计划的六阶段（stage 仍按六阶段填 1–6，见方法论末尾「老计划」）'}
+计划结构：{_adapt_layout(p)}
 {('我的补充说明：' + note) if note else ''}
 
 当前计划与进度（step_id 用于 edits）：
@@ -1178,6 +1209,9 @@ def delete_plan(pid: int):
 @router.post("/plans/{pid}/regenerate")
 def regenerate_plan(pid: int):
     p = _plan(pid)
+    if p.get("layout") == "course":  # 课程计划不清空步骤（学习记录不能丢）：没有步骤就重新导入，有就同步课表
+        _start_course_job(p, sync=bool(steps_of(pid)))
+        return get_plan(pid)
     if p.get("layout") != "rounds":  # 重新生成会清空步骤，顺势换成三轮
         db.update("learn_plans", pid, {"layout": "rounds"})
         p = _plan(pid)
@@ -1192,6 +1226,8 @@ def plan_to_rounds(pid: int):
     old = _plan(pid)
     if old.get("layout") == "rounds":
         raise HTTPException(400, "已经是三轮计划")
+    if old.get("layout") == "course":
+        raise HTTPException(400, "课程计划按课程单元组织，不精简成三轮")
     if (cur := db.row("SELECT id FROM learn_plans WHERE from_plan=? AND status!='failed' ORDER BY id DESC", [pid])):
         return get_plan(cur["id"])
     nid = db.insert("learn_plans", {"topic": old["topic"], "background": old["background"], "goal": old["goal"],
@@ -1226,6 +1262,8 @@ def get_step(sid: int):
 def patch_step(sid: int, body: StepIn):
     old = _step(sid)
     f = _step_fields(body.model_dump())
+    if "stage" in f:
+        f["stage"] = min(f["stage"], _stage_max(old["plan_id"]))
     if f:
         db.update("learn_steps", sid, f)
         changed = {k: f[k] for k in ("understanding", "feedback", "status", "notes") if k in f and f[k] != old.get(k)}
@@ -1271,6 +1309,257 @@ def _finish_plan(pid: int, job: dict, adapt: bool) -> None:
         p = _plan(pid)
         db.update("learn_plans", pid, {"status": "active" if adapt else "failed", "updated_at": db.now(),
                                        "overview_md": (p["overview_md"] or "") + f"\n\n> 解析失败（job {job['id']}）：{e}"})
+
+
+# ---------- 课程计划：导入名校课程（课表 → 单元 + 讲次 / 作业），每讲先整理素材包再写章节 ----------
+
+FETCH_SCRIPT = ROOT / "scripts" / "course_fetch.py"
+
+
+def _tier(task: str) -> str:
+    """这类任务用哪档模型（设置 learn.task_tiers，如 course / material / grade → light）；空 = 板块默认。"""
+    return str((settings.get("learn.task_tiers", {}) or {}).get(task) or "")
+
+
+class CourseIn(BaseModel):
+    url: str
+    background: str = ""
+    goal: str = ""
+    hours_per_week: float = 6
+
+
+def _course_steps_text(pid: int) -> str:
+    lines = []
+    for s in _ordered(steps_of(pid)):
+        if s.get("origin"):
+            continue
+        urls = " ".join(r.get("url", "") for r in s["resources"] if r.get("url"))
+        lines.append(f"- 单元 {s['stage']} [{s.get('step_kind') or 'lecture'}] {s['title']} {urls}")
+    return "\n".join(lines) or "（无）"
+
+
+def course_prompt(p: dict, sync: bool = False) -> str:
+    out = _out_root() / "plans" / str(p["id"]) / "course"
+    if sync:
+        units = "\n".join(f"{i}. {n}" for i, n in layout_of(p)[0].items())
+        head = f"""任务：同步课程「{p['topic']}」的课表，找出官网上新发布、计划里还没有的讲次和作业。今天是 {db.today()}。
+课程官网：{p['source_url']}
+计划里已有的单元：
+{units or '（无）'}
+计划里已有的步骤（标题 + 链接；这些不要再输出）：
+{_course_steps_text(p['id'])}
+
+只输出新增的步骤：能归入已有单元的，unit 填那个单元的名字（原样）；属于新主题的，在 units 里新建单元。没有新增就输出 {{"units": []}}。"""
+    else:
+        head = f"""任务：把一门大学课程导入成学习计划（课表 → 单元 + 步骤）。今天是 {db.today()}。
+课程官网：{p['source_url']}
+我的背景：{p['background'] or '（未说明）'}；学习目标：{p['goal'] or '（未说明）'}；每周可投入 {p['hours_per_week']} 小时"""
+    return f"""{head}
+
+做法：
+1. 抓课表：运行 `python3 {FETCH_SCRIPT} {out} {p['source_url']}`，读输出目录里的 .txt（JS 渲染的课程站会附上从打包 JS 里抽出的课表数据）。
+   课表里有作业页 / 讲义目录 / 录像播放列表链接时，同样用这个脚本抓（多个链接一次传入）；录像只有播放列表时，
+   用 `python3 {FETCH_SCRIPT} --playlist <播放列表链接>` 列出每讲视频，按标题对上讲次。必要时用 WebFetch / curl 补查。
+2. 只做整理，不写讲解内容；不要下载录像，不要抓每讲的课件正文（之后每讲单独整理）。
+3. 不要写其他文件，不要调用平台 API 写数据。最终回复只给一个 ```json 代码块，平台会自动导入。
+
+整理规则：
+- 单元：按主题把相邻的 1–2 讲合成一个单元（客座讲座、复习课、期中展示等可以单独成单元或略过），单元名用中文，goal 写学完这个单元能做什么（可检验）。
+- 步骤：每一讲是一个 lecture 步骤（title 用「第 N 讲 · 中文标题（英文原标题）」）；每个作业是一个 assignment 步骤，放在它考查的内容所在的单元末尾，
+  title 用「作业 N · 中文标题」，description 写作业要做什么、交付物、截止日期（课表有就写）。
+- resources 只放课表里真实存在的链接，原样保留，不要编造：课件（type=slides）、录像（type=video）、阅读材料（type=reading）、作业说明（type=assignment）、代码仓库（type=code）；
+  有日期写 date（YYYY-MM-DD）。还没发布课件 / 录像的讲次也要列出，resources 留已知的部分。
+- est_hours：一讲约 2–3 小时（看录像 + 读材料 + 测试），作业按课程说明的工作量估（常见 8–15 小时）。
+- overview_md：课程简介（学校、学期、讲师、先修要求、评分构成、官网链接），3–8 行。
+
+JSON 格式：
+```json
+{{"title": "课程中文名（课号，学校，学期）", "overview_md": "…",
+  "units": [{{"name": "单元名", "goal": "学完能…",
+             "steps": [{{"title": "…", "kind": "lecture", "goal": "学完能…", "description": "本讲讲什么、要点",
+                        "resources": [{{"title": "Slides", "url": "https://…", "type": "slides", "date": "2026-04-01"}}],
+                        "est_hours": 2.5}}]}}]}}
+```
+"""
+
+
+def _start_course_job(p: dict, sync: bool = False) -> int:
+    jid = jobs.submit("learn", course_prompt(p, sync), ref=f"learn:course:{p['id']}" + (":sync" if sync else ""),
+                      add_dirs=[str(_out_root() / "plans" / str(p["id"]))], tier=_tier("course"))
+    (_out_root() / "plans" / str(p["id"]) / "course").mkdir(parents=True, exist_ok=True)
+    db.update("learn_plans", p["id"], {"job_id": jid, "status": "adapting" if sync else "generating", "updated_at": db.now()})
+    return jid
+
+
+@router.post("/courses")
+def create_course(body: CourseIn):
+    url = body.url.strip()
+    if not re.match(r"https?://", url):
+        raise HTTPException(400, "填课程官网链接（http/https）")
+    _ensure_plan_cols()
+    pid = db.insert("learn_plans", {"topic": url, "background": body.background, "goal": body.goal,
+                                    "hours_per_week": body.hours_per_week, "status": "generating", "layout": "course",
+                                    "source_url": url, "created_at": db.now(), "updated_at": db.now()})
+    _start_course_job(_plan(pid))
+    return get_plan(pid)
+
+
+@router.post("/plans/{pid}/sync_course")
+def sync_course(pid: int):
+    """课程还在上（如本学期的课）：重新看一遍课表，只追加新发布的讲次 / 作业，已有步骤和学习记录不动。"""
+    p = _plan(pid)
+    if p.get("layout") != "course":
+        raise HTTPException(400, "只有课程计划能同步课表")
+    _start_course_job(p, sync=True)
+    return get_plan(pid)
+
+
+def _video_key(url: str) -> str:
+    """同一个 YouTube 视频的不同写法（带播放列表 / index 参数、youtu.be 短链）归一成视频 id。"""
+    m = re.search(r"(?:[?&]v=|youtu\.be/|youtube\.com/live/)([\w-]{11})", url or "")
+    return m.group(1) if m else ""
+
+
+def apply_course(pid: int, text: str, sync: bool = False) -> int:
+    """导入 / 同步课表 JSON：单元按名字对上已有单元，没有就新建；已有的步骤（同标题或同链接）跳过。返回新增步骤数。"""
+    o = extract_json(text, "units")
+    if not isinstance(o, dict) or not isinstance(o.get("units"), list):
+        raise ValueError("未找到课表 JSON")
+    p = _plan(pid)
+    units = [u for u in _loads(p.get("units"), []) if isinstance(u, dict)]
+    have = steps_of(pid)
+    titles = {s["title"].strip() for s in have}
+    urls = {r.get("url") for s in have for r in s["resources"] if r.get("url")}
+    videos = {_video_key(u) for u in urls} - {""}
+    added = 0
+    for u in o["units"]:
+        if not isinstance(u, dict) or not str(u.get("name") or "").strip():
+            continue
+        name = str(u["name"]).strip()[:80]
+        no = next((i for i, x in enumerate(units, 1) if x.get("name") == name), 0)
+        steps = [s for s in u.get("steps") or [] if isinstance(s, dict) and str(s.get("title") or "").strip()]
+        if not no:
+            if not steps or len(units) >= COURSE_MAX_UNITS:
+                continue
+            units.append({"name": name, "goal": str(u.get("goal") or "")[:300]})
+            no = len(units)
+            db.update("learn_plans", pid, {"units": units})  # 先写单元，add_step 按单元数收 stage
+        for s in steps:
+            rs = _clean_resources(s.get("resources"))
+            own = {r.get("url") for r in rs if r.get("url") and r.get("type") in ("slides", "video")}
+            if s["title"].strip() in titles or (own and own <= urls):
+                continue
+            # 一个录像只属于一讲：模型偶尔把上一讲的录像挂到后面讲次上，后出现的去掉
+            rs = [r for r in rs if _video_key(r.get("url")) not in videos]
+            sid = add_step(pid, {"title": s["title"], "goal": s.get("goal") or "", "description": s.get("description") or "",
+                                 "resources": rs, "est_hours": s.get("est_hours") or 2, "stage": no})
+            db.update("learn_steps", sid, {"step_kind": "assignment" if s.get("kind") == "assignment" else "lecture"})
+            titles.add(s["title"].strip())
+            urls |= {r.get("url") for r in rs if r.get("url")}
+            videos |= {_video_key(r.get("url")) for r in rs} - {""}
+            added += 1
+    data = {"units": units, "status": "active", "synced_at": db.now(), "updated_at": db.now()}
+    if not sync:
+        if not added:
+            raise ValueError("课表 JSON 里没有步骤")
+        data["topic"] = str(o.get("title") or p["topic"])[:200]
+        data["overview_md"] = str(o.get("overview_md") or "")
+    else:
+        data["overview_md"] = (p["overview_md"] or "") + f"\n\n## 同步课表 {db.today()}\n新增 {added} 步。"
+    db.update("learn_plans", pid, data)
+    return added
+
+
+def _finish_course(pid: int, job: dict, sync: bool) -> None:
+    if not db.row("SELECT id FROM learn_plans WHERE id=?", [pid]):
+        return
+    if job.get("status") != "done":
+        db.update("learn_plans", pid, {"status": "active" if sync else "failed", "updated_at": db.now()})
+        return
+    try:
+        apply_course(pid, job.get("output") or "", sync)
+    except ValueError as e:
+        p = _plan(pid)
+        db.update("learn_plans", pid, {"status": "active" if sync else "failed", "updated_at": db.now(),
+                                       "overview_md": (p["overview_md"] or "") + f"\n\n> 课表解析失败（job {job['id']}）：{e}"})
+
+
+def _is_course(s: dict) -> bool:
+    return bool(s.get("step_kind")) and not s.get("origin")
+
+
+def material_prompt(s: dict) -> str:
+    p = _plan(s["plan_id"])
+    out = _step_dir(s)
+    urls = [r["url"] for r in s["resources"] if r.get("url")]
+    res = "\n".join(f"- [{r.get('type', '')}] {r.get('title')} {r.get('url', '')}" for r in s["resources"]) or "（无）"
+    kind = "作业" if s.get("step_kind") == "assignment" else "一讲"
+    return f"""任务：把课程「{p['topic']}」的{kind}「{s['title']}」的原始材料整理成中文素材包，给后面写精讲章节的人用。只整理，不写教程。
+本步说明：{s['description'] or '（无）'}
+资源：
+{res}
+
+做法：
+1. 运行 `python3 {FETCH_SCRIPT} {out / 'raw'} {' '.join(urls) if urls else '<链接>'}`
+   （课件 / 作业 PDF → 带页码的文本，YouTube 录像 → 带时间戳的英文字幕，网页 → 正文；已抓过的会跳过）。读 raw/index.json 和各 .txt。
+   某个链接失败（如字幕被限流）就跳过它，在素材包开头注明缺了什么；资源里没有课件但官网有的，可用同一脚本补抓。
+2. 写 {out / 'material.md'}，结构：
+   - `# 素材包：<标题>`，下一行写材料来源与缺失情况。
+   - `## 逐页要点`：按课件页码（第 N 页）用中文概括每页要点，公式、图表含义写清楚；内容相近的连续几页可合并。作业则按说明文档的章节整理要求、接口、评分点。
+   - `## 讲者补充`：录像里课件没有、讲者口头补充的解释、例子、经验判断、学生问答，每条带时间戳 [mm:ss]。没有录像就省略。
+   - `## 术语表`：中英对照表（英文 | 中文 | 一句话解释）。
+   - `## 阅读材料`：每篇 2–4 句中文摘要 + 和本讲的关系。
+   - `## 关键原文`：最值得对照原文的英文句子 / 定义 / 公式 5–15 条，标出处（第 N 页 / [mm:ss]），原样摘录不翻译。
+3. 忠实于材料，不要补充材料里没有的内容；不确定的标「（原文不清）」。不要写其他文件，不要调用平台 API。最终回复一句话说明写完了、缺了什么。
+"""
+
+
+def _course_block(s: dict) -> str:
+    if not _is_course(s):
+        return ""
+    p = _plan(s["plan_id"])
+    mat = _step_dir(s) / "material.md"
+    lines = [f"\n---- 这是课程计划（{p['topic']}，官网 {p.get('source_url') or '—'}）的"
+             + ("一项课程作业" if s.get("step_kind") == "assignment" else "一讲") + "，以下要求优先于下面「做法」第 1 步 ----"]
+    if mat.is_file():
+        lines.append(f"素材包：{mat}（已从课件、录像字幕、阅读材料整理好：逐页中文要点、讲者补充、术语表、关键原文）。以它为主要依据写，"
+                     f"不要再下载课件或字幕；原始文本在 {mat.parent / 'raw'}，只在核对细节时查。")
+    else:
+        lines.append("素材包没整理成功：自己读资源原文（课件 PDF、讲义页、阅读材料），录像不看。")
+    lines.append("写法：中文精讲，术语首次出现写「中文（English）」；不要逐页翻译课件，按讲者的思路重组讲透；"
+                 "关键英文原文用 <details><summary>原文</summary>…</details> 折叠保留在对应段落后，标出处（课件第 N 页 / 录像 [mm:ss]）。")
+    if s.get("step_kind") == "assignment":
+        lines.append("这是作业，写成实践指导：要做什么和交付物、先要懂的概念（链到前面讲过的章）、拆成几个里程碑、每步的思路和常见坑、"
+                     "可运行的自检清单（测试命令 / 预期输出）。不要写出作业的解答代码（只给接口说明和伪代码级思路）；"
+                     "章末测试考理解和判断，不出要求写完整实现的题。")
+    return "\n".join(lines) + "\n"
+
+
+def start_material_job(s: dict, note: str = "", prefetch: bool = False) -> int:
+    out = _step_dir(s)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / ".chapter_note").write_text(note, "utf-8")  # 素材包整理完接着写章节时带上用户的要求
+    jid = jobs.submit("learn", material_prompt(s), ref=f"learn:step:{s['id']}:material" + (":prefetch" if prefetch else ""),
+                      cwd=str(out), tier=_tier("material"))
+    db.update("learn_steps", s["id"], {"chapter_status": "generating", "chapter_job": jid,
+                                       "material_status": "generating", "material_job": jid})
+    return jid
+
+
+def _finish_material(sid: int, job: dict, prefetch: bool) -> None:
+    s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
+    if not s or s.get("chapter_job") not in (None, job.get("id")):
+        return
+    s = _decode_step(s)
+    out = _step_dir(s)
+    mat = out / "material.md"
+    ok = job.get("status") == "done" and mat.is_file() and len(mat.read_text("utf-8", errors="replace")) > 300
+    if not ok and mat.is_file():  # 写了一半的不缓存，下次重整
+        mat.rename(out / f"material.failed-{job.get('id')}.md")
+    db.update("learn_steps", sid, {"material_status": "ready" if ok else "failed"})
+    nf = out / ".chapter_note"
+    note = nf.read_text("utf-8") if nf.is_file() else ""
+    _submit_chapter(_step(sid), note, prefetch)  # 素材包失败也照常写章节：章节提示里会让它自己读原文
 
 
 # ---------- 学习记录 ----------
@@ -1561,7 +1850,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 用户最近在读 / 在做（章末测试至少 1 题从中挑和本章相关的论文或项目出题，学以致用）：
 {_recent_context()}
 {('用户对本章的要求：' + note) if note else ''}
-{_extra_block(s)}{_arch_block(p, s, steps)}
+{_extra_block(s)}{_course_block(s)}{_arch_block(p, s, steps)}
 做法：
 1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；全貌、前沿章节（老计划的阶段 1、3、5）必须核对资料时效，优先用最新的综述 / 书 / 论文。
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
@@ -1646,8 +1935,14 @@ def start_chapter_job(s: dict, note: str = "", prefetch: bool = False) -> int:
     if archived or note:
         log_event(s, "chapter", {"action": "重新生成" if archived else "生成", "note": note, "archived": archived,
                                  "old_score": (s.get("quiz_result") or {}).get("score") if isinstance(s.get("quiz_result"), dict) else None})
+    if _is_course(s) and not (out / "material.md").is_file():  # 课程的一讲：先整理素材包（缓存，整理过就不再整理）
+        return start_material_job(s, note, prefetch)
+    return _submit_chapter(s, note, prefetch)
+
+
+def _submit_chapter(s: dict, note: str = "", prefetch: bool = False) -> int:
     jid = jobs.submit("learn", chapter_prompt(s, note), ref=f"learn:step:{s['id']}:{'prefetch' if prefetch else 'chapter'}",
-                      cwd=str(out), add_dirs=[str(SKILL_DIR)])
+                      cwd=str(_step_dir(s)), add_dirs=[str(SKILL_DIR)], tier=_tier("chapter"))
     db.update("learn_steps", s["id"], {"chapter_status": "generating", "chapter_job": jid})
     return jid
 
@@ -1712,6 +2007,14 @@ def _clean_cards(o) -> list[dict]:
     return out[:30]
 
 
+def _with_glossary(text: str, mat: Path) -> str:
+    """课程章节末尾接上素材包的术语表：Haiku 已整理好，直接拿来，不让写章节的模型再抄一遍（省输出 token）。"""
+    if re.search(r"(?m)^##\s*术语表", text) or not mat.is_file():
+        return text
+    m = re.search(r"(?ms)^##\s*术语表.*?(?=^##\s|\Z)", mat.read_text("utf-8", errors="replace"))
+    return f"{text}\n\n{m.group(0).strip()}\n" if m else text
+
+
 def _finish_chapter(sid: int, job: dict) -> None:
     s = db.row("SELECT * FROM learn_steps WHERE id=?", [sid])
     if not s or s.get("chapter_job") not in (None, job.get("id")):
@@ -1719,6 +2022,8 @@ def _finish_chapter(sid: int, job: dict) -> None:
     out = _step_dir(s)
     chap = out / "chapter.md"
     text = chap.read_text("utf-8", errors="replace").strip() if chap.is_file() else ""
+    if text and _is_course(s):
+        text = _with_glossary(text, out / "material.md")
     qo = {}
     qf = out / "quiz.json"
     if qf.is_file():
@@ -1860,7 +2165,8 @@ def submit_quiz(sid: int, body: QuizIn):
     if any(q["id"] not in items for q in s["quiz"]):
         r["status"] = "grading"
         db.update("learn_steps", sid, {"quiz_result": r})
-        r["job_id"] = jobs.submit("learn", grade_prompt(s, r), ref=f"learn:step:{sid}:grade", add_dirs=[str(_step_dir(s))])
+        r["job_id"] = jobs.submit("learn", grade_prompt(s, r), ref=f"learn:step:{sid}:grade", add_dirs=[str(_step_dir(s))],
+                                    tier=_tier("grade"))
         db.update("learn_steps", sid, {"quiz_result": r})
     else:
         _finalize_quiz(sid, r)
@@ -2022,6 +2328,10 @@ def on_job_done(job: dict) -> None:
         _finish_item(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:plan:(\d+)(:adapt)?", ref):
         _finish_plan(int(m.group(1)), job, bool(m.group(2)))
+    elif m := re.fullmatch(r"learn:course:(\d+)(:sync)?", ref):
+        _finish_course(int(m.group(1)), job, bool(m.group(2)))
+    elif m := re.fullmatch(r"learn:step:(\d+):material(:prefetch)?", ref):
+        _finish_material(int(m.group(1)), job, bool(m.group(2)))
     elif m := re.fullmatch(r"learn:step:(\d+):(chapter|prefetch)", ref):
         _finish_chapter(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:step:(\d+):grade", ref):

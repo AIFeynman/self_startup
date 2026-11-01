@@ -53,6 +53,8 @@ DEFAULTS: dict = {
     },
     # 按板块指定 Claude 模型（后台任务和对话都生效；空 / 不写 = 用 engines.claude.model）
     "module_models": {"learn": "claude-sonnet-5-5"},
+    # 按任务难度分档（比板块设置优先）：light = 抽取、翻译、整理、初判；standard = 精讲、出题、调整计划。哪类任务用哪档见 learn.task_tiers
+    "model_tiers": {"light": "claude-haiku-5-5", "standard": "claude-sonnet-5-5"},
     # 学习习惯：每天自动加一个「读前沿论文」学习块（规划页打开今天时加；在信息推荐的论文上写一句话判断即完成）
     "habits": {"paper_task": True, "paper_minutes": 30, "paper_per_day": 2},
     # 复盘时分析的代码库 / 文档目录
@@ -175,6 +177,9 @@ DEFAULTS: dict = {
         "paper_skill": str(Path.home() / ".codex/skills/paper-library/SKILL.md"),
         "github_skill": str(Path.home() / ".codex/skills/github-code-walkthrough/SKILL.md"),
         "output_dir": str(DATA_DIR / "learn"),
+        # 学习板块各类后台任务用哪一档模型（见 model_tiers）；没写的任务用 module_models.learn
+        # course 解析课表 / material 课件与字幕整理成素材包 / grade 批改简答题；chapter 章节精讲、adapt 调整计划等走默认
+        "task_tiers": {"course": "light", "material": "light", "grade": "light"},
     },
 }
 

@@ -62,6 +62,13 @@ def module_model(module: str, engine: str = "claude") -> str:
     return str((settings.get("module_models", {}) or {}).get(module) or "")
 
 
+def tier_model(tier: str, engine: str = "claude") -> str:
+    """按任务难度取模型（设置 model_tiers.<档>，只对 Claude 生效）；空 = 走板块 / 引擎默认。"""
+    if engine != "claude" or not tier:
+        return ""
+    return str((settings.get("model_tiers", {}) or {}).get(tier) or "")
+
+
 def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], model: str = "") -> list[str]:
     cfg = settings.get("engines.claude", {})
     cmd = [cfg.get("bin", "claude"), "-p", prompt, "--output-format", "stream-json", "--verbose"]

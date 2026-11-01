@@ -141,7 +141,8 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
         if "fallback_from" not in cols:  # 请求的引擎没跑通、由备选引擎代跑时，记下原来请求的引擎
             c.execute("ALTER TABLE jobs ADD COLUMN fallback_from TEXT DEFAULT ''")
         # 任务在独立的 runner 进程里跑（app/jobrun.py）：启动参数存表里，pid 用来暂停 / 判断进程是否还在
-        for col, typ in (("system", "TEXT DEFAULT ''"), ("add_dirs", "TEXT DEFAULT '[]'"), ("session_in", "TEXT DEFAULT ''"), ("pid", "INTEGER")):
+        for col, typ in (("system", "TEXT DEFAULT ''"), ("add_dirs", "TEXT DEFAULT '[]'"), ("session_in", "TEXT DEFAULT ''"), ("pid", "INTEGER"),
+                         ("model", "TEXT DEFAULT ''")):
             if col not in cols:
                 c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
         c.commit()

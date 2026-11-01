@@ -22,6 +22,8 @@ description: 深度学习板块：A. 单篇论文 / GitHub 项目深读（沿用
 
 **跟着学（章节 + 测试）**：每一步展开成一章教程（替用户消化资料、按这一轮的目的组织：全貌 → 最新综述给出的领域地图与痛点/热点/问题/方案矩阵并核对资料时效；机制/经典 → 一篇经典讲透一个机制；人物 → 判断依据与分歧，练判断力；前沿 → 增量与证据；项目/产品 → 读架构、亲手用并写使用评估）+ 本章要点 + 章末测试（4–5 题、最多 2 道手写，评估对这个方向的理解 / 判断 / 应用；至少 1 题拿用户最近读的论文或做的项目出题；选择题当场判、手写题 Agent 批改），70 分及格自动完成该步，薄弱点回流到计划调整。写法和测试格式见 [chapter.md](chapter.md)。读某一章时对话 ref 是 `learn:step:<id>`：围绕本章能力目标回答，用户答错的题优先帮他想通。
 
+**名校课程计划**（`layout=course`）：给课程官网链接导入（如 CS336、CMU 11-768）。Haiku 读课表，按主题把 1–2 讲合成一个「单元」，每讲 / 作业一步（作业 `step_kind=assignment`，只给指引和自检清单，不写解答代码）。打开某一讲时先由 Haiku 抓课件 PDF / 字幕 / 阅读材料，整理成素材包 `plans/<id>/step-<sid>/material.md`（缓存：逐页要点 + 讲者补充 + 术语表 + 关键原文），再由 Sonnet 写中文精讲（关键原文折叠在 `<details>` 里对照）。模型分档见设置 `model_tiers` / `learn.task_tiers`。课程更新后「同步课表」只追加新讲次，不动已有步骤和学习记录。
+
 反馈闭环：每步 `status`(todo/doing/done/skipped)、`understanding`(0–5)、`feedback`、`notes`。对话中（ref `learn:plan:<id>`）可直接按用户要求增删改步骤；只讨论时不写数据。调整原则：理解度低 → 补前置或换更易懂资源；理解度高且快 → 跳过同类或加深；不改已完成步骤。
 
 ## API（curl 示例）
@@ -36,6 +38,8 @@ curl -s $API/api/learn/items/3/file            # 主产物（md 为文本）
 # 计划
 curl -s -X POST $API/api/learn/plans -H 'Content-Type: application/json' -d '{"topic":"世界模型","background":"熟悉深度学习","goal":"能读懂前沿论文并复现一个小实验","hours_per_week":6}'
 curl -s $API/api/learn/plans/1                 # 含 steps、progress
+curl -s -X POST $API/api/learn/courses -H 'Content-Type: application/json' -d '{"url":"https://cs336.stanford.edu/","background":"熟悉 PyTorch","goal":"能从零训练小模型","hours_per_week":6}'   # 导入名校课程（Haiku 读课表）
+curl -s -X POST $API/api/learn/plans/1/sync_course   # 课程计划：同步课表，只追加新讲次
 curl -s -X PATCH $API/api/learn/steps/12 -H 'Content-Type: application/json' -d '{"status":"done","understanding":3,"feedback":"公式推导没跟上"}'
 curl -s -X POST "$API/api/learn/plans/1/steps?after_step_id=12" -H 'Content-Type: application/json' \
   -d '{"stage":4,"title":"补：变分推断基础","description":"...","resources":[{"title":"...","url":"https://...","type":"blog","why":"..."}],"questions":["..."],"est_hours":2}'

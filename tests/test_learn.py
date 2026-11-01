@@ -604,3 +604,144 @@ def test_item_choice_quiz(client, fake_submit):
     learn.start_item_job(learn._item(it["id"]))
     assert not (out / "qa.json").exists()
     assert len([e for e in client.get(base).json()["earlier"]]) >= 3
+
+
+# ---------- 课程计划 ----------
+
+COURSE_JSON = """```json
+{"title": "语言模型从零开始（CS336，斯坦福，2026 春）", "overview_md": "斯坦福 CS336。",
+ "units": [
+  {"name": "分词与模型结构", "goal": "能实现 BPE 和 Transformer",
+   "steps": [{"title": "第 1 讲 · 概览与分词（Overview, tokenization）", "kind": "lecture", "goal": "讲清 BPE",
+              "resources": [{"title": "Slides", "url": "https://example.com/l1.pdf", "type": "slides"},
+                            {"title": "Video", "url": "https://www.youtube.com/watch?v=aaa", "type": "video"}], "est_hours": 2.5},
+             {"title": "作业 1 · 基础", "kind": "assignment", "description": "实现 BPE 与 Transformer",
+              "resources": [{"title": "Handout", "url": "https://example.com/a1.pdf", "type": "assignment"}], "est_hours": 12}]},
+  {"name": "GPU 与内核", "goal": "能写 Triton 内核",
+   "steps": [{"title": "第 5 讲 · GPU", "kind": "lecture", "resources": [{"title": "Slides", "url": "https://example.com/l5.pdf", "type": "slides"}]}]}
+ ]}
+```"""
+
+
+def test_tier_model_mapping(monkeypatch):
+    from app import agent, settings
+    tiers = {"light": "claude-haiku-5-5", "standard": "claude-sonnet-5-5"}
+    monkeypatch.setattr(settings, "get", lambda k, d=None: {"model_tiers": tiers,
+                                                           "learn.task_tiers": {"course": "light", "grade": "light"}}.get(k, d))
+    assert agent.tier_model("light") == "claude-haiku-5-5"
+    assert agent.tier_model("light", "codex") == ""  # 只对 Claude 生效
+    assert agent.tier_model("") == ""
+    assert learn._tier("course") == "light" and learn._tier("chapter") == ""
+
+
+def test_submit_records_tier_model(monkeypatch):
+    from app import agent
+    monkeypatch.setattr(agent, "tier_model", lambda tier, engine="claude": "claude-haiku-5-5" if tier == "light" else "")
+    jid = jobs.submit("learn", "x", ref="learn:test:tier", tier="light")
+    assert db.row("SELECT model FROM jobs WHERE id=?", [jid])["model"] == "claude-haiku-5-5"
+    jid2 = jobs.submit("learn", "x", ref="learn:test:tier2")
+    assert db.row("SELECT model FROM jobs WHERE id=?", [jid2])["model"] == ""
+
+
+def test_course_import_sync_and_material_chain(client, fake_submit):
+    r = client.post("/api/learn/courses", json={"url": "https://cs336.stanford.edu/", "goal": "能训练小模型"})
+    assert r.status_code == 200
+    p = r.json()
+    assert p["layout"] == "course" and p["status"] == "generating"
+    call = fake_submit[-1]
+    assert call["ref"] == f"learn:course:{p['id']}" and call["tier"] == "light"
+    assert "course_fetch.py" in call["prompt"] and "https://cs336.stanford.edu/" in call["prompt"]
+
+    learn.on_job_done(_job(call["id"], COURSE_JSON))
+    p = client.get(f"/api/learn/plans/{p['id']}").json()
+    assert p["status"] == "active" and p["topic"].startswith("语言模型从零开始") and p["unit"] == "单元"
+    assert p["stages"] == {"1": "分词与模型结构", "2": "GPU 与内核"}
+    assert [(s["stage"], s["step_kind"]) for s in p["steps"]] == [(1, "lecture"), (1, "assignment"), (2, "lecture")]
+    assert learn.stage_label(learn._plan(p["id"]), 2) == "单元 2 · GPU 与内核"
+
+    # 同步：已有的讲次跳过，新讲次追加到已有单元 / 新单元；已有步骤不动
+    client.post(f"/api/learn/plans/{p['id']}/sync_course")
+    sync = fake_submit[-1]
+    assert sync["ref"] == f"learn:course:{p['id']}:sync" and "第 1 讲 · 概览与分词" in sync["prompt"]
+    more = COURSE_JSON.replace('"units": [', '"units": [{"name": "对齐", "goal": "RLHF", "steps": [{"title": "第 15 讲 · RLHF", "kind": "lecture"}]},')
+    more = more.replace('"title": "第 5 讲 · GPU"', '"title": "第 6 讲 · 内核"').replace("l5.pdf", "l6.pdf")
+    learn.on_job_done(_job(sync["id"], more))
+    p = client.get(f"/api/learn/plans/{p['id']}").json()
+    assert p["status"] == "active" and len(p["steps"]) == 5 and p["stages"]["3"] == "对齐"
+    assert "同步课表" in p["overview_md"]
+    # 课程计划重新生成 = 同步，不清空步骤
+    client.post(f"/api/learn/plans/{p['id']}/regenerate")
+    assert fake_submit[-1]["ref"].endswith(":sync") and len(learn.steps_of(p["id"])) == 5
+    assert client.post(f"/api/learn/plans/{p['id']}/rounds").status_code == 400
+
+    # 打开一讲：先整理素材包（轻量模型），完成后接着写章节（默认模型），章节提示里用素材包
+    lec = p["steps"][0]
+    s = client.post(f"/api/learn/steps/{lec['id']}/open", json={"note": "多讲直觉"}).json()
+    mat = fake_submit[-1]
+    assert mat["ref"] == f"learn:step:{lec['id']}:material" and mat["tier"] == "light"
+    assert "course_fetch.py" in mat["prompt"] and "https://example.com/l1.pdf" in mat["prompt"] and "术语表" in mat["prompt"]
+    assert s["chapter_status"] == "generating" and s["material_status"] == "generating"
+    out = learn._step_dir(learn._step(lec["id"]))
+    (out / "material.md").write_text("# 素材包\n" + "要点 " * 200, "utf-8")
+    learn.on_job_done(_job(mat["id"], "写完了"))
+    chap = fake_submit[-1]
+    assert chap["ref"] == f"learn:step:{lec['id']}:chapter" and chap["tier"] == ""
+    assert str(out / "material.md") in chap["prompt"] and "<details><summary>原文</summary>" in chap["prompt"]
+    assert "用户对本章的要求：多讲直觉" in chap["prompt"]
+    s = learn._step(lec["id"])
+    assert s["material_status"] == "ready" and s["chapter_job"] == chap["id"]
+    # 重新生成章节：素材包已缓存，直接写章节
+    client.post(f"/api/learn/steps/{lec['id']}/open", json={"force": True})
+    assert fake_submit[-1]["ref"] == f"learn:step:{lec['id']}:chapter"
+
+    # 作业：素材包失败也照常写章节，提示自己读原文、不给解答代码
+    asg = p["steps"][1]
+    client.post(f"/api/learn/steps/{asg['id']}/open", json={})
+    m2 = fake_submit[-1]
+    learn.on_job_done(_job(m2["id"], "", status="failed"))
+    c2 = fake_submit[-1]
+    assert c2["ref"] == f"learn:step:{asg['id']}:chapter" and "素材包没整理成功" in c2["prompt"] and "不要写出作业的解答代码" in c2["prompt"]
+    assert learn._step(asg["id"])["material_status"] == "failed"
+
+
+def test_course_import_failure_and_stage_clamp(client, fake_submit):
+    p = client.post("/api/learn/courses", json={"url": "https://example.com/course"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], "没找到课表"))
+    p = client.get(f"/api/learn/plans/{p['id']}").json()
+    assert p["status"] == "failed" and "课表解析失败" in p["overview_md"]
+    assert client.post("/api/learn/courses", json={"url": "cs336"}).status_code == 400
+    # 非课程计划的 stage 上限不变：三轮 3
+    r = client.post("/api/learn/plans", json={"topic": "RAG"}).json()
+    sid = learn.add_step(r["id"], {"title": "x", "stage": 9})
+    assert learn._step(sid)["stage"] == 3
+
+
+def test_course_video_belongs_to_one_lecture(client, fake_submit):
+    p = client.post("/api/learn/courses", json={"url": "https://example.com/agents"}).json()
+    v = "https://www.youtube.com/watch?v=paAcPaaYZGM"
+    out = json.dumps({"title": "Agents", "units": [{"name": "训练", "steps": [
+        {"title": "第 9 讲", "resources": [{"title": "录像", "url": v + "&list=PLx&index=9", "type": "video"}]},
+        {"title": "第 11 讲", "resources": [{"title": "课件", "url": "https://example.com/l11.pdf", "type": "slides"},
+                                          {"title": "录像", "url": "https://youtu.be/paAcPaaYZGM", "type": "video"}]}]}]})
+    learn.on_job_done(_job(fake_submit[-1]["id"], out))
+    steps = client.get(f"/api/learn/plans/{p['id']}").json()["steps"]
+    assert [len(s["resources"]) for s in steps] == [1, 1] and steps[1]["resources"][0]["type"] == "slides"
+
+
+def test_grade_uses_light_tier(client, fake_submit):
+    p = client.post("/api/learn/plans", json={"topic": "评测"}).json()
+    sid = learn.add_step(p["id"], {"title": "一步"})
+    db.update("learn_steps", sid, {"chapter_status": "ready", "chapter_md": "x" * 300,
+                                   "quiz": [{"id": "q1", "type": "short", "q": "为什么？", "reference": "因为", "rubric": "要点",
+                                            "dim": "理解", "about": "", "section": "", "options": [], "answer": None, "explain": ""}]})
+    client.post(f"/api/learn/steps/{sid}/quiz", json={"answers": {"q1": "因为所以"}})
+    assert fake_submit[-1]["ref"] == f"learn:step:{sid}:grade" and fake_submit[-1]["tier"] == "light"
+
+
+def test_course_chapter_gets_glossary(tmp_path):
+    mat = tmp_path / "material.md"
+    mat.write_text("# 素材包\n\n## 逐页要点\n…\n\n## 术语表\n| English | 中文 | 解释 |\n|---|---|---|\n| RoPE | 旋转位置编码 | … |\n\n## 关键原文\n…\n", "utf-8")
+    out = learn._with_glossary("# 第 3 讲\n正文", mat)
+    assert out.rstrip().endswith("| RoPE | 旋转位置编码 | … |") and "关键原文" not in out
+    assert learn._with_glossary("正文\n\n## 术语表\n已有", mat) == "正文\n\n## 术语表\n已有"
+    assert learn._with_glossary("正文", tmp_path / "none.md") == "正文"
