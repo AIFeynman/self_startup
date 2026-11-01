@@ -36,6 +36,8 @@ const CSS = `
 .ln-badge.video { background: var(--warn-soft, var(--accent-soft)); color: var(--warn, var(--accent)); }
 .ln-reads .ln-rd { display: grid; grid-template-columns: 7.5em 3em 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
 .ln-reads .ln-rd:first-of-type { border-top: 0; }
+.ln-dd-exps { margin-bottom: 12px; } .ln-dd-exps .ln-rd { display: grid; grid-template-columns: 2.6em 3.4em 5.5em 1fr auto; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
+.ln-dd-exps .ln-rd:first-child { border-top: 0; }
 /* 追问清单：逐题作答 + Agent 点评 */
 .ln-qa { display: grid; gap: 10px; }
 .ln-qa .qa { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
@@ -639,6 +641,17 @@ async function renderItem(el, ctx, iid) {
     h('button.ghost', { onclick: async () => { if (!confirm('删除该条目？（产物文件保留）')) return; await api.del(`/api/learn/items/${it.id}`); location.hash = '#learn'; } }, [ui.icon('trash'), '删除']),
   ]));
 
+  // GitHub 项目：深读笔记 / Deep Dive 两个标签（#learn/item/<id>/deepdive）
+  const ddTab = it.kind === 'github' && ctx.sub[2] === 'deepdive';
+  if (it.kind === 'github') {
+    el.append(h('div.ln-tabs2', {}, [
+      h('button' + (ddTab ? '' : '.on'), { onclick: () => { location.hash = `#learn/item/${it.id}`; } }, '深读笔记'),
+      h('button' + (ddTab ? '.on' : ''), { title: '自己拉仓库、写测试、做实验的深度解读（点了才生成）', onclick: () => { location.hash = `#learn/item/${it.id}/deepdive`; } },
+        ['Deep Dive', it.dd_status === 'running' ? h('span.muted.dots', { style: { marginLeft: '6px' } }, '生成中') : it.dd_status === 'done' ? ' ✓' : '']),
+    ]));
+  }
+  if (ddTab) { el.append(await deepDivePane(ctx, it)); return; }
+
   const reader = h('div.ln-reader');
   el.append(reader);
   const lines = (it.summary || '').split('\n').map((s) => s.replace(/^[-*•]\s*/, '').trim()).filter(Boolean);
@@ -646,21 +659,7 @@ async function renderItem(el, ctx, iid) {
 
   if (busy || it.status === 'failed' || !it.output_path) { if (tldrBox) reader.append(tldrBox); }
   if (busy) {
-    // 实时进度：已用时 + Agent 最近几步（读了哪些文件、跑了什么命令）
-    const steps = h('div.ln-steps');
-    const head = h('div.serif', {}, '后台深读中');
-    reader.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, (it.depth || 'quick') === 'quick' && it.kind === 'github' ? '速读 · 通常几分钟' : it.kind === 'github' ? '完整教程 · 通常 10–20 分钟' : it.kind === 'article' ? '文章深读 · 通常 2–5 分钟' : it.kind === 'video' ? '视频解读 · 通常 3–8 分钟（无字幕时本机转写更久）' : '论文深读 · 通常 2–5 分钟')]), steps]));
-    const tick = async () => {
-      if (!steps.isConnected) return;
-      const j = await api.get(`/api/jobs/${it.job_id}`).catch(() => null);
-      if (!j) return;
-      const mins = ((j.elapsed_s ?? 0) / 60).toFixed(1);
-      head.textContent = `后台深读中 · 已用 ${mins} 分钟`;
-      const lines = (j.log || '').split('\n').filter(Boolean).slice(-6).map((l) => l.replace(/^\[tool\]\s*/, '').replace(/\/Users\/[^ ]*\/data\/learn\/[^/]+\//g, ''));
-      steps.replaceChildren(...(lines.length ? lines.map((l) => h('div.ln-step', { title: l }, l)) : [h('div.muted', {}, h('span.dots', {}, '准备中'))]));
-      if (['queued', 'running'].includes(j.status)) setTimeout(tick, 4000);
-    };
-    tick();
+    reader.append(jobProgress(ctx, it.job_id, '后台深读中', (it.depth || 'quick') === 'quick' && it.kind === 'github' ? '速读 · 通常几分钟' : it.kind === 'github' ? '完整教程 · 通常 10–20 分钟' : it.kind === 'article' ? '文章深读 · 通常 2–5 分钟' : it.kind === 'video' ? '视频解读 · 通常 3–8 分钟（无字幕时本机转写更久）' : '论文深读 · 通常 2–5 分钟'));
   }
   else if (it.status === 'failed') reader.append(h('div.card', {}, ui.empty('深读失败', '点「重新生成」再试一次，或看 job 日志')));
   else if (it.output_path) {
@@ -703,6 +702,84 @@ async function renderItem(el, ctx, iid) {
   reader.append(ui.section('我的笔记'), h('div.card', {}, [notes,
     h('div.row', { style: { marginTop: '10px' } }, [h('span.muted', {}, '评分'), stars(h, ui, rating, (v) => { rating = v; saveNotes(); }), h('span.grow'), saved,
       h('button.primary', { onclick: saveNotes }, [ui.icon('check'), '保存'])])]));
+}
+
+// 后台任务实时进度：已用时 + Agent 最近几步（读了哪些文件、跑了什么命令）
+function jobProgress(ctx, jobId, title, hint, n = 6) {
+  const { api, h } = ctx;
+  const steps = h('div.ln-steps');
+  const head = h('div.serif', {}, title);
+  const card = h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, hint)]), steps]);
+  let started = false;
+  const tick = async () => {
+    if (started && !steps.isConnected) return;
+    started = steps.isConnected || started;
+    const j = await api.get(`/api/jobs/${jobId}`).catch(() => null);
+    if (!j) return;
+    head.textContent = `${title} · ${j.status === 'queued' ? '排队中' : `已用 ${((j.elapsed_s ?? 0) / 60).toFixed(1)} 分钟`}`;
+    const lines = (j.log || '').split('\n').filter(Boolean).slice(-n).map((l) => l.replace(/^\[tool\]\s*/, '').replace(/\/Users\/[^ ]*\/data\/learn\/[^/]+\//g, ''));
+    steps.replaceChildren(...(lines.length ? lines.map((l) => h('div.ln-step', { title: l }, l)) : [h('div.muted', {}, h('span.dots', {}, '准备中'))]));
+    if (['queued', 'running'].includes(j.status)) setTimeout(tick, 4000);
+  };
+  tick();
+  return card;
+}
+
+// ---------- Deep Dive：按需生成，拉仓库、写测试、做实验，命令 / 原样输出 / 结论都在文档里 ----------
+const VERDICT_TAG = { 证实: 'ok', 推翻: 'err', 意外: 'warn', 部分: 'gray' };
+
+async function deepDivePane(ctx, it) {
+  const { api, h, md, toast, ui } = ctx;
+  const box = h('div.ln-reader');
+  const d = await api.get(`/api/learn/items/${it.id}/deepdive`).catch(() => null);
+  if (!d) { box.append(ui.empty('读取 Deep Dive 状态失败')); return box; }
+  const start = async (e) => {
+    if (d.ready && !confirm('重新生成 Deep Dive？当前版本会保留为历史版本。')) return;
+    e.target.disabled = true;
+    try { await api.post(`/api/learn/items/${it.id}/deepdive`); toast('已开始生成 Deep Dive'); } catch (err) { toast('启动失败：' + err.message, true); }
+    softRefresh();
+  };
+  const intro = '比深读笔记深一层：Agent 在本机隔离目录里单独克隆仓库，自己写测试、做消融 / 边界实验并真的跑出结果，命令、原样输出和结论都写进文档；同步进知识库。通常 30–60 分钟。';
+  const jobLink = d.job_id ? h('a.muted', { href: `/api/jobs/${d.job_id}`, target: '_blank' }, `job ${d.job_id}`) : null;
+  if (d.status === 'running') {
+    watchJob(ctx, d.job_id, 'running');
+    box.append(jobProgress(ctx, d.job_id, 'Deep Dive 生成中', '拉仓库 → 读代码 → 写测试 / 做实验 → 写文档 · 通常 30–60 分钟', 10));
+    return box;
+  }
+  if (d.status === 'failed') {
+    box.append(h('div.card', {}, [h('div.serif', { style: { color: 'var(--err)' } }, 'Deep Dive 生成失败'),
+      h('div', { style: { margin: '8px 0' } }, d.error || '未知原因'),
+      h('div.row', {}, [jobLink, h('span.muted', {}, d.ready ? '（下面是这次写出的部分内容）' : ''), h('span.grow'), h('button.primary', { onclick: start }, [ui.icon('refresh'), '重试'])])]));
+  }
+  if (!d.ready) {
+    if (d.status !== 'failed') box.append(h('div.card', {}, [h('div.serif', {}, '还没有 Deep Dive'), h('p.muted', {}, intro),
+      h('div.row', {}, [h('span.grow'), h('button.primary', { onclick: start }, [ui.icon('doc'), '生成 Deep Dive'])])]));
+    return box;
+  }
+  const docBox = h('div.card');
+  const show = async (version = '') => {
+    const text = await api.get(`/api/learn/items/${it.id}/deepdive/file${version ? `?version=${encodeURIComponent(version)}` : ''}`).catch(() => null);
+    if (typeof text !== 'string') { docBox.replaceChildren(ui.empty('读取文档失败')); return; }
+    const body = text.replace(/^---[\s\S]*?---\s*/, '');
+    docBox.replaceChildren(annotate(ctx, localImgs(md(body), `/api/learn/items/${it.id}/out/deepdive/`),
+      { doc: `learn:item:${it.id}:deepdive`, title: d.title || `${it.title || it.url} · Deep Dive`, link: `#learn/item/${it.id}/deepdive`, source: body }));
+  };
+  const versions = d.versions.length ? h('select', { onchange: (e) => show(e.target.value) },
+    [h('option', { value: '' }, '当前版本'), ...d.versions.map((v) => h('option', { value: v }, v.replace(/^deepdive\.|\.md$/g, '')))]) : null;
+  box.append(h('div.row', { style: { marginBottom: '12px' } }, [
+    h('span.muted', {}, `${d.experiments.length} 个实验 · ${(d.at || '').slice(0, 16).replace('T', ' ')}`), versions, h('span.grow'), jobLink,
+    h('button.ghost', { onclick: start }, [ui.icon('refresh'), '重新生成']),
+  ]));
+  if (d.experiments.length) {
+    box.append(h('div.card.ln-dd-exps', {}, d.experiments.map((x) => h('div.ln-rd', { title: x.cmd || '' }, [
+      h('b', {}, x.id || ''), h('span.tag.' + (VERDICT_TAG[x.verdict] || 'gray'), {}, x.verdict || '—'), h('span.muted', {}, x.type || ''),
+      h('span', {}, x.finding || x.title || ''),
+      h('a.muted', { href: `/api/learn/items/${it.id}/out/deepdive/${String(x.out).split('/').map(encodeURIComponent).join('/')}`, target: '_blank' }, '原样输出'),
+    ]))));
+  }
+  box.append(docBox);
+  await show();
+  return box;
 }
 
 // ---------- 追问清单：逐题作答，提交后 Agent 对照笔记 / 原文 / 源码点评 ----------

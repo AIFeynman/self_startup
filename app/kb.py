@@ -200,7 +200,25 @@ def _learn_items() -> list[dict]:
         out.append(_doc(type_, it["id"], it["title"] or it["url"], "\n".join(body), date=it["created_at"],
                         updated=it.get("updated_at") or "", tags=[it["kind"]], status=it["status"], url=it["url"],
                         summary=_first_lines(it.get("summary") or "", 3)))
+        if it.get("dd_status") == "done":
+            out += _deepdive_doc(it)
     return out
+
+
+def _deepdive_doc(it: dict) -> list[dict]:
+    """GitHub 项目的 Deep Dive（含实验）单独一篇，和项目深读放一起。"""
+    from .modules import learn
+    md = learn._deepdive.dd_dir(learn._item_dir(it)) / "deepdive.md"
+    if not md.is_file():
+        return []
+    text = md.read_text("utf-8", errors="ignore")
+    title = it.get("dd_title") or f"{it['title'] or it['url']} · Deep Dive"
+    exps = json.loads(it.get("dd_experiments") or "[]")
+    head = [f"- 链接：{it['url']}", f"- 深读条目：repo:{it['id']}", f"- 产物：{md}",
+            f"- 实验：{len(exps)} 个（原样输出在 {md.parent / 'lab'}）"]
+    return [_doc("repo", f"{it['id']}-deepdive", title, "\n".join(head) + "\n\n" + re.sub(r"\A\s*#[^\n]*\n", "", text),
+                 date=it.get("dd_at") or it["created_at"], updated=it.get("dd_at") or "", tags=["github", "deepdive"],
+                 status="done", url=it["url"], summary=learn._tldr_from_md(text))]
 
 
 def _plans() -> list[dict]:
