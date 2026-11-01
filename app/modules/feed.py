@@ -23,6 +23,7 @@ from . import _feed_product as pa
 from . import _feed_judge as judge
 from . import _feed_rank as rk
 from . import _feed_sources as src
+from . import _feed_topics as topics
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,13 @@ CREATE TABLE IF NOT EXISTS feed_feedback (
     hidden      INTEGER DEFAULT 0,
     updated_at  TEXT
 );
+CREATE TABLE IF NOT EXISTS feed_query_log (    -- 每个搜索词搜过几次：没收到条目时靠它判「没搜到」
+    source      TEXT NOT NULL,             -- hn / github / reddit / youtube / zhihu / x
+    query       TEXT NOT NULL,             -- 小写
+    runs        INTEGER DEFAULT 0,
+    last_run    TEXT,
+    PRIMARY KEY (source, query)
+);
 """
 
 # settings.feed 之外的旋钮的缺省值（可在 data/settings.json 的 feed 下覆盖）
@@ -56,8 +64,10 @@ CFG_DEFAULTS = {
     "half_life_hours": 72,
     "auto_refresh_hours": 6,      # 数据超过这么久自动后台刷新；0 = 关闭
     "stale_source_days": 7,       # 某来源最新条目早于这么多天，status 里标为停更
-    "hn_queries": ["LLM", "AI agent", "Claude", "OpenAI", "GPT", "coding agent"],
-    "github_queries": ["llm", "ai agent", "mcp", "claude code"],
+    # 搜索关键词：一份主题表派生 HN / GitHub / Reddit / YouTube / 知乎（/ X）的搜索词，见 _feed_topics.py；
+    # 页面「关键词」里维护。settings 里显式写了 <来源>_queries 的来源仍用老列表
+    "topics": topics.DEFAULT_TOPICS,
+    "topic_caps": {},             # 覆盖每个来源的词数上限，如 {"youtube": 4, "x": 3}
     "github_min_stars": 100,      # 搜索新建仓库时的最低星数（太低全是刚建的小项目）
     "github_trending_languages": [""],  # 每日 Trending 看哪些语言："" = 全部语言，可加 "python" "typescript"
     # 重点机构的新仓库：和官方博客一样加「官方」分；机构名对照见 _feed_rank.GITHUB_ORGS，不在里面的显示 GitHub 账号名
@@ -66,7 +76,6 @@ CFG_DEFAULTS = {
     "github_watch_min_stars": 5,  # 重点机构新仓库的最低星数：滤掉大厂每天建的内部空仓库
     # Reddit：实践经验和前沿讨论最集中的版块；.env 配 REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET 走官方 API（有票数），否则走 RSS
     "reddit": ["LocalLLaMA", "ClaudeAI", "ClaudeCode", "MachineLearning", "LLMDevs", "AI_Agents", "ChatGPTCoding", "mcp"],
-    "reddit_queries": ["claude code", "coding agent", "mcp server"],   # 全站搜本周 top，补名单版块之外的讨论
     # 视频：YouTube 频道 id（UC 开头；显示名见 _feed_follow.KNOWN_NAMES，「关注源」里可用 @handle 添加）
     "youtube_channels": ["UCXUPKJO5MZQN11PqgIvyuvQ", "UCbfYPyITQ-7l4upoX8nvctg", "UCZHmQk67mSJgfCCTn7xBfew",
                          "UCNJ1Ymd5yFuUPtn21xtRbbw", "UCXl4i9dYBrFOabk0xGmbkRA", "UCMLtBahI5DMrt0NPvDSoIRQ",
@@ -86,11 +95,9 @@ CFG_DEFAULTS = {
                          "UCZgt6AzoyjslHTC9dz0UoTw", "UC1kBxkk2bcG78YBX7LMl9pQ", "UCbRP3c757lWg9M-U7TyEkXA",
                          "UCMwVTLZIRRUyyVrkjDpn4pA", "UC_x36zCEGilGpB1m-V4gmjg", "UCC-lyoTfSrcJzA1ab3APAgw",
                          "UCSI7h9hydQ40K5MJHnCrQvw"],
-    "youtube_queries": ["claude code", "AI agents", "LLM explained", "AI engineering"],   # 只在 .env 有 YOUTUBE_API_KEY 时搜
     "bilibili": ["1567748478"],   # B 站 UP 主 uid（经 RSSHub，公共实例不稳）
     "video_days": 21,
     # 知乎：专栏 id（zhuanlan.zhihu.com/<id>，经 RSSHub；公共实例限流狠，别加太多）+ 热榜里技术相关的问题；都过 Jev 价值判断
-    "zhihu_queries": ["大模型", "Agent", "Claude Code", "AI Infra", "强化学习"],   # DeepSeek 搜索（DEEPSEEK_API_KEY），每词 1 次
     "zhihu_columns": ["jiqizhixin"],
     "zhihu_hot": True,
     "zhihu_days": 14,
@@ -288,13 +295,49 @@ def src_list(lst: str) -> list:
     return follow.effective(list(cfg(lst) or []), follow_cfg(), lst)
 
 
-def _collectors() -> dict:
+def queries(source: str, stats: dict | None = None) -> list[str]:
+    """某来源这次搜哪些词：settings 显式写了 <来源>_queries 用它，否则从主题表派生（效果差的排后、按上限截）。"""
+    explicit = settings.get(f"feed.{source}_queries")
+    if explicit is not None:
+        return list(explicit or [])
+    caps = {**topics.CAPS, **(cfg("topic_caps") or {})}
+    return topics.queries_for(list(cfg("topics") or []), source, stats, cap=int(caps.get(source, 6)))
+
+
+# 采集器 → 它会用到搜索词的来源；跑完记查询日志。YouTube / 知乎没 key 时不搜，不记
+QUERY_SOURCES = {"hn": "hn", "github": "github", "reddit": "reddit", "video": "youtube", "zhihu": "zhihu", "x": "x"}
+QUERY_KEYS = {"youtube": "YOUTUBE_API_KEY", "zhihu": "DEEPSEEK_API_KEY"}
+
+
+def _log_queries(source: str, qs: list[str], errors: list[str]) -> None:
+    if (env := QUERY_KEYS.get(source)) and not os.environ.get(env, "").strip():
+        return
+    for q in qs:
+        if any(q.lower() in str(e).lower() for e in errors):   # 这个词这次报错了，不算搜过
+            continue
+        db.execute("INSERT INTO feed_query_log (source, query, runs, last_run) VALUES (?,?,1,?) "
+                   "ON CONFLICT(source, query) DO UPDATE SET runs=runs+1, last_run=excluded.last_run",
+                   [source, q.strip().lower(), db.now()])
+
+
+def query_runs() -> dict[str, dict]:
+    return {f"{r['source']}|{r['query']}": r for r in db.rows("SELECT * FROM feed_query_log")}
+
+
+def term_stats() -> dict[str, dict]:
+    _ensure_cols()
+    fb = {r["item_id"]: r for r in db.rows("SELECT * FROM feed_feedback")}
+    return topics.term_stats(_load_items(), fb, _deep_urls(), query_runs(), low_value=rk.low_value, norm_url=rk.norm_url)
+
+
+def _collectors(stats: dict | None = None) -> dict:
     fc = settings.get("feed", {}) or {}
+    q = lambda s: queries(s, stats)   # noqa: E731
     return {
-        "hn": lambda: src.fetch_hn(list(cfg("hn_queries")), known_ids=_enriched_hn()),
+        "hn": lambda: src.fetch_hn(q("hn"), known_ids=_enriched_hn()),
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
-        "github": lambda: src.fetch_github_all(list(cfg("github_queries")), min_stars=int(cfg("github_min_stars")),
+        "github": lambda: src.fetch_github_all(q("github"), min_stars=int(cfg("github_min_stars")),
                                                trending_languages=list(cfg("github_trending_languages")),
                                                watch_orgs=src_list("github_watch_orgs"),
                                                watch_min_stars=int(cfg("github_watch_min_stars"))),
@@ -303,8 +346,8 @@ def _collectors() -> dict:
         "podcast": lambda: src.fetch_rss(src_list("podcasts"), per_feed=5, source="podcast", typ="podcast"),
         "xiaoyuzhou": lambda: src.fetch_xiaoyuzhou(src_list("xiaoyuzhou"),
                                                    rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
-        "reddit": lambda: src.fetch_reddit(src_list("reddit"), list(cfg("reddit_queries") or [])),
-        "video": lambda: src.fetch_videos(src_list("youtube_channels"), list(cfg("youtube_queries") or []),
+        "reddit": lambda: src.fetch_reddit(src_list("reddit"), q("reddit")),
+        "video": lambda: src.fetch_videos(src_list("youtube_channels"), q("youtube"),
                                           bilibili=src_list("bilibili"), days=int(cfg("video_days")),
                                           rsshub_bases=list(fc.get("rsshub_bases") or []) or None,
                                           langs=tuple(cfg("video_langs") or ()),
@@ -312,10 +355,10 @@ def _collectors() -> dict:
                                           region=str(cfg("youtube_region") or "US"),
                                           bili_boards=tuple(cfg("bilibili_ranking") or ())),
         "zhihu": lambda: src.fetch_zhihu(src_list("zhihu_columns"), hot=bool(cfg("zhihu_hot")),
-                                         queries=list(cfg("zhihu_queries") or []),
+                                         queries=q("zhihu"),
                                          days=int(cfg("zhihu_days")),
                                          rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
-        "x": lambda: src.fetch_x(src_list("x_accounts"), list(fc.get("x_queries") or []),
+        "x": lambda: src.fetch_x(src_list("x_accounts"), q("x"),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
@@ -351,7 +394,12 @@ def _known_urls(source: str) -> set[str]:
 def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> dict:
     """跑一遍采集；每个来源独立 fail-soft。返回 {source: {count, new, errors}}。
     gists：是否补中文一句话，默认只在全量刷新时补（分类页手动刷新也补，新抓的要能看懂）。"""
-    cols = _collectors()
+    try:
+        stats = term_stats()
+    except Exception as e:  # noqa: BLE001  统计坏了也照常刷新，只是不按效果排词
+        log.warning("feed term stats failed: %s", e)
+        stats = {}
+    cols = _collectors(stats)
     names = [n for n in (only or cfg("sources")) if n in cols]
     results: dict = {}
 
@@ -359,6 +407,8 @@ def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> di
         try:
             got = cols[name]()
             items, errs = got if isinstance(got, tuple) else (got, [])
+            if s := QUERY_SOURCES.get(name):
+                _log_queries(s, queries(s, stats), errs)
             n, new = _upsert(items)
             return name, {"count": n, "new": new, "errors": errs}
         except Exception as e:  # noqa: BLE001
@@ -692,13 +742,18 @@ def feedback_stats() -> dict:
     return out
 
 
-def deep_reads() -> int:
-    """从推荐进了深读的条目数：learn_items 的 url 与 feed 条目（或其 arXiv id）一致。"""
+def _deep_urls() -> set[str]:
     try:
         urls = {rk.norm_url(r["url"]) for r in db.rows("SELECT url FROM learn_items")}
     except Exception:  # noqa: BLE001  学习模块不存在
-        return 0
+        return set()
     urls.discard("")
+    return urls
+
+
+def deep_reads() -> int:
+    """从推荐进了深读的条目数：learn_items 的 url 与 feed 条目（或其 arXiv id）一致。"""
+    urls = _deep_urls()
     if not urls:
         return 0
     return sum(1 for r in db.rows("SELECT url FROM feed_items") if rk.norm_url(r["url"]) in urls)
@@ -706,14 +761,90 @@ def deep_reads() -> int:
 
 @router.get("/config")
 def config():
-    return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
+    return {k: cfg(k) for k in ("interests", "half_life_hours", "topics", "topic_caps", "reddit", "x_days",
                                 "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "trustmrr_days", "sources", "github_min_stars",
                                 "github_trending_languages", "github_watch_orgs", "github_watch_min_stars",
-                                "reddit_queries", "youtube_channels", "youtube_queries", "bilibili", "video_days", "video_langs",
+                                "youtube_channels", "bilibili", "video_days", "video_langs",
                                 "youtube_trending", "youtube_region", "bilibili_ranking",
-                                "zhihu_queries", "zhihu_columns", "zhihu_hot", "zhihu_days")} | {
-        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
+                                "zhihu_columns", "zhihu_hot", "zhihu_days")} | {
+        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "product_rss", "rsshub_bases", "x_accounts")} | {
+        "queries": {s: queries(s) for s in topics.LANG}, "types": TYPES}
 
+
+
+# ---------- 关键词（主题表） ----------
+
+class TopicsIn(BaseModel):
+    topics: list[dict]
+
+
+class SuggestionIn(BaseModel):
+    name: str
+    action: str   # accept / dismiss
+
+
+def topics_view() -> dict:
+    stats = term_stats()
+    explicit = [s for s in topics.LANG if settings.get(f"feed.{s}_queries") is not None]
+    caps = {**topics.CAPS, **(cfg("topic_caps") or {})}
+    return {"topics": list(cfg("topics") or []), "queries": {s: queries(s, stats) for s in topics.LANG},
+            "stats": stats, "caps": caps, "explicit": explicit, "labels": topics.SOURCE_LABEL, "langs": topics.LANG,
+            "suggestions": settings.get("feed.topic_suggestions", []) or [], "days": topics.STATS_DAYS}
+
+
+@router.get("/topics")
+def get_topics():
+    return topics_view()
+
+
+@router.put("/topics")
+def put_topics(body: TopicsIn):
+    settings.save({"feed": {"topics": topics.normalize(body.topics)}})
+    return topics_view()
+
+
+def _liked_titles(days: int = 60) -> list[str]:
+    """推荐候选词用的正样本：近 days 天赞过 / 收藏 / 深读过的条目标题（新的在前）。"""
+    _ensure_cols()
+    fb = {r["item_id"]: r for r in db.rows("SELECT * FROM feed_feedback")}
+    deep = _deep_urls()
+    since = datetime.fromtimestamp(time.time() - days * 86400, timezone.utc).isoformat(timespec="seconds")
+    out = []
+    for it in _load_items():
+        f = fb.get(it["id"], {})
+        if ((f.get("vote") or 0) > 0 or f.get("saved") or rk.norm_url(it.get("url") or "") in deep) \
+                and str(it.get("fetched_at") or "") >= since[:19]:
+            out.append(it["title"])
+    return out
+
+
+@router.post("/topics/suggest")
+def suggest_topics():
+    got, err = topics.suggest(_liked_titles(), list(cfg("topics") or []), settings.get("feed.topic_dismissed", []) or [],
+                              model=str(cfg("gist_model")))
+    if err:
+        raise HTTPException(400, err)
+    settings.save({"feed": {"topic_suggestions": got}})
+    return topics_view() | {"added": len(got)}
+
+
+@router.post("/topics/suggestion")
+def answer_suggestion(body: SuggestionIn):
+    sugg = settings.get("feed.topic_suggestions", []) or []
+    hit = next((x for x in sugg if x.get("name") == body.name), None)
+    if not hit:
+        raise HTTPException(404, "这个候选已经处理过了")
+    rest = [x for x in sugg if x is not hit]
+    if body.action == "accept":
+        new = {k: v for k, v in hit.items() if k != "reason"}
+        settings.save({"feed": {"topics": topics.normalize([*(cfg("topics") or []), new]), "topic_suggestions": rest}})
+    elif body.action == "dismiss":
+        dismissed = list(settings.get("feed.topic_dismissed", []) or [])
+        dismissed += [t for k in ("en", "zh") for t in hit.get(k, [])]
+        settings.save({"feed": {"topic_dismissed": dismissed[-200:], "topic_suggestions": rest}})
+    else:
+        raise HTTPException(400, "action 只能是 accept / dismiss")
+    return topics_view()
 
 # ---------- 定时刷新 ----------
 

@@ -116,6 +116,19 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-follow .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
 .fd-follow .head .muted { font-size: 12px; }
 @media (max-width: 640px) { .fd-follow .fg { grid-template-columns: 1fr; } .fd-follow form { grid-column: 1; } }
+.fd-kw .chips { justify-content: flex-start; }
+.fd-kw .fd-int small { margin-left: 5px; opacity: .7; font-size: 11px; }
+.fd-kw .fd-int.good { background: var(--ok-soft); color: var(--ok); }
+.fd-kw .fd-int.bad { background: var(--err-soft); color: var(--err); }
+.fd-kw .fd-int.off { opacity: .5; }
+.fd-kw .fd-int i { font-style: normal; font-size: 10.5px; opacity: .65; margin-left: 4px; }
+.fd-kw .fg > b button { display: block; border: none; background: none; padding: 2px 0 0; font-size: 11.5px; color: var(--muted); cursor: pointer; }
+.fd-kw .fg > b button:hover { color: var(--accent); }
+.fd-kw .srcs { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 6px; }
+.fd-kw .srcs span { cursor: help; border-bottom: 1px dotted var(--line-2); }
+.fd-kw .sug { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); margin-top: 6px; font-size: 13px; }
+.fd-kw .sug .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.fd-kw .sug .acts { display: flex; gap: 6px; margin-top: 6px; }
 .fd-sentinel { text-align: center; padding: 14px 0 4px; }
 .fd-hidden { display: none !important; }
 @media (max-width: 900px) {
@@ -153,8 +166,10 @@ export default {
     const pop = h('div.fd-pop');
     const refreshBtn = h('button.outline', { onclick: doRefresh }, [ui.icon('refresh'), h('span', {}, '刷新')]);
     const followBtn = h('button.ghost', { onclick: () => toggleFollow() }, [ui.icon('user'), h('span', {}, '关注源')]);
-    const head = ui.pageHead('今天值得看', '', [followBtn, h('div.fd-refresh', {}, [refreshBtn, pop])]);
+    const kwBtn = h('button.ghost', { onclick: () => toggleKw() }, [ui.icon('search'), h('span', {}, '关键词')]);
+    const head = ui.pageHead('今天值得看', '', [kwBtn, followBtn, h('div.fd-refresh', {}, [refreshBtn, pop])]);
     const followBox = h('div');
+    const kwBox = h('div');
     head.querySelector('.titles').append(subEl);
 
     // ---------- 输入框 ----------
@@ -214,7 +229,7 @@ export default {
     // 刚刷完的结果常驻在按钮旁；有新增时本次新收的排到列表最前（否则按综合分常落到几十名开外，看着像没刷）
     const freshNote = h('span.fd-fresh');
     let fresh = null;   // { since, added, label }
-    el.append(h('style', {}, CSS), head, followBox, comp, intsEl, quick,
+    el.append(h('style', {}, CSS), head, kwBox, followBox, comp, intsEl, quick,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条'), topBox,
       h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), listBox, sentinel);
 
@@ -321,6 +336,120 @@ export default {
                 if (r.refreshing) { status = await api.get('/api/feed/status'); renderStatus(); watchRefresh(r.label); }
               } }, [input, add])])]);
         })]));
+    }
+
+    // ---------- 关键词（主题表） ----------
+    let kwOpen = false, kw = null, kwBusy = false;
+    const KW_LISTS = ['en', 'zh', 'hn', 'github', 'reddit', 'youtube', 'zhihu', 'x'];
+    async function toggleKw(force) {
+      kwOpen = force ?? !kwOpen;
+      kwBtn.classList.toggle('on', kwOpen);
+      if (!kwOpen) { kwBox.replaceChildren(); return; }
+      kw = await api.get('/api/feed/topics').catch(() => null);
+      renderKw();
+    }
+    const errMsg = (e) => String(e.message || e).replace(/^"|"$/g, '').replace(/^\{"detail":"|"\}$/g, '');
+    async function saveTopics(topics, msg) {
+      const r = await api.put('/api/feed/topics', { topics }).catch((e) => { toast(errMsg(e)); return null; });
+      if (r) { kw = r; renderKw(); if (msg) toast(msg); }
+    }
+    // 一个词可能被几个来源用：合计各来源的数字；有一个来源有效就算有效
+    function termInfo(tp, term) {
+      const t = term.toLowerCase(), rows = [];
+      for (const s of Object.keys(kw.langs)) {
+        const used = s in tp ? tp[s] : tp[kw.langs[s]];
+        if (!(used || []).some((x) => x.toLowerCase() === t) || kw.explicit.includes(s)) continue;
+        const r = kw.stats[`${s}|${t}`];
+        const inUse = (kw.queries[s] || []).some((x) => x.toLowerCase() === t);
+        rows.push({ s, r, inUse });
+      }
+      const sum = (k) => rows.reduce((n, x) => n + (x.r?.[k] || 0), 0);
+      const vs = rows.map((x) => x.r?.verdict).filter(Boolean);
+      const verdict = vs.includes('有效') ? '有效' : vs.find((v) => v === '低效' || v === '没搜到') || '';
+      const good = sum('liked') + sum('saved') + sum('deep');
+      const title = rows.map(({ s, r, inUse }) => `${kw.labels[s]}：` + (r ? `搜到 ${r.found} · 留下 ${r.kept} · 赞 ${r.liked} 藏 ${r.saved} 深读 ${r.deep} · 搜过 ${r.runs} 次 · ${r.verdict}` : '还没数据')
+        + (inUse ? '' : '（超出上限，这次不搜）')).join('\n') || '没有来源用这个词（对应来源用自己的列表）';
+      return { found: sum('found'), kept: sum('kept'), good, verdict, title, srcs: rows.map((x) => kw.labels[x.s]) };
+    }
+    function renderKw() {
+      if (!kwOpen) return;
+      if (!kw) { kwBox.replaceChildren(h('div.card.fd-follow', {}, '关键词加载失败')); return; }
+      const topics = kw.topics;
+      const bad = [];
+      const termChip = (tp, ti, term, key) => {
+        const x = termInfo(tp, term);
+        if ((x.verdict === '低效' || x.verdict === '没搜到') && !bad.some((b) => b.term.toLowerCase() === term.toLowerCase())) bad.push({ ti, term, x });
+        const cls = x.verdict === '有效' ? '.good' : x.verdict ? '.bad' : '';
+        return h('span.fd-int' + cls + (tp.off ? '.off' : ''), { title: x.title }, [
+          term, key !== 'en' && key !== 'zh' ? h('i', {}, `仅${kw.labels[key]}`) : null,
+          x.found ? h('small', {}, `${x.found}→${x.kept}${x.good ? ` ♥${x.good}` : ''}`) : null,
+          h('button', { title: '删掉这个词', onclick: () => removeTerm(ti, term) }, ui.icon('x'))]);
+      };
+      const rows = topics.map((tp, ti) => {
+        const input = h('input', { placeholder: '加词：中文进知乎，英文进 HN / Reddit / YouTube / GitHub' });
+        const chips = [];
+        for (const k of KW_LISTS) for (const t of tp[k] || []) chips.push(termChip(tp, ti, t, k));
+        return h('div.fg', {}, [
+          h('b', {}, [tp.name, h('small', {}, tp.off ? '已停用' : `${chips.length} 个词`),
+            h('button', { onclick: () => saveTopics(topics.map((x, i) => i === ti ? { ...x, off: !x.off } : x), tp.off ? `已启用「${tp.name}」` : `已停用「${tp.name}」`) }, tp.off ? '启用' : '停用'),
+            h('button', { onclick: () => saveTopics(topics.filter((_, i) => i !== ti), `已删除主题「${tp.name}」`) }, '删除主题')]),
+          h('div', {}, [h('div.chips', {}, chips),
+            h('form', { onsubmit: (e) => {
+              e.preventDefault();
+              const add = input.value.split(/[,，、\n]/).map((x) => x.trim()).filter(Boolean);
+              if (!add.length) return;
+              const next = { ...tp };
+              for (const t of add) {
+                const k = /[一-鿿]/.test(t) ? 'zh' : 'en';
+                if (!(next[k] || []).some((x) => x.toLowerCase() === t.toLowerCase())) next[k] = [...(next[k] || []), t];
+              }
+              saveTopics(topics.map((x, i) => i === ti ? next : x), `已加入：${add.join('、')}`);
+            } }, [input, h('button.sm', { type: 'submit' }, [ui.icon('plus'), '加词'])])])]);
+      });
+      const nameIn = h('input', { placeholder: '新主题名，比如「推理加速」' });
+      const addTopic = h('div.fg', {}, [h('b', {}, '新主题'), h('form', { style: 'margin-top:0; grid-column:auto', onsubmit: (e) => {
+        e.preventDefault();
+        const name = nameIn.value.trim();
+        if (!name) return;
+        if (topics.some((x) => x.name.toLowerCase() === name.toLowerCase())) { toast('已有这个主题'); return; }
+        saveTopics([...topics, { name }], `已加主题「${name}」，再给它加几个词`);
+      } }, [nameIn, h('button.sm', { type: 'submit' }, [ui.icon('plus'), '加主题'])])]);
+
+      const srcs = h('div.srcs', {}, ['这次各来源搜：', ...Object.keys(kw.langs).map((s) => kw.explicit.includes(s)
+        ? h('span', { title: (kw.queries[s] || []).join('\n') }, `${kw.labels[s]} 用自己的列表`)
+        : h('span', { title: (kw.queries[s] || []).join('\n') || '不搜' }, `${kw.labels[s]} ${(kw.queries[s] || []).length}/${kw.caps[s]}`))]);
+      const badBox = bad.length ? h('div.fg', {}, [h('b', {}, ['建议换掉', h('small', {}, `近 ${kw.days} 天`)]), h('div.chips', {},
+        bad.map(({ ti, term, x }) => h('span.fd-int.bad', { title: x.title }, [term, h('small', {}, x.verdict === '没搜到' ? '没搜到' : `${x.found}→${x.kept}`),
+          h('button', { title: '从所有主题里删掉这个词', onclick: () => removeTerm(null, term) }, ui.icon('x'))])))]) : null;
+
+      const sugBtn = h('button.sm.outline', { disabled: kwBusy, onclick: async () => {
+        kwBusy = true; renderKw();
+        const r = await api.post('/api/feed/topics/suggest', {}).catch((e) => { toast(errMsg(e)); return null; });
+        kwBusy = false;
+        if (r) { kw = r; toast(r.added ? `推荐了 ${r.added} 个候选主题` : '没有新的候选'); }
+        renderKw();
+      } }, [ui.icon('spark'), kwBusy ? '分析中…' : '根据我的反馈推荐']);
+      const sugBox = h('div.fg', {}, [h('b', {}, ['候选', h('small', {}, '赞 / 收藏 / 深读过的')]), h('div', {}, [sugBtn,
+        ...(kw.suggestions || []).map((x) => h('div.sug', {}, [h('b', {}, x.name), ' ',
+          h('span.muted', {}, [...(x.en || []), ...(x.zh || [])].join(' · ')), x.reason ? h('div.why', {}, x.reason) : null,
+          h('div.acts', {}, [
+            h('button.sm', { onclick: () => answerSug(x.name, 'accept', `已加入「${x.name}」`) }, [ui.icon('plus'), '加入']),
+            h('button.sm.ghost', { onclick: () => answerSug(x.name, 'dismiss', '已忽略，以后不再推荐这些词') }, '忽略')])]))])]);
+
+      kwBox.replaceChildren(h('div.card.fd-follow.fd-kw', {}, [
+        h('div.head', {}, [h('b', {}, `关键词 · ${topics.length} 个主题`),
+          h('span.muted', {}, `一份主题表派生各来源的搜索词；词后数字是近 ${kw.days} 天「搜到→留下 ♥赞藏深读」，悬停看各来源`)]),
+        srcs, ...rows, addTopic, badBox, sugBox]));
+    }
+    function removeTerm(ti, term) {
+      const t = term.toLowerCase();
+      const topics = kw.topics.map((x, i) => ti !== null && i !== ti ? x : Object.fromEntries(Object.entries(x).map(([k, v]) =>
+        [k, Array.isArray(v) ? v.filter((y) => y.toLowerCase() !== t) : v])));
+      saveTopics(topics, `已删掉「${term}」`);
+    }
+    async function answerSug(name, action, msg) {
+      const r = await api.post('/api/feed/topics/suggestion', { name, action }).catch((e) => { toast(errMsg(e)); return null; });
+      if (r) { kw = r; renderKw(); toast(msg); }
     }
 
     // ---------- 兴趣词 ----------
