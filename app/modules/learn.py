@@ -2,6 +2,7 @@
 
 后台 job 的 ref 约定：
     learn:item:<id>          条目深读
+    learn:item:<id>:deepdive GitHub 项目的 Deep Dive（按需：拉仓库、写测试、做实验，见 _deepdive.py）
     learn:plan:<id>          生成学习计划
     learn:plan:<id>:adapt    根据反馈调整计划
     learn:course:<id>        导入课程：解析官网课表成单元 + 步骤（轻量模型）；:sync = 同步新发布的讲次（只追加）
@@ -29,6 +30,7 @@ from pydantic import BaseModel
 
 from .. import agent, db, jobs, settings, tasks
 from ..db import ROOT
+from . import _deepdive
 from . import _reads
 from . import _video
 
@@ -317,13 +319,21 @@ def _ensure_step_cols() -> None:
             db.execute(f"ALTER TABLE learn_steps ADD COLUMN {k} {decl}")
 
 
+# Deep Dive：dd_status '' / running / done / failed；dd_error 失败原因；dd_experiments 校验过的实验清单 JSON
+DD_COLS = {"dd_status": "TEXT DEFAULT ''", "dd_job": "INTEGER", "dd_error": "TEXT DEFAULT ''",
+           "dd_experiments": "TEXT DEFAULT '[]'", "dd_title": "TEXT DEFAULT ''", "dd_at": "TEXT DEFAULT ''"}
+
+
 def _ensure_depth_col() -> None:
-    """老库补上 depth（速读 / 完整教程）和 qa（追问清单作答与点评）列。"""
+    """老库补上 depth（速读 / 完整教程）、qa（追问清单作答与点评）和 Deep Dive 的列。"""
     cols = {r["name"] for r in db.rows("PRAGMA table_info(learn_items)")}
     if "depth" not in cols:
         db.execute("ALTER TABLE learn_items ADD COLUMN depth TEXT DEFAULT 'quick'")
     if "qa" not in cols:
         db.execute("ALTER TABLE learn_items ADD COLUMN qa TEXT DEFAULT '{}'")
+    for c, t in DD_COLS.items():
+        if c not in cols:
+            db.execute(f"ALTER TABLE learn_items ADD COLUMN {c} {t}")
 
 
 class ItemPatch(BaseModel):
@@ -935,6 +945,72 @@ def _finish_item(iid: int, job: dict) -> None:
         data["title"] = _reads.md_title(main.read_text("utf-8", errors="replace"))
     db.update("learn_items", iid, data)
     _reads.sync_task(iid)
+
+
+# ---------- A2. Deep Dive（GitHub 项目，按需生成） ----------
+
+def deepdive_info(it: dict) -> dict:
+    dd = _deepdive.dd_dir(_item_dir(it))
+    md = dd / "deepdive.md"
+    return {"status": it.get("dd_status") or "", "job_id": it.get("dd_job"), "error": it.get("dd_error") or "",
+            "title": it.get("dd_title") or "", "at": it.get("dd_at") or "",
+            "experiments": _loads(it.get("dd_experiments"), []), "ready": md.is_file(),
+            "path": str(md) if md.is_file() else "",
+            "versions": sorted((p.name for p in dd.glob("deepdive.*.md")), reverse=True) if dd.is_dir() else []}
+
+
+@router.get("/items/{iid}/deepdive")
+def get_deepdive(iid: int):
+    _ensure_depth_col()
+    return deepdive_info(_item(iid))
+
+
+@router.post("/items/{iid}/deepdive")
+def start_deepdive(iid: int):
+    """点了才生成：拉仓库、写测试、做实验，写 deepdive/deepdive.md。正在生成时重复点只返回当前状态。"""
+    _ensure_depth_col()
+    it = _item(iid)
+    if it["kind"] != "github":
+        raise HTTPException(400, "Deep Dive 目前只支持 GitHub 项目")
+    if it.get("dd_status") == "running" and it.get("dd_job"):
+        j = db.row("SELECT status FROM jobs WHERE id=?", [it["dd_job"]])
+        if j and j["status"] in ("queued", "running"):
+            return deepdive_info(it)
+    out = _item_dir(it)
+    dd = _deepdive.prepare(out)
+    jid = jobs.submit("learn", _deepdive.prompt(it, out, _known_knowledge(it["id"])), ref=f"learn:item:{iid}:deepdive",
+                      cwd=str(dd), add_dirs=[str(out)])
+    db.update("learn_items", iid, {"dd_status": "running", "dd_job": jid, "dd_error": "", "updated_at": db.now()})
+    return deepdive_info(_item(iid))
+
+
+@router.get("/items/{iid}/deepdive/file")
+def deepdive_file(iid: int, version: str = ""):
+    dd = _deepdive.dd_dir(_item_dir(_item(iid)))
+    name = version if re.fullmatch(r"deepdive\.[\d-]+\.md", version or "") else "deepdive.md"
+    p = dd / name
+    if not p.is_file():
+        raise HTTPException(404, "deep dive not ready")
+    return PlainTextResponse(p.read_text("utf-8", errors="replace"))
+
+
+def _finish_deepdive(iid: int, job: dict) -> None:
+    _ensure_depth_col()
+    it = db.row("SELECT * FROM learn_items WHERE id=?", [iid])
+    if not it or it.get("dd_job") != job.get("id"):
+        return  # 条目删了，或者已经换了一个新任务
+    dd = _deepdive.dd_dir(_item_dir(it))
+    ok, reason, exps = _deepdive.check(dd)
+    if job.get("status") != "done":
+        ok, reason = False, _deepdive.fail_reason(job)
+    meta = extract_json(job.get("output") or "", "experiments") or {}
+    data = {"dd_status": "done" if ok else "failed", "dd_error": reason, "dd_experiments": json.dumps(exps, ensure_ascii=False),
+            "dd_at": db.now(), "updated_at": db.now()}
+    if meta.get("title"):
+        data["dd_title"] = str(meta["title"])[:200]
+    elif (dd / "deepdive.md").is_file():
+        data["dd_title"] = _reads.md_title((dd / "deepdive.md").read_text("utf-8", errors="replace"))[:200]
+    db.update("learn_items", iid, data)
 
 
 # ---------- B. 主题学习计划 ----------
@@ -2385,6 +2461,8 @@ def on_job_done(job: dict) -> None:
     ref = job.get("ref") or ""
     if m := re.fullmatch(r"learn:item:(\d+)", ref):
         _finish_item(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:item:(\d+):deepdive", ref):
+        _finish_deepdive(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:plan:(\d+)(:adapt)?", ref):
         _finish_plan(int(m.group(1)), job, bool(m.group(2)))
     elif m := re.fullmatch(r"learn:course:(\d+)(:sync)?", ref):
@@ -2445,8 +2523,11 @@ def agent_context(ref: str) -> str:
             if p.is_file() and p.suffix == ".md":
                 body = p.read_text("utf-8", errors="replace")[:8000]
                 break
+        dd = _deepdive.dd_dir(out)
+        dd_line = (f"Deep Dive（含真实跑过的实验，问到实验 / 机制细节时先读它）：{dd / 'deepdive.md'}，实验原样输出在 {dd / 'lab'}\n"
+                   if (dd / "deepdive.md").is_file() else "")
         return (f"正在追问条目 {it['id']}（{it['kind']}）：{it['title'] or it['url']}\n来源：{it['url']}\n"
-                f"状态：{it['status']}；产物：{it['output_path'] or '无'}（目录 {out}，可用 Read 读取全文）\n"
+                f"状态：{it['status']}；产物：{it['output_path'] or '无'}（目录 {out}，可用 Read 读取全文）\n{dd_line}"
                 f"TL;DR：{it['summary']}\n我的笔记：{it['my_notes'] or '无'}；评分：{it['rating']}/5\n"
                 f"用户在这里说的话会作为「追问与感想」进复盘和知识库；他写下感想时，帮他把感想说准、和文档里的论据对上，不要只附和。\n"
                 f"更新笔记：curl -s -X PATCH {api}/items/{it['id']} -H 'Content-Type: application/json' -d '{{\"my_notes\":\"...\"}}'\n\n"
