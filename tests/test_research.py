@@ -1,5 +1,6 @@
 """调研板块：不调用真实 LLM / GrokBot / Muse（jobs.submit、subprocess、线程全部替换）。"""
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,7 @@ def fakes(monkeypatch, client):
     monkeypatch.setattr(R.jobs, "submit", fake_submit)
     monkeypatch.setattr(R.subprocess, "run", fake_run)
     monkeypatch.setattr(R, "_spawn", lambda fn, *a: fn(*a))  # 线程改同步
+    monkeypatch.setattr(R.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd) or type("P", (), {"pid": os.getpid()})())
     return submitted, calls
 
 
@@ -69,12 +71,27 @@ def test_create_and_job_done(client, fakes):
     assert not Path(r4["doc_path"]).exists()
 
 
-def test_muse_paste(client, fakes):
+def test_muse_auto(client, fakes):
     _, calls = fakes
+    r = client.post("/api/research", json={"topic": "Muse 自动", "engines": ["muse"]}).json()
+    res = r["results"][0]
+    assert res["status"] == "running" and res["request_id"] == f"pid:{os.getpid()}"
+    assert any(c[-2:] == ["app.muse_bot", str(res["id"])] for c in calls)
+    # 进程不在了 → 打开详情时收尾成待粘贴，可重试
+    R.db.update("research_results", res["id"], {"request_id": "pid:999999"})
+    r2 = client.get(f"/api/research/{r['id']}").json()
+    assert r2["results"][0]["status"] == "awaiting_paste" and "意外退出" in r2["results"][0]["error"]
+    assert client.post(f"/api/research/results/{res['id']}/muse_auto").json()["status"] == "running"
+
+
+def test_muse_paste(client, fakes, monkeypatch):
+    _, calls = fakes
+    real_get = R.settings.get
+    monkeypatch.setattr(R.settings, "get", lambda k, d=None: "web" if k == "engines.muse.mode" else real_get(k, d))
     r = client.post("/api/research", json={"topic": "Muse 测试", "engines": ["muse"]}).json()
     res = r["results"][0]
     assert res["status"] == "awaiting_paste" and r["status"] == "awaiting_paste" and "Muse 测试" in res["brief"]
-    assert ["pbcopy"] in calls and any(c[0] == "open" for c in calls)
+    assert ["pbcopy"] in calls and ["open", "https://muse.ai"] in calls
     assert client.post(f"/api/research/results/{res['id']}/paste", json={"content": "Muse 的回答"}).json()["status"] == "done"
     r2 = client.get(f"/api/research/{r['id']}").json()
     assert r2["status"] == "done" and "Muse 的回答" in Path(r2["doc_path"]).read_text("utf-8")

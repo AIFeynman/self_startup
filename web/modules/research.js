@@ -2,11 +2,11 @@
 import { annotate } from './_annotate.js';
 const STATUS = {
   queued: ['排队中', 'gray'], running: ['调研中', 'warn'], waiting: ['等待 GrokBot', 'warn'], timeout: ['等待超时', 'warn'],
-  awaiting_paste: ['待粘贴', ''], done: ['完成', 'ok'], failed: ['失败', 'err'],
+  awaiting_paste: ['待粘贴', ''], awaiting_login: ['等待登录', 'warn'], done: ['完成', 'ok'], failed: ['失败', 'err'],
 };
 const ENGINE_NAMES = { claude: 'Claude Code', codex: 'Codex', grokbot: 'GrokBot', muse: 'Muse' };
 const ENGINE_PILLS = { claude: 'Claude', codex: 'Codex', grokbot: 'GrokBot·X', muse: 'Muse·手动' };
-const ENGINE_DESC = { claude: '联网检索网页与文档', codex: '联网检索网页与文档', grokbot: 'X/Twitter 上的讨论', muse: '复制提问并打开 Muse 网页版，回答手动粘贴回来' };
+const ENGINE_DESC = { claude: '联网检索网页与文档', codex: '联网检索网页与文档', grokbot: 'X/Twitter 上的讨论', muse: '自动打开 Muse 网页版提问并取回答（首次需登录）' };
 const ENGINE_ICON = { claude: 'robot', codex: 'bolt', grokbot: 'chat', muse: 'edit' };
 const DEFAULT_ANGLES = ['技术原理', '关键玩家与竞品', '最新进展'];
 const PREFILL_KEY = 'research-prefill';
@@ -330,6 +330,7 @@ function engineCard(x, ctx, rerender, root) {
       h('div.muted', {}, x.error),
       h('div.row', {}, [
         h('button.sm', { onclick: async () => { await navigator.clipboard.writeText(x.brief); toast('已复制提问'); } }, [ui.icon('doc'), '复制提问']),
+        h('button.sm', { onclick: () => act('muse_auto') }, [ui.icon('bolt'), '自动提问']),
         h('button.sm', { onclick: () => act('muse') }, [ui.icon('refresh'), '重新复制并打开 Muse']),
         h('details', { style: { flex: '1 1 100%' } }, [h('summary', {}, '查看提问 brief'), h('pre', { style: { maxHeight: '200px' } }, x.brief)]),
       ]),
@@ -343,10 +344,10 @@ function engineCard(x, ctx, rerender, root) {
     card.append(h('div.muted', {}, x.error), h('div', {}, h('button.sm', { onclick: () => act('resume') }, [ui.icon('clock'), '继续等待（不重发）'])));
     if (x.engine === 'grokbot') card.append(grokPaste(h, toast, ui, act));
   } else {
-    card.append(h('div.muted.dots', {}, x.engine === 'grokbot' ? (x.request_id ? '已发送，等待 GrokBot 回复' : '检查配置并发送') : ENGINE_DESC[x.engine] || '后台 Agent 调研中'), logEl);
+    card.append(h('div.muted.dots', {}, x.engine === 'grokbot' ? (x.request_id ? '已发送，等待 GrokBot 回复' : '检查配置并发送') : x.engine === 'muse' ? (x.error || 'Muse 自动提问中') : ENGINE_DESC[x.engine] || '后台 Agent 调研中'), logEl);
     if (x.engine === 'grokbot' && x.request_id) card.append(grokPaste(h, toast, ui, act));
     if (x.job_id) watchJob(api, x.job_id, root, rerender, logEl);
-    else if (x.engine === 'grokbot') pollResult(api, x, root, rerender);
+    else if (x.engine === 'grokbot' || x.engine === 'muse') pollResult(api, x, root, rerender);
   }
   return card;
 }

@@ -31,7 +31,7 @@ description: 调研板块：对任意主题按用户选的关注角度（技术�
 
 - **claude / codex**：通用联网调研（网页、官方文档、论文、GitHub）。默认 claude；想要第二视角或 claude 不可用时加 codex。
 - **grokbot**：X/Twitter 上的讨论、KOL 观点、实时舆情。每次只发一个请求（脚本只 POST 一次），超时只能「继续等待」同一 request_id，绝不自动重发。未配置时请用户在终端运行 `python3 ~/.codex/skills/grokbot-webhook/scripts/grokbot.py setup`，不要在对话里索要密钥。
-- **muse**：无 CLI。平台把提问复制到剪贴板并打开 Muse 网页版（https://muse.ai；`engines.muse.mode` 设为 `app` 时开桌面 App，打不开自动退回网页），用户手动把回答粘贴回来（结果状态 `awaiting_paste`）。
+- **muse**：无 API / CLI。默认（`engines.muse.mode=auto`）由独立进程用 Playwright 驱动本机 Chrome 打开 https://muse.ai 自动提问并取回答；首次会弹出 Chrome 窗口要求登录（状态 `awaiting_login`），登录后自动继续。自动失败或 `mode=web/app` 时退回手动：复制提问并打开网页版 / 桌面 App，用户把回答粘贴回来（状态 `awaiting_paste`）。
 - 多引擎完成后用「综合」合并：一致点、冲突、开放问题、去重来源。
 
 ## 对话中
@@ -54,7 +54,8 @@ curl -s -X DELETE $API/api/research/12
 # 单个引擎结果
 curl -s $API/api/research/results/30
 curl -s -X POST $API/api/research/results/30/paste -H 'Content-Type: application/json' -d '{"content":"Muse 的回答…"}'
-curl -s -X POST $API/api/research/results/30/muse     # 重新复制 brief 并打开 Muse
+curl -s -X POST $API/api/research/results/30/muse_auto  # Muse 自动提问（重试）
+curl -s -X POST $API/api/research/results/30/muse     # 重新复制 brief 并打开 Muse（手动）
 curl -s -X POST $API/api/research/results/30/resume   # GrokBot 继续等待同一 request_id（不重发）
 curl -s -X POST $API/api/research/results/30/retry    # 失败后重跑（GrokBot 会发新请求，先征得用户同意）
 # 文档库（调研自动生成 + 手写）

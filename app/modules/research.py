@@ -4,14 +4,17 @@
 引擎：
     claude / codex  走 jobs.submit（后台 Agent，联网检索）
     grokbot         后台线程调 GrokBot webhook 脚本（send 一次，wait 轮询，request_id 落库可续等）
-    muse            无 CLI：生成 brief → pbcopy → 打开 Muse 网页版（mode=app 时开桌面 App，打不开退回网页）→ 用户把回答粘贴回来
+    muse            无 API / CLI。mode=auto（默认）：独立进程用 Playwright 驱动本机 Chrome 打开网页版自动提问、取回答（app/muse_bot.py）；
+                    mode=web / app 或自动失败：brief → pbcopy → 打开网页版 / 桌面 App → 用户把回答粘贴回来
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -83,7 +86,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 ANGLES = ["技术原理", "关键玩家与竞品", "用户口碑与体验", "商业模式", "风险与局限", "最新进展", "对我的启发"]
 ENGINES = {"claude": "Claude Code", "codex": "Codex", "grokbot": "GrokBot (X/Twitter)", "muse": "Muse（手动粘贴）"}
-PENDING = ("queued", "running", "waiting")
+PENDING = ("queued", "running", "waiting", "awaiting_login")
 GROK_WAIT_SECONDS = 9 * 60
 DOC_DIR = db.DATA_DIR / "research"
 
@@ -234,7 +237,7 @@ def _launch(r: dict, engine: str) -> int:
         db.update("research_results", res_id, {"status": "running"})
         _spawn(_grok_run, res_id)
     elif engine == "muse":
-        _muse_open(res_id, brief)
+        _muse_auto(res_id) if settings.get("engines.muse.mode", "auto") == "auto" else _muse_open(res_id, brief)
     else:
         db.update("research_results", res_id, {"status": "failed", "error": f"未知引擎 {engine}"})
     return res_id
@@ -373,6 +376,28 @@ def _resume_waiters(rid: int) -> None:
     for x in _results(rid):
         if x["engine"] == "grokbot" and x["status"] in ("waiting", "running") and x["request_id"] and x["id"] not in _waiting:
             _spawn(_grok_wait, x["id"])
+
+
+def _muse_auto(res_id: int) -> None:
+    """独立进程跑（服务重启不中断）；pid 记在 request_id，进程意外没了由 _check_muse 收尾。"""
+    db.update("research_results", res_id, {"status": "running", "error": "正在打开 Muse 网页版自动提问…", "request_id": ""})
+    try:
+        p = subprocess.Popen([sys.executable, "-m", "app.muse_bot", str(res_id)], cwd=str(db.ROOT), env=agent.clean_env(),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        db.update("research_results", res_id, {"request_id": f"pid:{p.pid}"})
+    except Exception as e:  # noqa: BLE001
+        _set_result(res_id, status="awaiting_paste", error=f"自动提问启动失败：{e}，请手动粘贴。")
+
+
+def _check_muse(rid: int) -> None:
+    for x in _results(rid):
+        if x["engine"] == "muse" and x["status"] in ("running", "awaiting_login") and x["request_id"].startswith("pid:"):
+            try:
+                os.kill(int(x["request_id"][4:]), 0)
+            except (ProcessLookupError, ValueError):
+                _set_result(x["id"], status="awaiting_paste", error="自动提问进程意外退出，可点「自动提问」重试，或手动粘贴回答。")
+            except PermissionError:
+                pass
 
 
 def _muse_open(res_id: int, brief: str) -> None:
@@ -528,6 +553,16 @@ def paste_result(res_id: int, body: PasteIn):
     return _result(res_id)
 
 
+@router.post("/results/{res_id}/muse_auto")
+def muse_auto(res_id: int):
+    x = _result(res_id)
+    if x["status"] in PENDING:
+        raise HTTPException(400, "仍在运行")
+    _muse_auto(res_id)
+    _refresh(x["research_id"])
+    return _result(res_id)
+
+
 @router.post("/results/{res_id}/muse")
 def reopen_muse(res_id: int):
     x = _result(res_id)
@@ -565,6 +600,7 @@ def retry_result(res_id: int):
 def get_research(rid: int):
     r = _research(rid)
     _resume_waiters(rid)
+    _check_muse(rid)
     r["results"] = _results(rid)
     d = db.row("SELECT id,path FROM research_docs WHERE research_id=?", [rid])
     r["doc_id"], r["doc_path"] = (d["id"], d["path"]) if d else (None, "")
