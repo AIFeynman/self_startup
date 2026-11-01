@@ -53,6 +53,14 @@ const CSS = `
 .ln-qa .qa .rv .sc { float: right; font: 700 13px var(--mono); color: var(--accent); }
 .ln-qa .qa .rv .better .md { font-size: inherit; line-height: 1.65; } .ln-qa .qa .qt .md { font-size: 14.5px; }
 .ln-qa details.old { font-size: 13px; } .ln-qa details.old .qa { margin-top: 8px; }
+.ln-qa .qa .opt { display: flex; gap: 8px; align-items: flex-start; padding: 7px 10px; margin-top: 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; background: var(--bg); }
+.ln-qa .qa .opt:hover { border-color: var(--accent); }
+.ln-qa .qa.locked .opt { cursor: default; } .ln-qa .qa.locked .opt:hover { border-color: var(--line); }
+.ln-qa .qa .opt .k { flex: none; font: 700 12px/1.9 var(--mono); color: var(--muted); }
+.ln-qa .qa .opt.right { border-color: var(--ok); background: var(--ok-soft); } .ln-qa .qa .opt.wrong { border-color: var(--err); background: var(--err-soft); }
+.ln-qa .qa .qh .dim { flex: none; font-size: 11px; color: var(--muted); }
+.ln-qa .gen { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border: 1px dashed var(--line-2); border-radius: var(--radius-sm); font-size: 13.5px; }
+.ln-qa details.legacy > summary { cursor: pointer; font-size: 13px; } .ln-qa details.legacy > .qa { margin-top: 8px; }
 .ln-stars { display: inline-flex; gap: 0; }
 .ln-stars button { border: none; background: none; padding: 1px; color: var(--line-2); border-radius: 4px; }
 .ln-stars button svg { width: 17px; height: 17px; }
@@ -651,7 +659,7 @@ async function renderItem(el, ctx, iid) {
       const note = text.replace(/^---[\s\S]*?---\s*/, '').replace(QA_SECTION, '');
       reader.append(h('div.card', {}, annotate(ctx, localImgs(md(note), `/api/learn/items/${it.id}/out/`), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
       const qa = await api.get(`/api/learn/items/${it.id}/qa`).catch(() => null);
-      if (qa?.items?.length || qa?.earlier?.length) reader.append(qaSection(ctx, it, qa));
+      if (qa) reader.append(qaSection(ctx, it, qa));
     }
     else if (isHtml) reader.append(h('div.card', {}, ui.empty('这是一份 HTML 教程', '点上方「打开 HTML 教程」在新标签页阅读')));
   }
@@ -696,21 +704,87 @@ function localImgs(el, base) {
 
 const QA_SECTION = /^#{2,4}\s*追问清单[^\n]*\n[\s\S]*?(?=^#{1,4}\s|(?![\s\S]))/m;
 
+// 练习题（qa.json）：选择题点一下当场判对错并给解析，开放题 1–2 道交给 Agent 点评；老笔记没有练习题时可以让 Agent 出一套
 function qaSection(ctx, it, qa) {
-  const { h, ui } = ctx;
-  const done = qa.items.filter((x) => x.review).length;
-  const head = h('span', {}, qa.items.length ? `已点评 ${done}/${qa.items.length}` : '');
+  const { api, h, toast, ui } = ctx;
+  const box = h('div');
+  const reload = async () => {
+    const r = await api.get(`/api/learn/items/${it.id}/qa`).catch(() => null);
+    if (r && box.isConnected) box.replaceWith(qaSection(ctx, it, r));
+  };
+  const gen = async (e) => {
+    if (e?.target) e.target.disabled = true;
+    try { await api.post(`/api/learn/items/${it.id}/qa/generate`); toast('Agent 正在出题，约 1 分钟'); }
+    catch (err) { toast('出题失败：' + err.message.replace(/^"|"$/g, ''), true); }
+    reload();
+  };
+  if (qa.gen?.status === 'generating') api.waitJob(qa.gen.job_id, null, 3000).catch(() => {}).finally(reload);
+  const quiz = qa.mode === 'quiz';
+  const choices = qa.items.filter((x) => x.type === 'choice');
+  const shorts = qa.items.filter((x) => x.type !== 'choice');
+  const head = h('span');
   const list = h('div.ln-qa');
-  list.append(...qa.items.map((x) => qaCard(ctx, it, x, () => {
-    if (list.isConnected) head.textContent = `已点评 ${list.querySelectorAll(':scope > .qa.done').length}/${qa.items.length}`;
-  })));
+  const count = () => {
+    const ok = list.querySelectorAll(':scope > .qa.right').length, answered = list.querySelectorAll(':scope > .qa.locked').length;
+    const reviewed = list.querySelectorAll(':scope > .qa.done:not(.locked)').length;
+    head.textContent = quiz ? [choices.length ? `选择题 ${answered ? `已答 ${answered}/${choices.length} · 答对 ${ok}` : `${choices.length} 道`}` : '', shorts.length ? `开放题已点评 ${reviewed}/${shorts.length}` : ''].filter(Boolean).join(' · ')
+      : (qa.items.length ? `已点评 ${list.querySelectorAll('.qa.done').length}/${qa.items.length}` : '');
+  };
+  const genBox = () => {
+    if (qa.gen?.status === 'generating') return h('div.gen', {}, h('span.muted.dots', {}, 'Agent 正在读笔记出选择题（约 1 分钟），出好自动显示'));
+    return h('div.gen', {}, [qa.gen?.status === 'failed' ? h('span', { style: { color: 'var(--err)' } }, '上次出题失败。') : null,
+      h('span', {}, '这篇笔记还没有练习题：让 Agent 出 4 道选择题 + 1 道开放题，点选就能检验读懂没有。'),
+      h('button.sm.primary', { onclick: gen }, '出选择题')]);
+  };
+  if (quiz) {
+    list.append(...qa.items.map((x) => (x.type === 'choice' ? choiceCard(ctx, it, x, count, reload) : qaCard(ctx, it, x, count))));
+  } else if (it.status === 'done') {
+    list.append(genBox());
+    if (qa.items.length) {
+      const legacy = qa.items.map((x) => qaCard(ctx, it, x, count));
+      list.append(h('details.legacy', { open: qa.items.some((x) => x.answer) }, [h('summary.muted', {}, `笔记里原来的开放题 ${qa.items.length} 道（可选，逐题写作答请 Agent 点评）`), ...legacy]));
+    }
+  }
   if (qa.earlier?.length) {
-    list.append(h('details.old', {}, [h('summary.muted', {}, `以前的作答 ${qa.earlier.length} 条（笔记重新生成前的题）`),
+    list.append(h('details.old', {}, [h('summary.muted', {}, `以前的作答 ${qa.earlier.length} 条（换题前的作答）`),
       ...qa.earlier.map((x) => qaCard(ctx, it, x, null, true))]));
   }
-  return h('div', {}, [ui.section('追问清单', [head]),
-    h('div.muted', { style: { fontSize: '13px', margin: '-4px 0 10px' } }, '每题先自己写判断和理由，再提交给 Agent：它会对照笔记、原文和源码点评，并给出带出处的参考答案。作答和点评都会进学习记录和复盘。'),
-    list]);
+  count();
+  const hint = quiz ? '选择题点一下当场判对错并给解析；开放题写下判断和理由，Agent 会对照笔记、原文和源码点评。作答都会进学习记录和复盘。'
+    : '';
+  box.append(...[ui.section(quiz ? '练习题' : '追问清单', [head, quiz && qa.gen?.status !== 'generating' && it.status === 'done'
+    ? h('button.sm.ghost', { title: '让 Agent 重新出一套；已答的进「以前的作答」', onclick: (e) => { if (confirm('重新出一套题？已答的会放进「以前的作答」')) gen(e); } }, [ui.icon('refresh'), '换一套']) : null]),
+  hint ? h('div.muted', { style: { fontSize: '13px', margin: '-4px 0 10px' } }, hint) : null,
+  quiz && qa.gen?.status === 'generating' ? h('div.ln-qa', { style: { marginBottom: '10px' } }, genBox()) : null, list].filter(Boolean));
+  return box;
+}
+
+function choiceCard(ctx, it, x, onChange, reload) {
+  const { api, h, md, toast } = ctx;
+  let c = x;
+  const card = h('div.qa');
+  const pick = async (k) => {
+    if ('choice' in c) return;
+    try { c = { ...x, ...(await api.post(`/api/learn/items/${it.id}/qa/${x.n}`, { q: x.q, choice: k })) }; }
+    catch (e) { toast('提交失败：' + e.message.replace(/^"|"$/g, ''), true); if (/已更新/.test(e.message)) reload(); return; }
+    draw();
+  };
+  const draw = () => {
+    const done = 'choice' in c;
+    card.className = 'qa' + (done ? ' locked done ' + (c.correct ? 'right' : 'wrong') : '');
+    const kids = [h('div.qh', {}, [h('span.no', {}, `Q${x.n}`), h('div.qt', {}, md(x.q)), x.dim ? h('span.dim', {}, x.dim) : null,
+      done ? h('span.tag' + (c.correct ? '.ok' : '.err'), {}, c.correct ? '答对' : '答错') : null])];
+    x.options.forEach((o, k) => {
+      const cls = done ? (k === c.right ? '.right' : k === c.choice ? '.wrong' : '') : '';
+      kids.push(h('div.opt' + cls, { role: 'button', tabindex: done ? -1 : 0, onclick: () => pick(k), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(k); } } },
+        [h('span.k', {}, 'ABCDEFG'[k]), h('span', {}, o)]));
+    });
+    if (done && c.explain) kids.push(h('div.rv', {}, [h('b', {}, '解析：'), md(c.explain), x.section ? h('div.muted', { style: { fontSize: '12px', marginTop: '4px' } }, `对应笔记：${x.section}`) : null]));
+    card.replaceChildren(...kids.filter(Boolean));
+    onChange?.();
+  };
+  draw();
+  return card;
 }
 
 function qaCard(ctx, it, x, onChange, readonly = false) {
