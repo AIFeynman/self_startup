@@ -1114,6 +1114,52 @@ def bilibili_ranking(c: httpx.Client, board: str, bases: list[str], days: int = 
     raise RuntimeError(f"{name}: RSSHub 各实例都没取到")
 
 
+ZHIHU_COLUMN_RE = re.compile(r"zhuanlan\.zhihu\.com/(?!p/)([\w-]+)|^([\w-]{3,})$")
+
+
+def fetch_zhihu(columns: list[str], hot: bool = True, days: int = 14, per_column: int = 8,
+                rsshub_bases: list[str] | None = None) -> tuple[list[dict], list[str]]:
+    """知乎：专栏文章（RSSHub /zhihu/zhuanlan/:id）+ 热榜里技术相关的问题（/zhihu/hot）。
+    知乎直连要登录（403），只走 RSSHub；公共实例对知乎限流很狠，专栏挨个取、不并发。都交给 Jev 判有没有深度。"""
+    bases = rsshub_bases or RSSHUB_BASES
+
+    def get(c, path, **kw):
+        for base in bases:
+            try:
+                r = c.get(f"{base.rstrip('/')}{path}", timeout=15)
+                got = parse_feed(r.text, source="zhihu", **kw) if r.status_code == 200 else []
+            except Exception:  # noqa: BLE001
+                got = []
+            if got:
+                return got
+        return None
+
+    items, errors = [], []
+    with _client() as c:
+        for col in columns:
+            got = get(c, f"/zhihu/zhuanlan/{col}", typ="blog", days=days, limit=per_column)
+            if got is None:
+                errors.append(f"知乎专栏 {col}: RSSHub 各实例都没取到")
+                continue
+            for it in got:
+                if m := re.search(r"zhuanlan\.zhihu\.com/p/(\d+)", it["url"]):
+                    it["id"] = f"zhihu:p{m.group(1)}"
+                it["extra"] |= {"column": col, "channel": it["extra"].get("feed", "").replace("知乎专栏-", ""), "via": "column"}
+            items += got
+        if hot:
+            got = get(c, "/zhihu/hot", typ="discussion", days=0, limit=50)
+            if got is None:
+                errors.append("知乎热榜: RSSHub 各实例都没取到")
+            for n, it in enumerate(got or [], 1):
+                if not tech_topic(it):
+                    continue
+                if m := re.search(r"zhihu\.com/question/(\d+)", it["url"]):
+                    it["id"] = f"zhihu:q{m.group(1)}"
+                it["extra"] |= {"via": "hot", "board": "知乎热榜", "rank": n}
+                items.append(it)
+    return items, errors
+
+
 def fetch_videos(channels: list[str], queries: list[str] = (), bilibili: list[str] = (), days: int = 21,
                  per_channel: int = 5, rsshub_bases: list[str] | None = None,
                  langs=YT_LANGS, trending=("28", "27"), region: str = "US",

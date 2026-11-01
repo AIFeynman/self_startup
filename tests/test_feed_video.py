@@ -260,3 +260,47 @@ def test_trending_and_ranking_judged_and_labeled():
 ])
 def test_tech_topic_prefilter(title, ok):
     assert src.tech_topic({"title": title, "summary": ""}) is ok
+
+
+ZHIHU_COL = """<?xml version="1.0"?><rss version="2.0"><channel><title>知乎专栏-机器之心</title>
+<item><title>深入理解 KV cache 压缩</title><description>讲清原理</description><link>https://zhuanlan.zhihu.com/p/2099987320443237060</link>
+<pubDate>Sun, 01 Nov 2026 12:52:17 GMT</pubDate></item></channel></rss>"""
+ZHIHU_HOT = """<?xml version="1.0"?><rss version="2.0"><channel><title>知乎热榜</title>
+<item><title>如何评价某明星离婚？</title><link>https://www.zhihu.com/question/1</link></item>
+<item><title>如何看待 DeepSeek 新发布的大模型？</title><link>https://www.zhihu.com/question/2100246281591510431</link></item>
+</channel></rss>"""
+
+
+def test_fetch_zhihu(monkeypatch):
+    class C:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, url, timeout):
+            if url.endswith("/zhihu/hot"):
+                return _Resp(text=ZHIHU_HOT)
+            return _Resp(text=ZHIHU_COL) if "jiqizhixin" in url else _Resp(status=503)
+    monkeypatch.setattr(src, "_client", lambda: C())
+    items, errs = src.fetch_zhihu(["jiqizhixin", "nope"], days=0, rsshub_bases=["https://x"])
+    by = {it["id"]: it for it in items}
+    assert set(by) == {"zhihu:p2099987320443237060", "zhihu:q2100246281591510431"}   # 八卦问题被粗筛掉
+    a, q = by["zhihu:p2099987320443237060"], by["zhihu:q2100246281591510431"]
+    assert a["type"] == "blog" and a["extra"]["channel"] == "机器之心" and a["extra"]["via"] == "column"
+    assert q["type"] == "discussion" and q["extra"]["rank"] == 2 and q["extra"]["board"] == "知乎热榜"
+    assert errs == ["知乎专栏 nope: RSSHub 各实例都没取到"]
+    assert rk.needs_value(a) and rk.needs_value(q)
+
+
+@pytest.mark.parametrize("text,want", [
+    ("https://zhuanlan.zhihu.com/jiqizhixin", "jiqizhixin"), ("jiqizhixin", "jiqizhixin"),
+])
+def test_follow_zhihu_column(text, want):
+    assert follow.resolve("zhihu", text)[:2] == ("zhihu_columns", want)
+
+
+def test_follow_zhihu_rejects_article_link():
+    with pytest.raises(follow.FollowError, match="专栏"):
+        follow.resolve("zhihu", "https://zhuanlan.zhihu.com/p/2099987320443237060")

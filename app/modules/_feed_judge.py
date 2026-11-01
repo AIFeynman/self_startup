@@ -35,6 +35,11 @@ Q_VALUE = {
                 "课程讲座、论文解读、和一线研究者 / 工程师的深度访谈。以下回答否：标题党（「太疯狂了」「改变一切」"
                 "「X 分钟精通」）、面向普通用户的入门或泛用技巧、用 AI 赚钱 / 涨粉 / 副业、新闻快讯和发布会复述、"
                 "噱头实验（让 AI 做生意、造机器人）、营销带货、恐慌或炒作。"),
+    "zhihu": ("state.items.{k} 是知乎上的一篇专栏文章或热榜问题，读者是做 AI 应用 / Agent 的工程师。"
+              "只有当它是有深度的技术内容时回答是：讲清了模型 / 算法 / 系统的原理或工程做法、有一手实践和踩坑、"
+              "有实测数据、论文或技术报告的深入解读、对技术方向有论证的分析。以下回答否：新闻快讯和发布会复述、"
+              "融资 / 人事 / 八卦、观点口水和情绪化讨论、面向普通用户的工具推荐、课程或社群广告、标题党、"
+              "和 AI / 计算机无关的问题。"),
     "bilibili": ("state.items.{k} 是 B 站排行榜上的一个视频，读者是做 AI 应用 / Agent 的工程师。"
                  "只有当它和 AI、计算机、数学或工程有关，且值得这位工程师花时间看时回答是：讲清了技术原理或工程做法、"
                  "有具体实测 / 对比、课程讲座、论文解读、深度访谈。以下回答否：和技术无关的时政 / 历史 / 生活 / 应试内容、"
@@ -60,6 +65,8 @@ def _state(it: dict, org: str) -> dict:
     if it.get("source") == "github":
         row |= {"stars": int(it.get("popularity") or 0), "language": ex.get("language", ""),
                 "topics": ex.get("topics") or []}
+    if it.get("source") == "zhihu":
+        row |= {"column": ex.get("channel", ""), "kind": "热榜问题" if ex.get("via") == "hot" else "专栏文章"}
     if it.get("source") == "reddit":
         row |= {"subreddit": ex.get("subreddit", ""), "flair": ex.get("flair", ""), "comments": ex.get("comments")}
     if it.get("source") in ("youtube", "bilibili"):

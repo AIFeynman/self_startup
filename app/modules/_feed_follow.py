@@ -32,13 +32,15 @@ GROUPS = {
     "product": {"label": "产品分析", "lists": ["product_rss"], "collector": "analysis",
                 "hint": "分析文章的网站或 RSS，比如 a16z.news"},
     "reddit": {"label": "Reddit 版块", "lists": ["reddit"], "collector": "reddit", "hint": "r/LocalLLaMA"},
+    "zhihu": {"label": "知乎专栏", "lists": ["zhihu_columns"], "collector": "zhihu",
+              "hint": "专栏链接 zhuanlan.zhihu.com/<专栏 id>（不是 /p/ 文章链接）"},
     "video": {"label": "视频频道", "lists": ["youtube_channels", "bilibili"], "collector": "video",
               "hint": "YouTube @handle / 频道链接，或 B 站 space.bilibili.com/uid"},
 }
 # 列表 → 采集器（refresh_sync 的来源名）
 LIST_COLLECTOR = {"x_accounts": "x", "github_watch_orgs": "github", "rss": "rss", "sites": "sites",
                   "podcasts": "podcast", "xiaoyuzhou": "xiaoyuzhou", "reddit": "reddit",
-                  "youtube_channels": "video", "bilibili": "video", "product_rss": "analysis"}
+                  "youtube_channels": "video", "bilibili": "video", "product_rss": "analysis", "zhihu_columns": "zhihu"}
 URL_LISTS = ("rss", "podcasts", "xiaoyuzhou", "product_rss")   # 条目本身是地址的列表
 CASELESS = {"x_accounts", "github_watch_orgs", "reddit"}
 
@@ -65,7 +67,7 @@ KNOWN_NAMES = {
     "UCbRP3c757lWg9M-U7TyEkXA": "Theo - t3.gg", "UCMwVTLZIRRUyyVrkjDpn4pA": "Cole Medin",
     "UC_x36zCEGilGpB1m-V4gmjg": "IndyDevDan", "UCC-lyoTfSrcJzA1ab3APAgw": "LangChain",
     "UCSI7h9hydQ40K5MJHnCrQvw": "No Priors",
-    "1567748478": "B 站 跟李沐学AI",
+    "1567748478": "B 站 跟李沐学AI", "jiqizhixin": "知乎专栏 机器之心",
 }
 
 
@@ -143,6 +145,14 @@ def resolve(group: str, text: str, client: httpx.Client | None = None) -> tuple[
         return "reddit", m.group(1), "r/" + m.group(1)
     if group == "video":
         return _video(text)
+    if group == "zhihu":
+        if "zhihu.com/p/" in text:
+            raise FollowError("这是单篇文章链接；订阅要填它所在专栏的链接 zhuanlan.zhihu.com/<专栏 id>")
+        m = src.ZHIHU_COLUMN_RE.search(text)
+        if not m:
+            raise FollowError("知乎专栏写成 zhuanlan.zhihu.com/<专栏 id>")
+        col = m.group(1) or m.group(2)
+        return "zhihu_columns", col, "知乎专栏 " + col
     own = client is None
     c = client or _client()
     try:

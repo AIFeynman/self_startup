@@ -89,6 +89,10 @@ CFG_DEFAULTS = {
     "youtube_queries": ["claude code", "AI agents", "LLM explained", "AI engineering"],   # 只在 .env 有 YOUTUBE_API_KEY 时搜
     "bilibili": ["1567748478"],   # B 站 UP 主 uid（经 RSSHub，公共实例不稳）
     "video_days": 21,
+    # 知乎：专栏 id（zhuanlan.zhihu.com/<id>，经 RSSHub；公共实例限流狠，别加太多）+ 热榜里技术相关的问题；都过 Jev 价值判断
+    "zhihu_columns": ["jiqizhixin"],
+    "zhihu_hot": True,
+    "zhihu_days": 14,
     "video_langs": ["en", "zh"],   # YouTube 搜索 / 热门只收这些语言（音频语言）；订阅频道不受影响
     "youtube_trending": ["28", "27"],   # YouTube 热门榜分类：28 科技、27 教育（要 YOUTUBE_API_KEY，1 配额 / 次）
     "youtube_region": "US",
@@ -106,11 +110,11 @@ CFG_DEFAULTS = {
     "trustmrr_days": 30,          # TrustMRR：只要最近几天挂牌出售的产品
     "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
     "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt",
-                "yc", "trustmrr", "analysis", "video"],
+                "yc", "trustmrr", "analysis", "video", "zhihu"],
 }
 # 分类 → 采集器：分类页上的「刷新」只跑这些来源
-TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites"], "podcast": ["podcast", "xiaoyuzhou"],
-                "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x"],
+TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites", "zhihu"], "podcast": ["podcast", "xiaoyuzhou"],
+                "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x", "zhihu"],
                 "x_article": ["x"], "video": ["video"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
          "video": "视频", "news": "资讯"}
@@ -306,6 +310,9 @@ def _collectors() -> dict:
                                           trending=tuple(cfg("youtube_trending") or ()),
                                           region=str(cfg("youtube_region") or "US"),
                                           bili_boards=tuple(cfg("bilibili_ranking") or ())),
+        "zhihu": lambda: src.fetch_zhihu(src_list("zhihu_columns"), hot=bool(cfg("zhihu_hot")),
+                                         days=int(cfg("zhihu_days")),
+                                         rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
         "x": lambda: src.fetch_x(src_list("x_accounts"), list(fc.get("x_queries") or []),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
@@ -701,7 +708,8 @@ def config():
                                 "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "trustmrr_days", "sources", "github_min_stars",
                                 "github_trending_languages", "github_watch_orgs", "github_watch_min_stars",
                                 "reddit_queries", "youtube_channels", "youtube_queries", "bilibili", "video_days", "video_langs",
-                                "youtube_trending", "youtube_region", "bilibili_ranking")} | {
+                                "youtube_trending", "youtube_region", "bilibili_ranking",
+                                "zhihu_columns", "zhihu_hot", "zhihu_days")} | {
         k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 
