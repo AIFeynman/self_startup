@@ -27,6 +27,8 @@ POP_WINDOW_DAYS = 30        # 热度百分位只和同源最近 30 天的条目�
 SRC_MIN_EXAMPLES = 5        # 某来源的反馈样本少于这个数时不算「你常赞 X」
 PICKS_N, PICKS_PER_SOURCE, PICKS_PER_TYPE = 5, 1, 2     # 今日精选：每个来源最多 1 条、每类最多 2 条
 SOURCE_SHARE = 0.2          # diversify：前 N 条里同一来源最多占的比例
+# 刚建的仓库还没上 Trending（榜单滞后）但星涨得飞快：平均每天涨这么多星就按 Trending 同等加分，只看建库一周内的
+VELOCITY_MIN_PER_DAY, VELOCITY_MAX_AGE_DAYS = 500, 7
 STALE_DAYS = 14             # 发布超过这么多天算「旧」：在推荐里降权，避免几个月前的高赞条目霸榜
 TYPE_SHARE = 0.4            # diversify：前 N 条里同一类型最多占的比例
 NO_POP_BASE = 0.35          # 整个来源都没有热度数据（博客 RSS 等）时的中性热度分
@@ -170,6 +172,12 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     if ex.get("trending") and age_h < 48:  # 上榜那天的标记，过两天不再加分（日期就是上榜日）
         s += W["trending"]
         lead.append("GitHub 今日 Trending" + (f" +{ex['stars_gained']}★" if ex.get("stars_gained") else ""))
+    elif it.get("source") == "github" and d and age_h < VELOCITY_MAX_AGE_DAYS * 24:
+        per_day = (it.get("popularity") or 0) / max(1.0, age_h / 24)   # 不满一天按一天算，免得刚建几小时的被放大
+        if per_day >= VELOCITY_MIN_PER_DAY:
+            s += W["trending"]
+            v = f"{per_day / 1000:.1f}k" if per_day >= 1000 else str(int(per_day))
+            lead.append(f"新仓库涨星快 ≈{v}★/天")
     xa = (it.get("extra") or {}).get("x_article")
     if xa:
         s += W["x_article"] if xa == "own" else W["x_article"] / 2

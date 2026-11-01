@@ -1,6 +1,8 @@
 """项目：GitHub 每日 Trending + 新建仓库搜索；X 长文标签页。"""
 from datetime import datetime, timezone
 
+import pytest
+
 from app.modules import _feed_rank as rk, _feed_sources as src, feed
 
 ROW = """<article class="Box-row">
@@ -49,12 +51,28 @@ def test_trending_boost_and_no_repo_age_label():
     now = datetime(2026, 10, 31, 12, tzinfo=timezone.utc)
     it = {"id": "github:a/b", "source": "github", "type": "repo", "title": "b", "summary": "", "date": "2026-10-31T08:00:00+00:00",
           "popularity": 90000, "extra": {"trending": "daily", "stars_gained": 1200}}
-    plain = {**it, "id": "github:c/d", "extra": {}}
+    plain = {**it, "id": "github:c/d", "popularity": 300, "extra": {}}
     s1, why1 = rk.score_item(it, pop_norm=0.9, now=now, half_life_h=72, interests=[])
     s2, why2 = rk.score_item(plain, pop_norm=0.9, now=now, half_life_h=72, interests=[])
     assert s1 > s2 and "GitHub 今日 Trending +1200★" in why1 and not any("建" in w for w in why1)
     assert any("建 1 天" in w for w in why2)
 
+
+
+def test_new_repo_velocity_boost():
+    """刚建、还没上 Trending 但涨星飞快的仓库，按 Trending 同等加分；涨得慢或建得久的不加。"""
+    now = datetime(2026, 11, 1, 0, tzinfo=timezone.utc)
+    base = {"source": "github", "type": "repo", "title": "x", "summary": "", "extra": {}}
+    fast = {**base, "id": "github:a/fast", "date": "2026-10-31T09:30:00+00:00", "popularity": 1890}
+    slow = {**base, "id": "github:a/slow", "date": "2026-10-31T09:30:00+00:00", "popularity": 300}
+    old = {**base, "id": "github:a/old", "date": "2026-10-20T00:00:00+00:00", "popularity": 9000}
+    hours = {**base, "id": "github:a/hours", "date": "2026-10-31T22:00:00+00:00", "popularity": 400}
+    kw = dict(pop_norm=0.5, now=now, half_life_h=72, interests=[])
+    (sf, wf), (ss, ws) = rk.score_item(fast, **kw), rk.score_item(slow, **kw)
+    assert sf - ss == pytest.approx(rk.W["trending"]) and "新仓库涨星快 ≈1.9k★/天" in wf
+    assert not any("涨星快" in w for w in ws)
+    assert not any("涨星快" in w for w in rk.score_item(old, **kw)[1])     # 建 12 天，超出一周窗口
+    assert not any("涨星快" in w for w in rk.score_item(hours, **kw)[1])   # 不满一天按一天算：400★ 不够
 
 def test_x_article_tab(client):
     feed.upsert([
