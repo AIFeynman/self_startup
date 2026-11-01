@@ -243,6 +243,7 @@ def _launch(r: dict, engine: str) -> int:
         jid = jobs.submit("research", brief, ref=f"research:{r['id']}:r{res_id}", engine=engine, cwd=str(DOC_DIR))
         db.update("research_results", res_id, {"job_id": jid, "status": "running"})
     elif engine == "grokbot":
+        _sending.add(res_id)  # 先占位，避免线程起来前被 _resume_waiters 当成「重启丢失」
         db.update("research_results", res_id, {"status": "running"})
         _spawn(_grok_run, res_id)
     elif engine == "muse":
@@ -299,7 +300,11 @@ def _grok_setup_hint() -> str:
             f"`python3 {s} instructions --clipboard` 复制。配置后点「重试」。")
 
 
+_sending: set[int] = set()  # 正在 status/send、request_id 还没落库的结果；服务重启会丢，main.busy 据此推迟重启
+
+
 def _grok_run(res_id: int) -> None:
+    _sending.add(res_id)
     try:
         x = _result(res_id)
         if not Path(_grok_script()).exists():
@@ -323,6 +328,7 @@ def _grok_run(res_id: int) -> None:
         req = next((o.get("request_id") for o in objs if o.get("request_id")), "")
         if req:
             db.update("research_results", res_id, {"request_id": req, "status": "waiting"})
+        _sending.discard(res_id)
         if _grok_handle(res_id, rc, objs, raw):
             return
         if not req:
@@ -332,6 +338,8 @@ def _grok_run(res_id: int) -> None:
     except Exception as e:  # noqa: BLE001
         log.exception("grokbot %s", res_id)
         _set_result(res_id, status="failed", error=f"GrokBot 调用异常：{e}")
+    finally:
+        _sending.discard(res_id)
 
 
 def _grok_handle(res_id: int, rc: int, objs: list[dict], raw: str) -> bool:
@@ -400,9 +408,47 @@ def _grok_wait(res_id: int, seconds: float = GROK_WAIT_SECONDS) -> None:
             _waiting.discard(res_id)
 
 
+def _grok_find_sent(x: dict) -> str:
+    """send 中途服务重启、request_id 没落库：到 grokbot 脚本的请求记录里按 brief 找回（不重发）。"""
+    _, objs, _ = _grok_cmd("status", timeout=30)
+    state = (objs[0].get("state_dir") if objs else "") or ""
+    used = {r["request_id"] for r in db.rows("SELECT request_id FROM research_results WHERE request_id!=''")}
+    best, best_t = "", 0.0
+    for f in (Path(state) / "requests").glob("*.json") if state else []:
+        try:
+            rec = json.loads(f.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        t = float(rec.get("created_at") or 0)
+        if rec.get("task") == x["brief"] and rec.get("request_id") not in used and rec.get("delivery") != "rejected" and t > best_t:
+            best, best_t = rec["request_id"], t
+    return best
+
+
+def _grok_recover(res_id: int) -> None:
+    try:
+        req = _grok_find_sent(_result(res_id))
+    except Exception:  # noqa: BLE001
+        log.exception("grokbot recover %s", res_id)
+        req = ""
+    finally:
+        _sending.discard(res_id)
+    if req:
+        db.update("research_results", res_id, {"request_id": req, "status": "waiting"})
+        log.info("grokbot %s: 服务重启丢了 request_id，已从请求记录找回 %s", res_id, req)
+        _grok_wait(res_id)
+    else:
+        _set_result(res_id, status="failed", error="发送过程中服务重启，没找到已投递的请求；可点「重试」重新发送。")
+
+
 def _resume_waiters(rid: int) -> None:
-    """进程重启后线程丢失：有 request_id 且仍在等待的 GrokBot 结果，重新挂上等待线程。"""
+    """进程重启后线程丢失：有 request_id 且仍在等待的 GrokBot 结果，重新挂上等待线程；
+    还没拿到 request_id 的（send 被重启打断），先找回 request_id 再等。"""
     for x in _results(rid):
+        if x["engine"] == "grokbot" and x["status"] == "running" and not x["request_id"] and x["id"] not in _sending:
+            _sending.add(x["id"])  # 防止并发请求重复找回
+            _spawn(_grok_recover, x["id"])
+            continue
         if x["engine"] == "grokbot" and x["status"] in ("waiting", "running") and x["request_id"] and x["id"] not in _waiting:
             _spawn(_grok_wait, x["id"])
 

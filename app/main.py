@@ -56,7 +56,9 @@ RELOAD_FLAG = db.DATA_DIR / ".reload_pending"  # supervisor 写：后端有改�
 def busy() -> dict:
     """正在跑的后台任务和对话。任务在独立进程里，supervisor 重启只等对话结束。"""
     n = (db.row("SELECT count(*) AS n FROM jobs WHERE status IN ('queued','running')") or {}).get("n", 0)
-    return {"jobs": n, "chats": chat.active + annotations.active}  # 阅读批注里问 Claude 也在服务进程里跑
+    # 阅读批注里问 Claude、GrokBot 投递（request_id 落库前）也在服务进程里跑
+    research = mods.get("research")
+    return {"jobs": n, "chats": chat.active + annotations.active + len(getattr(research, "_sending", ()))}
 
 
 def static_version() -> float:
