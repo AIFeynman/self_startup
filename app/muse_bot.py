@@ -5,6 +5,7 @@ Muse 没有 API / CLI，这里用 Playwright 驱动本机 Google Chrome 打开�
 - 没登录（找不到输入框）时结果记为 awaiting_login，窗口保持打开，用户登录后自动继续提问；
 - 每次先点「新旁聊」开一个空对话（不混进主要聊天的旧内容），把 brief 填进输入框发送；
 - 回答取对话区（role=log）里最后一条「你：」提问之后的全部消息，文字连续一段时间不变视为答完；
+- Muse 常把完整报告做成 Artifact 卡片（聊天里只有摘要），答完后逐个点开卡片，把报告正文接在回答后面；
 - 服务重启不影响它；同一时间只有一个进程用这个浏览器配置（文件锁排队）。
 页面结构可能改版：输入框 / 回答的选择器可在 engines.muse.selectors 里覆盖；自动失败时退回手动粘贴。
 """
@@ -58,6 +59,35 @@ def _replies(page, sels: dict) -> list[str]:
         return page.evaluate(REPLIES_JS, sels.get("log") or LOG)
     except Exception:  # noqa: BLE001
         return []
+
+
+def _artifacts(page, sels: dict) -> list[str]:
+    """点开回答里的每张 Artifact 卡片，取报告正文（渲染在内嵌 frame 里，取文字最多的那个），再回到对话。"""
+    out = []
+    label = page.locator(sels.get("log") or LOG).get_by_text("Artifact", exact=True)
+    for i in range(label.count()):
+        try:
+            lab = page.locator(sels.get("log") or LOG).get_by_text("Artifact", exact=True).nth(i)
+            title = lab.locator("xpath=..").inner_text(timeout=5000).strip().splitlines()[0]
+            lab.click(timeout=10000)
+            text = ""
+            for _ in range(10):
+                page.wait_for_timeout(2000)
+                for f in page.frames[1:]:
+                    try:
+                        t = f.locator("body").inner_text(timeout=3000).strip()
+                    except Exception:  # noqa: BLE001
+                        continue
+                    text = t if len(t) > len(text) else text
+                if len(text) > 200:
+                    break
+            if text:
+                out.append(f"## 报告：{title}\n\n{text}")
+            page.go_back(wait_until="domcontentloaded", timeout=30000)
+            page.locator(sels.get("log") or LOG).first.wait_for(state="visible", timeout=20000)
+        except Exception:  # noqa: BLE001
+            log.exception("muse artifact %s", i)
+    return out
 
 
 def _new_chat(page, url: str, box) -> None:
@@ -116,6 +146,9 @@ def run(res_id: int) -> None:
                     if now and not busy and time.monotonic() - stable_since >= SETTLE:
                         break
                 ans = "\n\n".join(_replies(page, sels)).strip()
+                if ans:
+                    _set(res_id, status="running", error="Muse 已回答，正在取完整报告…")
+                    ans = "\n\n".join([ans, *_artifacts(page, sels)])
                 if not ans:
                     raise RuntimeError("没取到回答（页面结构可能变了）")
                 _set(res_id, status="done", content=ans, error="")
