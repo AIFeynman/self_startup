@@ -166,7 +166,7 @@ def test_click_counts_and_funnel(client):
 def test_auto_refresh_respects_threshold(client, monkeypatch):
     from app.modules import feed
     calls = []
-    monkeypatch.setattr(feed, "_bg", lambda only: calls.append(only) or feed._state.update(running=False))
+    monkeypatch.setattr(feed, "_bg", lambda only, gists=None: calls.append(only) or feed._state.update(running=False))
     monkeypatch.setattr(feed, "_stale_hours", lambda: 1.0)
     assert feed.maybe_auto_refresh() is False
     monkeypatch.setattr(feed, "_stale_hours", lambda: 100.0)

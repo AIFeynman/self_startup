@@ -4,6 +4,7 @@
 import { toMs } from '../api.js';
 
 const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['x_article', 'X 长文'], ['saved', '已收藏']];
+const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'x_article'];
 const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论' };
 const PAGE = 40;
 const TOP_N = 5;
@@ -82,6 +83,23 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-int button { border: none; background: none; padding: 1px 3px; color: inherit; border-radius: 50%; }
 .fd-int button:hover { background: rgba(0,0,0,.06); }
 .fd-int button svg { width: 12px; height: 12px; }
+.fd-tabref { white-space: nowrap; }
+.fd-tabref svg { width: 13px; height: 13px; }
+.fd-follow { margin: 0 0 16px; padding: 16px 20px; }
+.fd-follow .fg { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 14px; padding: 12px 0; border-top: 1px solid var(--line); }
+.fd-follow .fg:first-of-type { border-top: none; padding-top: 4px; }
+.fd-follow .fg > b { font-size: 13px; padding-top: 4px; }
+.fd-follow .fg > b small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.fd-follow .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.fd-follow .fd-int { background: var(--bg-2); color: var(--ink); }
+.fd-follow .fd-int.custom { background: var(--accent-soft); color: var(--accent); }
+.fd-follow .fd-int a { color: inherit; text-decoration: none; }
+.fd-follow .more { border: none; background: none; color: var(--accent); font-size: 12px; padding: 1px 6px; }
+.fd-follow form { display: flex; gap: 6px; margin-top: 8px; grid-column: 2; }
+.fd-follow form input { flex: 1; min-width: 0; font-size: 13px; }
+.fd-follow .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.fd-follow .head .muted { font-size: 12px; }
+@media (max-width: 640px) { .fd-follow .fg { grid-template-columns: 1fr; } .fd-follow form { grid-column: 1; } }
 .fd-sentinel { text-align: center; padding: 14px 0 4px; }
 .fd-hidden { display: none !important; }
 @media (max-width: 900px) {
@@ -118,7 +136,9 @@ export default {
     const subEl = h('div.sub');
     const pop = h('div.fd-pop');
     const refreshBtn = h('button.outline', { onclick: doRefresh }, [ui.icon('refresh'), h('span', {}, '刷新')]);
-    const head = ui.pageHead('今天值得看', '', [h('div.fd-refresh', {}, [refreshBtn, pop])]);
+    const followBtn = h('button.ghost', { onclick: () => toggleFollow() }, [ui.icon('user'), h('span', {}, '关注源')]);
+    const head = ui.pageHead('今天值得看', '', [followBtn, h('div.fd-refresh', {}, [refreshBtn, pop])]);
+    const followBox = h('div');
     head.querySelector('.titles').append(subEl);
 
     // ---------- 输入框 ----------
@@ -174,9 +194,10 @@ export default {
     };
     const opts = h('div.fd-opts', {}, [optSel(DAYS, 'days', '按发布时间筛选'), optSel(SORTS, 'sort', '列表排序方式')]);
 
-    el.append(h('style', {}, CSS), head, comp, intsEl, quick,
+    const tabRefresh = h('button.ghost.sm.fd-tabref', { onclick: () => doRefresh(st.tab) });
+    el.append(h('style', {}, CSS), head, followBox, comp, intsEl, quick,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条'), topBox,
-      h('div.fd-bar', {}, [tabs, opts, kbd]), listBox, sentinel);
+      h('div.fd-bar', {}, [tabs, tabRefresh, opts, kbd]), listBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
     function renderStatus() {
@@ -184,7 +205,8 @@ export default {
       const last = s.running ? `刷新中（${fmtTime(s.started_at).slice(6)} 开始）…` : `上次刷新 ${ago(s.finished_at || s.last_fetched) || '—'}`;
       subEl.textContent = `从 ${s.total} 条里按你的兴趣挑出 · ${last}`;
       refreshBtn.disabled = !!s.running;
-      refreshBtn.lastChild.textContent = s.running ? '刷新中…' : '刷新';
+      refreshBtn.lastChild.textContent = s.running && !s.scope ? '刷新中…' : '刷新';
+      renderTabRefresh();
       const res = s.results || {};
       const srcs = Object.keys({ ...s.by_source, ...res }).sort((a, b) => (s.by_source?.[b] || 0) - (s.by_source?.[a] || 0));
       pop.replaceChildren(
@@ -199,16 +221,79 @@ export default {
         }),
         h('div.muted', { style: { marginTop: '6px' } }, `反馈：👍 ${s.feedback?.likes || 0} · ★ ${s.feedback?.saved || 0} · 隐藏 ${s.feedback?.hidden || 0} · 打开 ${s.feedback?.clicks || 0} · 进深读 ${s.feedback?.deep_reads || 0}`));
     }
-    async function doRefresh() {
-      status = await api.post('/api/feed/refresh', {});
+    // 分类页的「刷新本类」：只跑这个分类的来源（论文 → HF / AlphaXiv …）；已入库的同一条只更新不重复
+    function renderTabRefresh() {
+      const name = TABS.find(([id]) => id === st.tab)?.[1];
+      tabRefresh.hidden = !REFRESHABLE.includes(st.tab);
+      const busy = status.running && status.scope === st.tab;
+      tabRefresh.disabled = !!status.running;
+      tabRefresh.title = status.running ? '正在刷新，稍等' : `只抓「${name}」的来源，抓新的、合并重复的`;
+      tabRefresh.replaceChildren(ui.icon('refresh'), busy ? `刷新${name}中…` : `刷新${name || ''}`);
+    }
+    async function doRefresh(type = '') {
+      status = await api.post('/api/feed/refresh', type ? { type } : {});
       renderStatus();
+      await watchRefresh(type ? TABS.find(([id]) => id === type)?.[1] : '');
+    }
+    async function watchRefresh(label) {
       while (status.running) {
         await new Promise((r) => setTimeout(r, 2000));
         if (!el.isConnected) return;
         status = await api.get('/api/feed/status');
         renderStatus();
       }
-      toast('刷新完成'); reloadAll();
+      const res = Object.entries(status.results || {}).filter(([k]) => !['judge', 'gist'].includes(k));
+      const added = res.reduce((n, [, r]) => n + (r.new || 0), 0);
+      const errs = res.filter(([, r]) => r.errors?.length).map(([k]) => k);
+      toast(`${label ? label + '：' : ''}刷新完成，新增 ${added} 条${errs.length ? `（${errs.join('、')} 有报错，悬停「刷新」看详情）` : ''}`);
+      reloadAll();
+    }
+
+    // ---------- 关注源 ----------
+    let followOpen = false;
+    const followMore = {};
+    async function toggleFollow(force) {
+      followOpen = force ?? !followOpen;
+      followBtn.classList.toggle('on', followOpen);
+      if (!followOpen) { followBox.replaceChildren(); return; }
+      const r = await api.get('/api/feed/sources').catch(() => null);
+      if (r) renderFollow(r.groups);
+    }
+    function renderFollow(groups) {
+      if (!followOpen) return;
+      const total = groups.reduce((n, g) => n + g.items.length, 0);
+      followBox.replaceChildren(h('div.card.fd-follow', {}, [
+        h('div.head', {}, [h('b', {}, `关注源 · ${total}`), h('span.muted', {}, '加进来的会马上抓一次；高亮的是你加的，删掉默认的也能再加回来')]),
+        ...groups.map((g) => {
+          const LIMIT = 24;
+          const all = followMore[g.id] ? g.items : g.items.slice(0, LIMIT);
+          const input = h('input', { placeholder: g.hint });
+          const add = h('button.sm', { type: 'submit' }, [ui.icon('plus'), '关注']);
+          return h('div.fg', {}, [
+            h('b', {}, [g.label, h('small', {}, `${g.items.length} 个`)]),
+            h('div', {}, [
+              h('div.chips', {}, [
+                ...all.map((x) => h('span.fd-int' + (x.custom ? '.custom' : ''), { title: x.url || x.key }, [
+                  x.url ? h('a', { href: x.url, target: '_blank', rel: 'noopener' }, x.label) : x.label,
+                  h('button', { title: '取消关注', onclick: async () => {
+                    const r = await api.post('/api/feed/sources/remove', { list: x.list, key: x.key }).catch((e) => { toast(String(e.message).replace(/^"|"$/g, '')); return null; });
+                    if (r) { toast(`已取消关注 ${x.label}`); renderFollow(r.groups); }
+                  } }, ui.icon('x'))])),
+                g.items.length > LIMIT ? h('button.more', { onclick: () => { followMore[g.id] = !followMore[g.id]; renderFollow(groups); } },
+                  followMore[g.id] ? '收起' : `展开全部 ${g.items.length} 个`) : null]),
+              h('form', { onsubmit: async (e) => {
+                e.preventDefault();
+                const value = input.value.trim();
+                if (!value) return;
+                add.disabled = true; add.lastChild.textContent = '识别中…';
+                const r = await api.post('/api/feed/sources', { group: g.id, value }).catch((err) => { toast(String(err.message || '加不上').replace(/^"|"$/g, '')); return null; });
+                add.disabled = false; add.lastChild.textContent = '关注';
+                if (!r) return;
+                toast(r.exists ? `${r.label} 已在关注里` : `已关注 ${r.label}${r.refreshing ? '，正在抓取…' : ''}`);
+                renderFollow(r.groups);
+                if (r.refreshing) { status = await api.get('/api/feed/status'); renderStatus(); watchRefresh(r.label); }
+              } }, [input, add])])]);
+        })]));
     }
 
     // ---------- 兴趣词 ----------
@@ -406,7 +491,7 @@ export default {
     // ---------- 数据 ----------
     function renderTabs() {
       tabs.replaceChildren(...TABS.map(([id, name]) => h('button' + (st.tab === id ? '.active' : ''), {
-        onclick: () => { if (st.tab === id) return; st.tab = id; renderTabs(); loadList(); },
+        onclick: () => { if (st.tab === id) return; st.tab = id; renderTabs(); renderTabRefresh(); loadList(); },
       }, name)));
     }
     async function loadTop() {
