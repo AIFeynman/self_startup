@@ -19,6 +19,10 @@ W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2
 OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
                   "openai.com": "OpenAI", "deepmind.google": "Google DeepMind", "blog.google": "Google",
                   "research.google": "Google Research"}
+# 重点机构的 GitHub 账号 → 机构名：这些账号新建的仓库（feed.github_watch_orgs 盯的）和官方博客同样加「官方」分
+GITHUB_ORGS = {"deepseek-ai": "DeepSeek", "openai": "OpenAI", "anthropics": "Anthropic", "google": "Google",
+               "google-deepmind": "Google DeepMind", "google-research": "Google Research", "meta-llama": "Meta",
+               "facebookresearch": "Meta", "microsoft": "Microsoft"}
 # 新鲜度半衰期 = 基准（settings feed.half_life_hours，默认 72h）× 类型系数：
 # 讨论 / 产品一两天就过气；论文、项目、播客的价值衰减慢，且论文日期只精确到天
 TYPE_HALF_LIFE = {"discussion": 0.5, "product": 0.67, "blog": 1.0, "news": 1.0, "repo": 1.67, "paper": 1.67,
@@ -322,7 +326,11 @@ def display_summary(title: str, summary: str) -> str:
 
 
 def official_org(it: dict) -> str:
-    """博客条目的链接属于官方域名（含子域）时返回机构名。"""
+    """博客条目的链接属于官方域名（含子域），或是重点机构新建的仓库时，返回机构名。
+    仓库只认机构监控抓到的（watch_org）：机构的老仓库上 Trending 已有 Trending 分，不再叠官方分。"""
+    org = (it.get("extra") or {}).get("watch_org")
+    if it.get("source") == "github":
+        return GITHUB_ORGS.get(org, org) if org else ""
     if it.get("source") != "blog":
         return ""
     host = urlsplit(it.get("url") or "").netloc.lower().removeprefix("www.")

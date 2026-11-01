@@ -56,6 +56,10 @@ CFG_DEFAULTS = {
     "github_queries": ["llm", "ai agent", "mcp", "claude code"],
     "github_min_stars": 100,      # 搜索新建仓库时的最低星数（太低全是刚建的小项目）
     "github_trending_languages": [""],  # 每日 Trending 看哪些语言："" = 全部语言，可加 "python" "typescript"
+    # 重点机构的新仓库：和官方博客一样加「官方」分；机构名对照见 _feed_rank.GITHUB_ORGS，不在里面的显示 GitHub 账号名
+    "github_watch_orgs": ["deepseek-ai", "openai", "anthropics", "google", "google-deepmind", "google-research",
+                          "meta-llama", "facebookresearch", "microsoft"],
+    "github_watch_min_stars": 5,  # 重点机构新仓库的最低星数：滤掉大厂每天建的内部空仓库
     "reddit": ["LocalLLaMA", "ClaudeAI", "MachineLearning"],
     "x_days": 3,                  # X：只要最近几天的推文
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
@@ -228,7 +232,9 @@ def _collectors() -> dict:
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
         "github": lambda: src.fetch_github_all(list(cfg("github_queries")), min_stars=int(cfg("github_min_stars")),
-                                               trending_languages=list(cfg("github_trending_languages"))),
+                                               trending_languages=list(cfg("github_trending_languages")),
+                                               watch_orgs=list(cfg("github_watch_orgs")),
+                                               watch_min_stars=int(cfg("github_watch_min_stars"))),
         "rss": lambda: src.fetch_rss(list(fc.get("rss") or [])),
         "sites": lambda: src.fetch_sites(list(fc.get("sites") or []), known_urls=_known_urls("blog")),
         "podcast": lambda: src.fetch_rss(list(fc.get("podcasts") or []), per_feed=5, source="podcast", typ="podcast"),
@@ -473,7 +479,7 @@ def deep_reads() -> int:
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
                                 "x_min_likes", "x_per_account", "producthunt_days", "sources", "github_min_stars",
-                                "github_trending_languages")} | {
+                                "github_trending_languages", "github_watch_orgs", "github_watch_min_stars")} | {
         k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 

@@ -193,11 +193,13 @@ def fetch_github_trending(since: str = "daily", languages: list[str] | None = No
     return list(out.values())
 
 
-def fetch_github_all(queries: list[str], *, min_stars: int = 100, trending_languages: list[str] | None = None) -> tuple[list[dict], list[str]]:
-    """项目：GitHub 每日 Trending（成熟的热门项目）+ 按关键词搜最近新建的仓库（新项目）。两路各自失败不影响另一路。"""
+def fetch_github_all(queries: list[str], *, min_stars: int = 100, trending_languages: list[str] | None = None,
+                     watch_orgs: list[str] | None = None, watch_min_stars: int = 5) -> tuple[list[dict], list[str]]:
+    """项目：GitHub 每日 Trending（成熟的热门项目）+ 按关键词搜最近新建的仓库（新项目）+ 重点机构的新仓库。各路失败互不影响。"""
     items: dict[str, dict] = {}
     errors = []
     for name, fn in (("search", lambda: fetch_github(queries, min_stars=min_stars)),
+                     ("orgs", lambda: fetch_github_orgs(watch_orgs or [], min_stars=watch_min_stars)),
                      ("trending", lambda: fetch_github_trending("daily", trending_languages))):
         try:
             for it in fn():
@@ -211,12 +213,50 @@ def fetch_github_all(queries: list[str], *, min_stars: int = 100, trending_langu
     return list(items.values()), errors
 
 
-def fetch_github(queries: list[str], days: int = 14, min_stars: int = 30, per_query: int = 20) -> list[dict]:
-    since = _days_ago(days).strftime("%Y-%m-%d")
+def _gh_headers() -> dict:
     headers = {"Accept": "application/vnd.github+json"}
     tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
+    return headers
+
+
+def _repo_item(it: dict, **extra) -> dict:
+    name = it["full_name"]
+    desc = clean(it.get("description") or "")
+    short = re.split(r"(?<=[.!?。！？])\s", desc, maxsplit=1)[0][:90].rstrip(" .。")
+    return {
+        # 只有仓库名看不出是什么：标题带上一句话描述
+        "id": f"github:{name}", "source": "github", "type": "repo",
+        "title": f"{name.split('/', 1)[1]}：{short}" if short else name,
+        "summary": desc, "url": it.get("html_url") or f"https://github.com/{name}",
+        "date": it.get("created_at", ""), "popularity": float(it.get("stargazers_count") or 0),
+        "extra": {"language": it.get("language") or "", "topics": (it.get("topics") or [])[:6], **extra, "repo": name}}
+
+
+def fetch_github_orgs(orgs: list[str], days: int = 14, min_stars: int = 5) -> list[dict]:
+    """重点机构（DeepSeek / OpenAI / Anthropic …）最近新建的公开仓库：关键词搜索靠描述命中，大厂新项目描述常常很短，单独盯。
+    min_stars 过滤大厂每天建的内部空仓库（Microsoft 两周十几个，几乎都是 0★）。"""
+    cutoff = _days_ago(days)
+    out = []
+    with _client() as c:
+        for org in orgs:
+            r = c.get(f"https://api.github.com/orgs/{org}/repos", headers=_gh_headers(),
+                      params={"sort": "created", "direction": "desc", "per_page": 30, "type": "public"})
+            r.raise_for_status()
+            for it in r.json():
+                created = datetime.fromisoformat((it.get("created_at") or "1970-01-01T00:00:00Z").replace("Z", "+00:00"))
+                if created < cutoff:
+                    break   # 按创建时间倒序，后面的更旧
+                if it.get("full_name") and not it.get("fork") and not it.get("archived") \
+                        and (it.get("stargazers_count") or 0) >= min_stars:
+                    out.append(_repo_item(it, watch_org=org))
+    return out
+
+
+def fetch_github(queries: list[str], days: int = 14, min_stars: int = 30, per_query: int = 20) -> list[dict]:
+    since = _days_ago(days).strftime("%Y-%m-%d")
+    headers = _gh_headers()
     out: dict[str, dict] = {}
     with _client() as c:
         for q in queries:
@@ -225,19 +265,8 @@ def fetch_github(queries: list[str], days: int = 14, min_stars: int = 30, per_qu
                 "sort": "stars", "order": "desc", "per_page": per_query})
             r.raise_for_status()
             for it in r.json().get("items", []):
-                name = it.get("full_name")
-                if not name:
-                    continue
-                desc = clean(it.get("description") or "")
-                short = re.split(r"(?<=[.!?。！？])\s", desc, maxsplit=1)[0][:90].rstrip(" .。")
-                out[name] = {
-                    # 只有仓库名看不出是什么：标题带上一句话描述
-                    "id": f"github:{name}", "source": "github", "type": "repo",
-                    "title": f"{name.split('/', 1)[1]}：{short}" if short else name,
-                    "summary": desc, "url": it.get("html_url") or f"https://github.com/{name}",
-                    "date": it.get("created_at", ""), "popularity": float(it.get("stargazers_count") or 0),
-                    "extra": {"language": it.get("language") or "", "topics": (it.get("topics") or [])[:6], "query": q,
-                              "repo": name}}
+                if it.get("full_name"):
+                    out[it["full_name"]] = _repo_item(it, query=q)
     return list(out.values())
 
 

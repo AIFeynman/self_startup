@@ -1,5 +1,5 @@
 """项目：GitHub 每日 Trending + 新建仓库搜索；X 长文标签页。"""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -73,6 +73,46 @@ def test_new_repo_velocity_boost():
     assert not any("涨星快" in w for w in ws)
     assert not any("涨星快" in w for w in rk.score_item(old, **kw)[1])     # 建 12 天，超出一周窗口
     assert not any("涨星快" in w for w in rk.score_item(hours, **kw)[1])   # 不满一天按一天算：400★ 不够
+
+
+def test_github_orgs_watch(monkeypatch):
+    """重点机构新仓库：只要窗口内、非 fork / 归档、过了星数门槛的；标上 watch_org，排序时按官方加分。"""
+    now = datetime.now(timezone.utc)
+    ago = lambda d: (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    repos = {"deepseek-ai": [
+        {"full_name": "deepseek-ai/new", "description": "Towards a More Autonomous Agent System", "created_at": ago(0.5),
+         "stargazers_count": 1890, "html_url": "https://github.com/deepseek-ai/new"},
+        {"full_name": "deepseek-ai/fork", "created_at": ago(1), "stargazers_count": 50, "fork": True},
+        {"full_name": "deepseek-ai/empty", "created_at": ago(2), "stargazers_count": 0},
+        {"full_name": "deepseek-ai/old", "created_at": ago(30), "stargazers_count": 9000}]}
+
+    class Resp:
+        def __init__(self, data):
+            self.data = data
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return self.data
+
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+        def get(self, url, **kw):
+            return Resp(repos[url.split("/orgs/")[1].split("/")[0]])
+
+    monkeypatch.setattr(src, "_client", Client)
+    (it,) = src.fetch_github_orgs(["deepseek-ai"])
+    assert it["id"] == "github:deepseek-ai/new" and it["extra"]["watch_org"] == "deepseek-ai"
+    assert it["title"] == "new：Towards a More Autonomous Agent System"
+
+    kw = dict(pop_norm=0.5, now=now, half_life_h=72, interests=[])
+    s1, why1 = rk.score_item(it, **kw)
+    s2, _ = rk.score_item({**it, "id": "github:x/new", "extra": {}}, **kw)
+    assert s1 - s2 == pytest.approx(rk.W["official"]) and "DeepSeek 官方" in why1
+    # 机构的老仓库上 Trending（没有 watch_org）不叠官方分
+    assert rk.official_org({"source": "github", "extra": {"trending": "daily", "repo": "anthropics/skills"}}) == ""
 
 def test_x_article_tab(client):
     feed.upsert([
