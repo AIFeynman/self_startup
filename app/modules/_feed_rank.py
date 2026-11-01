@@ -14,7 +14,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
-     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "x_article": 0.4, "trending": 0.8}
+     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "x_article": 0.4, "trending": 0.8,
+     "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
 OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
                   "openai.com": "OpenAI", "deepmind.google": "Google DeepMind", "blog.google": "Google",
@@ -26,7 +27,7 @@ GITHUB_ORGS = {"deepseek-ai": "DeepSeek", "openai": "OpenAI", "anthropics": "Ant
 # 新鲜度半衰期 = 基准（settings feed.half_life_hours，默认 72h）× 类型系数：
 # 讨论 / 产品一两天就过气；论文、项目、播客的价值衰减慢，且论文日期只精确到天
 TYPE_HALF_LIFE = {"discussion": 0.5, "product": 0.67, "blog": 1.0, "news": 1.0, "repo": 1.67, "paper": 1.67,
-                  "podcast": 2.33}
+                  "podcast": 2.33, "video": 2.33}
 POP_WINDOW_DAYS = 30        # 热度百分位只和同源最近 30 天的条目比，避免历史爆款把新条目都压成低热度
 SRC_MIN_EXAMPLES = 5        # 某来源的反馈样本少于这个数时不算「你常赞 X」
 PICKS_N, PICKS_PER_SOURCE, PICKS_PER_TYPE = 5, 1, 2     # 今日精选：每个来源最多 1 条、每类最多 2 条
@@ -48,6 +49,18 @@ AI_RE = re.compile(r"\b(ai|llms?|gpt|agents?|agentic|mcp|rag|claude|codex|copilo
 PR_RE = re.compile(r"\b(partner(ship)?s?|customers?|case stud(y|ies)|roi|webinar|summit|hiring|nonprofits?|government|"
                    r"enterprise|adopts?|achieves|expands?|brings?|uses (openai|claude|chatgpt|gemini|gpt)|"
                    r"how \w+ (uses|is|cut|streamlines?|builds?|built)|for (financial|legal|healthcare|education))\b", re.I)
+# Reddit / 视频搜索结果的「有没有价值」：Jev 判过（judge_value）低于 VALUE_DROP 的不推荐，≥ VALUE_GOOD 加分。
+# 没判过时按 flair / 标题的关键词规则：实践经验、前沿讨论打标签加分，梗图 / 求助 / 吐槽 / 「什么时候发布」降权
+VALUE_DROP, VALUE_GOOD = 0.35, 0.7
+PRACTICE_RE = re.compile(r"\b(tutorial|guide|how[- ]to|walkthrough|i (built|made|tested|benchmarked|switched|replaced)|"
+                         r"benchmarks?|tested|comparison|vs\.?|lessons?( learned)?|post[- ]?mortem|my (setup|workflow|stack)|"
+                         r"workflow|tips?|tricks|best practices|showcase|project|resources?|open[- ]?sourced?|"
+                         r"in production|case study|experience|deep dive)\b|教程|实测|经验|踩坑|复盘|对比", re.I)
+FRONTIER_RE = re.compile(r"^\[(r|d|p|n)\]|\b(research|paper|arxiv|discussion|news|new model|release[ds]?|weights|"
+                         r"sota|state of the art|technical report|preprint)\b|论文|发布", re.I)
+NOISE_RE = re.compile(r"\b(meme|funny|humou?r|shitpost|rant|vent|when will|is it just me|anyone else|eli5|"
+                      r"help|question|beginner|noob|hiring|giveaway)\b|\?\s*$|求助|吐槽", re.I)
+
 STALE_DAYS = 14             # 发布超过这么多天算「旧」：在推荐里降权，避免几个月前的高赞条目霸榜
 TYPE_SHARE = 0.4            # diversify：前 N 条里同一类型最多占的比例
 NO_POP_BASE = 0.35          # 整个来源都没有热度数据（博客 RSS 等）时的中性热度分
@@ -55,11 +68,11 @@ LE_PRIOR = {"star": 0.5, "good": 0.3, "skip": -0.3, "bad": -0.6}
 LE_LABEL = {"star": "learn_evolve 标星", "good": "learn_evolve 好评", "skip": "learn_evolve 跳过", "bad": "learn_evolve 差评"}
 SOURCE_LABEL = {"hn": "HN", "github": "GitHub", "hf": "HF Papers", "arxiv": "AlphaXiv", "reddit": "Reddit",
                 "blog": "博客", "producthunt": "Product Hunt", "twitter": "X", "podcast": "播客", "xiaoyuzhou": "小宇宙",
-                "openrouter": "OpenRouter", "youtube": "YouTube", "yc": "Launch YC", "huggingface": "HF", "analysis": "产品分析",
-                "trustmrr": "TrustMRR"}
+                "openrouter": "OpenRouter", "youtube": "YouTube", "bilibili": "B 站", "yc": "Launch YC", "huggingface": "HF",
+                "analysis": "产品分析", "trustmrr": "TrustMRR"}
 POP_UNIT = {"hn": "分", "github": "★", "hf": "赞", "arxiv": "赞", "reddit": "赞", "producthunt": "票",
-            "twitter": "赞", "huggingface": "赞", "yc": "票", "youtube": "播放",
-            "xiaoyuzhou": "播放"}
+            "twitter": "赞", "huggingface": "赞", "yc": "票",
+            "xiaoyuzhou": "播放", "youtube": "播放", "bilibili": "播放"}
 
 _STOP = set("""the and for with from that this into your you are was were has have how what why when who our its
 not but can will all new using use via over about than more most best just get make made like vs based
@@ -218,6 +231,8 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     if via.startswith("@"):
         s += W["follow"]
         lead.append(f"关注账号 {via}")
+    if needs_value(it):
+        s += _value_score(it, lead, why)
 
     text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
     hits = [t for t in interests if t and _interest_re(t).search(text)]
@@ -280,6 +295,8 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
             continue
         if trending_only(it) and not is_ai(it, interests) and not fb.get("saved"):
             continue    # Trending 是全站榜：和 AI 无关的不推荐（收藏过的照样留着）
+        if low_value(it) and not fb.get("saved"):
+            continue    # Reddit / 视频搜索里 Jev 判为没干货的（梗、求助、吐槽）
         pn = pop_norm(pops, it)
         s, why = score_item(it, pop_norm=pn, now=now, half_life_h=half_life_h, interests=list(interests),
                             aff=aff, fb=fb)
@@ -370,6 +387,50 @@ def official_org(it: dict) -> str:
         return ""
     host = urlsplit(it.get("url") or "").netloc.lower().removeprefix("www.")
     return next((org for d, org in OFFICIAL_BLOGS.items() if host == d or host.endswith("." + d)), "")
+
+
+def needs_value(it: dict) -> bool:
+    """要判断「有没有价值」的条目：Reddit 帖子、YouTube 搜索结果（订阅频道是人挑过的，不用判）。"""
+    src = it.get("source")
+    return src == "reddit" or src == "youtube" and (it.get("extra") or {}).get("via") == "search"
+
+
+def value_tag(it: dict) -> str:
+    """「实践」/「前沿」/「噪音」/ ""：按 flair 与标题的关键词规则。"""
+    ex = it.get("extra") or {}
+    text = f"{ex.get('flair') or ''} {it.get('title', '')}"
+    if PRACTICE_RE.search(text):
+        return "实践"
+    if FRONTIER_RE.search(text) or FRONTIER_RE.search(ex.get("flair") or ""):
+        return "前沿"
+    if NOISE_RE.search(text) and it.get("source") == "reddit":
+        return "噪音"
+    return ""
+
+
+def low_value(it: dict) -> bool:
+    jv = (it.get("extra") or {}).get("judge_value")
+    return needs_value(it) and jv is not None and jv < VALUE_DROP
+
+
+def _value_score(it: dict, lead: list[str], why: list[str]) -> float:
+    """Reddit / 视频搜索结果的价值加减分，顺带写 lead / why。Jev 的判断优先，关键词只当没判过时的近似和标签。"""
+    ex = it.get("extra") or {}
+    jv, tag, s = ex.get("judge_value"), value_tag(it), 0.0
+    if jv is not None and jv >= VALUE_GOOD:
+        s += W["value"]
+        lead.append({"实践": "实践经验", "前沿": "前沿讨论"}.get(tag, "有干货"))
+    elif tag in ("实践", "前沿") and (jv is None or jv >= 0.5):
+        s += W["practice"]
+        lead.append("实践经验" if tag == "实践" else "前沿讨论")
+    elif tag == "噪音" and jv is None:
+        s += W["noise"]
+        why.append("像求助 / 闲聊帖")
+    rk_ = ex.get("top_rank")
+    if it.get("source") == "reddit" and rk_ and rk_ <= 5 and ex.get("subreddit"):
+        s += W["top_rank"]
+        why.append(f"r/{ex['subreddit']} 本周 top {rk_}")
+    return s
 
 
 def trending_only(it: dict) -> bool:

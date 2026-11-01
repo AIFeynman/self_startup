@@ -1,4 +1,4 @@
-"""深度学习：A. 单篇论文 / GitHub 项目 / 文章（博客、X 长文、gist、讨论帖）深读；B. 主题学习计划（分阶段步骤 + 反馈调整）。
+"""深度学习：A. 单篇论文 / GitHub 项目 / 文章（博客、X 长文、gist、讨论帖）/ 视频（YouTube、B 站：旁白解析 + 时间点）深读；B. 主题学习计划（分阶段步骤 + 反馈调整）。
 
 后台 job 的 ref 约定：
     learn:item:<id>          条目深读
@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import subprocess
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from pydantic import BaseModel
 from .. import agent, db, jobs, settings, tasks
 from ..db import ROOT
 from . import _reads
+from . import _video
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +134,7 @@ STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapte
              "origin": "TEXT DEFAULT ''", "parent_id": "INTEGER", "request": "TEXT DEFAULT ''"}
 EXTRA = {"interest": "深入", "confused": "补课"}  # 按需加一节的两种：感兴趣 → 往深处展开；没懂 → 换个讲法讲透
 SKILL_DIR = ROOT / "skills" / "learn"
-KINDS = ("paper", "github", "article")
+KINDS = ("paper", "github", "article", "video")
 STEP_STATUS = ("todo", "doing", "done", "skipped")
 router = APIRouter()
 
@@ -141,6 +143,8 @@ router = APIRouter()
 
 def detect_kind(url: str) -> str:
     u = url.strip().lower()
+    if _video.is_video_url(u):
+        return "video"
     if re.search(r"(arxiv\.org|doi\.org|openreview\.net|\.pdf$|^10\.\d{4,9}/)", u):
         return "paper"
     if re.search(r"(^|//|\.)github\.com/[\w.-]+/[\w.-]+", u) and "gist.github.com" not in u or re.fullmatch(r"[a-z0-9][\w.-]*/[\w.-]+", u):
@@ -161,6 +165,10 @@ def slugify(url: str) -> str:
         s = f"arxiv-{m.group(1)}"
     elif m := re.search(r"github\.com/([^/]+)/([^/#?]+)", u) or re.fullmatch(r"([\w.-]+)/([\w.-]+)", u):
         s = f"{m.group(1)}-{m.group(2).removesuffix('.git')}"
+    elif vid := _video.youtube_id(u):
+        s = f"yt-{vid}"
+    elif m := _video.BILI_RE.search(u):
+        s = f"bili-{m.group(1)}"
     else:
         s = Path(u.split("?")[0]).stem or "item"
     s = re.sub(r"[^\w.-]+", "-", s, flags=re.ASCII).strip("-.").lower()
@@ -384,7 +392,9 @@ ARTICLE = """任务：文章深读（博客 / X 长文 / gist / 讨论帖 / 官�
 {feed}
 做法：
 - 先读全文：普通网页用 WebFetch 或 curl；X / Twitter 的帖子和长文直接抓常常拿不到，依次试 `https://api.fxtwitter.com/<用户>/status/<id>`、
-  `https://r.jina.ai/<原链接>`；gist 用 `https://api.github.com/gists/<id>`；HN 用 `https://hn.algolia.com/api/v1/items/<id>`（顺带看讨论里有分量的反驳）。
+  `https://r.jina.ai/<原链接>`；gist 用 `https://api.github.com/gists/<id>`；HN 用 `https://hn.algolia.com/api/v1/items/<id>`（顺带看讨论里有分量的反驳）；
+  Reddit 帖子用 `<帖子链接>.rss`（正文 + 高赞评论；直接抓网页常被拦，不要绕），帖子的价值往往在评论：提炼亲身实践经验
+  （配置、数字、踩坑）和有分量的反驳 / 补充，帖子指向外链时也读外链。
   实在拿不到全文，就基于上面的推荐摘要写，并在文档开头写明「未读到全文」。
 - 用户已学过的内容（用于「与我已有知识的联系」）：
 {known}
@@ -411,6 +421,48 @@ ARTICLE = """任务：文章深读（博客 / X 长文 / gist / 讨论帖 / 官�
 """
 
 
+VIDEO = """任务：视频深度解读（YouTube / B 站等），重点是旁白内容的解析总结和时间点，方便用户挑段落手动去看
+对象：{url}
+{focus}
+{feed}
+做法：
+- 先取文字稿（不下载视频）：`{fetch}`
+  产物：transcript.md（作者章节 + 按 ~45 秒分段、每段开头是可点击的 [mm:ss](跳转链接)）和 video.json（标题、频道、时长、字幕来源）。
+  自动字幕没有标点、有错别字（人名 / 术语尤其多），按上下文纠正后再引用。
+- 命令失败或提示「没有可用字幕」：时长 ≤ 90 分钟的，在同一命令末尾加 `--whisper` 重跑（本机转写，较慢）；仍拿不到就基于视频简介
+  和推荐摘要写，文档开头写明「未拿到文字稿」，时间点只列作者章节。
+- 文字稿很长时分段读完，不要只读开头；时间点只用文字稿里真实出现的，不要估算或编造。
+- 用户已学过的内容（用于「与我已有知识的联系」）：
+{known}
+
+写 {out}/note.md（中文，markdown，保留英文术语和原话里的关键句），结构：
+# 视频标题（频道）
+一行：时长 · 发布日期 · 字幕来源 · [原视频](链接)
+## TL;DR
+正好 3 条 `- `：视频的核心观点 / 最有价值的一段（带时间点）/ 最值得怀疑或需要自己验证的说法
+## 时间轴
+按视频顺序 6–15 条，每条一行：`- [mm:ss](跳转链接) 小标题 —— 这一段讲了什么（一句话）`。有作者章节时以章节为骨架，长章节内部再细分。
+## 旁白解析
+按主题（不是逐句复述）归纳讲者的论证：问题 → 主张 → 论据 / 演示 / 数据 → 结论。每个要点后面括注出处时间点 `[mm:ss](链接)`，关键处附原话短引用。
+画面里的演示、图表、代码只凭旁白无法确知的，写明「需看画面」。
+## 值得手动看的片段
+3–6 段，每段：`[起始](链接)–结束时间` + 为什么值得看（演示操作、图表、关键论证、精彩问答）+ 带着什么问题去看。
+## 论据可信吗
+哪些是实验 / 数据 / 一手经验，哪些只是观点；讲者的立场和利益相关；与主流看法的分歧。
+## 与我已有知识的联系
+## 可迁移结论 / 对我的启发
+2–4 条，注明适用边界。
+## 追问清单
+3 个最值得继续追问、可以直接复制到对话里的问题（练习题另写在 qa.json）。
+## 我的笔记
+（留空，给用户写）
+
+{qa}
+只写 note.md、qa.json，以及取文字稿命令生成的 transcript.md、video.json、字幕文件，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
+{{"title": "视频标题（频道）", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
+"""
+
+
 def _feed_hint(url: str) -> str:
     """从信息推荐里点进来的：带上推荐时抓到的标题、摘要、作者，X 长文抓不到全文时至少有个底。"""
     try:
@@ -429,6 +481,11 @@ def _feed_hint(url: str) -> str:
 
 def item_prompt(it: dict, out: Path) -> str:
     kind = it["kind"]
+    if kind == "video":
+        return VIDEO.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
+                            feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]),
+                            fetch=f"{sys.executable} {Path(_video.__file__).resolve()} '{it['url']}' {out}",
+                            qa=QA_SPEC.format(out=out))
     if kind == "article":
         return ARTICLE.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
                               feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]),
@@ -471,7 +528,7 @@ def start_item_job(it: dict) -> int:
     out = _item_dir(it)
     out.mkdir(parents=True, exist_ok=True)
     (out / "qa.json").unlink(missing_ok=True)   # 练习题跟着笔记重出；以前的作答在 qa 列里，换题后进「以前的作答」
-    dirs = [str(SKILL_DIR)] if it["kind"] == "article" else [str(_skill_dir(it["kind"])), str(SKILL_DIR)]
+    dirs = [str(SKILL_DIR)] if it["kind"] in ("article", "video") else [str(_skill_dir(it["kind"])), str(SKILL_DIR)]
     jid = jobs.submit("learn", item_prompt(it, out), ref=f"learn:item:{it['id']}", cwd=str(out), add_dirs=dirs)
     db.update("learn_items", it["id"], {"job_id": jid, "status": "running", "updated_at": db.now()})
     return jid
@@ -504,6 +561,8 @@ def create_item(body: ItemIn):
     url, extra = normalize_target(body.url)
     if not url:
         raise HTTPException(400, "url required")
+    if _video.is_video_url(url):
+        url = _video.canonical_url(url)   # 带播放列表 / 时间点参数的也算同一个视频
     if body.reuse and (old := _reads.find_item(url)):
         _reads.bind_chats(old)
         return old
@@ -834,7 +893,7 @@ def _finish_item(iid: int, job: dict) -> None:
         cand = cand if cand.is_absolute() else out / cand
         main = cand if cand.is_file() else None
     if not main:
-        md_only = it["kind"] in ("paper", "article") or (it.get("depth") or "quick") == "quick"
+        md_only = it["kind"] in ("paper", "article", "video") or (it.get("depth") or "quick") == "quick"
         names = ["note.md"] if md_only else ["index.html"]
         globs = ["*.md"] if md_only else ["*.html", "*.md"]
         found = [out / n for n in names if (out / n).is_file()]

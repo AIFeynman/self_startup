@@ -643,18 +643,6 @@ def test_yc_launches_parse_and_filter(monkeypatch):
     assert items[0]["type"] == "product" and items[0]["url"].endswith("/launches/s1") and items[0]["popularity"] == 1
 
 
-def test_youtube_skips_shorts():
-    d = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-    entry = lambda vid, path: f"""<entry><yt:videoId>{vid}</yt:videoId><title>T{vid}</title>
-<link rel="alternate" href="https://www.youtube.com/{path}"/><published>{d}</published>
-<media:group><media:description>desc</media:description><media:community><media:statistics views="1234"/></media:community></media:group></entry>"""
-    xml = f"""<?xml version="1.0"?><feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/"
-xmlns="http://www.w3.org/2005/Atom"><title>Chan</title>{entry("aaa", "watch?v=aaa")}{entry("bbb", "shorts/bbb")}</feed>"""
-    items = src.parse_youtube(xml, name="YC")
-    assert [i["id"] for i in items] == ["youtube:aaa"]
-    assert items[0]["type"] == "podcast" and items[0]["popularity"] == 1234 and items[0]["extra"]["feed"] == "YC"
-
-
 def _rsc_page(objs: list[dict]) -> str:
     payload = json.dumps('1:' + json.dumps(objs, separators=(',', ':')))[1:-1]
     return f'<script>self.__next_f.push([1,"{payload}"])</script>'

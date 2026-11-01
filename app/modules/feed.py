@@ -1,4 +1,4 @@
-"""信息推荐：从 HN/HF/AlphaXiv/GitHub/博客 RSS 与官方站/播客/Reddit/X/Product Hunt 收集 AI 相关内容，按热度/新鲜度/兴趣/反馈排序。
+"""信息推荐：从 HN/HF/AlphaXiv/GitHub/博客 RSS 与官方站/播客/Reddit/X/Product Hunt/YouTube 与 B 站视频收集 AI 相关内容，按热度/新鲜度/兴趣/反馈排序。
 
 不做逐条提炼：只展示标题 + 简介 + 链接 + 「为什么推荐」。排序逻辑见 _feed_rank.py，采集见 _feed_sources.py。
 """
@@ -64,7 +64,22 @@ CFG_DEFAULTS = {
     "github_watch_orgs": ["deepseek-ai", "openai", "anthropics", "google", "google-deepmind", "google-research",
                           "meta-llama", "facebookresearch", "microsoft"],
     "github_watch_min_stars": 5,  # 重点机构新仓库的最低星数：滤掉大厂每天建的内部空仓库
-    "reddit": ["LocalLLaMA", "ClaudeAI", "MachineLearning"],
+    # Reddit：实践经验和前沿讨论最集中的版块；.env 配 REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET 走官方 API（有票数），否则走 RSS
+    "reddit": ["LocalLLaMA", "ClaudeAI", "ClaudeCode", "MachineLearning", "LLMDevs", "AI_Agents", "ChatGPTCoding", "mcp"],
+    "reddit_queries": ["claude code", "coding agent", "mcp server"],   # 全站搜本周 top，补名单版块之外的讨论
+    # 视频：YouTube 频道 id（UC 开头；显示名见 _feed_follow.KNOWN_NAMES，「关注源」里可用 @handle 添加）
+    "youtube_channels": ["UCXUPKJO5MZQN11PqgIvyuvQ", "UCbfYPyITQ-7l4upoX8nvctg", "UCZHmQk67mSJgfCCTn7xBfew",
+                         "UCNJ1Ymd5yFuUPtn21xtRbbw", "UCXl4i9dYBrFOabk0xGmbkRA", "UCMLtBahI5DMrt0NPvDSoIRQ",
+                         "UCrDwWp7EBBv4NwvScIpBDOA", "UCXZCJLdBC09xxGZ6gcdrc6A", "UCP7jMXSY2xbc3KCAE0MHQ-A",
+                         "UCLKPca3kwwd-B59HNr-_lvA", "UCxBcwypKK-W3GHd_RZ9FZrQ", "UC2ggjtuuWvxrHHHiaDH1dlQ",
+                         "UCYO_jab_esuFRV4b17AJtAw", "UCSHZKyawb77ixDdsGog4iWA", "UCcefcZRL2oaA_uBNeo5UOWg",
+                         "UCtAcpQcYerN8xxZJYTfWBMw", "UCBa5G_ESCn8Yd4vw5U-gIcg",
+                         # 创投 / 创业访谈：a16z、Sequoia、Every、Cognitive Revolution、20VC
+                         "UC9cn0TuPq4dnbTY-CBsm8XA", "UCWrF0oN6unbXrWsTN7RctTw", "UCjIMtrzxYc0lblGhmOgC_CA",
+                         "UCjNRVMBVI30Sak_p6HRWhIA", "UCf0PBRjhf0rF8fWBIxTuoWA"],
+    "youtube_queries": ["claude code", "AI agents", "LLM explained", "AI engineering"],   # 只在 .env 有 YOUTUBE_API_KEY 时搜
+    "bilibili": ["1567748478"],   # B 站 UP 主 uid（经 RSSHub，公共实例不稳）
+    "video_days": 21,
     "x_days": 3,                  # X：只要最近几天的推文
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
     "x_per_account": 2,           # X 名单账号：每人每次最多收几条
@@ -78,13 +93,14 @@ CFG_DEFAULTS = {
     "trustmrr_days": 30,          # TrustMRR：只要最近几天挂牌出售的产品
     "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
     "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt",
-                "yc", "trustmrr", "analysis", "youtube"],
+                "yc", "trustmrr", "analysis", "video"],
 }
 # 分类 → 采集器：分类页上的「刷新」只跑这些来源
-TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites"], "podcast": ["podcast", "xiaoyuzhou", "youtube"],
-                "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x"], "x_article": ["x"]}
+TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites"], "podcast": ["podcast", "xiaoyuzhou"],
+                "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x"],
+                "x_article": ["x"], "video": ["video"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
-         "news": "资讯"}
+         "video": "视频", "news": "资讯"}
 
 router = APIRouter()
 _state: dict = {"running": False, "started_at": "", "started_utc": "", "finished_at": "", "results": {}, "scope": ""}
@@ -269,7 +285,10 @@ def _collectors() -> dict:
         "podcast": lambda: src.fetch_rss(src_list("podcasts"), per_feed=5, source="podcast", typ="podcast"),
         "xiaoyuzhou": lambda: src.fetch_xiaoyuzhou(src_list("xiaoyuzhou"),
                                                    rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
-        "reddit": lambda: src.fetch_reddit(src_list("reddit")),
+        "reddit": lambda: src.fetch_reddit(src_list("reddit"), list(cfg("reddit_queries") or [])),
+        "video": lambda: src.fetch_videos(src_list("youtube_channels"), list(cfg("youtube_queries") or []),
+                                          bilibili=src_list("bilibili"), days=int(cfg("video_days")),
+                                          rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
         "x": lambda: src.fetch_x(src_list("x_accounts"), list(fc.get("x_queries") or []),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
@@ -278,7 +297,6 @@ def _collectors() -> dict:
         "trustmrr": lambda: src.fetch_trustmrr(days=int(cfg("trustmrr_days")), known=_known_extra("trustmrr")),
         "analysis": lambda: src.fetch_rss([_url_of(v) for v in src_list("product_rss")], per_feed=10,
                                           source="analysis", typ="product"),
-        "youtube": lambda: src.fetch_youtube(src_list("youtube")),
     }
 
 
@@ -333,7 +351,7 @@ def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> di
 
 
 def run_judge(now: datetime | None = None) -> dict:
-    """给最近的 Trending 仓库（是否 AI）和官方内容（是否重要）补 Jev 判断，写回 extra。没判过的排序时走关键词规则。"""
+    """给最近的 Trending 仓库（是否 AI）、官方内容（是否重要）、Reddit / 视频搜索结果（有没有干货）补 Jev 判断，写回 extra。没判过的排序时走关键词规则。"""
     now = now or datetime.now(timezone.utc)
     todo = []
     for it in _load_items():
@@ -347,6 +365,8 @@ def run_judge(now: datetime | None = None) -> dict:
             todo.append((it, "ai", ""))
         elif org := rk.official_org(it):
             todo.append((it, "important", org))
+        elif rk.needs_value(it):
+            todo.append((it, "value", ""))
     if not todo:
         return {"count": 0, "errors": []}
     got, errors = judge.judge(todo)
@@ -662,8 +682,9 @@ def deep_reads() -> int:
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "hn_queries", "github_queries", "reddit", "x_days",
                                 "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "trustmrr_days", "sources", "github_min_stars",
-                                "github_trending_languages", "github_watch_orgs", "github_watch_min_stars")} | {
-        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "youtube", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
+                                "github_trending_languages", "github_watch_orgs", "github_watch_min_stars",
+                                "reddit_queries", "youtube_channels", "youtube_queries", "bilibili", "video_days")} | {
+        k: settings.get(f"feed.{k}", []) for k in ("rss", "sites", "podcasts", "xiaoyuzhou", "product_rss", "rsshub_bases", "x_accounts", "x_queries")} | {"types": TYPES}
 
 
 # ---------- 定时刷新 ----------

@@ -325,47 +325,119 @@ def fetch_rss(urls: list[str], days: int = 30, per_feed: int = 15, source: str =
     return items, errors
 
 
-def fetch_reddit(subs: list[str], limit: int = 15) -> tuple[list[dict], list[str]]:
-    """每个子版块先试公开 JSON（有票数），被 403 时回退 RSS（无票数）。"""
+REDDIT_OAUTH = "https://oauth.reddit.com"
+REDDIT_RSS = "https://www.reddit.com"
+REDDIT_GAP = 3          # 匿名 RSS 请求之间的间隔（秒）：reddit 对匿名请求限流很紧
+_reddit_tok: dict = {"token": "", "exp": 0.0}
+
+
+def _reddit_token(c: httpx.Client) -> str:
+    """官方 OAuth（app-only，client_credentials）：.env 配 REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET 才用。
+    在 https://www.reddit.com/prefs/apps 建一个 script 类型的 app 即可，免费，每分钟 100 次。没配返回空串。"""
+    cid, sec = os.environ.get("REDDIT_CLIENT_ID", "").strip(), os.environ.get("REDDIT_CLIENT_SECRET", "").strip()
+    if not (cid and sec):
+        return ""
+    if _reddit_tok["token"] and _reddit_tok["exp"] > time.time() + 60:
+        return _reddit_tok["token"]
+    r = c.post("https://www.reddit.com/api/v1/access_token", auth=(cid, sec), data={"grant_type": "client_credentials"})
+    r.raise_for_status()
+    j = r.json()
+    _reddit_tok.update(token=j["access_token"], exp=time.time() + float(j.get("expires_in") or 3600))
+    return _reddit_tok["token"]
+
+
+def _reddit_json_item(d: dict, via: str) -> dict | None:
+    if not d.get("id") or d.get("stickied") or d.get("over_18"):
+        return None
+    link = d.get("url_overridden_by_dest") or ""
+    ex = {"subreddit": d.get("subreddit") or "", "comments": d.get("num_comments") or 0, "via": via,
+          "flair": d.get("link_flair_text") or "", "upvote_ratio": d.get("upvote_ratio")}
+    if link and "reddit.com" not in link and "redd.it" not in link:
+        ex["link"] = link
+    body = clean(d.get("selftext") or "")
+    return {"id": f"reddit:{d['id']}", "source": "reddit", "type": "discussion", "title": clean(d.get("title"), 200),
+            "summary": body or reddit_link_summary(link), "url": "https://www.reddit.com" + (d.get("permalink") or ""),
+            "date": _iso(datetime.fromtimestamp(d.get("created_utc") or 0, timezone.utc)),
+            "popularity": float(d.get("score") or 0), "extra": ex}
+
+
+def reddit_link_summary(link: str) -> str:
+    host = re.sub(r"^www\.", "", urlsplit(link or "").netloc)
+    if not host or host.endswith(("reddit.com", "redd.it")):
+        return ""
+    return f"链接到 {host}"
+
+
+def parse_reddit_rss(text: str, via: str, limit: int = 25) -> list[dict]:
+    """Reddit 的 Atom：正文 HTML 末尾是「submitted by /u/x [link] [comments]」，[link] 指向外链（自贴就是帖子本身）。"""
+    f = feedparser.parse(text)
+    out = []
+    for e in f.entries[:limit]:
+        link, title = e.get("link") or "", e.get("title") or ""
+        m = re.search(r"/comments/([a-z0-9]+)/", link)
+        if not m or not title:
+            continue
+        raw = (e.get("content") or [{}])[0].get("value", "") or e.get("summary") or ""
+        ext = re.search(r'<a href="([^"]+)">\s*\[link\]\s*</a>', raw)
+        ext_url = html.unescape(ext.group(1)) if ext else ""
+        body = raw.split("submitted by")[0] if "submitted by" in raw else raw
+        body = clean(re.sub(r"<table>.*?</table>", " ", body, flags=re.S))
+        if re.fullmatch(r"https?://\S+", body):
+            body = ""
+        tm = e.get("published_parsed") or e.get("updated_parsed")
+        sub = next((t.get("term") for t in e.get("tags") or [] if t.get("term")), "") or \
+            (re.search(r"/r/(\w+)/", link) or [None, ""])[1]
+        ex = {"subreddit": sub, "via": via}
+        if ext_url and "reddit.com" not in ext_url and "redd.it" not in ext_url:
+            ex["link"] = ext_url
+        out.append({"id": f"reddit:{m.group(1)}", "source": "reddit", "type": "discussion", "title": clean(title, 200),
+                    "summary": body or reddit_link_summary(ext_url), "url": link,
+                    "date": _iso(datetime(*tm[:6], tzinfo=timezone.utc) if tm else None), "popularity": 0.0, "extra": ex})
+    return out
+
+
+def fetch_reddit(subs: list[str], queries: list[str] = (), limit: int = 25) -> tuple[list[dict], list[str]]:
+    """每个子版块本周 top + 关键词全站搜索（本周 top）。配了官方 OAuth 走 oauth.reddit.com（有票数、评论数、flair），
+    否则走公开 RSS（无票数，按榜单顺序收）。搜索结果不在名单版块里，要求标题像 AI 话题。"""
     items, errors = [], []
-    use_json = True
     with _client() as c:
-        for i, sub in enumerate(subs):
-            if i:
-                time.sleep(3)  # reddit 对匿名请求限流很紧
+        try:
+            tok = _reddit_token(c)
+        except Exception as e:  # noqa: BLE001
+            tok = ""
+            errors.append(f"Reddit OAuth 取 token 失败，改走 RSS：{type(e).__name__}: {str(e)[:100]}")
+        jobs = [("sub", s) for s in subs] + [("q", q) for q in queries]
+        for i, (kind, arg) in enumerate(jobs):
+            label = f"r/{arg}" if kind == "sub" else f"搜索「{arg}」"
             try:
-                r = c.get(f"https://www.reddit.com/r/{sub}/top.json", params={"t": "week", "limit": limit}) if use_json else None
-                if r is not None and r.status_code == 403:
-                    use_json = False  # 本机 IP 被挡，后面的子版块直接走 RSS，省请求
-                if r is not None and r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json"):
-                    for ch in r.json().get("data", {}).get("children", []):
-                        d = ch.get("data") or {}
-                        if not d.get("id") or d.get("stickied"):
-                            continue
-                        items.append({
-                            "id": f"reddit:{d['id']}", "source": "reddit", "type": "discussion",
-                            "title": clean(d.get("title"), 200), "summary": clean(d.get("selftext") or ""),
-                            "url": "https://www.reddit.com" + (d.get("permalink") or ""),
-                            "date": _iso(datetime.fromtimestamp(d.get("created_utc") or 0, timezone.utc)),
-                            "popularity": float(d.get("score") or 0),
-                            "extra": {"subreddit": sub, "comments": d.get("num_comments") or 0}})
-                    continue
-                rss_url = f"https://www.reddit.com/r/{sub}/top/.rss"
-                r = c.get(rss_url, params={"t": "week", "limit": limit})
-                if r.status_code == 429:
-                    time.sleep(5)
-                    r = c.get(rss_url, params={"t": "week", "limit": limit})
-                r.raise_for_status()
-                for it in parse_feed(r.text, source="reddit", typ="discussion", days=0, limit=limit):
-                    m = re.search(r"/comments/([a-z0-9]+)/", it["url"])
-                    if m:
-                        it["id"] = f"reddit:{m.group(1)}"
-                    # RSS 正文是「submitted by /u/x [link] [comments]」之类，去掉这些尾巴
-                    it["summary"] = clean(re.sub(r"submitted by\s+/u/\S+.*$", "", it["summary"]))
-                    it["extra"] = {"subreddit": sub, "via": "rss"}
-                    items.append(it)
+                if tok:
+                    path, params = (f"/r/{arg}/top", {"t": "week", "limit": limit}) if kind == "sub" else \
+                        ("/search", {"q": arg, "sort": "top", "t": "week", "limit": limit, "type": "link"})
+                    r = c.get(REDDIT_OAUTH + path, params={**params, "raw_json": 1},
+                              headers={"Authorization": f"Bearer {tok}"})
+                    r.raise_for_status()
+                    got = [x for ch in r.json().get("data", {}).get("children", [])
+                           if (x := _reddit_json_item(ch.get("data") or {}, "api"))]
+                else:
+                    if i:
+                        time.sleep(REDDIT_GAP)
+                    path, params = (f"/r/{arg}/top/.rss", {"t": "week", "limit": limit}) if kind == "sub" else \
+                        ("/search.rss", {"q": arg, "sort": "top", "t": "week", "limit": limit})
+                    r = c.get(REDDIT_RSS + path, params=params)
+                    if r.status_code == 429:
+                        time.sleep(REDDIT_GAP * 3)
+                        r = c.get(REDDIT_RSS + path, params=params)
+                    r.raise_for_status()
+                    got = parse_reddit_rss(r.text, "rss", limit)
+                    for n, it in enumerate(got):
+                        it["extra"]["top_rank"] = n + 1     # RSS 没票数：记下在本周 top 里的名次
+                if kind == "q":
+                    got = [it for it in got if X_SEARCH_RE.search(it["title"]) or X_SEARCH_RE.search(it["summary"])]
+                    for it in got:
+                        it["extra"]["query"] = arg
+                items += got
             except Exception as e:  # noqa: BLE001
-                errors.append(f"r/{sub}: {type(e).__name__}: {str(e)[:120]}")
+                errors.append(f"{label}: {type(e).__name__}: {str(e)[:120]}")
     return items, errors
 
 
@@ -737,54 +809,6 @@ def fetch_trustmrr(days: int = 30, known: dict | None = None, detail_max: int = 
     return items, errors
 
 
-# ---------- YouTube 频道：官方 RSS（最近 15 条，含播放数），去掉 Shorts ----------
-
-def youtube_feed(channel_id: str) -> str:
-    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-
-
-def parse_youtube(text: str, feed_url: str = "", name: str = "", days: int = 30, limit: int = 5) -> list[dict]:
-    f = feedparser.parse(text)
-    name = name or clean(f.feed.get("title", ""), 80)
-    cutoff, out = _days_ago(days) if days else None, []
-    for e in f.entries:
-        link, vid = e.get("link") or "", e.get("yt_videoid") or ""
-        if not vid or not e.get("title") or "/shorts/" in link:
-            continue
-        tm = e.get("published_parsed")
-        dt = datetime(*tm[:6], tzinfo=timezone.utc) if tm else None
-        if cutoff and dt and dt < cutoff:
-            continue
-        out.append({
-            "id": f"youtube:{vid}", "source": "youtube", "type": "podcast", "title": clean(e["title"], 200),
-            "summary": clean(e.get("summary") or ""), "url": f"https://www.youtube.com/watch?v={vid}", "date": _iso(dt),
-            "popularity": float((e.get("media_statistics") or {}).get("views") or 0),
-            "extra": {"feed": name, "feed_url": feed_url}})
-        if len(out) >= limit:
-            break
-    return out
-
-
-def fetch_youtube(channels: list, days: int = 30, per_channel: int = 5) -> tuple[list[dict], list[str]]:
-    """channels: [{name, url}] 或 feed 地址字符串（youtube.com/feeds/videos.xml?channel_id=…）。"""
-    def one(c, ch):
-        url, name = (ch.get("url", ""), ch.get("name", "")) if isinstance(ch, dict) else (str(ch), "")
-        try:
-            r = c.get(url)
-            r.raise_for_status()
-            return parse_youtube(r.text, url, name, days, per_channel), None
-        except Exception as e:  # noqa: BLE001
-            return [], f"{name or url}: {type(e).__name__}: {str(e)[:120]}"
-
-    items, errors = [], []
-    with _client() as c, ThreadPoolExecutor(max_workers=6) as ex:
-        for got, err in ex.map(lambda ch: one(c, ch), channels):
-            items += got
-            if err:
-                errors.append(err)
-    return items, errors
-
-
 # ---------- 没有 RSS 的官方站：列表页 → 文章链接 → 文章页 meta ----------
 
 def _meta(page: str, *names: str) -> str:
@@ -938,3 +962,145 @@ def fetch_xiaoyuzhou(urls: list[str], days: int = 30, per_feed: int = 5,
             if err:
                 errors.append(err)
     return items, errors
+
+
+# ---------- 视频：YouTube 频道 RSS（免 key）+ YouTube Data API 关键词搜索（可选）+ B 站（经 RSSHub） ----------
+YT_FEED = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
+YT_CHANNEL_RE = re.compile(r"\bUC[\w-]{22}\b")
+YT_MIN_SECONDS = 240        # API 搜索：短于 4 分钟的（Shorts、预告）不收
+
+
+def _yt_item(vid: str, title: str, desc: str, date: str, views: float, channel: str, channel_id: str, via: str,
+             **extra) -> dict:
+    return {"id": f"youtube:{vid}", "source": "youtube", "type": "video", "title": clean(title, 200), "summary": clean(desc),
+            "url": f"https://www.youtube.com/watch?v={vid}", "date": date, "popularity": float(views or 0),
+            "extra": {"channel": channel, "channel_id": channel_id, "via": via,
+                      "thumb": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg", **extra}}
+
+
+def parse_youtube_feed(text: str, days: int = 21, limit: int = 8) -> list[dict]:
+    """频道 RSS：最近 15 条，带播放量（media:statistics views）。Shorts 的链接是 /shorts/，不收。"""
+    f = feedparser.parse(text)
+    channel = clean(f.feed.get("title", ""), 80) if getattr(f, "feed", None) else ""
+    cutoff = _days_ago(days) if days else None
+    out = []
+    for e in f.entries:
+        vid = e.get("yt_videoid") or ""
+        if not vid or "/shorts/" in (e.get("link") or ""):
+            continue
+        tm = e.get("published_parsed")
+        dt = datetime(*tm[:6], tzinfo=timezone.utc) if tm else None
+        if cutoff and dt and dt < cutoff:
+            continue
+        views = (e.get("media_statistics") or {}).get("views") or 0
+        out.append(_yt_item(vid, e.get("title") or "", e.get("media_description") or e.get("summary") or "", _iso(dt),
+                            float(views), channel or e.get("author", ""), e.get("yt_channelid", ""), "channel"))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _iso_dur(s: str) -> int:
+    m = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", s or "")
+    if not m:
+        return 0
+    d, h, mi, se = (int(x or 0) for x in m.groups())
+    return d * 86400 + h * 3600 + mi * 60 + se
+
+
+def youtube_search(c: httpx.Client, key: str, queries: list[str], days: int = 7, per_query: int = 10) -> list[dict]:
+    """YouTube Data API v3：每个关键词取最近 days 天按播放量排的前 per_query 个，再批量补播放量和时长（search 100 配额 / 次，
+    videos 1 配额 / 次；默认 4 个词每天跑 4 次 ≈ 1600，免费额度 10000 / 天）。"""
+    since = _days_ago(days).strftime("%Y-%m-%dT%H:%M:%SZ")
+    found: dict[str, tuple[dict, str]] = {}
+    for q in queries:
+        r = c.get("https://www.googleapis.com/youtube/v3/search", params={
+            "key": key, "part": "snippet", "q": q, "type": "video", "order": "viewCount", "publishedAfter": since,
+            "maxResults": per_query})
+        r.raise_for_status()
+        for it in r.json().get("items", []):
+            vid = (it.get("id") or {}).get("videoId")
+            if vid and vid not in found:
+                found[vid] = (it.get("snippet") or {}, q)
+    out = []
+    ids = list(found)
+    for i in range(0, len(ids), 50):
+        r = c.get("https://www.googleapis.com/youtube/v3/videos", params={
+            "key": key, "part": "statistics,contentDetails,snippet", "id": ",".join(ids[i:i + 50])})
+        r.raise_for_status()
+        for v in r.json().get("items", []):
+            sn, q = found[v["id"]]
+            sn = v.get("snippet") or sn
+            secs = _iso_dur((v.get("contentDetails") or {}).get("duration", ""))
+            if secs and secs < YT_MIN_SECONDS:
+                continue
+            st = v.get("statistics") or {}
+            out.append(_yt_item(v["id"], sn.get("title", ""), sn.get("description", ""), sn.get("publishedAt", ""),
+                                float(st.get("viewCount") or 0), sn.get("channelTitle", ""), sn.get("channelId", ""),
+                                "search", query=q, duration=secs, likes=int(st.get("likeCount") or 0)))
+    return out
+
+
+def fetch_videos(channels: list[str], queries: list[str] = (), bilibili: list[str] = (), days: int = 21,
+                 per_channel: int = 5, rsshub_bases: list[str] | None = None) -> tuple[list[dict], list[str]]:
+    """channels：YouTube 频道 id（UC 开头 24 位），关注列表里加 @handle / 频道链接时已解析成 id。
+    queries：配了 YOUTUBE_API_KEY 才搜。bilibili：B 站 UP 主 uid，经 RSSHub 取投稿。"""
+    def chan(c, cid):
+        try:
+            r = c.get(YT_FEED.format(cid))
+            r.raise_for_status()
+            return parse_youtube_feed(r.text, days, per_channel), None
+        except Exception as e:  # noqa: BLE001
+            return [], f"YouTube {cid}: {type(e).__name__}: {str(e)[:100]}"
+
+    def bili(c, uid):
+        for base in rsshub_bases or RSSHUB_BASES:
+            try:
+                r = c.get(f"{base.rstrip('/')}/bilibili/user/video/{uid}", timeout=12)
+                got = parse_feed(r.text, source="bilibili", typ="video", days=days, limit=per_channel) if r.status_code == 200 else []
+            except Exception:  # noqa: BLE001
+                got = []
+            for it in got:
+                if m := re.search(r"(BV\w{10})", it["url"]):
+                    it["id"], it["url"] = f"bilibili:{m.group(1)}", f"https://www.bilibili.com/video/{m.group(1)}"
+                it["extra"] = {**it["extra"], "channel": it["extra"].get("feed", ""), "uid": uid, "via": "rsshub"}
+            if got:
+                return got, None
+        return [], f"B 站 uid {uid}: RSSHub 各实例都没取到"
+
+    items, errors = [], []
+    with _client() as c, ThreadPoolExecutor(max_workers=6) as ex:
+        for got, err in list(ex.map(lambda x: chan(c, x), channels)) + list(ex.map(lambda x: bili(c, x), bilibili)):
+            items += got
+            if err:
+                errors.append(err)
+        key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+        if queries and key:
+            try:
+                items += youtube_search(c, key, list(queries))
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"YouTube 搜索: {type(e).__name__}: {str(e)[:120]}")
+    return items, errors
+
+
+def resolve_youtube_channel(text: str) -> tuple[str, str]:
+    """@handle / 频道链接 / UC id → (频道 id, 频道名)。只读频道页的 meta，不调 API。"""
+    t = text.strip()
+    if m := YT_CHANNEL_RE.search(t):
+        cid = m.group(0)
+        url = YT_FEED.format(cid)
+    else:
+        h = re.sub(r"^(?:https?://)?(?:www\.|m\.)?youtube\.com/", "", t).strip("/")
+        h = h if h.startswith(("@", "c/", "user/")) else "@" + h.lstrip("@")
+        url = f"https://www.youtube.com/{h}"
+    with httpx.Client(timeout=TIMEOUT, headers={"User-Agent": BROWSER_UA}, follow_redirects=True) as c:
+        r = c.get(url)
+        r.raise_for_status()
+        if "feeds/videos.xml" in url:
+            f = feedparser.parse(r.text)
+            return cid, clean(f.feed.get("title", ""), 80) if getattr(f, "feed", None) else ""
+        m = re.search(r'<meta itemprop="identifier" content="(UC[\w-]{22})"', r.text) or \
+            re.search(r'"(?:externalId|channelId)":"(UC[\w-]{22})"', r.text)
+        if not m:
+            raise ValueError("频道页里没找到频道 id")
+        return m.group(1), clean(_meta(r.text[:300_000], "og:title"), 80)
