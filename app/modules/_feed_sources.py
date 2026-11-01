@@ -299,7 +299,7 @@ def parse_feed(text: str, feed_url: str = "", source: str = "blog", typ: str = "
         out.append({
             "id": f"{source}:{sha1(ext.encode()).hexdigest()[:12]}", "source": source, "type": typ,
             "title": clean(title, 200), "summary": clean(body), "url": link, "date": _iso(dt),
-            "popularity": 0.0, "extra": {"feed": feed_title, "feed_url": feed_url}})
+            "popularity": 0.0, "extra": {"feed": feed_title, "feed_url": feed_url, "author": clean(e.get("author") or "", 60)}})
         if len(out) >= limit:
             break
     return out
@@ -1053,11 +1053,74 @@ def youtube_search(c: httpx.Client, key: str, queries: list[str], days: int = 7,
     return out
 
 
+YT_CATEGORIES = {"28": "科技", "27": "教育"}
+# 热门榜 / 排行榜是全站口味（数码开箱、时政历史居多），先按标题 + 简介粗筛技术相关的，再交给价值判断
+TECH_TOPIC_RE = re.compile(
+    r"\b(?:AI|AGI|LLMs?|GPT|Claude|Gemini|agents?|machine learning|deep learning|neural|transformers?|GPUs?|CUDA|"
+    r"algorithms?|programming|coding|code|software|compilers?|math(?:ematics)?|robot(?:s|ics)?|open[- ]source|"
+    r"computer science|data science|python|rust)\b"
+    r"|人工智能|大模型|模型|智能体|算法|编程|程序员?|代码|计算机|芯片|显卡|机器学习|深度学习|神经网络|数学|机器人|开源|软件|"
+    r"量子计算|自动驾驶|具身智能|操作系统", re.I)
+
+
+def tech_topic(it: dict) -> bool:
+    return bool(TECH_TOPIC_RE.search(f"{it.get('title', '')} {(it.get('summary') or '')[:600]}"))
+BILI_BOARDS = {"knowledge": "知识区", "tech": "科技区"}
+
+
+def youtube_trending(c: httpx.Client, key: str, categories=("28", "27"), region: str = "US", per_cat: int = 25,
+                     langs=YT_LANGS) -> list[dict]:
+    """YouTube 热门榜（videos chart=mostPopular，1 配额 / 次）：按分类取，过滤语言和时长，记下榜上名次。"""
+    out = []
+    for cat in categories:
+        r = c.get("https://www.googleapis.com/youtube/v3/videos", params={
+            "key": key, "part": "snippet,statistics,contentDetails", "chart": "mostPopular",
+            "videoCategoryId": cat, "regionCode": region, "maxResults": per_cat})
+        if r.status_code == 404:   # 该地区没有这个分类的榜
+            continue
+        r.raise_for_status()
+        for n, v in enumerate(r.json().get("items", []), 1):
+            sn = v.get("snippet") or {}
+            secs = _iso_dur((v.get("contentDetails") or {}).get("duration", ""))
+            if secs and secs < YT_MIN_SECONDS or langs and not yt_lang_ok(sn, langs):
+                continue
+            st = v.get("statistics") or {}
+            out.append(_yt_item(v["id"], sn.get("title", ""), sn.get("description", ""), sn.get("publishedAt", ""),
+                                float(st.get("viewCount") or 0), sn.get("channelTitle", ""), sn.get("channelId", ""),
+                                "trending", board=f"YouTube {YT_CATEGORIES.get(str(cat), cat)}热门", rank=n,
+                                duration=secs, likes=int(st.get("likeCount") or 0)))
+    return out
+
+
+def _bili_fix(it: dict, **extra) -> dict:
+    if m := re.search(r"(BV\w{10})", it["url"]):
+        it["id"], it["url"] = f"bilibili:{m.group(1)}", f"https://www.bilibili.com/video/{m.group(1)}"
+    it["extra"] = {**it["extra"], **extra}
+    return it
+
+
+def bilibili_ranking(c: httpx.Client, board: str, bases: list[str], days: int = 21, limit: int = 30) -> list[dict]:
+    """B 站分区排行榜（经 RSSHub /bilibili/ranking/:分区）。条目顺序就是名次。"""
+    name = f"B 站{BILI_BOARDS.get(board, board)}排行"
+    for base in bases:
+        try:
+            r = c.get(f"{base.rstrip('/')}/bilibili/ranking/{board}", timeout=15)
+            got = parse_feed(r.text, source="bilibili", typ="video", days=days, limit=limit) if r.status_code == 200 else []
+        except Exception:  # noqa: BLE001
+            got = []
+        if got:
+            return [_bili_fix(it, channel=it["extra"].get("author", ""), via="ranking", board=name, rank=n)
+                    for n, it in enumerate(got, 1)]
+    raise RuntimeError(f"{name}: RSSHub 各实例都没取到")
+
+
 def fetch_videos(channels: list[str], queries: list[str] = (), bilibili: list[str] = (), days: int = 21,
                  per_channel: int = 5, rsshub_bases: list[str] | None = None,
-                 langs=YT_LANGS) -> tuple[list[dict], list[str]]:
+                 langs=YT_LANGS, trending=("28", "27"), region: str = "US",
+                 bili_boards=("knowledge",)) -> tuple[list[dict], list[str]]:
     """channels：YouTube 频道 id（UC 开头 24 位），关注列表里加 @handle / 频道链接时已解析成 id。
-    queries：配了 YOUTUBE_API_KEY 才搜。bilibili：B 站 UP 主 uid，经 RSSHub 取投稿。"""
+    queries / trending：配了 YOUTUBE_API_KEY 才搜 / 取热门榜（trending 是分类 id，28 科技、27 教育）。
+    bilibili：B 站 UP 主 uid，经 RSSHub 取投稿；bili_boards：B 站排行榜分区（knowledge / tech …），也经 RSSHub。"""
     def chan(c, cid):
         try:
             r = c.get(YT_FEED.format(cid))
@@ -1074,9 +1137,7 @@ def fetch_videos(channels: list[str], queries: list[str] = (), bilibili: list[st
             except Exception:  # noqa: BLE001
                 got = []
             for it in got:
-                if m := re.search(r"(BV\w{10})", it["url"]):
-                    it["id"], it["url"] = f"bilibili:{m.group(1)}", f"https://www.bilibili.com/video/{m.group(1)}"
-                it["extra"] = {**it["extra"], "channel": it["extra"].get("feed", ""), "uid": uid, "via": "rsshub"}
+                _bili_fix(it, channel=it["extra"].get("feed", ""), uid=uid, via="rsshub")
             if got:
                 return got, None
         return [], f"B 站 uid {uid}: RSSHub 各实例都没取到"
@@ -1093,6 +1154,18 @@ def fetch_videos(channels: list[str], queries: list[str] = (), bilibili: list[st
                 items += youtube_search(c, key, list(queries), langs=langs)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"YouTube 搜索: {type(e).__name__}: {str(e)[:120]}")
+        if trending and key:
+            try:
+                items += [it for it in youtube_trending(c, key, list(trending), region=region, langs=langs)
+                          if tech_topic(it)]
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"YouTube 热门: {type(e).__name__}: {str(e)[:120]}")
+        for board in bili_boards or ():
+            try:
+                items += [it for it in bilibili_ranking(c, board, rsshub_bases or RSSHUB_BASES, days=days)
+                          if tech_topic(it)]
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e)[:160])
     return items, errors
 
 
