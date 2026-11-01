@@ -12,10 +12,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import db, settings
+from . import _feed_follow as follow
 from . import _feed_gist as gist
 from . import _feed_judge as judge
 from . import _feed_rank as rk
@@ -73,11 +75,14 @@ CFG_DEFAULTS = {
     "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
     "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt"],
 }
+# 分类 → 采集器：分类页上的「刷新」只跑这些来源
+TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites"], "podcast": ["podcast", "xiaoyuzhou"],
+                "product": ["producthunt"], "repo": ["github"], "discussion": ["hn", "reddit", "x"], "x_article": ["x"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
          "news": "资讯"}
 
 router = APIRouter()
-_state: dict = {"running": False, "started_at": "", "finished_at": "", "results": {}}
+_state: dict = {"running": False, "started_at": "", "finished_at": "", "results": {}, "scope": ""}
 _state_lock = threading.Lock()
 
 
@@ -118,8 +123,13 @@ def _iso(d: datetime) -> str:
     return d.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 def upsert(items: list[dict]) -> int:
-    """写入/合并：新值非空才覆盖；extra 合并（保留旧条目已有的字段）。"""
-    n = 0
+    return _upsert(items)[0]
+
+
+def _upsert(items: list[dict]) -> tuple[int, int]:
+    """写入/合并：新值非空才覆盖；extra 合并（保留旧条目已有的字段）。同一条（id 相同）再抓到只更新不重复入库。
+    返回 (写入条数, 其中新增条数)。"""
+    n = new = 0
     ts = db.now()
     for it in items:
         if not it.get("id") or not it.get("title"):
@@ -147,8 +157,9 @@ def upsert(items: list[dict]) -> int:
                                      "summary": it.get("summary") or "", "url": it.get("url") or "",
                                      "date": it.get("date") or "", "popularity": float(it.get("popularity") or 0),
                                      "extra": extra, "fetched_at": ts})
+            new += 1
         n += 1
-    return n
+    return n, new
 
 
 def _extra(r: dict) -> dict:
@@ -229,6 +240,15 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
 
 # ---------- 采集 ----------
 
+def follow_cfg() -> dict:
+    return settings.get("feed.follow", {}) or {}
+
+
+def src_list(lst: str) -> list:
+    """某个关注列表的实际内容：默认名单 + 用户加的 − 用户删的。"""
+    return follow.effective(list(cfg(lst) or []), follow_cfg(), lst)
+
+
 def _collectors() -> dict:
     fc = settings.get("feed", {}) or {}
     return {
@@ -237,15 +257,15 @@ def _collectors() -> dict:
         "alphaxiv": lambda: src.fetch_alphaxiv(),
         "github": lambda: src.fetch_github_all(list(cfg("github_queries")), min_stars=int(cfg("github_min_stars")),
                                                trending_languages=list(cfg("github_trending_languages")),
-                                               watch_orgs=list(cfg("github_watch_orgs")),
+                                               watch_orgs=src_list("github_watch_orgs"),
                                                watch_min_stars=int(cfg("github_watch_min_stars"))),
-        "rss": lambda: src.fetch_rss(list(fc.get("rss") or [])),
-        "sites": lambda: src.fetch_sites(list(fc.get("sites") or []), known_urls=_known_urls("blog")),
-        "podcast": lambda: src.fetch_rss(list(fc.get("podcasts") or []), per_feed=5, source="podcast", typ="podcast"),
-        "xiaoyuzhou": lambda: src.fetch_xiaoyuzhou(list(fc.get("xiaoyuzhou") or []),
+        "rss": lambda: src.fetch_rss(src_list("rss")),
+        "sites": lambda: src.fetch_sites(src_list("sites"), known_urls=_known_urls("blog")),
+        "podcast": lambda: src.fetch_rss(src_list("podcasts"), per_feed=5, source="podcast", typ="podcast"),
+        "xiaoyuzhou": lambda: src.fetch_xiaoyuzhou(src_list("xiaoyuzhou"),
                                                    rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
-        "reddit": lambda: src.fetch_reddit(list(cfg("reddit"))),
-        "x": lambda: src.fetch_x(list(fc.get("x_accounts") or []), list(fc.get("x_queries") or []),
+        "reddit": lambda: src.fetch_reddit(src_list("reddit")),
+        "x": lambda: src.fetch_x(src_list("x_accounts"), list(fc.get("x_queries") or []),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
@@ -266,8 +286,9 @@ def _known_urls(source: str) -> set[str]:
     return {r["url"] for r in db.rows("SELECT url FROM feed_items WHERE source=?", [source])}
 
 
-def refresh_sync(only: list[str] | None = None) -> dict:
-    """跑一遍采集；每个来源独立 fail-soft。返回 {source: {count, errors}}。"""
+def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> dict:
+    """跑一遍采集；每个来源独立 fail-soft。返回 {source: {count, new, errors}}。
+    gists：是否补中文一句话，默认只在全量刷新时补（分类页手动刷新也补，新抓的要能看懂）。"""
     cols = _collectors()
     names = [n for n in (only or cfg("sources")) if n in cols]
     results: dict = {}
@@ -276,7 +297,8 @@ def refresh_sync(only: list[str] | None = None) -> dict:
         try:
             got = cols[name]()
             items, errs = got if isinstance(got, tuple) else (got, [])
-            return name, {"count": upsert(items), "errors": errs}
+            n, new = _upsert(items)
+            return name, {"count": n, "new": new, "errors": errs}
         except Exception as e:  # noqa: BLE001
             log.warning("feed source %s failed: %s", name, e)
             return name, {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
@@ -286,7 +308,7 @@ def refresh_sync(only: list[str] | None = None) -> dict:
             results[name] = res
     if cfg("judge_enabled"):    # 判断决定过滤和置顶，刷了哪个来源都跑；只问新的或内容变了的，量很小
         results["judge"] = run_judge()
-    if not only and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
+    if (not only if gists is None else gists) and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
         results["gist"] = run_gists()
     return results
 
@@ -337,9 +359,9 @@ def run_gists() -> dict:
         return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
 
 
-def _bg(only):
+def _bg(only, gists=None):
     try:
-        res = refresh_sync(only)
+        res = refresh_sync(only, gists)
     except Exception as e:  # noqa: BLE001
         res = {"_": {"count": 0, "errors": [str(e)]}}
     with _state_lock:
@@ -348,6 +370,7 @@ def _bg(only):
 
 class RefreshIn(BaseModel):
     sources: list[str] = []      # 空 = 全部
+    type: str = ""               # 只刷这个分类的来源（TYPE_SOURCES），和 sources 二选一
     wait: bool = False           # true = 同步等结果（CLI / Agent 用）
 
 
@@ -360,16 +383,102 @@ def gist_now():
 @router.post("/refresh")
 def refresh(body: RefreshIn | None = None):
     body = body or RefreshIn()
+    if body.type and body.type not in TYPE_SOURCES:
+        raise HTTPException(400, f"未知分类：{body.type}")
+    only = TYPE_SOURCES[body.type] if body.type else (body.sources or None)
+    gists = True if body.type else None
     if body.wait:
-        res = refresh_sync(body.sources or None)
+        res = refresh_sync(only, gists)
         with _state_lock:
-            _state.update(finished_at=db.now(), results=res)
+            _state.update(finished_at=db.now(), results=res, scope=body.type)
         return status()
-    with _state_lock:
-        if not _state["running"]:
-            _state.update(running=True, started_at=db.now(), results={})
-            threading.Thread(target=_bg, args=(body.sources or None,), daemon=True).start()
+    start_refresh(only, gists, scope=body.type)
     return status()
+
+
+def start_refresh(only=None, gists=None, scope: str = "") -> bool:
+    """后台刷新；已有刷新在跑时不重复起（返回 False）。scope 记下这次刷的是哪个分类，页面据此显示。"""
+    with _state_lock:
+        if _state["running"]:
+            return False
+        _state.update(running=True, started_at=db.now(), results={}, scope=scope)
+    threading.Thread(target=_bg, args=(only, gists), daemon=True).start()
+    return True
+
+
+# ---------- 关注源 ----------
+
+def follow_groups() -> list[dict]:
+    fc = follow_cfg()
+    names = fc.get("names") or {}
+    added = {lst: {follow.entry_key(lst, v) for v in vs} for lst, vs in (fc.get("add") or {}).items()}
+    out = []
+    for gid, g in follow.GROUPS.items():
+        items = [{"list": lst, "key": follow.entry_key(lst, v), "label": follow.label(lst, v, names),
+                  "custom": follow.entry_key(lst, v) in added.get(lst, set()),
+                  "url": v.get("url") if isinstance(v, dict) else (v if lst in ("rss", "podcasts", "xiaoyuzhou") else "")}
+                 for lst in g["lists"] for v in src_list(lst)]
+        out.append({"id": gid, "label": g["label"], "hint": g["hint"], "items": items})
+    return out
+
+
+class FollowIn(BaseModel):
+    group: str
+    value: str
+
+
+class UnfollowIn(BaseModel):
+    list: str
+    key: str
+
+
+def _save_follow(fc: dict) -> None:
+    settings.save({"feed": {"follow": fc}})
+
+
+@router.get("/sources")
+def sources():
+    return {"groups": follow_groups()}
+
+
+@router.post("/sources")
+def add_source(body: FollowIn):
+    """加关注源：解析输入（可能联网验证）→ 记进 feed.follow → 后台只刷这个来源。"""
+    if body.group not in follow.GROUPS:
+        raise HTTPException(400, f"未知类别：{body.group}")
+    try:
+        lst, entry, name = follow.resolve(body.group, body.value)
+    except follow.FollowError as e:
+        raise HTTPException(400, str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(400, f"网络错误：{type(e).__name__}") from e
+    key = follow.entry_key(lst, entry)
+    exists = key in {follow.entry_key(lst, v) for v in src_list(lst)}
+    fc = follow_cfg()
+    rm = [k for k in (fc.get("remove") or {}).get(lst) or [] if k != key]
+    patch: dict = {"remove": {lst: rm}, "names": {key: name}}
+    if not exists and key not in {follow.entry_key(lst, v) for v in cfg(lst) or []}:
+        patch["add"] = {lst: [*((fc.get("add") or {}).get(lst) or []), entry]}
+    _save_follow(patch)
+    started = start_refresh([follow.LIST_COLLECTOR[lst]], gists=True, scope=f"source:{lst}") if not exists else False
+    return {"ok": True, "exists": exists, "list": lst, "key": key, "label": name, "refreshing": started,
+            "groups": follow_groups()}
+
+
+@router.post("/sources/remove")
+def remove_source(body: UnfollowIn):
+    """取消关注：自己加的直接删；默认名单里的记进 remove。已经抓到的条目留着，随时间自然沉下去。"""
+    fc = follow_cfg()
+    add = (fc.get("add") or {}).get(body.list) or []
+    patch: dict = {}
+    if any(follow.entry_key(body.list, v) == body.key for v in add):
+        patch["add"] = {body.list: [v for v in add if follow.entry_key(body.list, v) != body.key]}
+    if body.key in {follow.entry_key(body.list, v) for v in cfg(body.list) or []}:
+        patch["remove"] = {body.list: sorted({*((fc.get("remove") or {}).get(body.list) or []), body.key})}
+    if not patch:
+        raise HTTPException(404, "没有这个关注源")
+    _save_follow(patch)
+    return {"ok": True, "groups": follow_groups()}
 
 
 @router.get("/status")
@@ -533,11 +642,8 @@ def maybe_auto_refresh() -> bool:
     hours = float(cfg("auto_refresh_hours") or 0)
     if hours <= 0 or _stale_hours() < hours:
         return False
-    with _state_lock:
-        if _state["running"]:
-            return False
-        _state.update(running=True, started_at=db.now(), results={})
-    threading.Thread(target=_bg, args=(None,), daemon=True).start()
+    if not start_refresh():
+        return False
     log.info("feed auto refresh started (data older than %sh)", hours)
     return True
 

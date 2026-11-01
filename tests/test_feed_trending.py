@@ -87,6 +87,7 @@ def test_github_orgs_watch(monkeypatch):
         {"full_name": "deepseek-ai/old", "created_at": ago(30), "stargazers_count": 9000}]}
 
     class Resp:
+        status_code = 200
         def __init__(self, data):
             self.data = data
         def raise_for_status(self):
@@ -100,7 +101,7 @@ def test_github_orgs_watch(monkeypatch):
         def __exit__(self, *a):
             pass
         def get(self, url, **kw):
-            return Resp(repos[url.split("/orgs/")[1].split("/")[0]])
+            return Resp(repos[url.split("/users/")[1].split("/")[0]])
 
     monkeypatch.setattr(src, "_client", Client)
     (it,) = src.fetch_github_orgs(["deepseek-ai"])

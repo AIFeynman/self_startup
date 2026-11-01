@@ -238,12 +238,17 @@ def fetch_github_orgs(orgs: list[str], days: int = 14, min_stars: int = 5) -> li
     """重点机构（DeepSeek / OpenAI / Anthropic …）最近新建的公开仓库：关键词搜索靠描述命中，大厂新项目描述常常很短，单独盯。
     min_stars 过滤大厂每天建的内部空仓库（Microsoft 两周十几个，几乎都是 0★）。"""
     cutoff = _days_ago(days)
-    out = []
+    out, errors = [], []
     with _client() as c:
         for org in orgs:
-            r = c.get(f"https://api.github.com/orgs/{org}/repos", headers=_gh_headers(),
-                      params={"sort": "created", "direction": "desc", "per_page": 30, "type": "public"})
-            r.raise_for_status()
+            # /users/ 对个人账号和机构都适用（/orgs/ 只认机构），用户关注的个人作者也走这里
+            r = c.get(f"https://api.github.com/users/{org}/repos", headers=_gh_headers(),
+                      params={"sort": "created", "direction": "desc", "per_page": 30, "type": "owner"})
+            if r.status_code != 200:
+                errors.append(f"{org}: HTTP {r.status_code}")
+                if r.status_code in (403, 429):
+                    break   # 限流了，后面的也会失败
+                continue
             for it in r.json():
                 created = datetime.fromisoformat((it.get("created_at") or "1970-01-01T00:00:00Z").replace("Z", "+00:00"))
                 if created < cutoff:
@@ -251,6 +256,8 @@ def fetch_github_orgs(orgs: list[str], days: int = 14, min_stars: int = 5) -> li
                 if it.get("full_name") and not it.get("fork") and not it.get("archived") \
                         and (it.get("stargazers_count") or 0) >= min_stars:
                     out.append(_repo_item(it, watch_org=org))
+    if errors and not out and len(errors) == len(orgs):
+        raise RuntimeError("; ".join(errors[:3]))
     return out
 
 
