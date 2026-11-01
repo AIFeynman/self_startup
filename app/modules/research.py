@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS products (
 """
 
 ANGLES = ["技术原理", "关键玩家与竞品", "用户口碑与体验", "商业模式", "风险与局限", "最新进展", "对我的启发"]
-ENGINES = {"claude": "Claude Code", "codex": "Codex", "grokbot": "GrokBot (X/Twitter)", "muse": "Muse（手动粘贴）"}
+ENGINES = {"claude": "Claude Code", "codex": "Codex", "grokbot": "GrokBot (X/Twitter)", "muse": "Muse"}
 PENDING = ("queued", "running", "waiting", "awaiting_login")
 GROK_WAIT_SECONDS = 9 * 60
 DOC_DIR = db.DATA_DIR / "research"
