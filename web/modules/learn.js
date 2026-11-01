@@ -33,6 +33,7 @@ const CSS = `
 .ln-step:last-child { color: var(--accent); }
 .ln-badge.github { background: var(--dark); color: var(--bg); }
 .ln-badge.article { background: var(--ok-soft); color: var(--ok); }
+.ln-badge.video { background: var(--warn-soft, var(--accent-soft)); color: var(--warn, var(--accent)); }
 .ln-reads .ln-rd { display: grid; grid-template-columns: 7.5em 3em 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
 .ln-reads .ln-rd:first-of-type { border-top: 0; }
 /* 追问清单：逐题作答 + Agent 点评 */
@@ -391,7 +392,7 @@ async function softRefresh() {
 }
 
 const tag = (h, status) => h('span.tag' + (STATUS_TAG[status] ? '.' + STATUS_TAG[status] : ''), {}, STATUS_TXT[status] || status);
-const BADGE = { github: 'REPO', paper: 'PAPER', article: '文章' };
+const BADGE = { github: 'REPO', paper: 'PAPER', article: '文章', video: '视频' };
 const badge = (h, kind) => h('span.ln-badge.' + (BADGE[kind] ? kind : 'paper'), {}, BADGE[kind] || 'PAPER');
 
 function watchJob(ctx, jobId, status) {
@@ -423,6 +424,9 @@ function detectIntent(text) {
     const repo = `${m[1]}/${m[2].replace(/\.git$/, '')}`;
     return { kind: 'github', label: `仓库 ${repo}`, url: `https://github.com/${repo}` };
   }
+  if ((m = t.match(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch|shorts\/|live\/)|youtu\.be\/|bilibili\.com\/video\/|b23\.tv\/)\S+/i))) {
+    return { kind: 'video', label: '视频 ' + m[0].replace(/^https?:\/\/(www\.)?/, '').slice(0, 40), url: m[0] };
+  }
   if ((m = t.match(/https?:\/\/[^\s，。、）)]+/i))) {
     const link = m[0];
     const u = new URL(link);
@@ -453,7 +457,7 @@ async function renderHome(el, ctx, scrollToPlans) {
   let editing = null;
 
   const box = ui.composer({
-    placeholder: '粘贴 arXiv / PDF / DOI / GitHub 链接深读，或输入想系统学习的主题…', autofocus: true,
+    placeholder: '粘贴 arXiv / PDF / DOI / GitHub / YouTube 链接深读，或输入想系统学习的主题…', autofocus: true,
     modes: [{ id: 'auto', label: '自动' }, { id: 'item', label: '深读', placeholder: 'arXiv / PDF / DOI 链接，或 GitHub owner/repo' },
       { id: 'plan', label: '学习计划', placeholder: '想系统学习的主题，例如：世界模型、RL 用于 LLM 推理' },
       { id: 'ask', label: '问 Agent', placeholder: '问学习 Agent，例如：ReAct 和 Reflexion 的区别？' }],
@@ -634,7 +638,7 @@ async function renderItem(el, ctx, iid) {
     // 实时进度：已用时 + Agent 最近几步（读了哪些文件、跑了什么命令）
     const steps = h('div.ln-steps');
     const head = h('div.serif', {}, '后台深读中');
-    reader.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, (it.depth || 'quick') === 'quick' && it.kind === 'github' ? '速读 · 通常几分钟' : it.kind === 'github' ? '完整教程 · 通常 10–20 分钟' : it.kind === 'article' ? '文章深读 · 通常 2–5 分钟' : '论文深读 · 通常 2–5 分钟')]), steps]));
+    reader.append(h('div.card', {}, [h('div.row', {}, [head, h('span.grow'), h('span.muted', {}, (it.depth || 'quick') === 'quick' && it.kind === 'github' ? '速读 · 通常几分钟' : it.kind === 'github' ? '完整教程 · 通常 10–20 分钟' : it.kind === 'article' ? '文章深读 · 通常 2–5 分钟' : it.kind === 'video' ? '视频解读 · 通常 3–8 分钟（无字幕时本机转写更久）' : '论文深读 · 通常 2–5 分钟')]), steps]));
     const tick = async () => {
       if (!steps.isConnected) return;
       const j = await api.get(`/api/jobs/${it.job_id}`).catch(() => null);

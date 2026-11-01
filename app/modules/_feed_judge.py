@@ -3,8 +3,10 @@
 - ai：GitHub Trending 上的项目是否与 AI 相关。不相关的不进推荐（Trending 是全站榜，混着 devops 题库、紫微斗数之类）。
 - important：官方博客 / 重点机构新仓库是不是实质更新（新模型、产品功能、开源项目、研究、技术文章），而不是客户案例、
   合作签约、营销活动这类 PR 水文。是的话在「全部」里置顶、进今日精选。
+- value：Reddit 帖子 / YouTube 搜索到的视频有没有干货（实践经验、教程、实测、前沿讨论、有知识密度的讲解）。
+  低的不推荐，高的加分（见 _feed_rank.VALUE_DROP / VALUE_GOOD）。
 
-结果写进 feed_items.extra 的 judge_ai / judge_important，judge_src 记输入哈希，内容不变不重复问。
+结果写进 feed_items.extra 的 judge_ai / judge_important / judge_value，judge_src 记输入哈希，内容不变不重复问。
 没配 TYPESAFE_API_KEY（或 JEV_API_KEY）或调用失败时不写，排序退回 _feed_rank 里的关键词规则。
 """
 from __future__ import annotations
@@ -24,6 +26,22 @@ Q_AI = ("state.items.{k} 是 GitHub Trending 上的一个开源项目。它是�
 Q_IMPORTANT = ("state.items.{k} 是 {org} 官方发布的内容。它是否是实质性的更新：新模型、新产品或功能、开源项目、"
                "研究成果、技术或工程深度文章、重要的安全报告？客户案例、合作签约、行业方案推广、营销活动、招聘、"
                "公关表态这类内容回答否。")
+Q_VALUE = {
+    "reddit": ("state.items.{k} 是 Reddit 上的一个帖子。它对一个关注 AI 的工程师是否有实际价值：亲身实践经验、"
+               "教程或配置分享、实测 / 对比 / 基准、开源项目展示、对新论文 / 新模型 / 技术方向的有内容的讨论？"
+               "梗图、段子、单纯求助提问、吐槽、「什么时候发布」式猜测、没有内容的新闻转发回答否。"),
+    "youtube": ("state.items.{k} 是 YouTube 上搜索到的一个视频。它是否是有知识密度的 AI / 科技内容：技术讲解、"
+                "课程讲座、论文解读、深度访谈、实操教程？标题党、营销带货、搬运剪辑、泛泛的新闻快讯、「AI 要取代你」"
+                "式恐慌内容回答否。"),
+}
+
+
+def _question(kind: str, k: str, it: dict, org: str) -> str:
+    if kind == "ai":
+        return Q_AI.format(k=k)
+    if kind == "value":
+        return Q_VALUE.get(it.get("source"), Q_VALUE["reddit"]).format(k=k)
+    return Q_IMPORTANT.format(k=k, org=org)
 
 
 def judge_key(it: dict) -> str:
@@ -36,16 +54,21 @@ def _state(it: dict, org: str) -> dict:
     if it.get("source") == "github":
         row |= {"stars": int(it.get("popularity") or 0), "language": ex.get("language", ""),
                 "topics": ex.get("topics") or []}
+    if it.get("source") == "reddit":
+        row |= {"subreddit": ex.get("subreddit", ""), "flair": ex.get("flair", ""), "comments": ex.get("comments")}
+    if it.get("source") == "youtube":
+        row |= {"channel": ex.get("channel", ""), "views": int(it.get("popularity") or 0),
+                "minutes": round((ex.get("duration") or 0) / 60)}
     if org:
         row["publisher"] = org
     return row
 
 
 def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = None) -> tuple[dict[str, dict], list[str]]:
-    """todo: [(item, kind, org)]，kind 是 "ai" / "important"。返回 ({id: {"judge_ai"|"judge_important": p}}, errors)。"""
+    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
     key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
     if not key:
-        return {}, ["未配置 TYPESAFE_API_KEY（项目根目录 .env），Trending 是否 AI、官方内容是否重要改用关键词规则"]
+        return {}, ["未配置 TYPESAFE_API_KEY（项目根目录 .env），Trending 是否 AI、官方内容是否重要、Reddit / 视频有没有干货改用关键词规则"]
     own = client is None
     c = client or httpx.Client(timeout=TIMEOUT)
     out: dict[str, dict] = {}
@@ -56,8 +79,8 @@ def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = No
             refs = {f"i{n}": row for n, row in enumerate(batch)}   # 题目里引用短键，不把条目 id 里的 / : 放进路径
             payload = {"model": MODEL,
                        "state": {"items": {k: _state(it, org) for k, (it, _, org) in refs.items()}},
-                       "questions": {f"{k}_{kind}": {"type": "noul", "instructions": (Q_AI if kind == "ai" else Q_IMPORTANT)
-                                                     .format(k=k, org=org)} for k, (_, kind, org) in refs.items()}}
+                       "questions": {f"{k}_{kind}": {"type": "noul", "instructions": _question(kind, k, it, org)}
+                                     for k, (it, kind, org) in refs.items()}}
             try:
                 r = c.post(API, headers={"Authorization": f"Bearer {key}"}, json=payload)
                 r.raise_for_status()
