@@ -1,7 +1,8 @@
 """视频深读的素材准备：用 yt-dlp 取元数据和一条字幕（YouTube / B 站等 yt-dlp 支持的站点），转成带时间点的文字稿。
 
-不下载视频；没有字幕时可加 --whisper 转写音频：配了 XAI_API_KEY 先用 xAI 云端转写（grok-voice-transcribe，
-按音频时长计费，1 小时约 $0.1，几十秒到几分钟），失败或没配 key 再用本机 whisper（M3 Max 上 base 模型约 6 倍速）。
+不下载视频；没有字幕时可加 --whisper 转写音频，按配了哪个 key 依次试云端：
+xAI（XAI_API_KEY，grok-voice-transcribe，1 小时约 $0.1）→ Groq（GROQ_API_KEY，whisper-large-v3-turbo，1 小时约 $0.04，
+约 200 倍速）；GROK_API_KEY 按前缀认（xai- 归 xAI、gsk_ 归 Groq，两家名字容易混）。都失败或没配再用本机 whisper（base 约 6 倍速）。
 不依赖 app 包，深读 Agent 直接这样跑：
     python app/modules/_video.py <视频链接> <输出目录> [--whisper]
 产物：<输出目录>/transcript.md（按 ~45 秒分段、每段带 [hh:mm:ss] 跳转链接）与 video.json（标题、频道、时长、章节、字幕来源）。
@@ -28,6 +29,9 @@ XAI_STT_URL = "https://api.x.ai/v1/stt"
 XAI_STT_MODEL = "grok-voice-transcribe-2.0"
 XAI_LANGS = {"ar", "bs", "bg", "yue", "ca", "zh", "hr", "cs", "da", "nl", "en", "fil", "fi", "fr", "de", "el", "hi", "hu", "id",
              "it", "ja", "ko", "mk", "ms", "nb", "fa", "pl", "pt", "ro", "ru", "sk", "es", "sv", "th", "tr", "uk", "ur", "vi"}
+GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_STT_MODEL = "whisper-large-v3-turbo"
+GROQ_MAX_BYTES = 24 * 1024 * 1024   # 免费档单文件上限 25MB，超了按小时切段
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 
 
@@ -212,9 +216,9 @@ def _whisper(ytdlp: str, url: str, out: Path, info: dict, meta: dict) -> list[tu
     if (info.get("duration") or 0) > WHISPER_MAX_SECONDS:
         meta["error"] = "没有字幕，视频超过 3 小时，不做转写"
         return []
-    key, local = _env("XAI_API_KEY"), shutil.which("whisper")
-    if not key and not local:
-        meta["error"] = "没有字幕，没配 XAI_API_KEY，本机也没有 whisper"
+    keys, local = stt_keys(), shutil.which("whisper")
+    if not keys and not local:
+        meta["error"] = "没有字幕，没配 XAI_API_KEY / GROQ_API_KEY，本机也没有 whisper"
         return []
     # 单声道 16kHz 低码率 mp3：语音够用，1 小时约 20MB，上传快
     r = _run([ytdlp, "-f", "bestaudio", "-x", "--audio-format", "mp3", "--postprocessor-args", "ExtractAudio:-ac 1 -ar 16000 -b:a 40k",
@@ -224,15 +228,19 @@ def _whisper(ytdlp: str, url: str, out: Path, info: dict, meta: dict) -> list[tu
         meta["error"] = f"音频下载失败：{r.stderr.strip()[-300:]}"
         return []
     try:
-        cues: list[tuple[float, str]] = []
-        if key:
-            cues, err = _xai_stt(audio, info, key)
+        errs, cues = [], []
+        for name, key in keys:
+            cues, err = (_xai_stt if name == "xAI" else _groq_stt)(audio, info, key)
             if cues:
-                meta["track"] = "xAI 云端转写"
-                return cues
-            meta["asr_error"] = err
+                meta["track"] = f"{name} 云端转写"
+                break
+            errs.append(f"{name}：{err}")
+        if errs:
+            meta["asr_error"] = "；".join(errs)   # 前面的服务失败过也记下来，方便看 key 是否失效
+        if cues:
+            return cues
         if not local:
-            meta["error"] = f"xAI 转写失败，本机也没有 whisper：{meta.get('asr_error', '')}"
+            meta["error"] = f"云端转写失败，本机也没有 whisper：{meta.get('asr_error', '')}"
             return []
         r = _run([local, str(audio), "--model", "base", "--output_format", "vtt", "--output_dir", str(out)], timeout=3 * 3600)
         vtt = out / (audio.stem + ".vtt")
@@ -243,6 +251,16 @@ def _whisper(ytdlp: str, url: str, out: Path, info: dict, meta: dict) -> list[tu
         return parse_vtt(vtt.read_text("utf-8", errors="replace"))
     finally:
         audio.unlink(missing_ok=True)
+
+
+def stt_keys() -> list[tuple[str, str]]:
+    """[(服务名, key)]，按尝试顺序。"""
+    xai, groq, grok = _env("XAI_API_KEY"), _env("GROQ_API_KEY"), _env("GROK_API_KEY")
+    if grok.startswith("gsk_"):
+        groq = groq or grok
+    elif grok:
+        xai = xai or grok
+    return [(n, k) for n, k in (("xAI", xai), ("Groq", groq)) if k]
 
 
 def keyterms(info: dict) -> list[str]:
@@ -261,8 +279,11 @@ def _xai_stt(audio: Path, info: dict, key: str, client=None) -> tuple[list[tuple
     import httpx
 
     lang = (info.get("language") or "").split("-")[0].lower()
-    data = [("model", XAI_STT_MODEL)] + ([("language", lang)] if lang in XAI_LANGS else []) \
-        + [("keyterm", t) for t in keyterms(info)]
+    data: dict = {"model": XAI_STT_MODEL}   # httpx 的表单字段要 dict，同名多值写成列表
+    if lang in XAI_LANGS:
+        data["language"] = lang
+    if terms := keyterms(info):
+        data["keyterm"] = terms
     own = client is None
     c = client or httpx.Client(timeout=httpx.Timeout(900.0, connect=15.0))
     try:
@@ -278,6 +299,52 @@ def _xai_stt(audio: Path, info: dict, key: str, client=None) -> tuple[list[tuple
         if own:
             c.close()
     return words_to_cues(words), ("" if words else "转写结果为空")
+
+
+def _groq_stt(audio: Path, info: dict, key: str, client=None) -> tuple[list[tuple[float, str]], str]:
+    """→ (cues, 错误)。Groq 的 OpenAI 兼容转写接口，verbose_json 自带分段时间戳；超过单文件上限就切段、时间加偏移。"""
+    import httpx
+
+    lang = (info.get("language") or "").split("-")[0].lower()
+    data: dict = {"model": GROQ_STT_MODEL, "response_format": "verbose_json", "temperature": "0"}
+    if len(lang) == 2:
+        data["language"] = lang
+    if terms := keyterms(info):
+        data["prompt"] = ", ".join(terms)[:600]   # 只用来提示拼写，上限 224 token
+    parts = [(audio, 0.0)] if audio.stat().st_size <= GROQ_MAX_BYTES else _split(audio)
+    own = client is None
+    c = client or httpx.Client(timeout=httpx.Timeout(600.0, connect=15.0))
+    cues: list[tuple[float, str]] = []
+    try:
+        for part, offset in parts:
+            with part.open("rb") as f:
+                r = c.post(GROQ_STT_URL, headers={"Authorization": f"Bearer {key}"}, data=data,
+                           files={"file": (part.name, f, "audio/mpeg")})
+            if r.status_code >= 400:
+                return [], f"HTTP {r.status_code}：{r.text[:300]}"
+            cues += [(float(sg.get("start") or 0) + offset, str(sg.get("text") or "").strip())
+                     for sg in r.json().get("segments") or [] if str(sg.get("text") or "").strip()]
+    except Exception as e:  # noqa: BLE001
+        return [], f"{type(e).__name__}: {str(e)[:200]}"
+    finally:
+        if own:
+            c.close()
+        for part, _ in parts:
+            if part != audio:
+                part.unlink(missing_ok=True)
+    return cues, ("" if cues else "转写结果为空")
+
+
+def _split(audio: Path, seconds: int = 3600) -> list[tuple[Path, float]]:
+    """按 seconds 切段（不重编码），→ [(段文件, 开始秒)]；偏移用每段实际时长累加。"""
+    _run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(audio), "-f", "segment", "-segment_time", str(seconds),
+          "-c", "copy", str(audio.with_name(audio.stem + "_part%02d" + audio.suffix))], timeout=600)
+    out, offset = [], 0.0
+    for p in sorted(audio.parent.glob(audio.stem + "_part*" + audio.suffix)):
+        out.append((p, offset))
+        r = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(p)], timeout=60)
+        offset += float((r.stdout or "0").strip() or 0)
+    return out or [(audio, 0.0)]
 
 
 _CJK = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
