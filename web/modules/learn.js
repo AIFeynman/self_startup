@@ -1585,7 +1585,7 @@ function habitsCard(ctx) {
         return item(a.total ? !miss.length : null, '学完当天用到项目', a.total ? `今天学完 ${a.total} 章，已用到项目 ${a.applied} 章` + (first ? ` · 下一章去用：${first.title.split(/[：:]/)[0]}` : '') : '今天还没学完新章节',
           first ? chapterHref(first.plan_id, first.step_id) : '');
       })(),
-      item(p.done, '每日论文', p.done ? `已写 ${p.count}/${p.goal} 篇一句话判断 → ${p.kb_path}` : `今天还没读 · ${p.minutes} 分钟，在信息推荐里挑 1–${p.goal} 篇写一句话判断`, '#feed'),
+      item(p.done, '每日论文', p.done ? `已读 ${p.count}/${p.goal} 篇` + (p.deepread ? `（深读 ${p.deepread} 篇）` : '') + (p.kb_path ? ` → ${p.kb_path}` : '') : `今天还没读 · ${p.minutes} 分钟，在信息推荐里挑 1–${p.goal} 篇写一句话判断`, '#feed'),
     ]));
   }).catch(() => {});
   return box;

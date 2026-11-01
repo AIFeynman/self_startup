@@ -77,3 +77,34 @@ def test_import_loose_chats(client, fake_submit):
     _reads.bind_chats(it)
     assert db.row("SELECT ref FROM chat_sessions WHERE id=?", [sid2])["ref"] == _reads.ref_of(it["id"])
     assert len(db.rows("SELECT id FROM learn_items WHERE url LIKE ?", [f"%{url[8:]}%"])) == 1
+
+
+def test_annotation_marks_read_and_counts_paper(client, fake_submit):
+    """在深读文档上划线评论也算读完；论文类深读（含 HF 论文页）算进当天的每日论文，和信息推荐里的判断按链接去重。"""
+    from app.modules import _habits
+    today = db.today()
+    pt = _habits.ensure_paper_task(today)
+    url = "https://huggingface.co/papers/2610.38352"
+    it = client.post("/api/learn/items", json={"url": url, "reuse": True}).json()
+    (learn._item_dir(it) / "note.md").write_text(REPLY, "utf-8")
+    learn.on_job_done(_job(fake_submit[-1]["id"], "好了"))
+    assert _reads.task_of(it["id"])["progress"] == 50
+    assert not _habits.paper_status(today)["done"]  # 只生成了文档，不算读过
+    # 只写评论不问 Claude：不起后台线程
+    r = client.post("/api/annotations", json={"doc": _reads.ref_of(it["id"]), "quote": "核心做法", "text": "这段和我的剪辑流程很像"})
+    assert r.status_code == 200
+    assert _reads.task_of(it["id"])["status"] == "done"
+    day = next(x for x in _reads.day_reads(today) if x["id"] == it["id"])
+    assert day["annots"] == 1 and any("划线讨论 1 条" in s for s in _reads.day_lines(today))
+    ps = _habits.paper_status(today)
+    assert ps["done"] and ps["count"] == 1 and ps["deepread"] == 1 and ps["kb_path"] == ""
+    assert ps["notes"][0]["verdict"] == "这段和我的剪辑流程很像" and ps["notes"][0]["link"] == f"#learn/item/{it['id']}"
+    assert db.row("SELECT status FROM tasks WHERE id=?", [pt["id"]])["status"] == "done"
+    # 同一篇在信息推荐里也写了判断：只算一篇
+    db.insert("feed_items", {"id": "hf:dup1", "source": "hf", "type": "paper", "title": "Dup", "summary": "s", "url": url + "?x=1",
+                             "date": today, "popularity": 1, "extra": "{}", "fetched_at": db.now()})
+    client.post("/api/feed/verdict", json={"id": "hf:dup1", "text": "值得跟"})
+    assert _habits.paper_status(today)["count"] == 1
+    client.post("/api/feed/verdict", json={"id": "hf:dup1", "text": ""})  # 不留给后面的用例
+    # 文章类深读不算论文
+    assert not _reads.is_paper({"kind": "article", "url": "https://x.com/a/status/1"})

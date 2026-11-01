@@ -2,7 +2,8 @@
 
 1. 「停一下」按固定格式作答：结论 + 为什么（机制）+ 一个例子 + 在我项目里怎么用。指标：近 7 天平均分 ≥ 65%。
 2. 学完一章当天就在一个项目里用一次。指标：当天学完的每一章，都有一条项目会话 / 文档 / 提交引用到它，或手动记了应用。
-3. 每天单独排 30 分钟读 1–2 篇前沿论文，在信息推荐里挑，写一句话判断。指标：知识库里当天有论文笔记。
+3. 每天单独排 30 分钟读 1–2 篇前沿论文，在信息推荐里挑，写一句话判断。指标：知识库里当天有论文笔记，
+   或当天深读了论文并留下追问 / 感想 / 划线（同一篇只算一次）。
 """
 from __future__ import annotations
 
@@ -42,24 +43,36 @@ def ensure_paper_task(date: str) -> dict | None:
                          "notes": f"{PAPER_TAG} #feed"})
 
 
+def paper_reads(date: str) -> list[dict]:
+    """当天读过的论文：信息推荐里的一句话判断 + 深读里有互动的论文，按链接去重。"""
+    from . import _reads, feed
+    out = [{**n, "source": "feed"} for n in feed.paper_notes(date)]
+    seen = {_reads._key(n["url"]) for n in out}
+    for n in _reads.day_paper_reads(date):
+        if _reads._key(n["url"]) not in seen:
+            seen.add(_reads._key(n["url"]))
+            out.append(n)
+    return out
+
+
 def sync_paper_task(date: str) -> None:
-    """写了一句话判断后更新当天的论文事项：写满目标篇数算完成，写了一篇算进行中。"""
+    """写了一句话判断 / 深读完论文后更新当天的论文事项：读了一篇就算完成，进度按目标篇数算。"""
     t = paper_task(date)
     if not t or t["status"] == "dropped":
         return
-    from . import feed
-    n, goal = len(feed.paper_notes(date)), max(1, int(cfg()["paper_per_day"]))
+    n, goal = len(paper_reads(date)), max(1, int(cfg()["paper_per_day"]))
     if n:
         tasks.patch(t["id"], {"progress": min(100, round(100 * n / goal)), "status": "done" if n >= 1 else t["status"]})
 
 
 def paper_status(date: str) -> dict:
-    from . import feed
-    notes = feed.paper_notes(date)
+    notes = paper_reads(date)
     t = paper_task(date)
-    return {"done": bool(notes), "count": len(notes), "goal": int(cfg()["paper_per_day"]), "minutes": int(cfg()["paper_minutes"]),
-            "kb_path": f"learn/paper-notes/{date}.md" if notes else "", "task_id": t["id"] if t else None,
-            "notes": [{"id": n["id"], "title": n["title"], "url": n["url"], "verdict": n["verdict"], "at": n["verdict_at"][11:16]} for n in notes]}
+    feed_n = sum(n["source"] == "feed" for n in notes)
+    return {"done": bool(notes), "count": len(notes), "deepread": len(notes) - feed_n, "goal": int(cfg()["paper_per_day"]),
+            "minutes": int(cfg()["paper_minutes"]), "kb_path": f"learn/paper-notes/{date}.md" if feed_n else "", "task_id": t["id"] if t else None,
+            "notes": [{"id": n["id"], "title": n["title"], "url": n["url"], "verdict": n["verdict"], "at": n["verdict_at"][11:16],
+                       "source": n["source"], "link": n.get("link", "")} for n in notes]}
 
 
 # ---------- 2. 学完当天用到项目 ----------
@@ -229,5 +242,6 @@ def lines(date: str) -> list[str]:
     if a and a["total"]:
         miss = [x["title"] for x in a["learned"] if not x["applied"]]
         out.append(f"学完当天用到项目：{a['applied']}/{a['total']} 章" + (f"；还没用：{'、'.join(miss)[:120]}" if miss else ""))
-    out.append(f"每日论文：{'已写 ' + str(p['count']) + ' 篇论文笔记（' + p['kb_path'] + '）' if p['done'] else '今天还没有论文笔记'}")
+    out.append("每日论文：" + (f"已读 {p['count']} 篇" + (f"（深读 {p['deepread']} 篇）" if p["deepread"] else "")
+                              + (f"，论文笔记 {p['kb_path']}" if p["kb_path"] else "") if p["done"] else "今天还没有论文笔记"))
     return out

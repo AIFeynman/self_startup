@@ -163,6 +163,10 @@ def _post(aid: int, text: str, ask: bool, source: str) -> None:
         mid = db.insert("annotation_msgs", {"annotation_id": aid, "role": "assistant", "status": "pending", "created_at": now})
         threading.Thread(target=_answer, args=(aid, mid, text or DEFAULT_QUESTION, source), daemon=True,
                          name=f"annotation-{aid}").start()
+    doc = db.row("SELECT doc FROM annotations WHERE id=?", [aid])["doc"]
+    if doc.startswith("learn:item:") and doc.rsplit(":", 1)[1].isdigit():  # 在深读文档上划线讨论也算读完
+        from .modules import _reads
+        _reads.sync_task(int(doc.rsplit(":", 1)[1]))
     kb.schedule_sync()
 
 
