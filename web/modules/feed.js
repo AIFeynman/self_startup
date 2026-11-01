@@ -33,6 +33,9 @@ const CSS = `
 .fd-t:hover { color: var(--accent); text-decoration: none; }
 .fd-best { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent);
   font: 600 12px/20px var(--font); vertical-align: 2px; }
+.fd-new { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--ok-soft); color: var(--ok);
+  font: 600 11.5px/18px var(--font); vertical-align: 2px; }
+.fd-old { display: inline-block; margin-left: 6px; color: var(--muted); font: 400 11.5px/18px var(--font); vertical-align: 2px; white-space: nowrap; }
 .fd-sum { color: var(--text); opacity: .82; font-size: 13.5px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .fd-gist { color: var(--text); font-size: 14.5px; font-weight: 500; line-height: 1.5; margin-top: 4px; }
 .fd-gist + .fd-sum { opacity: .6; font-size: 12.5px; }
@@ -255,6 +258,9 @@ export default {
     };
     // 打开原文只做统计（推荐 → 点击 → 深读的转化），失败不打扰
     const logClick = (x) => { api.post('/api/feed/click', { id: x.id }).catch(() => {}); };
+    // 新增 / 在榜天数：第一次收进来不到 24 小时标「新」，在榜 3 天以上标天数，长期霸榜的一眼能看出来
+    const ageTag = (x) => x.new ? h('span.fd-new', { title: '24 小时内新收录' }, '新')
+      : x.seen_days >= 3 ? h('span.fd-old', { title: '第一次收录到现在的天数' }, `在榜 ${x.seen_days} 天`) : null;
     const titleLink = (x) => h('a.fd-t', { href: x.url, target: '_blank', rel: 'noopener', onclick: () => logClick(x), onauxclick: () => logClick(x) }, x.title);
     // 一句话判断：已写的直接显示，点「编辑」展开输入框；论文每天写 1–2 篇是学习习惯之一
     const verdictBox = (entry) => {
@@ -281,7 +287,7 @@ export default {
         node = h('div.fd-row' + (i === 0 ? '.first' : ''), {}, [
           h('div.fd-n', {}, String(i + 1).padStart(2, '0')),
           h('div', { style: { minWidth: 0 } }, [
-            h('div', {}, [titleLink(x), i === 0 ? h('span.fd-best', {}, '最推荐') : null]),
+            h('div', {}, [titleLink(x), ageTag(x), i === 0 ? h('span.fd-best', {}, '最推荐') : null]),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
             why(x),
@@ -293,7 +299,7 @@ export default {
       } else {
         node = h('div.fd-item', {}, [
           h('div', { style: { minWidth: 0 } }, [
-            titleLink(x),
+            titleLink(x), ageTag(x),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),

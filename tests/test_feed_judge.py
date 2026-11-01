@@ -103,3 +103,21 @@ def test_run_judge_writes_back_once(monkeypatch):
     assert ex["judge_important"] == 0.7 and ex["judge_src"] == judge.judge_key({"title": "Our next frontier model", "summary": ""})
     feed.run_judge()
     assert len(calls) == 1 or all(i not in {"blog:q1", "github:q/trend"} for i, _ in calls[1])   # 内容没变不重复问
+
+
+def test_new_badge_and_days_on_list():
+    seen = lambda h: {"first_seen": (NOW - timedelta(hours=h)).isoformat()}
+    items = [_repo("n/fresh", "fresh：agent", extra=seen(3)),
+             _repo("n/stale", "stale：agent", extra=seen(24 * 5)),
+             _repo("n/legacy", "legacy：agent", extra={}, hours=24 * 10),      # 加字段前收的：按发布时间，不算在榜天数
+             _repo("n/legacy2", "legacy2：agent", extra={}, hours=2)]
+    got = {x["id"]: (x["new"], x["seen_days"]) for x in rk.rank(items, now=NOW)}
+    assert got == {"github:n/fresh": (True, 0), "github:n/stale": (False, 5),
+                   "github:n/legacy": (False, 0), "github:n/legacy2": (True, 0)}
+
+
+def test_upsert_keeps_first_seen():
+    feed.upsert([_blog("fs", "First")])
+    first = feed._extra(db.row("SELECT extra FROM feed_items WHERE id='blog:fs'"))["first_seen"]
+    feed.upsert([_blog("fs", "First, edited")])
+    assert feed._extra(db.row("SELECT extra FROM feed_items WHERE id='blog:fs'"))["first_seen"] == first
