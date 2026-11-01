@@ -20,7 +20,9 @@ from datetime import datetime
 from pathlib import Path
 
 MIN_EXPERIMENTS = 3   # 少于这么多「有原样输出的实验」不算完成
-TIMEOUT_HINT = "perl -e 'alarm shift; exec @ARGV' 600"   # macOS 没有 timeout 命令
+# 时间预算（分钟）：实验求轻，模拟核心能力即可，不跑重型全量流程
+BUDGET = {"cmd": 3, "install": 5, "exp": 5, "total": 20}
+TIMEOUT_HINT = f"perl -e 'alarm shift; exec @ARGV' {BUDGET['cmd'] * 60}"   # macOS 没有 timeout 命令
 
 PROMPT = """任务：GitHub 项目 Deep Dive——比已有的速读 / HTML 教程深得多的工程解读，**必须真实动手**：自己拉仓库、写测试、做实验、跑出结果。
 对象：{url}
@@ -33,19 +35,21 @@ PROMPT = """任务：GitHub 项目 Deep Dive——比已有的速读 / HTML 教�
 - `git clone --depth 1 {url} {dd}/lab/repo`（已存在就 `git -C {dd}/lab/repo pull --ff-only`），记下 `git rev-parse HEAD`。
 - 依赖只装在 lab/repo 里：Node 用 `pnpm install` / `npm ci`（不加 -g），Python 用 `uv venv {dd}/lab/repo/.venv` 后装进这个 venv；
   不用 brew / sudo / 全局安装，不修改 {dd} 以外的任何文件，不读 ~/.ssh、钥匙串、环境变量里的密钥。
-- 每条可能卡住的命令都加超时：`{timeout} <命令>`（单条最多 10 分钟）；不起常驻进程，起了服务就在同一条命令里测完并关掉。
+- 每条可能卡住的命令都加超时：`{timeout} <命令>`（单条最多 {b_cmd} 分钟，装依赖那一条最多 {b_install} 分钟）；不起常驻进程，起了服务就在同一条命令里测完并关掉。
 - 需要真实 LLM / 外部服务 API key 的路径，不要用真 key：写 mock / fake model / 本地桩，或者只测不依赖模型的部分，并在文中说明。
 
 ## 先读懂，再定实验
 1. 读 README / docs / 入口 / 核心模块，画出主链路；用 `rg` 找关键数据结构和状态机，记下 `文件:行号`。
 2. 列出这个项目**最核心的 3–6 个设计决定**（它为什么这样设计、换一种做法会怎样），每个都想一个能用实验检验的问题。
-3. 实验清单（至少 {min_exp} 个，一般 4–8 个，每个都要真的跑）：
-   - E1 必做：跑项目自带的测试 / 示例（`pnpm test`、`pytest`、examples 里的脚本），报告通过数、失败数和失败原因。
+3. 实验求**轻**：用最小脚本 / 桩模拟核心能力，验证机制本身即可；不跑构建、docker、端到端全流程、大数据集或长时间压测。
+   **时间预算**：装依赖 ≤ {b_install} 分钟（只装一次）；单个实验 ≤ {b_exp} 分钟；全部实验合计 ≤ {b_total} 分钟。超预算就缩小规模（减少轮次 / 数据量 / 只跑相关测试文件），在文中写明缩了什么。
+   实验清单（至少 {min_exp} 个，一般 3–5 个，每个都要真的跑）：
+   - E1 必做：跑项目自带的测试 / 示例（`pnpm test`、`pytest`、examples 里的脚本；全量太慢就只跑核心模块的测试文件），报告通过数、失败数、耗时和失败原因。
    - 至少 1 个**自己写的测试**：针对核心机制写新的单元测试 / 脚本（放进 lab/E<n>-<slug>/，必要时复制进 repo 的 tests 目录再跑），
      断言你从代码里读出的行为——读出来的结论被测试推翻时，如实写「推翻」。
    - 至少 1 个**消融 / 对照**：改一个参数、关掉一个机制、换一种输入，对比前后的输出或数字（例如关掉某个过滤 / 批处理 / 重试，看行为怎么变）。
    - 至少 1 个**边界 / 失败用例**：异常输入、并发、超时、权限被拒、资源上限，看系统怎么失败、能不能恢复。
-   - 能量化的给数字（耗时、次数、token、吞吐、成功率），多次运行取均值并写明次数。
+   - 能量化的给数字（耗时、次数、token、吞吐、成功率），多次运行取均值并写明次数（次数以不超预算为准）；每个实验在 out.txt 末尾记下耗时。
 4. 每个实验一个目录 `{dd}/lab/E<n>-<slug>/`：放你写的脚本 / 测试文件，命令的完整输出用 `2>&1 | tee out.txt` 原样保存到 out.txt。
    实验失败（装不上、跑不起来）也是结果：保存输出，写清卡在哪、怎么绕过或为什么放弃，再换一个能跑的实验补足数量。
 
@@ -104,7 +108,8 @@ def prompt(it: dict, item_dir: Path, known: str) -> str:
     dd = dd_dir(item_dir)
     base = "\n".join(f"- {p}" for p in base_docs(item_dir)) or "- （还没有，直接从仓库读起）"
     return PROMPT.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it.get("focus") else "", base=base,
-                         dd=dd, timeout=TIMEOUT_HINT, min_exp=MIN_EXPERIMENTS, known=known)
+                         dd=dd, timeout=TIMEOUT_HINT, min_exp=MIN_EXPERIMENTS, known=known,
+                         b_cmd=BUDGET["cmd"], b_install=BUDGET["install"], b_exp=BUDGET["exp"], b_total=BUDGET["total"])
 
 
 def prepare(item_dir: Path) -> Path:

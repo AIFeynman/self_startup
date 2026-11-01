@@ -56,7 +56,8 @@ def test_deepdive_on_demand_and_done(client, fake_submit):
     dd = _deepdive.dd_dir(learn._item_dir(it))
     assert call["cwd"] == str(dd) and (dd / "lab").is_dir()
     # 提示词要求真实动手：克隆、自写测试、消融、边界、原样输出、实验清单
-    for kw in ("git clone", "自己写的测试", "消融", "边界", "out.txt", "experiments.json", "alarm", it["url"]):
+    for kw in ("git clone", "自己写的测试", "消融", "边界", "out.txt", "experiments.json", "@ARGV' 180", "时间预算",
+               "合计 ≤ 20 分钟", it["url"]):
         assert kw in call["prompt"], kw
     # 生成中重复点：不再提交新任务
     assert client.post(f"/api/learn/items/{it['id']}/deepdive").json()["job_id"] == call["id"] and fake_submit[-1] is call
