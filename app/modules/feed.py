@@ -82,7 +82,7 @@ TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "�
          "news": "资讯"}
 
 router = APIRouter()
-_state: dict = {"running": False, "started_at": "", "finished_at": "", "results": {}, "scope": ""}
+_state: dict = {"running": False, "started_at": "", "started_utc": "", "finished_at": "", "results": {}, "scope": ""}
 _state_lock = threading.Lock()
 
 
@@ -401,7 +401,8 @@ def start_refresh(only=None, gists=None, scope: str = "") -> bool:
     with _state_lock:
         if _state["running"]:
             return False
-        _state.update(running=True, started_at=db.now(), results={}, scope=scope)
+        _state.update(running=True, started_at=db.now(), results={}, scope=scope,
+                      started_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))   # 和 first_seen 同口径，列表置顶本次新增用
     threading.Thread(target=_bg, args=(only, gists), daemon=True).start()
     return True
 
@@ -518,10 +519,14 @@ def _public(x: dict) -> dict:
 
 @router.get("/items")
 def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0, days: float = 0,
-          sort: str = "score"):
+          sort: str = "score", since: str = ""):
+    """since：刷新开始时间（status.started_utc），这之后第一次收进来的条目排到最前（刷完让人一眼看到新增）。"""
     if sort not in ("score", "new", "hot"):
         raise HTTPException(400, "sort 只能是 score / new / hot")
     out = ranked(type, saved, q, days=days, sort=sort)
+    if t0 := rk._parse_dt(since):
+        fresh = lambda x: (rk._parse_dt((x.get("extra") or {}).get("first_seen") or "") or datetime.min.replace(tzinfo=timezone.utc)) >= t0
+        out = [x for x in out if fresh(x)] + [x for x in out if not fresh(x)]
     return {"total": len(out), "items": [_public(x) for x in out[offset: offset + limit]]}
 
 
