@@ -1,5 +1,6 @@
 """产品雷达：快照 diff、实体链接、分类去重、分级、解读卡校验。不触网、不调 LLM。"""
 import json
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -522,7 +523,7 @@ class _Resp:
 def test_fetch_api_pages_and_rate_limit(monkeypatch):
     """官方 API：美分 → 美元、翻到 hasMore=false、429 等重置后重试、剩余 0 时先等。"""
     def item(slug, mrr_cents):
-        return {"slug": slug, "name": slug, "category": "ai", "revenue": {"mrr": mrr_cents, "last30Days": mrr_cents}, "growth30d": 12,
+        return {"slug": slug, "name": slug, "category": "Sales", "revenue": {"mrr": mrr_cents, "last30Days": mrr_cents}, "growth30d": 12,
                 "onSale": False, "askingPrice": None}
     script = [_Resp(200, {"data": [item("a", 123456)], "meta": {"hasMore": True}}, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "0"}),
               _Resp(429, headers={"X-RateLimit-Reset": "0"}),
@@ -543,9 +544,11 @@ def test_fetch_api_pages_and_rate_limit(monkeypatch):
     monkeypatch.setattr(st, "_client", lambda: C())
     got, errors = st.fetch_api("k", sleep=sleeps.append)
     assert [o["slug"] for o in got] == ["a", "b"] and not errors
-    assert got[0]["currentMrr"] == 1234.56 and got[0]["userCategory"] == "Artificial Intelligence"
+    assert got[0]["currentMrr"] == 1234.56 and got[0]["userCategory"] == "Sales"
     assert "askingPrice" not in got[0] and st.metrics_of(got[0])["mrr"] == 1234.56
     assert calls == [1, 2, 2] and len(sleeps) == 2
+    soon = (time.time() + 30) * 1000  # 毫秒时间戳
+    assert 25 < st._reset_wait(_Resp(200, headers={"X-RateLimit-Reset": str(soon)})) <= 30
 
 
 def test_fetch_api_bad_key(monkeypatch):

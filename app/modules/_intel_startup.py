@@ -87,10 +87,14 @@ def api_object(x: dict) -> dict:
          "cachedGrowthMRR30d": x.get("growthMRR30d"), "currentActiveSubscriptions": x.get("activeSubscriptions"),
          "askingPrice": usd_(x.get("askingPrice")), "onSale": x.get("onSale"), "firstListedForSaleAt": x.get("firstListedForSaleAt"),
          "xHandle": x.get("xHandle"), "country": x.get("country"), "targetAudience": x.get("targetAudience"),
-         "paymentProvider": x.get("paymentProvider")}
-    if x.get("category") == "ai":
-        o["userCategory"] = "Artificial Intelligence"
+         "paymentProvider": x.get("paymentProvider"), "userCategory": x.get("category")}  # 展示名（Sales / Mobile Apps…）；是否 AI 看请求的 category
     return {k: v for k, v in o.items() if v is not None}
+
+
+def _reset_wait(r) -> float:
+    """X-RateLimit-Reset 是毫秒时间戳（也兼容秒）→ 还要等几秒。"""
+    v = float((r.headers.get("X-RateLimit-Reset") if r is not None else 0) or 0)
+    return max(1.0, (v / 1000 if v > 1e11 else v) - time.time()) if r is not None else 5.0
 
 
 def fetch_api(key: str, category: str = "ai", sleep=time.sleep) -> tuple[list[dict], list[str]]:
@@ -106,8 +110,7 @@ def fetch_api(key: str, category: str = "ai", sleep=time.sleep) -> tuple[list[di
                     r, err = None, f"{type(e).__name__}: {str(e)[:120]}"
                 if r is not None and r.status_code != 429:
                     break
-                wait = max(1.0, float((r.headers.get("X-RateLimit-Reset") if r is not None else 0) or 0) - time.time()) if r is not None else 5.0
-                sleep(min(wait, 90))
+                sleep(min(_reset_wait(r), 90))
             else:
                 errors.append(f"API 第 {page} 页：{'429 限流' if r is not None else err}，停在这里")
                 break
@@ -123,7 +126,7 @@ def fetch_api(key: str, category: str = "ai", sleep=time.sleep) -> tuple[list[di
                 break
             page += 1
             if r.headers.get("X-RateLimit-Remaining") == "0":
-                sleep(min(max(1.0, float(r.headers.get("X-RateLimit-Reset") or 0) - time.time()), 90))
+                sleep(min(_reset_wait(r), 90))
     return out, errors
 
 
