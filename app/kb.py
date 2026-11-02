@@ -23,11 +23,11 @@ MANIFEST = ".manifest.json"
 
 TYPE_DIRS = {
     "daily": "daily", "note": "notes", "research": "research", "product": "products",
-    "paper": "learn/papers", "papernote": "learn/paper-notes", "repo": "learn/repos", "plan": "learn/plans", "feed": "feed", "annotation": "annotations",
+    "paper": "learn/papers", "papernote": "learn/paper-notes", "repo": "learn/repos", "plan": "learn/plans", "book": "learn/books", "feed": "feed", "annotation": "annotations",
 }
 TYPE_NAMES = {
     "daily": "每日记录", "note": "问题与经验", "research": "调研", "product": "产品体验",
-    "paper": "论文深读", "papernote": "论文笔记", "repo": "项目解读", "plan": "学习计划", "feed": "收藏的信息", "annotation": "阅读批注",
+    "paper": "论文深读", "papernote": "论文笔记", "repo": "项目解读", "plan": "学习计划", "book": "深度读书", "feed": "收藏的信息", "annotation": "阅读批注",
 }
 
 README = """# 本地知识库（自动生成，勿手改）
@@ -41,6 +41,7 @@ README = """# 本地知识库（自动生成，勿手改）
 - `research/`：调研文档（含各引擎结果与综合）。`products/`：产品体验。
 - `learn/papers/`、`learn/repos/`：论文 / GitHub 项目深读（TL;DR + 我的笔记 + 全文或产物路径）。
 - `learn/plans/`：主题学习计划（阶段、步骤、进度、理解度、反馈）。
+- `learn/books/`：深度读书（全书导读 + 已生成的逐章导读：来龙去脉、精髓、分节导读）。
 - `feed/saved.md`：点赞 / 收藏的信息流条目。
 - `feed/hn/`：点赞 / 收藏的 HN 帖子的评论区提炼（推荐链接、技术产品口碑、观点、实战经验），一帖一篇。
 - `annotations/`：阅读批注，一份材料一个文件：划线原文 + 我的评论 + 问 Claude 的问答。
@@ -220,6 +221,29 @@ def _deepdive_doc(it: dict) -> list[dict]:
     return [_doc("repo", f"{it['id']}-deepdive", title, "\n".join(head) + "\n\n" + re.sub(r"\A\s*#[^\n]*\n", "", text),
                  date=it.get("dd_at") or it["created_at"], updated=it.get("dd_at") or "", tags=["github", "deepdive"],
                  status="done", url=it["url"], summary=learn._tldr_from_md(text))]
+
+
+def _books() -> list[dict]:
+    if not _has("learn_books"):
+        return []
+    from .modules import _book
+    out = []
+    for b in db.rows("SELECT * FROM learn_books WHERE status='ready' ORDER BY id"):
+        ov = json.loads(b["overview"]) if (b.get("overview") or "").startswith("{") else {}
+        body = [f"- 来源：{b['url']}", f"- 作者：{b['author'] or ov.get('author', '')}", f"- 页数：{b['pages']}"]
+        if ov:
+            body += ["", f"> {ov.get('one_line', '')}", "", "## 全书精髓", *[f"- {e}" for e in ov.get("essence") or []],
+                     "", "## 作者与时代", ov.get("author_context", ""), "", ov.get("era_context", ""),
+                     "", "## 结构", ov.get("structure", ""), "", "## 主线",
+                     *[f"- **{t.get('name', '')}**：{t.get('desc', '')}" for t in ov.get("threads") or [] if isinstance(t, dict)],
+                     "", "## 读法", ov.get("how_to_read", "")]
+        for c in db.rows("SELECT * FROM learn_book_chapters WHERE book_id=? AND status='ready' ORDER BY idx", [b["id"]]):
+            body += [f"\n## {c['idx']}. {c['title']}（PDF 第 {c['page_start'] + 1} 页）",
+                     re.sub(r"^## ", "### ", _book.guide_md(json.loads(c["guide"])), flags=re.M)]
+        out.append(_doc("book", b["id"], b["title"] or b["url"], "\n".join(body), date=b["created_at"],
+                        updated=b.get("updated_at") or "", tags=["读书"], status=b["status"], url=b["url"],
+                        summary=ov.get("one_line", "")))
+    return out
 
 
 def _plans() -> list[dict]:
@@ -434,7 +458,7 @@ def _daily(docs: list[dict]) -> list[dict]:
 
 def build() -> list[dict]:
     docs: list[dict] = []
-    for fn in (_notes, _research, _products, _learn_items, _plans, _feed_saved, _feed_hn, _paper_notes, _annotations):
+    for fn in (_notes, _research, _products, _learn_items, _books, _plans, _feed_saved, _feed_hn, _paper_notes, _annotations):
         try:
             docs += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它
