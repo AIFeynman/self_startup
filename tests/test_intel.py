@@ -307,7 +307,7 @@ def _board(monkeypatch, objs, details=None):
     """不触网：首页 = objs（不足 50 家时补无关的小公司，避免被当成页面结构变了）。"""
     filler = [_tm(f"filler{i}", 100, description="plain todo list app") for i in range(60)]
     pages = {"/": filler + objs, "/category/ai": [], "/acquire": []}
-    monkeypatch.setattr(st, "fetch_board", lambda: (st.parse_board({p: json.dumps(v) for p, v in pages.items()}), []))
+    monkeypatch.setattr(st, "fetch_board", lambda **kw: (st.parse_board({p: json.dumps(v) for p, v in pages.items()}), []))
     monkeypatch.setattr(st, "rsc_objects", lambda html: json.loads(html))
     monkeypatch.setattr(st, "fetch_detail", lambda slug: (details or {}).get(slug))
 
@@ -378,7 +378,7 @@ def test_write_metrics_append_only(startup_db):
 
 
 def test_empty_board_writes_nothing(startup_db, monkeypatch):
-    monkeypatch.setattr(st, "fetch_board", lambda: ({}, ["首页只解析出 3 家公司"]))
+    monkeypatch.setattr(st, "fetch_board", lambda **kw: ({}, ["首页只解析出 3 家公司"]))
     r = intel.startup_snapshot(force=True)
     assert r["errors"] and not db.rows("SELECT 1 FROM intel_metric")
     assert intel._state("startup_day") != db.today()  # 没成功就不标记今天跑过
@@ -509,3 +509,55 @@ def test_value_in_text():
     assert st._value_in_text(1.2e9, "run-rate of $1.2 billion")
     assert st._value_in_text(1e8, "年化收入突破 1 亿美元")
     assert not st._value_in_text(30e6, "raised $300M at a $3B valuation")
+
+
+class _Resp:
+    def __init__(self, status, body=None, headers=None):
+        self.status_code, self._body, self.headers = status, body or {}, headers or {}
+
+    def json(self):
+        return self._body
+
+
+def test_fetch_api_pages_and_rate_limit(monkeypatch):
+    """官方 API：美分 → 美元、翻到 hasMore=false、429 等重置后重试、剩余 0 时先等。"""
+    def item(slug, mrr_cents):
+        return {"slug": slug, "name": slug, "category": "ai", "revenue": {"mrr": mrr_cents, "last30Days": mrr_cents}, "growth30d": 12,
+                "onSale": False, "askingPrice": None}
+    script = [_Resp(200, {"data": [item("a", 123456)], "meta": {"hasMore": True}}, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "0"}),
+              _Resp(429, headers={"X-RateLimit-Reset": "0"}),
+              _Resp(200, {"data": [item("b", 500)], "meta": {"hasMore": False}})]
+    calls, sleeps = [], []
+
+    class C:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, headers=None):
+            calls.append(params["page"])
+            assert headers["Authorization"] == "Bearer k" and params["category"] == "ai"
+            return script.pop(0)
+    monkeypatch.setattr(st, "_client", lambda: C())
+    got, errors = st.fetch_api("k", sleep=sleeps.append)
+    assert [o["slug"] for o in got] == ["a", "b"] and not errors
+    assert got[0]["currentMrr"] == 1234.56 and got[0]["userCategory"] == "Artificial Intelligence"
+    assert "askingPrice" not in got[0] and st.metrics_of(got[0])["mrr"] == 1234.56
+    assert calls == [1, 2, 2] and len(sleeps) == 2
+
+
+def test_fetch_api_bad_key(monkeypatch):
+    class C:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, *a, **kw):
+            return _Resp(401)
+    monkeypatch.setattr(st, "_client", lambda: C())
+    got, errors = st.fetch_api("bad", sleep=lambda s: None)
+    assert got == [] and "401" in errors[0]

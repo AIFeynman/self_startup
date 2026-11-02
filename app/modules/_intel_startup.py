@@ -8,6 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -40,6 +42,13 @@ TRACK_NAMES = {s: n for s, n, _ in TRACKS}
 
 AI_CATEGORY = re.compile(r"artificial intelligence|^ai$", re.I)
 BOARD_PAGES = ("/", "/category/ai", "/acquire")   # 首页：收入最高的几百家（含 MRR / 增长）；AI 分类页；在售列表
+# 其它分类页各给收入最高的 30 家：营销 / 销售 / 内容等分类里也有不少 AI 产品（不翻页，?page= 无效）
+CATEGORY_SLUGS = ("saas", "developer-tools", "fintech", "marketing", "ecommerce", "productivity", "design-tools", "no-code",
+                  "analytics", "crypto-web3", "education", "health-fitness", "social-media", "content-creation", "sales",
+                  "customer-support", "recruiting", "real-estate", "travel", "legal", "security", "iot-hardware", "green-tech",
+                  "entertainment", "games", "community", "news-magazines", "utilities", "marketplace", "mobile-apps")
+API_URL = TRUSTMRR + "/api/v1/startups"
+API_MAX_PAGES = 1500  # 每页最多 10 家；AI 分类约 4–5k 家，有收入的更少
 
 
 def _client() -> httpx.Client:
@@ -65,10 +74,64 @@ def parse_board(pages: dict[str, str]) -> dict[str, dict]:
     return keep
 
 
-def fetch_board() -> tuple[dict[str, dict], list[str]]:
+def api_object(x: dict) -> dict:
+    """官方 API 的一条（金额是美分）→ 和页面里解析出来的对象同形（美元、同字段名），后面的逻辑不用分两套。"""
+    rev = x.get("revenue") or {}
+
+    def usd_(v):
+        f = _num(v)
+        return None if f is None else f / 100
+    o = {"slug": x.get("slug"), "name": x.get("name"), "description": x.get("description"), "website": x.get("website"),
+         "currentMrr": usd_(rev.get("mrr")), "currentLast30DaysRevenue": usd_(rev.get("last30Days")),
+         "currentTotalRevenue": usd_(rev.get("total")), "cachedGrowth30d": x.get("growth30d"),
+         "cachedGrowthMRR30d": x.get("growthMRR30d"), "currentActiveSubscriptions": x.get("activeSubscriptions"),
+         "askingPrice": usd_(x.get("askingPrice")), "onSale": x.get("onSale"), "firstListedForSaleAt": x.get("firstListedForSaleAt"),
+         "xHandle": x.get("xHandle"), "country": x.get("country"), "targetAudience": x.get("targetAudience"),
+         "paymentProvider": x.get("paymentProvider")}
+    if x.get("category") == "ai":
+        o["userCategory"] = "Artificial Intelligence"
+    return {k: v for k, v in o.items() if v is not None}
+
+
+def fetch_api(key: str, category: str = "ai", sleep=time.sleep) -> tuple[list[dict], list[str]]:
+    """官方 API 全量翻页（有收入的）：按响应头限流（标准 key 每分钟 10 次），429 等到窗口重置再试。"""
+    out, errors, page = [], [], 1
+    with _client() as c:
+        while page <= API_MAX_PAGES:
+            for attempt in range(4):
+                try:
+                    r = c.get(API_URL, params={"category": category, "minRevenue": 100, "limit": 10, "page": page,
+                                               "sort": "revenue-desc"}, headers={"Authorization": f"Bearer {key}"})
+                except httpx.HTTPError as e:
+                    r, err = None, f"{type(e).__name__}: {str(e)[:120]}"
+                if r is not None and r.status_code != 429:
+                    break
+                wait = max(1.0, float((r.headers.get("X-RateLimit-Reset") if r is not None else 0) or 0) - time.time()) if r is not None else 5.0
+                sleep(min(wait, 90))
+            else:
+                errors.append(f"API 第 {page} 页：{'429 限流' if r is not None else err}，停在这里")
+                break
+            if r.status_code in (401, 403):
+                errors.append(f"API {r.status_code}：key 无效或被停用，改用页面抓取")
+                break
+            if r.status_code != 200:
+                errors.append(f"API 第 {page} 页：HTTP {r.status_code}")
+                break
+            body = r.json()
+            out += [api_object(x) for x in body.get("data") or [] if x.get("slug")]
+            if not (body.get("meta") or {}).get("hasMore"):
+                break
+            page += 1
+            if r.headers.get("X-RateLimit-Remaining") == "0":
+                sleep(min(max(1.0, float(r.headers.get("X-RateLimit-Reset") or 0) - time.time()), 90))
+    return out, errors
+
+
+def fetch_board(api_key: str = "") -> tuple[dict[str, dict], list[str]]:
+    """首页 / AI 分类 / 在售 / 其它分类页 → 解析；有 API key 时再用官方 API 把 AI 分类有收入的全量补上。"""
     pages, errors = {}, []
     with _client() as c:
-        for p in BOARD_PAGES:
+        for p in (*BOARD_PAGES, *(f"/category/{s}" for s in CATEGORY_SLUGS)):
             try:
                 r = c.get(TRUSTMRR + p)
                 r.raise_for_status()
@@ -79,6 +142,13 @@ def fetch_board() -> tuple[dict[str, dict], list[str]]:
     if pages.get("/") and len(board) < 50:
         errors.append(f"首页只解析出 {len(board)} 家公司（页面结构变了？）——本次不写指标")
         return {}, errors
+    if api_key:
+        got, errs = fetch_api(api_key)
+        errors += errs
+        for o in got:
+            cur = board.setdefault(o["slug"], {})
+            cur.update(o)
+            cur["_ai_cat"] = cur["_ai_hint"] = True
     return board, errors
 
 
@@ -183,18 +253,25 @@ TRACK_SYSTEM = """你在给 AI 创业公司 / 产品归赛道。输入 JSON：tr
 - track：最主要的一个赛道 slug（必须来自 tracks）；ai=false 时也给最接近的；
 - tracks：次要赛道（0–2 个）。只根据输入判断。"""
 TRACK_BATCH = 30
+TRACK_WORKERS = 6  # 批之间互不依赖，并发跑
 
 
 def classify_tracks(items: list[dict]) -> tuple[dict[str, dict], list[str]]:
     """{id: {ai, track, tracks, intro}}，errors。"""
     out, errors = {}, []
     tracks = [{"slug": s, "name": n, "scope": d} for s, n, d in TRACKS]
-    for i in range(0, len(items), TRACK_BATCH):
-        batch = items[i:i + TRACK_BATCH]
+    batches = [items[i:i + TRACK_BATCH] for i in range(0, len(items), TRACK_BATCH)]
+
+    def run(batch):
         try:
-            res = snap.llm_json(TRACK_SYSTEM, {"tracks": tracks, "items": batch}, max_tokens=6000)
+            return batch, snap.llm_json(TRACK_SYSTEM, {"tracks": tracks, "items": batch}, max_tokens=6000), None
         except Exception as e:  # noqa: BLE001
-            errors.append(f"赛道归类第 {i // TRACK_BATCH + 1} 批：{type(e).__name__}: {str(e)[:160]}")
+            return batch, None, f"{type(e).__name__}: {str(e)[:160]}"
+    with ThreadPoolExecutor(max_workers=TRACK_WORKERS) as ex:
+        done = list(ex.map(run, batches))
+    for n, (batch, res, err) in enumerate(done, 1):
+        if err:
+            errors.append(f"赛道归类第 {n} 批：{err}")
             continue
         ids = {str(x["id"]) for x in batch}
         for x in res.get("items") or []:

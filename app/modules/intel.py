@@ -179,6 +179,7 @@ CFG_DEFAULTS = {
     "profiles_per_day": 10,    # 每天最多自动写几张生意拆解卡（手动不算）
     "profile_days": 30,        # 同一家多少天内不重复自动写
     "ph_top": 20,              # PH 日榜取前几名
+    "tracks_per_round": 1500,  # 每轮最多归几家赛道（30 家一批、6 批并发）
 }
 _lock = threading.Lock()
 
@@ -667,12 +668,14 @@ def _revenue_event(c: dict, x: dict, day: str, src: dict) -> int | None:
 
 
 def startup_snapshot(force: bool = False) -> dict:
-    """每天一次：TrustMRR 首页 + AI 分类页 + 在售列表 → 指标；和上一次快照比出收入异动；再补一批详情页。"""
+    """每天一次：TrustMRR 首页 + 各分类页 + 在售列表（.env 有 TRUSTMRR_API_KEY 时再用官方 API 全量拉 AI 分类）→ 指标；和上一次快照比出收入异动；再补一批详情页。"""
     day = db.today()
     if not force and _state("startup_day") == day:
         return {}
-    board, errors = st.fetch_board()
-    res = {"companies": 0, "new_companies": 0, "metrics": 0, "revenue_events": 0, "details": 0, "errors": errors}
+    key = os.environ.get("TRUSTMRR_API_KEY", "").strip()
+    board, errors = st.fetch_board(api_key=key)
+    res = {"source": "api+pages" if key else "pages", "board": len(board), "companies": 0, "new_companies": 0, "metrics": 0,
+           "revenue_events": 0, "details": 0, "errors": errors}
     for slug, o in board.items():
         before = db.row("SELECT 1 FROM intel_company WHERE kind='startup' AND json_extract(ext, '$.trustmrr')=?", [slug])
         c = _upsert_startup(slug, o)
@@ -768,13 +771,13 @@ def _rev(x: dict) -> float:
 NEEDS_INTRO = "ai!=0 AND coalesce(json_extract(ext, '$.intro_zh'), '')='' AND coalesce(json_extract(ext, '$.description'), '')!=''"
 
 
-def classify_startup_tracks(limit: int = 150) -> dict:
+def classify_startup_tracks(limit: int = 0) -> dict:
     """没归过赛道（也没人手改过）、或还没有中文简介的创业公司交给 DeepSeek：是不是 AI 产品 + 主赛道 + 次赛道 + 中文一句话简介。
     已有赛道的只补简介，不动赛道和 ai 标记；没归赛道的先做，再按收入从高到低补简介。"""
     rows = [_company(r) for r in db.rows(
         f"SELECT * FROM intel_company WHERE kind='startup' AND enabled=1 AND ((track='' AND track_manual=0) OR ({NEEDS_INTRO})) "
         "ORDER BY (track='') DESC, ai DESC, (SELECT max(value) FROM intel_metric m WHERE m.company_id=intel_company.id "
-        "AND m.metric IN ('mrr', 'revenue_30d')) DESC, id LIMIT ?", [limit])]
+        "AND m.metric IN ('mrr', 'revenue_30d')) DESC, id LIMIT ?", [limit or int(cfg("tracks_per_round"))])]
     if not rows or not os.environ.get("DEEPSEEK_API_KEY") and snap.llm_json is snap._deepseek:
         return {"tracked": 0, "track_errors": []}
     items = [{"id": str(c["id"]), "name": c["name"], "description": (c["ext"].get("description") or "")[:400],
@@ -1000,8 +1003,8 @@ def run_cycle(force_fetch: bool = False, cards: bool = True) -> dict:
                "snapshot_candidates": sum(f.get("candidates", 0) for f in fetched), "feed_candidates": scan_feed()}
         res.update(classify_pending())
         res["cards"] = queue_cards() if cards else 0
-        if cfg("startups"):
-            res["startups"] = startup_cycle(force=force_fetch, cards=cards)
+        if cfg("startups"):  # 官方 API 全量翻页要几十分钟，放独立线程，不挡产品雷达这一轮
+            res["startups"] = {"started": run_startups({"force_fetch": force_fetch, "cards": cards})["started"]}
         res["at"], res["seconds"] = db.now(), round(time.time() - t0, 1)
         _set_state("last_run", res)
         return res

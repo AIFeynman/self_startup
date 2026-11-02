@@ -23,10 +23,10 @@ description: 产品雷达板块：持续跟踪大公司（OpenAI / Anthropic / G
 
 ## 创业公司链路（每天一次，`intel.startups` 开关）
 
-1. **TrustMRR 快照**：抓首页 / AI 分类 / 在售列表，AI 分类且有收入的全部建档（`kind='startup'`），指标按天只追加写 `intel_metric`（同一天同一指标同一来源不重复）。首日只建基线，不追溯异动。
+1. **TrustMRR 快照**：抓首页 / AI 分类 / 在售列表 / 其它 30 个分类页（每页只给收入前 30 家，不能翻页）；`.env` 里有 `TRUSTMRR_API_KEY` 时再用官方 API（`/api/v1/startups?category=ai&minRevenue=100`，每页 10 家，按响应头限流）把 AI 分类有收入的全量拉下来——新公司就是这样进来的。AI 且有收入的全部建档（`kind='startup'`），指标按天只追加写 `intel_metric`（同一天同一指标同一来源不重复）。首日只建基线，不追溯异动。整条创业公司链路在独立线程里跑，不挡产品雷达的 10 分钟一轮。
 2. **收入异动**（代码规则 `_intel_startup.detect`）：MRR 跨过 $10k / $50k / $100k / $1M、30 天环比 ≥ +100%（MRR ≥ $3k）或 ≤ −40%（MRR ≥ $5k）、新挂牌出售 → `type=revenue|listing` 事件；收入事件不出五层卡，改看公司的拆解卡。
 3. **详情页**：每天最多 `details_per_day` 个，补官网、创始人 X、渠道、定价。
-4. **赛道**：16 个固定赛道（`_intel_startup.TRACKS`），DeepSeek 每轮归 150 家，同一次调用顺带写中文一句话简介（`ext.intro_zh`：做什么 + 帮谁解决什么问题；原文简介变了会重写）；页面上人工改的（`track_manual=1`）不再被覆盖。
+4. **赛道**：16 个固定赛道（`_intel_startup.TRACKS`），DeepSeek 30 家一批、6 批并发，每轮最多 `tracks_per_round`（1500）家，同一次调用顺带写中文一句话简介（`ext.intro_zh`：做什么 + 帮谁解决什么问题；原文简介变了会重写）；页面上人工改的（`track_manual=1`）不再被覆盖。
 5. **公开 ARR**：信息推荐里命中 ARR / MRR 关键词的条目让 DeepSeek 抽数字，数字必须在原文出现，记成 `source='reported'`，报道里的新公司自动建档（`ai=-1` 待确认）。
 6. **PH 日榜**：取前 `ph_top` 名，DeepSeek 一段话解读 + 每条归赛道。
 7. **生意拆解卡**：Claude 联网写 7 节卡片，每天自动最多 `profiles_per_day`（10）张，同一家 `profile_days`（30）天内不重复；手动「写拆解卡」不受限。只追加 `intel_profile`。
@@ -56,7 +56,7 @@ curl -s -X POST $API/api/intel/companies/221/profile      # 写 / 重写生意�
 curl -s -X PATCH $API/api/intel/companies/221 -H 'Content-Type: application/json' -d '{"track":"voice","watch":1,"ai":1,"ext":{"bizpeel_url":"https://bizpeel.com/…","notes":"手动粘贴的资料"}}'
 ```
 
-设置（`PUT /api/settings` 写在 `intel` 下）：`cards_per_day`（20）、`card_days`（7）、`feed_lookback_days`（3）、`cycle_minutes`（10）、`startups`（true）、`details_per_day`（40）、`profiles_per_day`（10）、`profile_days`（30）、`ph_top`（20）。需要 `.env` 里有 `DEEPSEEK_API_KEY`（分类和定价结构化）；没有时候选会一直 pending。
+设置（`PUT /api/settings` 写在 `intel` 下）：`cards_per_day`（20）、`card_days`（7）、`feed_lookback_days`（3）、`cycle_minutes`（10）、`startups`（true）、`details_per_day`（40）、`profiles_per_day`（10）、`profile_days`（30）、`ph_top`（20）、`tracks_per_round`（1500）。需要 `.env` 里有 `DEEPSEEK_API_KEY`（分类和定价结构化）；没有时候选会一直 pending。
 
 ## 怎么回答
 
