@@ -25,12 +25,13 @@ TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 MODEL = "deepseek-v4-flash"
 CACHE_DAYS = 7
 RERANK_TOP = 40
+ATOM_MAX_HITS = 400   # 拆出的单词命中超过这么多仓库就当泛词，不参与「命中 2 个词以上」的召回和加分
 W = (0.5, 1.0, 1.2, 0.8, 0.8)   # bm25 列权重：name s t descr topics
 
 REWRITE = """你把开发者的「找开源项目」需求改写成检索意图。领域 code（二级）：{doms}
 形态 kind：{kinds}
 只输出 JSON：{{"must":[核心功能的说法，中英文各写几种，2-6 个],"should":[相关的技术词 / 常见库名 / 子功能，0-8 个],
-"not":[容易混淆但不是用户要的功能，0-4 个],"domains":[最相关的领域 code，1-3 个],"kinds":[用户明确要的形态，没说就空]}}"""
+"not":[容易混淆但不是用户要的功能，0-4 个],"domains":[最相关的领域 code，1-3 个，最主要的放第一个],"kinds":[用户明确要的形态，没说就空]}}"""
 
 RERANK = ("你是开源项目检索的重排器。给定用户需求和候选仓库（summary/tags），判断每个仓库能否直接满足需求："
           "3=正是要找的，2=能用来做（主要功能之一），1=沾边但不是主要用途，0=无关或是要排除的相反功能。"
@@ -102,8 +103,16 @@ def rerank(q: str, cands: list[dict], chat=None) -> dict[str, list]:
 # ---------- 召回与打分 ----------
 
 def hits(term: str, cols: list[str] | None = None) -> dict[int, float]:
-    """一个词命中的 rowid → bm25 分（越大越相关）；2 字词退回 LIKE（命中记 1 分）。"""
+    """一个词命中的 rowid → bm25 分（越大越相关）；2 字词退回 LIKE（命中记 1 分）。
+    中英文交界没空格的（「DNA语言模型」）同时查加空格的写法（标签里多写成「DNA 语言模型」）。"""
     t = term.lower().strip()
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[\u4e00-\u9fff])|(?<=[\u4e00-\u9fff])(?=[a-z0-9])", " ", t)
+    if spaced != t:
+        return {**_hits(spaced, cols), **_hits(t, cols)}
+    return _hits(t, cols)
+
+
+def _hits(t: str, cols: list[str] | None) -> dict[int, float]:
     if len(t) < 2:
         return {}
     if len(t) >= 3:
@@ -145,6 +154,8 @@ def recall(it: dict) -> list[dict]:
     neg = [hits(t, ["s", "t"]) for t in it.get("not") or []]
     acnt: dict[int, int] = {}
     for h in (hits(a, ["name", "s", "t", "topics"]) for a in atoms_of(it)):
+        if len(h) > ATOM_MAX_HITS:   # language / model / 预训练 这种泛词命中上千个，计数只会把通用项目顶上来
+            continue
         for i in h:
             acnt[i] = acnt.get(i, 0) + 1
     cand = set().union(*must, *should) | {i for i, c in acnt.items() if c >= 2}
@@ -158,7 +169,9 @@ def recall(it: dict) -> list[dict]:
         m = max((h.get(i, 0) for h in must), default=0)
         s = sum(1 for h in should if i in h)
         rel = (1.0 if m else 0) + 0.15 * min(m, 3) + 0.3 * min(s, 3) / 3 + 0.15 * min(acnt.get(i, 0), 5)
-        rel += 0.5 if d["d"] in it["domains"] else (0.25 if set(d["d2"]) & set(it["domains"]) else 0)
+        # 主领域（改写给的第一个）加满分，其余相关领域减半：「基因组大模型」不该让 llm 领域的通用教程和 ai4science 同分
+        doms = it["domains"]
+        rel += 0.5 if doms and d["d"] == doms[0] else (0.25 if d["d"] in doms or set(d["d2"]) & set(doms) else 0)
         if it["kinds"]:
             rel += 0.4 if d["k"] in it["kinds"] else -0.3
         if any(i in h for h in neg) and not m:

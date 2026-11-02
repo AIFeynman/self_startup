@@ -234,3 +234,15 @@ def test_validate_bad_kind_or_domain_falls_back():
     assert (y["d"], y["d2"]) == ("frontend", ["mobile"])          # 领域填成 kind code：取副领域
     assert lab.validate({**x, "d": "template"}, lenient=True)["d"] == "other"
     assert lab.validate({**x, "ai": "maybe"}, lenient=True) is None   # AI 关系错仍然不收
+
+
+def test_recall_spacing_variant_primary_domain_and_generic_atoms(monkeypatch):
+    _setup()
+    assert set(srch.hits("pdf转markdown")) == set(srch.hits("pdf 转 markdown")) != set()   # 中英交界补空格
+    it = {"must": ["无关说法"], "should": [], "not": [], "domains": ["cv", "doc_parsing"], "kinds": []}
+    rel = {d["name"]: d["rel"] for d in srch.recall(it)}
+    assert rel["b/ocrkit"] > rel["a/pdfx"]                       # 第一个领域加满分，其余减半
+    it = {"must": ["无关说法"], "should": ["parse markdown"], "not": [], "domains": [], "kinds": []}
+    assert "a/pdfx" in {d["name"] for d in srch.recall(it)}       # 两个词都命中 → 召回
+    monkeypatch.setattr(srch, "ATOM_MAX_HITS", 0)                 # 两个词都超过上限，当泛词
+    assert "a/pdfx" not in {d["name"] for d in srch.recall(it)}
