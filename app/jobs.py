@@ -237,6 +237,11 @@ def describe(job: dict) -> tuple[str, str, str]:
     if m := re.fullmatch(r"research:(\d+):(r\d+|synth)", ref):
         topic = one("SELECT topic FROM research WHERE id=?", int(m[1])).get("topic") or ref
         return topic, f"#research/r/{m[1]}", "调研综合报告" if m[2] == "synth" else "调研结果"
+    if m := re.fullmatch(r"intel:event:(\d+):card", ref):
+        return one("SELECT title FROM intel_event WHERE id=?", int(m[1])).get("title") or ref, f"#intel/e/{m[1]}", "产品解读卡"
+    if m := re.fullmatch(r"intel:company:(\d+):profile(?::\w+)?", ref):
+        r = one("SELECT name, slug FROM intel_company WHERE id=?", int(m[1]))
+        return r.get("name") or ref, f"#intel/c/{r.get('slug', '')}", "生意拆解卡"
     if m := re.fullmatch(r"approval:(\d+)", ref):
         src = one("SELECT j.* FROM jobs j WHERE j.id=?", int(m[1]))
         return (describe(src)[0] if src else ref), (describe(src)[1] if src else "#plan"), "审批后续"
