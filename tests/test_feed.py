@@ -699,3 +699,33 @@ def test_product_analysis_pick_and_generate(monkeypatch):
     assert not errors and got["t"]["revenue"] == "近 30 天 $100"            # 验证过的收入不让模型改
     assert got["p"]["revenue"] == "模型编的 $1M" and got["p"]["pain"] == "手工"
     assert '"revenue_30d": 100' in sent["body"]["messages"][1]["content"]
+
+
+def test_benchmark_event_tag():
+    now = datetime.now(timezone.utc)
+    kw = dict(pop_norm=0.5, now=now, half_life_h=72, interests=[])
+    named = _it(1, "Claude tops SWE-bench Pro with 64%")
+    tau = _it(2, "τ²-bench adds a banking domain")
+    generic_ai = _it(3, "New LLM leaderboard for long-context agents")
+    generic_other = _it(4, "Rust vs Go HTTP server benchmarks")
+    zh = _it(5, "大模型评测：国内模型 10 月榜单", source="zhihu")
+    plain = _it(6, "Show HN: a tiny terminal emulator")
+    xbench = _it(7, "ReviewBench: an open benchmark for AI code review", source="blog")
+    handle = _it(8, "@LuminaBench：Codex limits are getting merged", source="twitter")
+    in_summary = _it(9, "Introducing Gemini 4 Carbon", summary="SOTA on SWE-bench Pro and GPQA")
+    for it in (named, tau, generic_ai, zh, xbench):
+        assert rk.is_benchmark(it), it["title"]
+        _, why = rk.score_item(it, **kw)
+        assert "评测" in why
+    for it in (generic_other, plain, handle, in_summary):
+        assert not rk.is_benchmark(it), it["title"]
+        _, why = rk.score_item(it, **kw)
+        assert "评测" not in why
+
+
+def test_benchmark_tag_does_not_change_score():
+    now = datetime.now(timezone.utc)
+    kw = dict(pop_norm=0.5, now=now, half_life_h=72, interests=[])
+    a, _ = rk.score_item(_it(1, "GPQA results for the new model"), **kw)
+    b, _ = rk.score_item(_it(2, "Results for the new model"), **kw)
+    assert a == b
