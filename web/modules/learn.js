@@ -34,6 +34,7 @@ const CSS = `
 .ln-badge.github { background: var(--dark); color: var(--bg); }
 .ln-badge.article { background: var(--ok-soft); color: var(--ok); }
 .ln-badge.video { background: var(--warn-soft, var(--accent-soft)); color: var(--warn, var(--accent)); }
+.ln-kcount { margin-left: 6px; font-size: 11.5px; opacity: .6; font-variant-numeric: tabular-nums; }
 .ln-reads .ln-rd { display: grid; grid-template-columns: 7.5em 3em 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
 .ln-reads .ln-rd:first-of-type { border-top: 0; }
 .ln-dd-exps { margin-bottom: 12px; } .ln-dd-exps .ln-rd { display: grid; grid-template-columns: 2.6em 3.4em 5.5em 1fr auto; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
@@ -577,7 +578,7 @@ async function renderHome(el, ctx, scrollToPlans) {
     plans.length ? h('div.grid', {}, plans.map((p) => planCard(p, ctx))) : ui.empty('还没有学习计划', '在上面输入一个主题，Enter 即可生成'));
   el.append(plansSec,
     ui.section('论文与项目深读', items.length ? `${items.length} 篇` : ''),
-    items.length ? h('div.grid', {}, items.map((it) => itemCard(it, ctx))) : ui.empty('还没有深读条目', '粘贴一个 arXiv / GitHub 链接试试'));
+    items.length ? itemList(items, ctx) : ui.empty('还没有深读条目', '粘贴一个 arXiv / GitHub 链接试试'));
   if (scrollToPlans) setTimeout(() => plansSec.scrollIntoView({ block: 'start' }), 0);
 }
 
@@ -590,6 +591,26 @@ function planCard(p, ctx) {
     p.goal ? h('div.muted.clamp2', { style: { marginTop: '8px' } }, '目标：' + p.goal) : null,
     BUSY.includes(p.status) ? h('div.muted.dots', { style: { marginTop: '6px' } }, p.status === 'generating' ? (p.layout === 'course' ? 'Agent 正在读课表' : 'Agent 正在生成计划') : (p.layout === 'course' ? 'Agent 正在同步课表' : 'Agent 正在调整计划')) : null,
   ]);
+}
+
+// 深读记录按类型分类：论文 / 项目 / 文章 / 视频；只显示有内容的分类，选中的分类在本次打开期间记住
+const KINDS = [['', '全部'], ['paper', '论文'], ['github', '项目'], ['article', '文章'], ['video', '视频']];
+const kindOf = (it) => (BADGE[it.kind] ? it.kind : 'paper');
+let itemKind = '';
+function itemList(items, ctx) {
+  const { h } = ctx;
+  const count = (k) => (k ? items.filter((it) => kindOf(it) === k).length : items.length);
+  const kinds = KINDS.filter(([k]) => count(k));
+  if (!kinds.some(([k]) => k === itemKind)) itemKind = '';
+  const tabs = h('div.tabs');
+  const grid = h('div.grid');
+  const render = () => {
+    tabs.replaceChildren(...kinds.map(([k, name]) => h('button' + (itemKind === k ? '.active' : ''), { onclick: () => { itemKind = k; render(); } },
+      [name, h('span.ln-kcount', {}, String(count(k)))])));
+    grid.replaceChildren(...items.filter((it) => !itemKind || kindOf(it) === itemKind).map((it) => itemCard(it, ctx)));
+  };
+  render();
+  return h('div', {}, kinds.length > 2 ? [tabs, grid] : [grid]);
 }
 
 function itemCard(it, ctx) {

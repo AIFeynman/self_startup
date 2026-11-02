@@ -72,13 +72,16 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-acts .fd-more { opacity: 0; transition: opacity .12s; }
 .fd-row:hover .fd-more, .fd-item:hover .fd-more, .fd-sel .fd-more { opacity: 1; }
 .fd-sel { box-shadow: 0 0 0 2px var(--accent-ring); border-color: var(--accent) !important; }
-.fd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 26px 0 10px; }
-.fd-bar .tabs { margin: 0; flex: 1; }
+.fd-bar { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin: 26px 0 10px; }
+.fd-bar .tabs { margin: 0; flex: 1; min-width: 0; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.fd-bar .tabs::-webkit-scrollbar { display: none; }
+.fd-bar .tabs button { flex: none; white-space: nowrap; padding: 4px 10px; font-size: 13px; }
+.fd-bar .fd-tabref { padding: 4px 8px; font-size: 12.5px; }
 .fd-kbd { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.fd-opts { display: flex; gap: 6px; margin-left: auto; }
+.fd-opts { display: flex; gap: 6px; margin-left: auto; flex: none; }
 @media (max-width: 1500px) { .fd-bar .fd-kbd { display: none; } }   /* 窄屏下快捷键提示让位给分类和筛选，避免分类折行 */
 .fd-chip.art { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
-.fd-opts select { width: auto; font-size: 12px; padding: 4px 8px; border-radius: 8px; }
+.fd-opts select { width: auto; font-size: 12px; padding: 3px 6px; border-radius: 8px; }
 .fd-opts select.on { border-color: var(--accent); color: var(--accent); }
 .fd-kbd kbd { margin: 0 1px; }
 .fd-list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
@@ -308,7 +311,7 @@ export default {
       const busy = status.running && status.scope === st.tab;
       tabRefresh.disabled = !!status.running;
       tabRefresh.title = status.running ? '正在刷新，稍等' : `只抓「${name}」的来源，抓新的、合并重复的`;
-      tabRefresh.replaceChildren(ui.icon('refresh'), busy ? `刷新${name}中…` : `刷新${name || ''}`);
+      tabRefresh.replaceChildren(ui.icon('refresh'), busy ? '刷新中…' : '刷新');
     }
     async function doRefresh(type = '') {
       status = await api.post('/api/feed/refresh', type ? { type } : {});
@@ -317,7 +320,8 @@ export default {
     }
     function renderFresh() {
       freshNote.classList.toggle('ok', !!fresh?.added);
-      freshNote.textContent = !fresh ? '' : fresh.added ? `${fresh.label}刚刷新 · 新增 ${fresh.added} 条，已排在最前` : `${fresh.label}刚刷新 · 没有新内容`;
+      freshNote.textContent = !fresh ? '' : fresh.added ? `+${fresh.added} 新` : '无新内容';
+      freshNote.title = !fresh ? '' : fresh.added ? `${fresh.label}刚刷新 · 新增 ${fresh.added} 条，已排在最前` : `${fresh.label}刚刷新 · 没有新内容`;
     }
     function clearFresh() { if (fresh) { fresh = null; renderFresh(); } }
     async function watchRefresh(label) {
