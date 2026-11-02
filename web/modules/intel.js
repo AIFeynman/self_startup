@@ -1,6 +1,7 @@
 // 产品雷达：关注公司的产品 / 商业变化流，B 级及以上带「五层解读卡」。
 // 路由：#intel（变化流）· #intel/e/<id>（事件 + 解读卡）· #intel/c/<slug>（公司时间线；创业公司带收入曲线 + 生意拆解卡）
 //       #intel/overview（总览：赛道格局 / 本周异动 / 头部与黑马 / 打法汇总）
+//       #intel/growth（每日增长 Case + 候选池）· #intel/g/<id>（增长 Case 卡）
 //       #intel/startups · #intel/tracks · #intel/t/<赛道> · #intel/ph · #intel/oss/<查询>（开源雷达，见 _intel_oss.js）· #intel/companies · #intel/sources
 import oss from './_intel_oss.js';
 const LV = { S: ['S', 'err'], A: ['A', 'warn'], B: ['B', 'ok'], C: ['C', 'gray'] };
@@ -9,9 +10,11 @@ const DAYS = [['7', '7 天'], ['30', '30 天'], ['90', '90 天'], ['0', '全部'
 const st = { level: 'S,A,B', days: '30', company: '', q: '', type: '' };
 const ss = { track: '', sort: 'rev', q: '', watch: false, all: false };  // 创业公司表的筛选
 const PROFILE = { queued: ['拆解中', 'line'], done: ['拆解卡', 'ok'], incomplete: ['拆解卡不完整', 'warn'], failed: ['拆解失败', 'err'] };
+const GCASE = { queued: ['写卡中', 'line'], done: ['Case 卡', 'ok'], incomplete: ['卡片不完整', 'warn'], failed: ['写卡失败', 'err'] };
+const GSCORE = [['case', '案例'], ['numbers', '数字'], ['actions', '动作'], ['fit', '相关'], ['firsthand', '一手']];
 const os = { sort: 'rev' };  // 总览里赛道格局的排序
 const TABS = [['变化流', '#intel'], ['总览', '#intel/overview'], ['创业公司', '#intel/startups'], ['赛道', '#intel/tracks'], ['PH 日榜', '#intel/ph'],
-  ['开源雷达', '#intel/oss'], ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
+  ['增长 Case', '#intel/growth'], ['开源雷达', '#intel/oss'], ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
 const tabs = (h, active) => h('div.tabs', {}, TABS.map(([t, href]) =>
   h('button' + (href === active ? '.active' : ''), { onclick: () => { location.hash = href; } }, t)));
 
@@ -524,6 +527,76 @@ async function renderPh(el, ctx) {
   }
 }
 
+const gScores = (s) => GSCORE.map(([k, t]) => `${t}${s?.[k] ?? 0}`).join(' ');
+
+async function renderGrowth(el, ctx) {
+  const { api, h, ui, toast } = ctx;
+  const d = await api.get('/api/intel/growth');
+  const run = h('button.ghost', { onclick: async () => {
+    const r = await api.post('/api/intel/growth/run', { force_collect: true });
+    toast(r.started ? '已在后台采集 + 打分，今天还没有 Case 的话会选一条写卡' : '已经在跑了'); run.disabled = true;
+  } }, [ui.icon('refresh'), ' 立即采集']);
+  const c = d.counts || {};
+  el.append(ui.pageHead('产品雷达 · 增长 Case', '每天挑 1 个 AI / 订阅 / SaaS / App 的真实增长案例，拆成「怎么找到用户 → 怎么触达 → 怎么留住 → 我能怎么用」',
+    [run]), tabs(h, '#intel/growth'));
+  el.append(ui.stats([{ k: 'Case 卡', v: d.cases.length }, { k: '已打分', v: c.scored || 0 }, { k: '合格候选', v: d.pool.length }, { k: '待打分', v: c.new || 0 }]));
+  if (d.last?.picked_reason) el.append(h('div.card', { style: { borderColor: 'var(--warn)', marginTop: '8px' } }, `上一轮（${(d.last.at || '').slice(0, 16)}）没选出：${d.last.picked_reason}`));
+  el.append(ui.section('每日 Case', '同一素材重写过只显示最新一版'));
+  el.append(d.cases.length ? h('div.card', {}, d.cases.map((g) => {
+    const s = GCASE[g.status] || [g.status, 'gray'];
+    return h('div.it-row', { onclick: () => { location.hash = `#intel/g/${g.id}`; } }, [
+      h('div.it-lv', {}, g.auto ? '日' : '选'),
+      h('div', {}, [h('div.it-t', {}, `${g.company || '?'} · ${g.item?.title || ''}`),
+        h('div.it-meta', {}, [tag(h, s), h('span', {}, g.day), h('span', {}, g.item?.source || ''), h('span', {}, `素材 ${g.item?.date || '-'}`)]),
+        g.item?.one_line ? h('div.it-sum', {}, g.item.one_line) : null]),
+      h('div.muted', { style: { fontSize: '12px' } }, `${g.item?.total ?? '-'} 分`)]);
+  })) : ui.empty('还没有增长 Case', '后台每 10 分钟一轮；素材 12 小时采一次，打完分后每天自动选 1 条写卡'));
+  el.append(ui.section('候选池', '合格且没出过卡的前 10 条，可手动加写'));
+  el.append(d.pool.length ? h('div.card', {}, d.pool.map((it) => {
+    const btn = h('button.ghost', { onclick: async (ev) => {
+      ev.stopPropagation(); btn.disabled = true;
+      const r = await api.post('/api/intel/growth/pick', { item_id: it.id });
+      toast('已提交写卡任务'); location.hash = `#intel/g/${r.id}`;
+    } }, '选这个');
+    return h('div.it-row', { onclick: () => window.open(it.url, '_blank') }, [
+      h('div.it-lv', {}, String(it.total)),
+      h('div', {}, [h('div.it-t', {}, `${it.company || '?'} · ${it.title}`),
+        h('div.it-meta', {}, [tag(h, [`${it.tier} 档`, it.tier === 'A' ? 'ok' : 'gray']), h('span', {}, it.source), h('span', {}, it.date || ''), h('span', {}, gScores(it.scores))]),
+        it.one_line ? h('div.it-sum', {}, it.one_line) : null]),
+      btn]);
+  })) : ui.empty('候选池是空的', '等下一轮采集和打分'));
+  el.append(ui.section('素材来源', 'A 档一手带数字，B 档补充；X 只当线索'), h('div.card', {}, [
+    ...d.sources.map((s) => h('div.it-src', {}, [tag(h, [`${s.tier} 档`, s.tier === 'A' ? 'ok' : 'gray']), ' ', h('a', { href: s.url, target: '_blank' }, s.name)])),
+    h('div.it-src', {}, [tag(h, ['B 档', 'gray']), ` X 名单账号（近 3 天 ≥100 赞原创）：${d.x_accounts.map((a) => '@' + a).join(' ')}`])]));
+}
+
+async function renderGrowthCase(el, ctx, id) {
+  const { api, h, md, ui, toast } = ctx;
+  const g = await api.get(`/api/intel/growth/${id}`);
+  const it = g.item || {};
+  el.append(h('div.muted', { style: { marginBottom: '8px' } }, h('a', { href: '#intel/growth' }, '← 增长 Case')));
+  const regen = h('button.ghost', { onclick: async () => {
+    const r = await api.post(`/api/intel/growth/${id}/regen`);
+    toast('已提交重写任务（保留旧版）'); location.hash = `#intel/g/${r.id}`;
+  } }, [ui.icon('refresh'), ' 重写']);
+  el.append(ui.pageHead(`${g.company || '?'} · ${it.title || ''}`, `${g.day} · ${g.auto ? '每日自动' : '手动选'} · ${it.source || ''}（${it.tier || '-'} 档）· 素材日期 ${it.date || '-'}`, [regen]));
+  el.append(h('div.card', {}, [h('div.it-src', {}, ['原文：', h('a', { href: it.url, target: '_blank' }, it.url)]),
+    h('div.it-src.muted', {}, `初筛 ${it.total ?? '-'} 分（${gScores(it.scores)}）${it.one_line ? ' · ' + it.one_line : ''}`)]));
+  const s = GCASE[g.status] || [g.status, 'gray'];
+  el.append(ui.section('增长 Case 卡', s[0]));
+  if (g.content) {
+    if (g.missing.length) el.append(h('div.card', { style: { borderColor: 'var(--warn)' } }, `缺少：${g.missing.join('、')}（或缺带链接 / 日期的出处）`));
+    el.append(h('div.card', {}, cardMd(md, g.content)));
+  } else {
+    el.append(ui.empty(g.status === 'queued' ? '后台正在写卡（联网读原文 + 找第二来源，通常几分钟）' : '写卡失败，点「重写」再来一次'));
+    if (g.status === 'queued' && g.job_id) api.waitJob(g.job_id).then(() => ctx.refresh());
+  }
+  if (g.versions.length > 1) {
+    el.append(ui.section('版本', `${g.versions.length} 个`), h('div.card', {}, g.versions.map((v) =>
+      h('div.it-src', {}, [h('a', { href: `#intel/g/${v.id}` }, `#${v.id}`), ` · ${v.created_at.slice(0, 16)} · ${(GCASE[v.status] || [v.status])[0]}${String(v.id) === String(id) ? '（当前）' : ''}`]))));
+  }
+}
+
 async function renderCompanies(el, ctx) {
   const { api, h, ui, toast } = ctx;
   const cos = await api.get('/api/intel/companies');
@@ -590,6 +663,8 @@ export default {
     if (view === 'tracks') return renderTracks(el, ctx);
     if (view === 't' && arg) return renderTrack(el, ctx, arg);
     if (view === 'ph') return renderPh(el, ctx);
+    if (view === 'growth') return renderGrowth(el, ctx);
+    if (view === 'g' && arg) return renderGrowthCase(el, ctx, arg);
     if (view === 'oss') return oss.render(el, ctx, tabs(ctx.h, '#intel/oss'));
     return renderStream(el, ctx);
   },

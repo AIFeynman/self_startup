@@ -242,6 +242,9 @@ def describe(job: dict) -> tuple[str, str, str]:
     if m := re.fullmatch(r"intel:company:(\d+):profile(?::\w+)?", ref):
         r = one("SELECT name, slug FROM intel_company WHERE id=?", int(m[1]))
         return r.get("name") or ref, f"#intel/c/{r.get('slug', '')}", "生意拆解卡"
+    if m := re.fullmatch(r"intel:growth:(\d+)", ref):
+        r = one("SELECT c.company, i.title FROM intel_growth_case c LEFT JOIN intel_growth_item i ON i.id=c.item_id WHERE c.id=?", int(m[1]))
+        return r.get("company") or r.get("title") or ref, f"#intel/g/{m[1]}", "增长 Case 卡"
     if m := re.fullmatch(r"approval:(\d+)", ref):
         src = one("SELECT j.* FROM jobs j WHERE j.id=?", int(m[1]))
         return (describe(src)[0] if src else ref), (describe(src)[1] if src else "#plan"), "审批后续"

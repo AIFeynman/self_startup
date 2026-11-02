@@ -8,6 +8,9 @@
 P2 创业公司（kind=startup）：TrustMRR 每日收入快照 → intel_metric → 收入异动事件；16 个赛道归类；生意拆解卡；
 Product Hunt 日榜解读；新闻里的公开 ARR（reported，和 verified 分开）。纯函数见 _intel_startup.py，
 设计稿：docs/designs/2026-11-01-startup-intel-design.md。
+
+每日增长 Case：增长类 RSS + X 名单账号 → DeepSeek 打分 → 每天挑 1 条 → 后台 Claude 写「增长 Case 卡」。
+纯函数见 _intel_growth.py，设计稿：docs/designs/2026-11-02-growth-case-daily-design.md。
 """
 from __future__ import annotations
 
@@ -26,6 +29,7 @@ from pydantic import BaseModel
 
 from .. import db, jobs, settings
 from . import _intel_events as ev
+from . import _intel_growth as gr
 from . import _intel_snap as snap
 from . import _intel_startup as st
 from . import _intel_watch as watch
@@ -166,6 +170,38 @@ CREATE TABLE IF NOT EXISTS intel_ph_day (      -- Product Hunt 每日 AI 榜 + �
     summary     TEXT DEFAULT '',
     created_at  TEXT
 );
+CREATE TABLE IF NOT EXISTS intel_growth_item (  -- 增长 Case 候选池：每条素材收一次、打一次分
+    id          TEXT PRIMARY KEY,            -- growth:<hash> / twitter:<id>
+    source      TEXT DEFAULT '',
+    tier        TEXT DEFAULT 'B',
+    title       TEXT DEFAULT '',
+    summary     TEXT DEFAULT '',
+    url         TEXT DEFAULT '',
+    date        TEXT DEFAULT '',
+    company     TEXT DEFAULT '',
+    one_line    TEXT DEFAULT '',
+    scores      TEXT DEFAULT '{}',           -- {case, numbers, actions, fit, firsthand}，各 0–3
+    total       INTEGER DEFAULT 0,
+    status      TEXT DEFAULT 'new',          -- new 待打分 / scored / picked 出过卡
+    found_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_intel_growth_item ON intel_growth_item(status, total);
+CREATE TABLE IF NOT EXISTS intel_growth_case (  -- 增长 Case 卡，只追加：重写也是新的一行
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id     TEXT NOT NULL,
+    day         TEXT NOT NULL,               -- 哪一天的 Case
+    auto        INTEGER DEFAULT 1,           -- 1 每日自动选的；0 手动选 / 重写
+    company     TEXT DEFAULT '',
+    status      TEXT DEFAULT 'queued',       -- queued / done / incomplete / failed
+    content     TEXT DEFAULT '',
+    sections    TEXT DEFAULT '{}',
+    missing     TEXT DEFAULT '[]',
+    complete    INTEGER DEFAULT 0,
+    job_id      INTEGER,
+    created_at  TEXT,
+    updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_intel_growth_case ON intel_growth_case(day);
 """ + oss.SCHEMA
 
 SNAP_DIR = db.DATA_DIR / "intel" / "snapshots"
@@ -181,6 +217,11 @@ CFG_DEFAULTS = {
     "profile_days": 30,        # 同一家多少天内不重复自动写
     "ph_top": 20,              # PH 日榜取前几名
     "tracks_per_round": 1500,  # 每轮最多归几家赛道（30 家一批、6 批并发）
+    "growth": True,            # 每日增长 Case
+    "growth_collect_hours": 12,  # 增长素材多久采一次（X 名单每次每个账号约 $0.001）
+    "growth_score_per_round": 120,  # 每轮最多给几条素材打分（20 条一批）
+    "growth_repeat_days": 90,  # 同一家公司多少天内不重复出 Case
+    "growth_x_accounts": gr.X_ACCOUNTS,
 }
 _lock = threading.Lock()
 
@@ -589,6 +630,8 @@ def queue_cards() -> int:
 def on_job_done(job: dict) -> None:
     if re.fullmatch(r"intel:company:\d+:profile(:\w+)?", job.get("ref") or ""):
         return on_profile_done(job)
+    if re.fullmatch(r"intel:growth:\d+", job.get("ref") or ""):
+        return on_growth_done(job)
     m = re.fullmatch(r"intel:event:(\d+):card", job.get("ref") or "")
     if not m:
         return
@@ -1052,7 +1095,7 @@ def scan_reported_arr(limit: int = 80) -> dict:
 
 def startup_cycle(force: bool = False, cards: bool = True) -> dict:
     res = {}
-    for name, fn in (("snapshot", lambda: startup_snapshot(force)), ("tracks", classify_startup_tracks), ("ph", ph_daily),
+    for name, fn in (("growth", lambda: growth_daily(cards=cards) if cfg("growth") else {}), ("snapshot", lambda: startup_snapshot(force)), ("tracks", classify_startup_tracks), ("ph", ph_daily),
                      ("arr", scan_reported_arr), ("profiles", lambda: queue_profiles() if cards else 0)):
         try:
             res[name] = fn()
@@ -1060,6 +1103,140 @@ def startup_cycle(force: bool = False, cards: bool = True) -> dict:
             log.exception("intel startup %s failed", name)
             res[name] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
     return res
+
+
+# ---------- 每日增长 Case ----------
+
+def growth_collect() -> dict:
+    """增长类 RSS（各源自己的回看天数）+ X 名单账号近 3 天 ≥100 赞原创 → 候选池（已收过的不再收）。"""
+    from . import _feed_sources as fs
+    items, errors = [], []
+    for s in gr.SOURCES:
+        got, errs = fs.fetch_rss([s["url"]], days=s["days"], per_feed=s["per_feed"], source="growth", typ="blog")
+        items += [{**it, "source_name": s["name"], "tier": s["tier"]} for it in got]
+        errors += errs
+    accounts = cfg("growth_x_accounts") or []
+    if accounts:
+        try:
+            got, errs = fs.fetch_x(accounts, [], days=3, min_likes=100, per_account=3)
+            items += [{**it, "source_name": f"X @{it['extra'].get('author') or ''}", "tier": "B"} for it in got]
+            errors += errs
+        except Exception as e:  # noqa: BLE001 —— 没配 X 密钥时只用 RSS
+            errors.append(f"x: {type(e).__name__}: {str(e)[:120]}")
+    n = 0
+    for it in items:
+        if db.row("SELECT 1 FROM intel_growth_item WHERE id=?", [it["id"]]):
+            continue
+        db.insert("intel_growth_item", {"id": it["id"], "source": it["source_name"], "tier": it["tier"], "title": it["title"][:300],
+                                        "summary": (it.get("summary") or "")[:4000], "url": it["url"], "date": (it.get("date") or "")[:10],
+                                        "status": "new", "found_at": db.now()})
+        n += 1
+    return {"new": n, "fetched": len(items), "errors": errors[:10]}
+
+
+def growth_score(limit: int = 0) -> dict:
+    """待打分的素材 20 条一批交给 DeepSeek；一批失败只记错误，下一轮再打。"""
+    rows = db.rows("SELECT * FROM intel_growth_item WHERE status='new' ORDER BY date DESC LIMIT ?",
+                   [limit or int(cfg("growth_score_per_round"))])
+    n, errors = 0, []
+    for i in range(0, len(rows), 20):
+        batch = rows[i:i + 20]
+        try:
+            res = snap.llm_json(gr.SCORE_SYSTEM, gr.score_payload(batch), max_tokens=4000)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{type(e).__name__}: {str(e)[:120]}")
+            continue
+        got = {str(x.get("id")): x for x in res.get("items") or [] if isinstance(x, dict)}
+        for r in batch:
+            x = got.get(r["id"])
+            if not x:
+                continue
+            sc = gr.clamp_scores(x)
+            db.execute("UPDATE intel_growth_item SET scores=?, total=?, company=?, one_line=?, status='scored' WHERE id=?",
+                       [ev.dumps(sc), gr.total(sc), str(x.get("company") or "")[:80], str(x.get("one_line") or "")[:200], r["id"]])
+            n += 1
+    return {"scored": n, "errors": errors}
+
+
+def _growth_item(r: dict) -> dict:
+    return {**r, "scores": _j(r.get("scores"), {})}
+
+
+def growth_pool(limit: int = 0) -> list[dict]:
+    """打过分、合格、还没出过卡的候选，按选题顺序排。"""
+    today = db.today()
+    pool = [_growth_item(r) for r in db.rows("SELECT * FROM intel_growth_item WHERE status='scored'")]
+    pool = [it for it in pool if gr.eligible(it["scores"])]
+    pool.sort(key=lambda it: (gr.rank_key(it, today), it.get("date") or ""), reverse=True)
+    return pool[:limit] if limit else pool
+
+
+def _growth_used() -> set[str]:
+    since = (datetime.now() - timedelta(days=float(cfg("growth_repeat_days")))).strftime("%Y-%m-%d")
+    return {gr.norm_company(r["company"]) for r in db.rows("SELECT company FROM intel_growth_case WHERE day>=?", [since])}
+
+
+def _growth_metrics(company: str) -> str:
+    """主角在平台里有 TrustMRR / 公开 ARR 记录的，带给写卡任务做核验。"""
+    c = _find_company(company) if company else None
+    if not c:
+        return ""
+    lines = [f"- {m['date']} · verified MRR {st.usd(m['mrr']) if m.get('mrr') else '-'} · 30 天收入 "
+             f"{st.usd(m['revenue_30d']) if m.get('revenue_30d') else '-'}（TrustMRR）" for m in metric_series(c["id"])[-6:]]
+    lines += [f"- {r['date']} · reported {r['metric'].upper()} {st.usd(r['value'])} · {r.get('source') or ''}"
+              for r in db.rows("SELECT date, metric, value, source FROM intel_metric WHERE company_id=? AND grade='reported' "
+                               "ORDER BY date DESC LIMIT 6", [c["id"]])]
+    return "\n".join(lines)
+
+
+def request_growth_case(item_id: str, auto: bool = False) -> dict:
+    r = db.row("SELECT * FROM intel_growth_item WHERE id=?", [item_id])
+    if not r:
+        raise HTTPException(404, "素材不存在")
+    it = _growth_item(r)
+    cid = db.insert("intel_growth_case", {"item_id": item_id, "day": db.today(), "auto": int(auto), "company": it["company"],
+                                          "status": "queued", "created_at": db.now(), "updated_at": db.now()})
+    jid = jobs.submit("intel", gr.case_prompt(it, _growth_metrics(it["company"])), ref=f"intel:growth:{cid}", tier="standard")
+    db.update("intel_growth_case", cid, {"job_id": jid})
+    db.execute("UPDATE intel_growth_item SET status='picked' WHERE id=?", [item_id])
+    return {"id": cid, "job_id": jid}
+
+
+def growth_daily(force_collect: bool = False, cards: bool = True) -> dict:
+    """每轮都会被调：素材到点才采（默认 12 小时一次）→ 打分 → 今天还没有自动 Case 就挑 1 条写卡。"""
+    res = {}
+    last = _state("growth_collect_at") or ""
+    due = (datetime.now() - timedelta(hours=float(cfg("growth_collect_hours")))).isoformat(timespec="seconds")
+    if force_collect or last < due:
+        res["collect"] = growth_collect()
+        _set_state("growth_collect_at", db.now())
+    res.update(growth_score())
+    if cards and not db.row("SELECT 1 FROM intel_growth_case WHERE day=? AND auto=1 AND status!='failed'", [db.today()]):
+        it = gr.pick(growth_pool(), _growth_used(), db.today())
+        res["picked"] = request_growth_case(it["id"], auto=True)["id"] if it else None
+        if not it:
+            res["picked_reason"] = "候选池里没有合格素材（或主角公司近期都出过卡）"
+    _set_state("growth_last", {**res, "at": db.now()})
+    return res
+
+
+def on_growth_done(job: dict) -> None:
+    cid = int(job["ref"].rsplit(":", 1)[1])
+    if job.get("status") != "done":
+        db.update("intel_growth_case", cid, {"status": "failed", "updated_at": db.now()})
+        return
+    q = gr.case_quality(job.get("output") or "")
+    db.update("intel_growth_case", cid, {"content": job.get("output") or "", "sections": q["sections"], "missing": q["missing"],
+                                         "complete": int(q["complete"]), "status": "done" if q["complete"] else "incomplete",
+                                         "updated_at": db.now()})
+
+
+def _growth_case(r: dict, full: bool = False) -> dict:
+    it = db.row("SELECT * FROM intel_growth_item WHERE id=?", [r["item_id"]]) or {}
+    out = {**r, "sections": None, "missing": _j(r.get("missing"), []), "item": _growth_item(it) if it else None}
+    if not full:
+        out["content"] = None
+    return out
 
 
 # ---------- 调度 ----------
@@ -1343,6 +1520,64 @@ def run_startups(body: dict | None = None):
         finally:
             _st_lock.release()
     threading.Thread(target=go, daemon=True, name="intel-startups").start()
+    return {"started": True}
+
+
+@router.get("/growth")
+def list_growth(limit: int = 30):
+    """每天的增长 Case（同一素材重写过的只给最新一版）+ 候选池前 10 + 上一轮状态。"""
+    rows = db.rows("SELECT * FROM intel_growth_case WHERE id IN (SELECT max(id) FROM intel_growth_case GROUP BY item_id) "
+                   "ORDER BY day DESC, id DESC LIMIT ?", [limit])
+    counts = {r["status"]: r["n"] for r in db.rows("SELECT status, count(*) AS n FROM intel_growth_item GROUP BY status")}
+    return {"cases": [_growth_case(r) for r in rows], "pool": growth_pool(10), "counts": counts, "last": _state("growth_last"),
+            "sources": [{"name": s["name"], "url": s["url"], "tier": s["tier"]} for s in gr.SOURCES],
+            "x_accounts": cfg("growth_x_accounts") or []}
+
+
+@router.get("/growth/{cid}")
+def get_growth(cid: int):
+    r = db.row("SELECT * FROM intel_growth_case WHERE id=?", [cid])
+    if not r:
+        raise HTTPException(404, "Case 不存在")
+    versions = db.rows("SELECT id, status, created_at FROM intel_growth_case WHERE item_id=? ORDER BY id DESC", [r["item_id"]])
+    return {**_growth_case(r, full=True), "versions": versions}
+
+
+class GrowthPickIn(BaseModel):
+    item_id: str
+
+
+@router.post("/growth/pick")
+def pick_growth(body: GrowthPickIn):
+    """手动从候选池里选一条写卡（不占每天自动的那 1 张）。"""
+    return request_growth_case(body.item_id)
+
+
+@router.post("/growth/{cid}/regen")
+def regen_growth(cid: int):
+    r = db.row("SELECT item_id FROM intel_growth_case WHERE id=?", [cid])
+    if not r:
+        raise HTTPException(404, "Case 不存在")
+    return request_growth_case(r["item_id"])
+
+
+_gr_lock = threading.Lock()
+
+
+@router.post("/growth/run")
+def run_growth(body: dict | None = None):
+    """后台跑一遍：采素材（force_collect=true 时不等 12 小时）→ 打分 → 今天没有就选一条写卡。"""
+    if not _gr_lock.acquire(blocking=False):
+        return {"started": False}
+
+    def go():
+        try:
+            growth_daily(force_collect=bool((body or {}).get("force_collect")))
+        except Exception:  # noqa: BLE001
+            log.exception("growth run failed")
+        finally:
+            _gr_lock.release()
+    threading.Thread(target=go, daemon=True, name="intel-growth").start()
     return {"started": True}
 
 

@@ -603,3 +603,88 @@ def test_overview(startup_db, monkeypatch):
     intel.startup_snapshot(force=True)
     o = startup_db.get("/api/intel/overview").json()
     assert "fresh" in {x["slug"] for x in o["new"]} and "vidgen" not in {x["slug"] for x in o["new"]}
+
+
+# ---------- 每日增长 Case ----------
+
+from app.modules import _feed_sources as fsrc  # noqa: E402
+from app.modules import _intel_growth as gr  # noqa: E402
+
+
+def _gi(id_, company, date=TODAY, tier="A", **sc):
+    s = {"case": 3, "numbers": 3, "actions": 2, "fit": 3, "firsthand": 2, **sc}
+    return {"id": id_, "company": company, "date": date, "tier": tier, "scores": s, "total": gr.total(s)}
+
+
+def test_growth_pick_rules():
+    assert gr.clamp_scores({"case": 9, "fit": "x", "numbers": -1}) == {"case": 3, "numbers": 0, "actions": 0, "fit": 0, "firsthand": 0}
+    pool = [_gi("a", "Cal AI", total_=0), _gi("b", "Praktika", date=OLD), _gi("c", "", case=3),  # 说不出主角的不选
+            _gi("d", "Game Co", fit=0), _gi("e", "Blog", case=1)]                                 # 不相关 / 不是 Case 的不选
+    assert gr.pick(pool, set(), TODAY)["id"] == "a"                    # 同分时新的优先
+    assert gr.pick(pool, {gr.norm_company("cal ai")}, TODAY)["id"] == "b"  # 近期出过卡的公司跳过
+    assert gr.pick(pool, {"calai", "praktika"}, TODAY) is None
+    b = _gi("f", "Tiny", tier="B", actions=3)  # 总分高 1 但 B 档：和 A 档同排序分时按日期
+    assert gr.rank_key(b, TODAY) == gr.rank_key(_gi("g", "X"), TODAY)
+
+
+def test_growth_case_quality():
+    good = "\n".join(f"## {s}\n- 2025 年 MRR $50k [RevenueCat](https://www.revenuecat.com/blog/x, 2026-10-20)" for s in gr.CASE_SECTIONS)
+    assert gr.case_quality(good)["complete"]
+    no_num = good.replace("- 2025 年 MRR $50k", "- 涨了很多", 2)
+    q = gr.case_quality(no_num)
+    assert not q["complete"] and "背景与数字里的数字" in q["missing"]
+    assert gr.case_quality("## 一句话\n- 只有一节")["missing"]
+
+
+@pytest.fixture()
+def growth_db(client, monkeypatch):
+    for t in ("intel_growth_item", "intel_growth_case", "intel_state"):
+        db.execute(f"DELETE FROM {t}")
+    rss = [{"id": f"growth:{i}", "source": "growth", "type": "blog", "title": t, "summary": s, "url": f"https://ex.com/{i}",
+            "date": TODAY, "popularity": 0, "extra": {}} for i, (t, s) in enumerate([
+                ("How Cal AI hit $30M ARR with creators", "Cal AI paid 1000 creators..."),
+                ("5 pricing tips", "generic advice")])]
+    monkeypatch.setattr(fsrc, "fetch_rss", lambda urls, **kw: ([dict(x) for x in rss] if urls[0] == gr.SOURCES[0]["url"] else [], []))
+    monkeypatch.setattr(fsrc, "fetch_x", lambda *a, **kw: ([{"id": "twitter:1", "source": "twitter", "type": "discussion",
+                                                             "title": "@tibo_maker：$300k MRR", "summary": "outrank 15 months", "url": "https://x.com/t/1",
+                                                             "date": TODAY, "popularity": 500, "extra": {"author": "tibo_maker"}}], []))
+
+    def fake(system, payload, **kw):
+        out = []
+        for it in payload["items"]:
+            good, lead = "Cal AI" in it["title"], "MRR" in it["title"]
+            out.append({"id": it["id"], "company": "Cal AI" if good else ("Outrank" if lead else ""),
+                        "case": 3 if good else 2 if lead else 1, "numbers": 3, "actions": 3 if good else 0, "fit": 3, "firsthand": 2,
+                        "one_line": "达人矩阵把 ARR 做到 $30M" if good else ""})
+        return {"items": out}
+    monkeypatch.setattr(snap, "llm_json", fake)
+    return client
+
+
+def test_growth_daily_and_done(growth_db):
+    res = intel.growth_daily()
+    assert res["collect"]["new"] == 3 and res["scored"] == 3
+    c = db.row("SELECT * FROM intel_growth_case WHERE id=?", [res["picked"]])
+    assert c["company"] == "Cal AI" and c["auto"] == 1 and c["status"] == "queued"
+    job = db.row("SELECT * FROM jobs WHERE id=?", [c["job_id"]])
+    assert job["ref"] == f"intel:growth:{c['id']}" and "Cal AI" in job["prompt"]
+    assert jobs.describe(job)[1] == f"#intel/g/{c['id']}"
+    # 同一天再跑：不重采（12 小时内）、不再出第二张自动卡
+    res2 = intel.growth_daily()
+    assert "collect" not in res2 and "picked" not in res2
+    # 写卡失败 → failed；重写 = 新一行，旧行保留
+    intel.on_job_done({**job, "status": "failed", "output": ""})
+    assert db.row("SELECT status FROM intel_growth_case WHERE id=?", [c["id"]])["status"] == "failed"
+    r = growth_db.post(f"/api/intel/growth/{c['id']}/regen").json()
+    good = "\n".join(f"## {s}\n- ARR $30M [Sub Club](https://ex.com/0, 2026-10-01)" for s in gr.CASE_SECTIONS)
+    job2 = db.row("SELECT * FROM jobs WHERE id=?", [r["job_id"]])
+    intel.on_job_done({**job2, "status": "done", "output": good})
+    g = growth_db.get(f"/api/intel/growth/{r['id']}").json()
+    assert g["status"] == "done" and g["complete"] and len(g["versions"]) == 2 and g["item"]["company"] == "Cal AI"
+    lst = growth_db.get("/api/intel/growth").json()
+    assert [x["id"] for x in lst["cases"]] == [r["id"]] and lst["cases"][0]["content"] is None  # 列表只给最新版、不带正文
+    assert [x["company"] for x in lst["pool"]] == ["Outrank"]  # 已出卡的不在候选池，「5 pricing tips」不合格
+    # 手动从候选池选一张
+    p = growth_db.post("/api/intel/growth/pick", json={"item_id": "twitter:1"}).json()
+    assert db.row("SELECT auto FROM intel_growth_case WHERE id=?", [p["id"]])["auto"] == 0
+    assert "只当线索" in db.row("SELECT prompt FROM jobs WHERE id=?", [p["job_id"]])["prompt"]
