@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from .. import db, settings
 from . import _feed_follow as follow
 from . import _feed_gist as gist
+from . import _feed_hn as hnd
 from . import _feed_product as pa
 from . import _feed_judge as judge
 from . import _feed_rank as rk
@@ -114,6 +115,9 @@ CFG_DEFAULTS = {
     "gist_top": 60,               # 「全部」前多少条
     "gist_per_type": 10,          # 每个分类前多少条
     "gist_model": "deepseek-v4-flash",
+    "hn_digest_enabled": True,    # 刷新 HN 后读评论区提炼（链接 / 技术产品 / 观点 / 经验），进「HN 精读」
+    "hn_digest_top": 30,          # 每次最多提炼几帖（按分数从高到低，已提炼且评论没明显变多的跳过）
+    "hn_digest_min_comments": 30, # 评论少于这个数的帖子不提炼
     "product_analysis_top": 20,   # 「产品」分类前多少条生成产品分析（收入 / 商业模式 / 定位 / 价值 / 痛点）
     "trustmrr_days": 30,          # TrustMRR：只要最近几天挂牌出售的产品
     "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
@@ -122,8 +126,8 @@ CFG_DEFAULTS = {
 }
 # 分类 → 采集器：分类页上的「刷新」只跑这些来源
 TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites", "zhihu"], "podcast": ["podcast", "xiaoyuzhou"],
-                "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["hn", "reddit", "x", "zhihu"],
-                "x_article": ["x"], "video": ["video"]}
+                "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["reddit", "x", "zhihu"],
+                "x_article": ["x"], "video": ["video"], "hn": ["hn"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
          "video": "视频", "news": "资讯"}
 
@@ -271,6 +275,10 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = [x for x in out if x["feedback"].get("saved")]
     if type_ == "x_article":  # 「X 长文」标签页：自己发的长文 + 引用了长文的推文
         out = [x for x in out if x["extra"].get("x_article")]
+    elif type_ == "hn":       # 「HN 精读」标签页：HN 帖子单独一页，带评论区提炼
+        out = [x for x in out if x["source"] == "hn"]
+    elif type_ == "discussion":   # HN 移到「HN 精读」，讨论里只留 Reddit / X / 知乎
+        out = [x for x in out if x["type"] == type_ and x["source"] != "hn"]
     elif type_:
         out = [x for x in out if x["type"] == type_]
     if q:
@@ -418,6 +426,8 @@ def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> di
     with ThreadPoolExecutor(max_workers=6) as ex:
         for name, res in ex.map(run, names):
             results[name] = res
+    if "hn" in names and cfg("hn_digest_enabled"):   # 刷了 HN 就补评论区提炼（只做新的 / 评论明显变多的）
+        results["hn_digest"] = run_hn_digest()
     if cfg("judge_enabled"):    # 判断决定过滤和置顶，刷了哪个来源都跑；只问新的或内容变了的，量很小
         results["judge"] = run_judge()
     if (not only if gists is None else gists) and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
@@ -458,7 +468,7 @@ def run_gists() -> dict:
     """给排序前列里缺中文一句话（或标题 / 简介变了）的条目生成，写回 extra.gist。"""
     try:
         # 每个标签页的前列都要有：分类之外还有「X 长文」页
-        tabs = {t: ranked(type_=t) for t in [*TYPES, "x_article"]}
+        tabs = {t: ranked(type_=t) for t in [*TYPES, "x_article", "hn"]}
         todo = gist.pick(ranked(), tabs, int(cfg("gist_top")), int(cfg("gist_per_type")))
         if not todo:
             return {"count": 0, "errors": []}
@@ -471,6 +481,32 @@ def run_gists() -> dict:
         return {"count": len(got), "errors": errors}
     except Exception as e:  # noqa: BLE001
         log.warning("feed gist failed: %s", e)
+        return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
+
+
+def _save_hn_digest(item_id: str, d: dict, comments: int) -> None:
+    row = db.row("SELECT extra FROM feed_items WHERE id=?", [item_id])
+    ex = {**_extra(row or {}), "hn": d, "hn_src": comments, "hn_at": db.now()}
+    db.execute("UPDATE feed_items SET extra=? WHERE id=?", [json.dumps(ex, ensure_ascii=False), item_id])
+
+
+def run_hn_digest(ids: list[str] | None = None) -> dict:
+    """HN 评论区提炼，写回 extra.hn。ids 指定时只做这几帖（不看评论数门槛，手动「重新提炼」用）。"""
+    try:
+        items = [it for it in _load_items() if it["source"] == "hn"]
+        if ids:
+            todo = [it for it in items if it["id"] in set(ids)]
+        else:
+            todo = hnd.pick(items, int(cfg("hn_digest_top")), int(cfg("hn_digest_min_comments")))
+        if not todo:
+            return {"count": 0, "errors": []}
+        got, errors = hnd.generate(todo, model=str(cfg("gist_model")))
+        for it in todo:
+            if it["id"] in got:
+                _save_hn_digest(it["id"], got[it["id"]], hnd.comments_of(it))
+        return {"count": len(got), "errors": errors}
+    except Exception as e:  # noqa: BLE001
+        log.warning("feed hn digest failed: %s", e)
         return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
 
 
@@ -499,6 +535,33 @@ def _bg(only, gists=None):
         res = {"_": {"count": 0, "errors": [str(e)]}}
     with _state_lock:
         _state.update(running=False, finished_at=db.now(), results=res)
+
+
+class HnDigestIn(BaseModel):
+    id: str
+
+
+@router.post("/hn/digest")
+def hn_digest(body: HnDigestIn):
+    """手动（重新）提炼一帖 HN 评论区，同步返回提炼结果。"""
+    if not (body.id.startswith("hn:") and db.row("SELECT id FROM feed_items WHERE id=?", [body.id])):
+        raise HTTPException(404, "HN 条目不存在")
+    res = run_hn_digest([body.id])
+    row = db.row("SELECT extra FROM feed_items WHERE id=?", [body.id])
+    d = _extra(row or {}).get("hn")
+    if not d:
+        raise HTTPException(502, "；".join(res["errors"]) or "提炼失败")
+    return {"id": body.id, "hn": d}
+
+
+@router.get("/hn/library")
+def hn_library(q: str = "", days: float = 0):
+    """经验库：已提炼的 HN 帖子跨帖累计（技术与产品口碑、被反复推荐的链接、经验卡片）。days：只看最近 N 天发布的帖子。"""
+    fb = _feedback()
+    items = [it for it in _load_items() if it["source"] == "hn" and it["extra"].get("hn") and not fb.get(it["id"], {}).get("hidden")]
+    items = rk.within_days(items, days, datetime.now(timezone.utc))
+    total = (db.row("SELECT count(*) n FROM feed_items WHERE source='hn'") or {}).get("n", 0)
+    return {**hnd.library(items, q), "total": total}
 
 
 class RefreshIn(BaseModel):
