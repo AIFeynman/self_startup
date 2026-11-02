@@ -59,6 +59,14 @@ PRACTICE_RE = re.compile(r"\b(tutorial|guide|how[- ]to|walkthrough|i (built|made
                          r"in production|case study|experience|deep dive)\b|教程|实测|经验|踩坑|复盘|对比", re.I)
 FRONTIER_RE = re.compile(r"^\[(r|d|p|n)\]|\b(research|paper|arxiv|discussion|news|new model|release[ds]?|weights|"
                          r"sota|state of the art|technical report|preprint)\b|论文|发布", re.I)
+# 「评测」事件标签：新 benchmark / 榜单更新 / 刷榜成绩（只看标题）。只打标签不加分，方便按「评测」搜和区分，排序仍按热度、新鲜度、兴趣。
+# 具名 benchmark 本身就是 AI 评测，直接算；泛词（benchmark、leaderboard、评测…）要条目同时和 AI 相关，免得把 Rust 跑分帖算进来
+BENCH_NAME_RE = re.compile(r"\b(swe[- ]?bench\w*|terminal[- ]?bench|(τ|tau)[²2³3]?[- ]?bench|gpqa|humanity'?s last exam|"
+                           r"arc[- ]?agi[- ]?\d?|mmlu(-pro)?|gaia benchmark|osworld|webarena|browsecomp|livecodebench|"
+                           r"lmarena|chatbot arena|gdpval|mle[- ]?bench|bfcl|ifeval|simpleqa|matharena|aime 20\d\d|"
+                           r"frontiermath|metr time horizons?|vending[- ]?bench|programbench|artificial analysis)\b", re.I)
+BENCH_RE = re.compile(r"\b(benchmark(s|ing|ed)?|\w+[- ]?bench(?<!workbench)|leaderboards?|evals|llm[- ]evals?|eval(uation)? (suite|harness|set)|"
+                      r"state[- ]of[- ]the[- ]art on|sota on|tops? the leaderboard)\b|评测集|评测基准|大模型评测|基准测试|排行榜|榜单|跑分|刷榜", re.I)
 NOISE_RE = re.compile(r"\b(meme|funny|humou?r|shitpost|rant|vent|when will|is it just me|anyone else|eli5|"
                       r"help|question|beginner|noob|hiring|giveaway)\b|\?\s*$|求助|吐槽", re.I)
 
@@ -234,6 +242,8 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
         lead.append(f"关注账号 {via}")
     if needs_value(it):
         s += _value_score(it, lead, why)
+    if is_benchmark(it, interests):
+        lead.append("评测")
 
     text = f"{it.get('title', '')} {it.get('summary', '')}".lower()
     hits = [t for t in interests if t and _interest_re(t).search(text)]
@@ -407,6 +417,13 @@ def value_tag(it: dict) -> str:
     if NOISE_RE.search(text) and it.get("source") == "reddit":
         return "噪音"
     return ""
+
+
+def is_benchmark(it: dict, interests: list[str] = ()) -> bool:
+    """benchmark / 榜单类事件：标题点了具名 benchmark，或标题用了评测泛词（含 XxxBench）且条目与 AI 相关。
+    只看标题：模型发布的简介几乎都会列一串 benchmark 分数，看简介会把所有发布都标成「评测」。"""
+    text = re.sub(r"^@\w+：", "", it.get("title", ""))     # 推文标题前的 @账号 不算（@LuminaBench 之类）
+    return bool(BENCH_NAME_RE.search(text)) or bool(BENCH_RE.search(text)) and is_ai(it, interests)
 
 
 def low_value(it: dict) -> bool:
