@@ -1,0 +1,145 @@
+{
+  "version": "2026-11-01.1",
+  "note": "开源雷达分类体系。一个仓库 = 形态（单选）+ 主领域（1 个二级类）+ 副领域（0–2 个二级类）+ AI 关系（单选）+ 功能标签（3–8 个，受控词表，可提新词）。二级类 code 全局唯一。",
+  "kinds": [
+    {"code": "app", "name": "应用 / 产品", "desc": "装上或部署后直接使用的软件：桌面 / 移动 / Web 应用、自托管服务、CLI 工具、浏览器扩展本身是产品时"},
+    {"code": "library", "name": "库 / SDK", "desc": "被代码调用的组件：库、SDK、客户端、算子库"},
+    {"code": "framework", "name": "框架 / 平台", "desc": "在它之上搭东西的框架、引擎、平台、运行时"},
+    {"code": "plugin", "name": "插件 / 扩展 / 技能", "desc": "依附于宿主的扩展：MCP server、Claude/Codex skills、VS Code / Obsidian / ComfyUI 插件、主题"},
+    {"code": "model", "name": "模型 / 权重", "desc": "发布模型权重、模型代码或技术报告的仓库"},
+    {"code": "dataset", "name": "数据集 / 基准", "desc": "数据集、评测基准、排行榜"},
+    {"code": "research", "name": "论文实现", "desc": "论文配套代码、研究原型"},
+    {"code": "tutorial", "name": "教程 / 课程", "desc": "教程、课程、作业、示例代码集、从零实现、面试题"},
+    {"code": "book", "name": "书籍 / 文档", "desc": "书、讲义、官方文档源码、知识手册"},
+    {"code": "awesome", "name": "清单 / 导航", "desc": "awesome 列表、资源合集、工具导航、提示词合集"},
+    {"code": "template", "name": "模板 / 配置", "desc": "项目模板、样板、dotfiles、配置合集、规则文件"},
+    {"code": "other", "name": "其他", "desc": "个人主页、镜像、存档、看不出用途"}
+  ],
+  "ai_relation": [
+    {"code": "core", "name": "AI 本身", "desc": "模型、训练、推理、Agent 框架等 AI 技术本体"},
+    {"code": "for_ai", "name": "给 AI 用", "desc": "服务于 AI 开发或 AI 使用的工具：MCP server、技能、数据处理、评测、网关"},
+    {"code": "ai_powered", "name": "用 AI 做的应用", "desc": "核心功能靠 AI 实现的应用（AI 笔记、AI 炒股、AI 翻译）"},
+    {"code": "none", "name": "与 AI 无关", "desc": ""}
+  ],
+  "domains": [
+    {"code": "ai", "name": "模型与算法", "children": [
+      {"code": "llm", "name": "大语言模型", "eg": ["基座模型", "推理模型", "对话模型", "技术报告", "分词器"]},
+      {"code": "multimodal", "name": "多模态 / 视觉语言", "eg": ["VLM", "图文理解", "视频理解", "多模态 Embedding"]},
+      {"code": "cv", "name": "计算机视觉", "eg": ["目标检测", "图像分割", "人脸识别", "姿态估计", "图像分类"]},
+      {"code": "speech", "name": "语音", "eg": ["语音识别", "语音合成", "声音克隆", "实时语音对话"]},
+      {"code": "gen_image", "name": "图像生成与编辑", "eg": ["扩散模型", "文生图", "ComfyUI", "图像修复", "换脸"]},
+      {"code": "gen_video", "name": "视频 / 3D / 数字人生成", "eg": ["文生视频", "数字人", "3D 生成", "动作生成"]},
+      {"code": "nlp", "name": "传统 NLP", "eg": ["分词", "命名实体识别", "机器翻译", "文本分类"]},
+      {"code": "classic_ml", "name": "传统机器学习", "eg": ["梯度提升树", "AutoML", "时间序列预测", "推荐系统", "概率编程"]},
+      {"code": "robotics", "name": "机器人 / 具身 / 强化学习", "eg": ["强化学习", "具身智能", "自动驾驶", "机械臂控制", "仿真环境"]},
+      {"code": "ai4science", "name": "AI for Science", "eg": ["蛋白质结构", "分子生成", "气象预测"]}
+    ]},
+    {"code": "ai_infra", "name": "AI 基础设施", "children": [
+      {"code": "dl_framework", "name": "深度学习框架", "eg": ["PyTorch 生态", "JAX", "自动微分"]},
+      {"code": "training", "name": "训练与微调", "eg": ["LoRA 微调", "RLHF", "分布式训练", "预训练", "蒸馏"]},
+      {"code": "inference", "name": "推理与部署", "eg": ["LLM Serving", "本地运行大模型", "量化", "端侧推理", "KV Cache"]},
+      {"code": "kernels", "name": "算子 / 编译 / 加速", "eg": ["CUDA Kernel", "Attention 算子", "ML 编译器", "GPU 调度"]},
+      {"code": "llm_gateway", "name": "模型网关 / API 代理", "eg": ["统一 API", "OpenAI 兼容接口", "多账号代理", "负载均衡", "额度管理"]},
+      {"code": "eval", "name": "评测与基准", "eg": ["LLM 评测", "Agent 评测", "基准测试", "红队测试"]},
+      {"code": "ai_data", "name": "训练数据 / 标注 / 合成", "eg": ["数据标注", "合成数据", "数据清洗", "指令数据"]},
+      {"code": "llmops", "name": "LLMOps / 可观测 / 提示管理", "eg": ["链路追踪", "提示词管理", "成本监控", "Guardrails"]}
+    ]},
+    {"code": "agent", "name": "Agent 与 AI 应用", "children": [
+      {"code": "agent_framework", "name": "Agent 框架 / SDK", "eg": ["Agent 编排", "工具调用", "状态图", "Agent SDK"]},
+      {"code": "coding_agent", "name": "AI 编程", "eg": ["编码 Agent", "代码补全", "代码审查", "IDE AI 插件", "终端 Agent"]},
+      {"code": "agent_ext", "name": "Agent 扩展生态", "eg": ["MCP Server", "Agent Skills", "Claude Code 插件", "子 Agent 配置", "提示词"]},
+      {"code": "agent_runtime", "name": "Agent 运行时 / 沙箱 / 操作电脑", "eg": ["代码沙箱", "Computer Use", "浏览器自动化", "手机操作", "远程开发环境"]},
+      {"code": "multi_agent", "name": "多 Agent 协作与管理", "eg": ["多 Agent 编排", "Agent 看板", "任务分发", "Agent 团队"]},
+      {"code": "memory_rag", "name": "记忆 / RAG / 知识库", "eg": ["RAG", "长期记忆", "知识图谱", "知识库问答", "上下文工程"]},
+      {"code": "chat_ui", "name": "AI 聊天界面与客户端", "eg": ["LLM WebUI", "桌面客户端", "多模型聊天", "角色扮演"]},
+      {"code": "assistant", "name": "个人 AI 助手 / 自主 Agent", "eg": ["个人助理", "IM 接入", "常驻 Agent", "语音助手", "AI 伴侣"]},
+      {"code": "ai_workflow", "name": "AI 工作流 / 低代码编排", "eg": ["可视化编排", "工作流自动化", "LLM 应用平台"]},
+      {"code": "ai_app", "name": "其他 AI 应用", "eg": ["AI 搜索", "AI 写作", "AI 翻译", "深度研究", "AI 投研"]}
+    ]},
+    {"code": "data", "name": "数据与文档", "children": [
+      {"code": "doc_parsing", "name": "文档解析 / OCR / 格式转换", "eg": ["PDF 解析", "OCR", "版面分析", "表格抽取", "公式识别", "转 Markdown", "PDF 编辑"]},
+      {"code": "crawler", "name": "爬虫与网页抓取", "eg": ["网页抓取", "网页转 Markdown", "反爬", "社媒采集"]},
+      {"code": "database", "name": "数据库与存储", "eg": ["关系数据库", "KV 存储", "时序数据库", "对象存储", "ORM"]},
+      {"code": "search", "name": "搜索引擎 / 向量检索", "eg": ["全文检索", "向量数据库", "Embedding 检索", "重排序"]},
+      {"code": "data_eng", "name": "数据工程 / ETL / 流处理", "eg": ["ETL", "消息队列", "流处理", "数据编排"]},
+      {"code": "analytics", "name": "数据分析 / BI / 可视化", "eg": ["BI 报表", "图表库", "数据分析", "Notebook"]}
+    ]},
+    {"code": "dev", "name": "开发工具", "children": [
+      {"code": "editor", "name": "编辑器 / IDE", "eg": ["代码编辑器", "IDE", "LSP", "终端编辑器"]},
+      {"code": "terminal", "name": "终端 / 命令行 / Shell", "eg": ["终端模拟器", "Shell 增强", "TUI", "命令行工具集"]},
+      {"code": "build_pkg", "name": "构建 / 打包 / 包管理", "eg": ["构建工具", "包管理器", "版本管理", "Monorepo"]},
+      {"code": "code_quality", "name": "代码质量 / 静态分析", "eg": ["Linter", "格式化", "代码搜索", "重构工具", "类型检查"]},
+      {"code": "testing", "name": "测试与调试", "eg": ["单元测试", "E2E 测试", "Mock", "调试器", "性能分析"]},
+      {"code": "git_collab", "name": "Git 与代码协作", "eg": ["Git 客户端", "代码托管", "Code Review", "提交规范"]},
+      {"code": "api_tools", "name": "API 开发与文档", "eg": ["API 调试", "接口文档", "OpenAPI", "GraphQL"]},
+      {"code": "lang_runtime", "name": "编程语言 / 编译器 / 运行时", "eg": ["编程语言", "编译器", "解释器", "WebAssembly", "标准库"]},
+      {"code": "lowcode", "name": "低代码 / 脚手架 / 代码生成", "eg": ["低代码平台", "脚手架", "代码生成器"]}
+    ]},
+    {"code": "appdev", "name": "应用开发框架", "children": [
+      {"code": "frontend", "name": "前端框架 / UI 组件", "eg": ["React 生态", "Vue 生态", "UI 组件库", "CSS 框架", "状态管理"]},
+      {"code": "backend", "name": "后端 / 全栈框架", "eg": ["Web 框架", "RPC", "微服务", "认证鉴权", "全栈框架"]},
+      {"code": "mobile", "name": "移动开发", "eg": ["Android", "iOS", "Flutter", "React Native"]},
+      {"code": "desktop", "name": "桌面 / 跨平台", "eg": ["Electron", "Tauri", "GUI 框架"]},
+      {"code": "game_graphics", "name": "游戏引擎 / 图形渲染", "eg": ["游戏引擎", "渲染器", "物理引擎", "WebGL"]},
+      {"code": "site_cms", "name": "建站 / CMS / 静态站点", "eg": ["CMS", "静态站点生成", "博客", "主题"]}
+    ]},
+    {"code": "ops", "name": "云原生与运维", "children": [
+      {"code": "container", "name": "容器 / Kubernetes", "eg": ["Docker", "Kubernetes", "Helm", "服务网格"]},
+      {"code": "iac", "name": "基础设施即代码 / 配置管理", "eg": ["Terraform", "Ansible", "Nix", "配置管理"]},
+      {"code": "cicd", "name": "CI/CD 与发布", "eg": ["CI/CD", "GitOps", "发布管理"]},
+      {"code": "observability", "name": "监控 / 日志 / 告警", "eg": ["指标监控", "日志收集", "链路追踪", "告警"]},
+      {"code": "selfhost", "name": "服务器面板 / 自托管平台", "eg": ["服务器面板", "PaaS", "自托管", "备份"]},
+      {"code": "network", "name": "网络 / 代理 / VPN", "eg": ["反向代理", "内网穿透", "VPN", "代理协议", "DNS"]},
+      {"code": "cloud", "name": "云服务 / Serverless", "eg": ["云 SDK", "Serverless", "Cloudflare Workers", "多云管理"]}
+    ]},
+    {"code": "security", "name": "安全", "children": [
+      {"code": "offensive", "name": "渗透 / 漏洞", "eg": ["漏洞扫描", "渗透测试", "逆向", "CTF"]},
+      {"code": "defensive", "name": "防御 / 检测 / 合规", "eg": ["入侵检测", "SOC", "WAF", "供应链安全", "设备管理"]},
+      {"code": "crypto_identity", "name": "加密 / 隐私 / 身份", "eg": ["加密库", "密码管理", "身份认证", "端到端加密", "广告拦截"]},
+      {"code": "ai_security", "name": "AI 安全", "eg": ["提示注入防护", "模型安全", "Agent 权限"]}
+    ]},
+    {"code": "system", "name": "系统与硬件", "children": [
+      {"code": "os", "name": "操作系统 / 系统工具", "eg": ["Linux 发行版", "系统优化", "窗口管理", "文件管理", "包仓库"]},
+      {"code": "virtualization", "name": "虚拟化 / 模拟器", "eg": ["虚拟机", "游戏模拟器", "兼容层"]},
+      {"code": "embedded", "name": "嵌入式 / IoT / 固件", "eg": ["MCU 开发", "RTOS", "键盘固件", "IoT"]},
+      {"code": "hardware", "name": "硬件设计 / EDA / 3D 打印", "eg": ["HDL", "EDA", "3D 打印切片", "开源硬件"]},
+      {"code": "phone_mod", "name": "手机系统 / 定制", "eg": ["Root", "刷机", "Android 定制"]}
+    ]},
+    {"code": "media", "name": "多媒体", "children": [
+      {"code": "audio_video", "name": "音视频处理 / 播放 / 流媒体", "eg": ["视频处理", "播放器", "直播", "音乐", "字幕"]},
+      {"code": "downloader", "name": "下载器", "eg": ["视频下载", "网盘", "BT", "音乐下载"]},
+      {"code": "image_design", "name": "图像 / 设计 / 3D 建模", "eg": ["图像处理", "设计工具", "图标", "3D 建模", "图床"]}
+    ]},
+    {"code": "productivity", "name": "效率与协作", "children": [
+      {"code": "notes_km", "name": "笔记 / 知识管理", "eg": ["笔记", "双链", "Markdown 编辑", "白板"]},
+      {"code": "office_pm", "name": "办公 / 项目管理", "eg": ["项目管理", "文档协作", "表格", "日历", "工作流审批"]},
+      {"code": "communication", "name": "通讯 / 社交 / 聊天机器人", "eg": ["即时通讯", "邮件", "IM 机器人", "社区论坛"]},
+      {"code": "reading_info", "name": "阅读 / 信息聚合", "eg": ["RSS", "阅读器", "电子书", "新闻聚合"]},
+      {"code": "personal_auto", "name": "个人工具 / 自动化 / 智能家居", "eg": ["智能家居", "自动化脚本", "效率工具", "习惯追踪"]}
+    ]},
+    {"code": "industry", "name": "行业应用", "children": [
+      {"code": "finance", "name": "金融 / 量化 / 交易", "eg": ["量化交易", "股票分析", "记账", "回测"]},
+      {"code": "enterprise", "name": "企业应用 / ERP / 电商", "eg": ["ERP", "CRM", "电商", "客服"]},
+      {"code": "education", "name": "教育", "eg": ["在线学习平台", "刷题", "教学工具"]},
+      {"code": "health_bio", "name": "医疗 / 生物信息", "eg": ["生物信息", "医学影像", "健康"]},
+      {"code": "geo", "name": "地理 / 地图 / GIS", "eg": ["GIS", "地图", "遥感"]},
+      {"code": "sci_tools", "name": "科研工具", "eg": ["论文写作", "文献管理", "科学计算", "学术排名"]}
+    ]},
+    {"code": "web3", "name": "区块链 / Web3", "children": [
+      {"code": "blockchain", "name": "区块链 / 加密货币", "eg": ["公链", "智能合约", "钱包", "DeFi"]}
+    ]},
+    {"code": "fun", "name": "游戏与娱乐", "children": [
+      {"code": "games", "name": "游戏 / Mod / 启动器", "eg": ["开源游戏", "游戏 Mod", "启动器", "外挂辅助"]},
+      {"code": "content_apps", "name": "内容消费客户端", "eg": ["第三方客户端", "小说", "漫画", "视频客户端"]}
+    ]},
+    {"code": "cs", "name": "计算机基础与职业", "children": [
+      {"code": "algorithms", "name": "算法与数据结构", "eg": ["算法题解", "数据结构", "LeetCode"]},
+      {"code": "system_design", "name": "系统设计 / 架构", "eg": ["系统设计", "设计模式", "分布式系统", "架构"]},
+      {"code": "career", "name": "面试 / 职业 / 学习路线", "eg": ["面试题", "学习路线", "编程挑战", "自学方法"]},
+      {"code": "cs_general", "name": "通用编程 / 计算机课程", "eg": ["编程入门", "计算机课程", "编程书单"]}
+    ]},
+    {"code": "misc", "name": "其他", "children": [
+      {"code": "other", "name": "其他 / 非技术", "eg": ["个人主页", "非技术内容", "无法判断"]}
+    ]}
+  ]
+}

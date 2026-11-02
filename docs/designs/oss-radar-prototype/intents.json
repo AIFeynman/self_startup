@@ -1,0 +1,411 @@
+[
+ {
+  "i": 0,
+  "must": [
+   "PDF 解析",
+   "PDF parsing",
+   "PDF 文本提取",
+   "PDF text extraction"
+  ],
+  "should": [
+   "OCR",
+   "表格抽取",
+   "版面分析",
+   "table extraction",
+   "layout analysis"
+  ],
+  "not": [
+   "PDF 生成",
+   "PDF 阅读器",
+   "PDF 合并"
+  ],
+  "domains": [
+   "doc_parsing"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 1,
+  "must": [
+   "图片文字识别",
+   "OCR",
+   "图像转文字",
+   "image text recognition"
+  ],
+  "should": [
+   "文字检测",
+   "场景文字",
+   "手写识别",
+   "text detection",
+   "scene text"
+  ],
+  "not": [
+   "图片生成",
+   "图像分类",
+   "图片压缩"
+  ],
+  "domains": [
+   "doc_parsing",
+   "cv"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 2,
+  "must": [
+   "网页转 Markdown",
+   "HTML 转 Markdown",
+   "web to markdown",
+   "html to markdown",
+   "网页内容抽取",
+   "web content extraction"
+  ],
+  "should": [
+   "爬虫",
+   "网页抓取",
+   "LLM 数据准备",
+   "readability",
+   "web scraping"
+  ],
+  "not": [
+   "Markdown 编辑器",
+   "Markdown 渲染",
+   "Markdown 预览"
+  ],
+  "domains": [
+   "crawler",
+   "doc_parsing"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 3,
+  "must": [
+   "PDF 报表生成",
+   "生成 PDF",
+   "PDF generation",
+   "PDF report generation",
+   "HTML 转 PDF",
+   "HTML to PDF"
+  ],
+  "should": [
+   "报表模板",
+   "reportlab",
+   "wkhtmltopdf",
+   "report generation"
+  ],
+  "not": [
+   "PDF 解析",
+   "PDF 阅读器",
+   "PDF 编辑器"
+  ],
+  "domains": [
+   "analytics",
+   "doc_parsing"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 4,
+  "must": [
+   "语音转文字",
+   "语音识别",
+   "ASR",
+   "speech to text",
+   "speech recognition",
+   "语音转录"
+  ],
+  "should": [
+   "Whisper",
+   "说话人分离",
+   "实时字幕",
+   "transcription"
+  ],
+  "not": [
+   "文字转语音",
+   "TTS",
+   "语音合成",
+   "语音助手"
+  ],
+  "domains": [
+   "speech"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 5,
+  "must": [
+   "RAG 知识库",
+   "RAG 框架",
+   "检索增强生成",
+   "retrieval augmented generation",
+   "RAG knowledge base",
+   "知识库问答"
+  ],
+  "should": [
+   "向量数据库",
+   "文档问答",
+   "embedding",
+   "chunking",
+   "vector database"
+  ],
+  "not": [
+   "知识管理笔记",
+   "大模型训练",
+   "模型微调"
+  ],
+  "domains": [
+   "memory_rag",
+   "llm"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 6,
+  "must": [
+   "AI 管理 Kubernetes",
+   "Kubernetes AI 运维",
+   "K8s 智能运维",
+   "AI Kubernetes management",
+   "LLM Kubernetes operator",
+   "kubectl MCP"
+  ],
+  "should": [
+   "K8s MCP server",
+   "集群诊断",
+   "AIOps",
+   "kubernetes agent"
+  ],
+  "not": [
+   "Kubernetes 发行版",
+   "K8s 监控面板",
+   "Helm chart 仓库"
+  ],
+  "domains": [
+   "container",
+   "agent_ext"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 7,
+  "must": [
+   "路由器固件刷机",
+   "刷路由器固件",
+   "router firmware flashing",
+   "OpenWrt",
+   "router custom firmware"
+  ],
+  "should": [
+   "Padavan",
+   "DD-WRT",
+   "Asuswrt-Merlin",
+   "固件编译",
+   "firmware"
+  ],
+  "not": [
+   "路由器管理后台",
+   "VPN 代理",
+   "固件逆向分析"
+  ],
+  "domains": [
+   "embedded",
+   "network"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 8,
+  "must": [
+   "广告拦截",
+   "ad blocker",
+   "ad blocking",
+   "广告过滤",
+   "adblock"
+  ],
+  "should": [
+   "DNS 去广告",
+   "AdGuard",
+   "uBlock Origin",
+   "pi-hole",
+   "hosts 广告过滤"
+  ],
+  "not": [
+   "广告投放平台",
+   "广告生成",
+   "广告系统 SDK"
+  ],
+  "domains": [
+   "network",
+   "personal_auto"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 9,
+  "must": [
+   "WhatsApp 机器人",
+   "WhatsApp bot",
+   "WhatsApp Web API",
+   "WhatsApp 自动回复",
+   "WhatsApp Business API"
+  ],
+  "should": [
+   "Baileys",
+   "whatsapp-web.js",
+   "WhatsApp Cloud API",
+   "聊天机器人框架",
+   "chatbot"
+  ],
+  "not": [
+   "WhatsApp 消息导出",
+   "WhatsApp 聊天记录备份",
+   "WhatsApp 群发工具"
+  ],
+  "domains": [
+   "communication"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 10,
+  "must": [
+   "大模型 API 网关",
+   "LLM 网关",
+   "LLM gateway",
+   "统一 LLM API",
+   "多模型路由",
+   "LLM API proxy",
+   "OpenAI 兼容 API 代理"
+  ],
+  "should": [
+   "模型路由",
+   "负载均衡",
+   "fallback",
+   "API 聚合",
+   "AI gateway",
+   "LiteLLM",
+   "one-api"
+  ],
+  "not": [
+   "模型推理引擎",
+   "模型训练",
+   "LLM 应用框架"
+  ],
+  "domains": [
+   "llm_gateway"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 11,
+  "must": [
+   "Spring Cloud 微服务教程",
+   "Spring Cloud tutorial",
+   "Spring Cloud 微服务入门",
+   "microservices with Spring Cloud",
+   "Spring Cloud 实战"
+  ],
+  "should": [
+   "Spring Boot",
+   "服务注册与发现",
+   "Nacos",
+   "Eureka",
+   "Spring Cloud Gateway",
+   "Spring Cloud Alibaba"
+  ],
+  "not": [
+   "Java 基础教程",
+   "Spring 框架源码",
+   "Spring Cloud 脚手架模板"
+  ],
+  "domains": [
+   "backend",
+   "cs_general"
+  ],
+  "kinds": [
+   "tutorial"
+  ]
+ },
+ {
+  "i": 12,
+  "must": [
+   "公式识别",
+   "数学公式转 LaTeX",
+   "formula recognition",
+   "math OCR",
+   "image to LaTeX",
+   "formula to latex"
+  ],
+  "should": [
+   "OCR",
+   "截图识别",
+   "Pix2Tex",
+   "LaTeX-OCR",
+   "手写公式识别"
+  ],
+  "not": [
+   "LaTeX 编辑器",
+   "LaTeX 模板",
+   "KaTeX 公式渲染"
+  ],
+  "domains": [
+   "doc_parsing",
+   "cv"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 13,
+  "must": [
+   "Claude Code 省 token",
+   "Claude Code token 优化",
+   "减少 Claude Code token 消耗",
+   "Claude Code context compression",
+   "Claude Code cost reduction"
+  ],
+  "should": [
+   "上下文压缩",
+   "prompt caching",
+   "token 用量统计",
+   "token 计费",
+   "Claude Code 插件"
+  ],
+  "not": [
+   "Claude Code 汉化",
+   "AI 编程 IDE",
+   "Claude API 中转站"
+  ],
+  "domains": [
+   "coding_agent",
+   "llmops"
+  ],
+  "kinds": []
+ },
+ {
+  "i": 14,
+  "must": [
+   "本地音乐播放器",
+   "local music player",
+   "音乐播放器",
+   "desktop music player"
+  ],
+  "should": [
+   "FLAC 播放",
+   "歌词显示",
+   "播放列表",
+   "foobar2000",
+   "Navidrome"
+  ],
+  "not": [
+   "音乐下载器",
+   "网易云音乐 API",
+   "音乐标签编辑器"
+  ],
+  "domains": [
+   "audio_video",
+   "content_apps"
+  ],
+  "kinds": []
+ }
+]
