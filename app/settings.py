@@ -183,7 +183,7 @@ DEFAULTS: dict = {
         "output_dir": str(DATA_DIR / "learn"),
         # 学习板块各类后台任务用哪一档模型（见 model_tiers）；没写的任务用 module_models.learn
         # course 解析课表 / material 课件与字幕整理成素材包 / grade 批改简答题；chapter 章节精讲、adapt 调整计划等走默认
-        "task_tiers": {"course": "light", "material": "light", "grade": "light"},
+        "task_tiers": {"course": "light", "material": "light", "grade": "light", "book": "light"},
     },
 }
 

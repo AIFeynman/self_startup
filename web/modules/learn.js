@@ -1,8 +1,10 @@
 // 深度学习：条目深读（论文 / GitHub）+ 主题学习计划。
 // 路由：#learn（总览 + 智能输入框）、#learn/plans（同总览，滚到计划）、#learn/plan/<id>、
-//       #learn/plan/<id>/step/<sid>（跟着学：一章教程 + 章末测试）、#learn/item/<id>（笔记阅读）
+//       #learn/plan/<id>/step/<sid>（跟着学：一章教程 + 章末测试）、#learn/item/<id>（笔记阅读）、
+//       #learn/book/<id>（深度读书：全书导读 + 目录）、#learn/book/<id>/ch/<n>（逐篇读：导读 / 原文 / PDF，见 _book.js）
 // 按需加一节：读某一章时说「X 没懂 / 对 X 感兴趣」（或划线后点），在这一章后插一节针对性讲解 + 小测试
 import { annotate } from './_annotate.js';
+import { BOOK_CSS, bookCards, renderBook, renderBookChapter } from './_book.js';
 const CSS = `
 .ln-opts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: -4px 0 10px; }
 .ln-opts .lbl { font-size: 12px; color: var(--muted); margin-right: 2px; }
@@ -371,7 +373,7 @@ const page = {
     document.getElementById('learn-css')?.remove();
     let style = document.getElementById('ln-css');
     if (!style) { style = h('style', { id: 'ln-css' }); document.head.append(style); }
-    style.textContent = CSS;
+    style.textContent = CSS + BOOK_CSS;
     if (onAgentDone) document.removeEventListener('agent-done', onAgentDone);
     onAgentDone = (e) => { if (e.detail?.module === 'learn' && location.hash.startsWith('#learn')) softRefresh(); };
     document.addEventListener('agent-done', onAgentDone);
@@ -379,6 +381,9 @@ const page = {
     const [view, id] = ctx.sub;
     if (view === 'plan' && id && ctx.sub[2] === 'step' && ctx.sub[3]) return renderChapter(el, ctx, +id, +ctx.sub[3]);
     if (view === 'plan' && id) return renderPlan(el, ctx, +id);
+    const bookDeps = { back, refresh: softRefresh, watchJob };
+    if (view === 'book' && id && ctx.sub[2] === 'ch' && ctx.sub[3] !== undefined) return renderBookChapter(el, ctx, +id, +ctx.sub[3], bookDeps);
+    if (view === 'book' && id) return renderBook(el, ctx, +id, bookDeps);
     if (view === 'item' && id) return renderItem(el, ctx, +id);
     return renderHome(el, ctx, view === 'plans');
   },
@@ -445,7 +450,7 @@ function detectIntent(text) {
 // ---------- 总览：智能输入框 + 计划 + 条目 ----------
 async function renderHome(el, ctx, scrollToPlans) {
   const { api, h, toast, ui, ask } = ctx;
-  const [items, plans] = await Promise.all([api.get('/api/learn/items'), api.get('/api/learn/plans')]);
+  const [items, plans, books] = await Promise.all([api.get('/api/learn/items'), api.get('/api/learn/plans'), api.get('/api/learn/books').catch(() => [])]);
   items.forEach((it) => watchJob(ctx, it.job_id, it.status));
   plans.forEach((p) => watchJob(ctx, p.job_id, p.status));
   plans.sort((a, b) => (a.status === 'archived') - (b.status === 'archived'));
@@ -464,11 +469,18 @@ async function renderHome(el, ctx, scrollToPlans) {
     modes: [{ id: 'auto', label: '自动' }, { id: 'item', label: '深读', placeholder: 'arXiv / PDF / DOI 链接，或 GitHub owner/repo' },
       { id: 'plan', label: '学习计划', placeholder: '想系统学习的主题，例如：世界模型、RL 用于 LLM 推理' },
       { id: 'course', label: '导入课程', placeholder: '课程官网链接，例如 https://cs336.stanford.edu/' },
+      { id: 'book', label: '读书', placeholder: '整本书的 PDF / TXT 链接或本机路径，例如 https://…/GEBen.pdf' },
       { id: 'ask', label: '问 Agent', placeholder: '问学习 Agent，例如：ReAct 和 Reflexion 的区别？' }],
     onSubmit: async (text) => {
       try {
         if (intent === 'ask') { ask(text); return; }
         if (intent === 'open') { location.hash = `#learn/item/${target.existing.id}`; return; }
+        if (intent === 'book') {
+          const r = await api.post('/api/learn/books', { url: target?.url || text });
+          toast(r.existing ? '这本书已经在书架上' : '正在下载并按目录拆章（大书约半分钟）');
+          location.hash = `#learn/book/${r.id}`;
+          return;
+        }
         if (intent === 'item') {
           const url = target?.url || text;
           const it = await api.post('/api/learn/items', { url, kind: opt.kind || target?.kind || '', focus: opt.focus.trim(), depth: (opt.kind || target?.kind) === 'github' ? opt.depth : '' });
@@ -524,16 +536,20 @@ async function renderHome(el, ctx, scrollToPlans) {
     else if (mode === 'item') intent = 'item';
     else if (mode === 'plan') intent = 'plan';
     else if (mode === 'course') intent = 'course';
+    else if (mode === 'book') intent = 'book';
     else intent = det ? 'item' : /[?？]$/.test(text) ? 'ask' : 'plan';
     const existing = intent === 'item' && det && items.find((it) => it.url.trim() === det.url.trim());
     if (existing) { intent = 'open'; target = { ...det, existing }; }
     let hint;
-    if (!text) hint = mode === 'ask' ? 'Enter 发给学习 Agent' : mode === 'item' ? '粘贴链接，Enter 开始深读' : mode === 'plan' ? '输入主题，Enter 生成学习计划'
+    const bookHit = intent === 'book' && books.find((b) => b.url.trim() === (det?.url || text).trim() && b.status !== 'failed');
+    if (!text) hint = mode === 'book' ? '粘贴整本书的 PDF 链接，Enter 按目录拆章、生成全书导读，然后像读书一样一篇篇读' : mode === 'ask' ? 'Enter 发给学习 Agent' : mode === 'item' ? '粘贴链接，Enter 开始深读' : mode === 'plan' ? '输入主题，Enter 生成学习计划'
       : mode === 'course' ? '粘贴课程官网链接，Enter 导入成学习计划（按课程单元学，课件和录像整理成中文精讲）'
       : '链接 → 深读 · 主题 → 学习计划 · 问句 → 问 Agent';
     else if (intent === 'ask') hint = 'Enter → 问学习 Agent';
+    else if (intent === 'book') hint = bookHit ? `书架上已有「${(bookHit.title || bookHit.url).slice(0, 30)}」，Enter 打开` : `Enter → 深度读书：${(det?.url || text).slice(0, 60)}`;
     else if (intent === 'course') hint = /^https?:\/\//.test(text) ? `Enter → 导入课程 ${text.slice(0, 50)} · 每周 ${opt.hours}h` : '填课程官网链接（http/https）';
     else if (intent === 'open') hint = `已深读过「${(existing.title || existing.url).slice(0, 30)}」，Enter 打开笔记`;
+    else if (intent === 'item' && det?.kind === 'paper' && /\.pdf($|\?)/i.test(det.url) && mode === 'auto') hint = `Enter → 将深读${det.label}（整本书请切到「读书」）`;
     else if (intent === 'item') hint = `Enter → 将${(opt.kind || det?.kind) === 'github' && opt.depth !== 'full' ? '速读' : '深读'}${det ? det.label : '：' + text.slice(0, 40)}`;
     else hint = `Enter → 将生成「${text.slice(0, 24)}${text.length > 24 ? '…' : ''}」学习计划 · 每周 ${opt.hours}h`;
     box.setHint(hint);
@@ -555,7 +571,7 @@ async function renderHome(el, ctx, scrollToPlans) {
   };
   ta.addEventListener('input', update);
   box.querySelector('.modes')?.addEventListener('click', () => setTimeout(update, 0));
-  const setMode = (id) => { const i = ['auto', 'item', 'plan', 'course', 'ask'].indexOf(id); box.querySelectorAll('.modes button')[i]?.click(); };
+  const setMode = (id) => { const i = ['auto', 'item', 'plan', 'course', 'book', 'ask'].indexOf(id); box.querySelectorAll('.modes button')[i]?.click(); };
 
   const plansSec = h('div', { id: 'ln-plans' });
   const totalSteps = plans.reduce((a, p) => a + p.progress.total, 0);
@@ -568,6 +584,7 @@ async function renderHome(el, ctx, scrollToPlans) {
       { label: '深读一篇论文', icon: 'doc', onClick: () => { setMode('item'); box.focus(); } },
       { label: '给我一个学习计划', icon: 'plan', onClick: () => { setMode('plan'); box.focus(); } },
       { label: '导入名校课程', icon: 'learn', onClick: () => { setMode('course'); box.focus(); } },
+      { label: '深度读一本书', icon: 'doc', onClick: () => { setMode('book'); box.focus(); } },
       { label: '根据反馈调整', icon: 'refresh', onClick: () => (latestPlan ? (location.hash = `#learn/plan/${latestPlan.id}/adapt`) : toast('还没有学习计划', true)) },
     ]),
     habitsCard(ctx),
@@ -576,6 +593,7 @@ async function renderHome(el, ctx, scrollToPlans) {
 
   plansSec.append(ui.section('学习计划', plans.length ? `${plans.length} 个` : ''),
     plans.length ? h('div.grid', {}, plans.map((p) => planCard(p, ctx))) : ui.empty('还没有学习计划', '在上面输入一个主题，Enter 即可生成'));
+  if (books.length) el.append(ui.section('深度读书', `${books.length} 本`), bookCards(books, ctx));
   el.append(plansSec,
     ui.section('论文与项目深读', items.length ? `${items.length} 篇` : ''),
     items.length ? itemList(items, ctx) : ui.empty('还没有深读条目', '粘贴一个 arXiv / GitHub 链接试试'));
