@@ -89,7 +89,7 @@ GitHub 上和更新有关的量（2026-11-01 实测）：stars 在 1000–1050 �
 
 ## 4. 标注流水线
 
-**引擎**：原型用订阅版 Haiku（`reclaude -p --model claude-haiku-5-5`），跟随 `settings.model_tiers.light`。400 个仓库对比后建议改为 DeepSeek v4 flash + 追加规则（见 6.1 第二轮、O-D5），待确认后切换。
+**引擎**：`settings.oss.label_engine`，默认 `deepseek`（DeepSeek v4 flash 官方 API，关思考，8 并发，prompt 带 6.1 第二轮的 5 条补充规则）；`haiku` = 订阅版 Haiku（`reclaude -p --model claude-haiku-5-5`，跟随 `model_tiers.light`，4 并发）。2026-11-01 已切到 DeepSeek（O-D5），生产链路实跑 50 个：25 秒（含补 README）、$0.0044、0 错误。
 
 | 参数 | 选择 | 依据（原型实测） |
 |---|---|---|
@@ -235,4 +235,4 @@ Sonnet 5.5 盲评 399 个：**功能标签 + 一句话 DeepSeek 287 : Haiku 43**
 | O-D2 | 线上改写 / 精排用哪个模型 | **DeepSeek flash** | 订阅 CLI 单次 11–20 秒太慢；DeepSeek 已有 key、便宜。备选是 Anthropic API 的 Haiku |
 | O-D3 | 范围是否剔除 `misc/other` | **剔除**，但保留教程 / 书 / awesome | 符合「AI、软件工具相关」；剔除的列表可以在页面上单独查看 |
 | O-D4 | 向量召回 | **先不上**，O2 不达标再加 | 原型上前三路已经够用，少一个依赖 |
-| O-D5 | 是否用 DeepSeek 替代订阅做全量标注 | **替代**：默认 DeepSeek（调后 prompt），订阅 Haiku 留作可选 | 400 个实测（6.1 第二轮）：标签 287 : 43、分类 123 : 74，快 7 倍，全库约 $6；你原先要求优先订阅，这条需要你确认 |
+| O-D5 | 是否用 DeepSeek 替代订阅做全量标注 | **已定（2026-11-01）：替代**，默认 DeepSeek（调后 prompt），订阅 Haiku 留作可选（`oss.label_engine=haiku`） | 400 个实测（6.1 第二轮）：标签 287 : 43、分类 123 : 74，快 7 倍，全库约 $6 |

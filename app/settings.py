@@ -55,6 +55,8 @@ DEFAULTS: dict = {
     "module_models": {"learn": "claude-sonnet-5-5"},
     # 按任务难度分档（比板块设置优先）：light = 抽取、翻译、整理、初判；standard = 精讲、出题、调整计划。哪类任务用哪档见 learn.task_tiers
     "model_tiers": {"light": "claude-haiku-5-5", "standard": "claude-sonnet-5-5"},
+    # 开源雷达批量标注引擎：deepseek（默认，DeepSeek v4 flash API，全库约 1 小时 / $6）或 haiku（订阅 CLI，不另付费，约 6-9 小时）
+    "oss": {"label_engine": "deepseek"},
     # 学习习惯：每天自动加一个「读前沿论文」学习块（规划页打开今天时加；在信息推荐的论文上写一句话判断即完成）
     "habits": {"paper_task": True, "paper_minutes": 30, "paper_per_day": 2},
     # 复盘时分析的代码库 / 文档目录

@@ -2,7 +2,7 @@
 
 任务（oss_runs.task）：
     collect   全量切片拉取（约 20-40 分钟，只调 GitHub）
-    label     标注队列（progress.limit 限量；全量 6.6 万个约 6-9 小时，走订阅 Haiku）
+    label     标注队列（progress.limit 限量；全量 6.6 万个：默认 DeepSeek 约 1 小时 / $6，oss.label_engine=haiku 走订阅约 6-9 小时）
     daily     每日新增：门槛段做差 + 7 天新建 + 信息推荐里的高星仓库，再标注新进来的
     weekly    每周刷新：GraphQL 刷 star / push / 归档 / 改名，再标注需要重标的
 服务重启不影响它；SIGTERM（页面上点「停止」）→ 当前批次做完后停，状态记 stopped，下次接着跑（标注按 label_src 续）。

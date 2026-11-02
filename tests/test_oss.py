@@ -54,6 +54,39 @@ def fake_cli(drop=(), bad=()):
     return call
 
 
+def test_engine_default_deepseek_and_switch(monkeypatch):
+    assert lab.engine() == "deepseek"
+    monkeypatch.setattr(lab.settings, "get", lambda k, d=None: "haiku" if k == "oss.label_engine" else d)
+    assert lab.engine() == "haiku"
+    monkeypatch.setattr(lab.settings, "get", lambda k, d=None: "gpt" if k == "oss.label_engine" else d)
+    assert lab.engine() == "deepseek"   # 不认识的引擎回落到默认
+
+
+def test_deepseek_call_cost_and_prompt(monkeypatch):
+    sent = {}
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"i":0}'}}],
+                    "usage": {"prompt_tokens": 13000, "prompt_cache_hit_tokens": 12000, "completion_tokens": 1000}}
+
+    def post(url, **kw):
+        sent.update(url=url, **kw)
+        return R()
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    monkeypatch.setattr(lab.httpx, "post", post)
+    out = lab._deepseek("仓库：x")
+    assert sent["url"].endswith("/chat/completions") and sent["json"]["thinking"] == {"type": "disabled"}
+    assert "5-8 个" in sent["json"]["messages"][0]["content"]          # 调过的补充规则带上了
+    assert out["total_cost_usd"] == pytest.approx(12000 * 0.0028e-6 + 1000 * 0.14e-6 + 1000 * 0.28e-6)
+    monkeypatch.delenv("DEEPSEEK_API_KEY")
+    with pytest.raises(RuntimeError):
+        lab._deepseek("x")
+
+
 def test_taxonomy_codes_cover_test_labels():
     cs = lab.codes()
     for lb in LABELS.values():
