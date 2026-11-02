@@ -223,26 +223,40 @@ def todo(limit: int = 0) -> list[dict]:
 
 
 def run(limit: int = 0, batch: int = BATCH, parallel: int = 0, call=None, on_progress=None) -> dict:
-    """标注队列里的仓库：每轮取 batch×parallel×2 个，先补 README（GraphQL），再并行打包问。
+    """标注队列里的仓库：每轮取 batch×parallel×2 个，先补 README（GraphQL，和上一轮的标注重叠着跑），再并行打包问。
     中途停了下次接着跑（已标的 label_src 对得上，不会再进队列）。"""
     from . import _oss_collect as col
     rows = todo(limit)
     parallel = parallel or PARALLEL[engine()]
     stat = {"labeled": 0, "todo": len(rows), "cost": 0.0, "errors": [], "engine": "test" if call else engine()}
     step = batch * parallel * 2
-    with ThreadPoolExecutor(parallel) as ex:
-        for start in range(0, len(rows), step):
-            group = rows[start:start + step]
-            if call is None:   # 真跑时先补 README；测试传了假 call 就不联网
-                need = [r["name"] for r in group if r["readme_oid"] is None]
-                if need:
-                    col.fetch_readmes(need)
-                    group = [db.row("SELECT * FROM oss_repos WHERE id=?", [r["id"]]) or r for r in group]
+
+    def prep(group: list[dict]) -> list[dict]:
+        if call is not None:   # 测试传了假 call 就不联网
+            return group
+        need = [r["name"] for r in group if r["readme_oid"] is None]
+        if need:
+            col.fetch_readmes(need)
+            group = [db.row("SELECT * FROM oss_repos WHERE id=?", [r["id"]]) or r for r in group]
+        return group
+
+    groups = [rows[i:i + step] for i in range(0, len(rows), step)]
+    # 标注这一组的同时预取下一组的 README（两步各约 50 秒，串行时全库要翻倍）
+    with ThreadPoolExecutor(parallel) as ex, ThreadPoolExecutor(1) as pre:
+        nxt = pre.submit(prep, groups[0]) if groups else None
+        for k in range(len(groups)):
+            group = nxt.result()
+            nxt = pre.submit(prep, groups[k + 1]) if k + 1 < len(groups) else None
             chunks = [group[i:i + batch] for i in range(0, len(group), batch)]
             for chunk, (got, cost, errs) in zip(chunks, ex.map(lambda c: label_batch(c, call), chunks)):
                 stat["labeled"] += save(chunk, got)
                 stat["cost"] = round(stat["cost"] + cost, 4)
                 stat["errors"] = (stat["errors"] + errs)[-20:]
             if on_progress:
-                on_progress(min(start + step, len(rows)), len(rows), stat)
+                try:
+                    on_progress(min((k + 1) * step, len(rows)), len(rows), stat)
+                except BaseException:
+                    if nxt:
+                        nxt.cancel()
+                    raise
     return stat
