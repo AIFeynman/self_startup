@@ -224,3 +224,13 @@ def test_gql_nodes_splits_on_github_timeout(monkeypatch):
     got = col.gql_nodes(None, ids, with_text=False)
     assert list(got) == ids and all(got[i] == {"id": i} for i in ids)
     assert sizes[:3] == [100, 50, 25]
+
+
+def test_validate_bad_kind_or_domain_falls_back():
+    x = {"k": "lang_runtime", "d": "lang_runtime", "ai": "none", "t": ["Go 编译器"], "s": "Go 语言官方仓库"}
+    assert lab.validate(x) is None                                # 第一轮严格：填错就重问
+    assert lab.validate(x, lenient=True)["k"] == "other"          # 重问时 kind 填成领域 code：不丢整条
+    y = lab.validate({**x, "d": "template", "d2": ["frontend", "frontend", "mobile"]}, lenient=True)
+    assert (y["d"], y["d2"]) == ("frontend", ["mobile"])          # 领域填成 kind code：取副领域
+    assert lab.validate({**x, "d": "template"}, lenient=True)["d"] == "other"
+    assert lab.validate({**x, "ai": "maybe"}, lenient=True) is None   # AI 关系错仍然不收

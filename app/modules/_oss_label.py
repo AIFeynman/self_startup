@@ -48,6 +48,7 @@ SYSTEM = """你在给 GitHub 仓库做分类，供开发者按功能搜索开源
 - s 30-40 字：它是什么 + 能做什么 + 最关键的 1-2 个特性；README 说已停止维护 / 归档的，在句末写「（已停更）」。
 - ai：项目里有 AI 功能（如 AI 评分、语音 Agent）但主体不是模型 → ai_powered；只是给 AI 应用用的基础设施 → for_ai。
 - kind：能直接部署使用的平台 / 软件是 app，不是 framework；纯文档 / 数据仓库不是 library。
+- k 只能填形态 kind 的 code（app/library/framework/plugin/model/dataset/research/tutorial/book/awesome/template/other），不能填领域 code：编程语言 / 运行时本身 → k=framework，打包构建工具 → k=app，面试题库 → k=tutorial，开源硬件设计（PCB / 3D 打印件）→ k=other。
 """
 
 
@@ -92,16 +93,23 @@ def _row(n: int, r: dict) -> str:
     return json.dumps(x, ensure_ascii=False)
 
 
-def validate(x: dict) -> dict | None:
-    """模型输出的一行 → 合格的标签；code 不在分类体系里、标签或一句话为空的返回 None。"""
+def validate(x: dict, lenient: bool = False) -> dict | None:
+    """模型输出的一行 → 合格的标签；code 不在分类体系里、标签或一句话为空的返回 None。
+    lenient（重问那一轮用）：kind / 领域填错（常见是两者互相填串，如 k=lang_runtime、d=template）不丢整条，
+    kind 记 other，领域取第一个合法的副领域，没有就记 other。"""
     cs = codes()
     try:
         k, d, ai = str(x.get("k")), str(x.get("d")), str(x.get("ai"))
-        d2 = [str(v) for v in (x.get("d2") or []) if str(v) in cs["d"] and str(v) != d][:2]
+        d2 = [str(v) for v in (x.get("d2") or []) if str(v) in cs["d"]]
         t = [clean(str(v), 30) for v in (x.get("t") or []) if str(v).strip()][:8]
         s = clean(str(x.get("s") or ""), 60)
     except Exception:  # noqa: BLE001
         return None
+    if lenient and k not in cs["k"]:
+        k = "other"
+    if lenient and d not in cs["d"]:
+        d = d2[0] if d2 else "other"
+    d2 = [v for v in dict.fromkeys(d2) if v != d][:2]
     if k not in cs["k"] or d not in cs["d"] or ai not in cs["ai"] or not t or not s:
         return None
     return {"k": k, "d": d, "d2": d2, "ai": ai, "t": t, "s": s}
@@ -145,7 +153,7 @@ def engine() -> str:
     return e if e in ENGINES else "deepseek"
 
 
-def ask(chunk: list[dict], call=None) -> tuple[dict[str, dict], float]:
+def ask(chunk: list[dict], call=None, lenient: bool = False) -> tuple[dict[str, dict], float]:
     """一批仓库 → ({name: 标签}, 花费)。call 可替换（测试用），不传按 oss.label_engine 选。"""
     res = (call or ENGINES[engine()])("仓库：\n" + "\n".join(_row(n, r) for n, r in enumerate(chunk)))
     out = {}
@@ -158,13 +166,13 @@ def ask(chunk: list[dict], call=None) -> tuple[dict[str, dict], float]:
             i = int(x["i"])
         except Exception:  # noqa: BLE001
             continue
-        if 0 <= i < len(chunk) and (lab := validate(x)):
+        if 0 <= i < len(chunk) and (lab := validate(x, lenient)):
             out[chunk[i]["name"]] = lab
     return out, float(res.get("total_cost_usd") or 0)
 
 
 def label_batch(chunk: list[dict], call=None) -> tuple[dict[str, dict], float, list[str]]:
-    """问一批；漏掉的 / 不合格的再单独打包问一次。返回 (标签, 花费, 错误)。"""
+    """问一批；漏掉的 / 不合格的再单独打包问一次（这次 kind / 领域填错也收，见 validate）。返回 (标签, 花费, 错误)。"""
     errors, cost = [], 0.0
     try:
         got, cost = ask(chunk, call)
@@ -174,7 +182,7 @@ def label_batch(chunk: list[dict], call=None) -> tuple[dict[str, dict], float, l
     miss = [r for r in chunk if r["name"] not in got]
     if miss:
         try:
-            more, c2 = ask(miss, call)
+            more, c2 = ask(miss, call, lenient=True)
             got.update(more)
             cost += c2
         except Exception as e:  # noqa: BLE001
