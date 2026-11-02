@@ -168,6 +168,28 @@ GitHub 上和更新有关的量（2026-11-01 实测）：stars 在 1000–1050 �
 - 代码：`app/modules/_oss_collect.py`（切片拉取、GraphQL README）、`_oss_label.py`（打包、校验、重问）、`_oss_search.py`（改写、召回、打分、精排）。挂在「产品雷达」的 `intel.py` 下，后台任务走 `jobs.py`，**不新建独立服务**。
 - 页面：产品雷达第 6 个标签「开源雷达」。顶部一个搜索框，下面是筛选条（类型 / 领域 / 语言 / 活跃）和「相关性 | star」切换。结果卡片显示一句话、功能标签、star、语言、最近 push 和精排给的理由。没有输入时按领域浏览（领域树 + 每个领域按 star 排序）。
 
+### 7.1 和信息推荐的复用
+
+两边都抓 GitHub，但目的不同：信息推荐抓的是**最近的动态**（Trending、近 14 天新建、重点机构新仓库），存在 `feed_items` 里参与排序；开源雷达维护的是 **stars > 1000 的全量库**。所以表不合并，以仓库名 `owner/repo` 为键互相引用（feed 的 id 是 `github:owner/repo`）。
+
+| 能复用的 | 怎么用 |
+|---|---|
+| `_feed_sources._gh_headers` / `_client` / `clean` | 开源雷达采集直接 import，不复制一份 |
+| `_feed_sources._repo_item` 里的字段映射 | 抽成公共函数 `repo_base(raw)`（name、desc、topics、lang、stars、created），两边共用；开源雷达再补 pushed_at、archived、node_id |
+| 信息推荐每天抓到的 Trending / 新建 / 重点机构仓库 | **当作开源雷达的第三路新增来源**：`feed_items` 里 source=github 且 stars ≥ 1000、雷达库里还没有的，直接进待标注队列。Trending 能抓到刚爆火、还没被门槛段做差扫到的项目，等于免费的补充 |
+| `_feed_gist` / `_feed_product` 的 DeepSeek 调用方式 | 线上改写和精排照这个写（同一个 key、同样的 JSON 输出和错误处理） |
+| `_feed_judge` 的批量 + 输入哈希去重模式 | 标注的 `label_src` 哈希、「内容不变不重复问」沿用同一个思路 |
+| 学习板块的 GitHub 项目深读（`learn.py`） | 检索结果卡片上加「深读」按钮，直接发起已有的项目深读，不另写 |
+| `_feed_follow`（关注作者 / 机构） | 结果卡片上加「关注作者」，写进 `github_watch_orgs`，以后这个作者的新仓库进信息推荐 |
+
+**反向复用：开源雷达给信息推荐用**
+
+- **是否 AI**：信息推荐现在对 Trending 仓库调 Jev 判断「是否 AI」。stars ≥ 1000 且已在雷达库里的仓库，直接用雷达标签的 `ai` 字段（none 以外都算 AI 相关），省掉这次调用，判断依据也更完整（有 README 和功能标签）。库里没有的仍走 Jev。
+- **中文一句话**：雷达库里的仓库已经有 `s`，信息推荐展示这个仓库时直接用，不再单独生成 gist。
+- **推荐理由更具体**：信息推荐里的仓库可以带上雷达的领域和功能标签，用户点「同类项目」就跳到开源雷达，按相同功能标签检索。
+
+**不复用的**：信息推荐的关键词搜索只查近 14 天、每条查询 20 个结果，规模和全量切片拉取不是一回事；全量切片、GraphQL 批量刷新和 README 拉取是开源雷达新写的，放在 `_oss_collect.py`，只 import 上面那几个公共函数。
+
 ## 8. 分期
 
 | 期 | 范围 | 验收 | 估计 |
