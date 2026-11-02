@@ -207,3 +207,20 @@ def test_feed_reuses_radar_labels(monkeypatch):
     assert asked == ["github:z/unknown"]                       # 库里有的不再问 Jev
     ex = json.loads(db.row("SELECT extra FROM feed_items WHERE id='github:c/webui'")["extra"])
     assert ex["judge_ai"] == 0.0 and ex["judge_by"] == "oss" and ex["oss"]["d"] == "frontend"
+
+
+def test_gql_nodes_splits_on_github_timeout(monkeypatch):
+    """一批太大 GitHub 回 502：对半拆开再查，结果合起来不丢仓库。"""
+    sizes = []
+
+    def fake(c, q, v):
+        ids = v["ids"]
+        sizes.append(len(ids))
+        if len(ids) > 25:
+            raise col.GqlTimeout("GraphQL 502")
+        return {"data": {"nodes": [{"id": i} for i in ids]}}
+    monkeypatch.setattr(col, "_gql", fake)
+    ids = [f"N{i}" for i in range(100)]
+    got = col.gql_nodes(None, ids, with_text=False)
+    assert list(got) == ids and all(got[i] == {"id": i} for i in ids)
+    assert sizes[:3] == [100, 50, 25]

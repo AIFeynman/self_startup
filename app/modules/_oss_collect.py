@@ -206,13 +206,22 @@ def _readme_fields(with_text: bool) -> str:
     return " ".join(f'r{i}: object(expression: "HEAD:{p}") {{ ... on Blob {{ {body} }} }}' for i, p in enumerate(README_PATHS))
 
 
+class GqlTimeout(RuntimeError):
+    """GitHub 算不完返回 502 / 504：多半是一次查的仓库太多，拆小了再查。"""
+
+
 def _gql(c: httpx.Client, query: str, variables: dict) -> dict:
     h = gh_headers()
     if "Authorization" not in h:
         raise RuntimeError("GraphQL 需要 GITHUB_TOKEN（项目根目录 .env）")
     for attempt in range(4):
         r = c.post("https://api.github.com/graphql", headers=h, json={"query": query, "variables": variables})
-        if r.status_code in (403, 429, 502):
+        if r.status_code in (502, 504):
+            if attempt >= 1:
+                raise GqlTimeout(f"GraphQL {r.status_code}")
+            time.sleep(5)
+            continue
+        if r.status_code in (403, 429):
             time.sleep(10 * (attempt + 1))
             continue
         r.raise_for_status()
@@ -221,9 +230,15 @@ def _gql(c: httpx.Client, query: str, variables: dict) -> dict:
 
 
 def gql_nodes(c: httpx.Client, node_ids: list[str], with_text: bool) -> dict[str, dict | None]:
-    """node_id → 仓库信息（含 README oid / 文本）；查不到的（删了 / 转私有）值为 None。"""
+    """node_id → 仓库信息（含 README oid / 文本）；查不到的（删了 / 转私有）值为 None。GitHub 超时就对半拆开再查。"""
     q = f"query($ids: [ID!]!) {{ nodes(ids: $ids) {{ ... on Repository {{ {_REPO_FIELDS} {_readme_fields(with_text)} }} }} }}"
-    data = _gql(c, q, {"ids": node_ids})
+    try:
+        data = _gql(c, q, {"ids": node_ids})
+    except GqlTimeout:
+        if len(node_ids) <= 5:
+            raise
+        mid = len(node_ids) // 2
+        return {**gql_nodes(c, node_ids[:mid], with_text), **gql_nodes(c, node_ids[mid:], with_text)}
     nodes = (data.get("data") or {}).get("nodes") or [None] * len(node_ids)
     return {nid: (n or None) for nid, n in zip(node_ids, nodes)}
 
