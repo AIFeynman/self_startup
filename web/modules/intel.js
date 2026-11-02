@@ -132,7 +132,7 @@ function startupTable(h, rows, { showTrack = true } = {}) {
   const head = ['公司', showTrack ? '赛道' : null, 'MRR', '30 天', '走势', '在售', '拆解卡'].filter((x) => x !== null);
   return h('table.it-tbl', {}, [h('tr', {}, head.map((t) => h('th' + (['MRR', '30 天'].includes(t) ? '.it-n' : ''), {}, t))),
     ...rows.map((c) => h('tr.click', { onclick: () => { location.hash = `#intel/c/${c.slug}`; } }, [
-      h('td', {}, [h('b', {}, c.name), c.watch ? ' ★' : '', c.description ? h('div.muted.it-hide-sm', { style: { fontSize: '12px' } }, c.description.slice(0, 80)) : null,
+      h('td', {}, [h('b', {}, c.name), c.watch ? ' ★' : '', c.intro || c.description ? h('div.muted.it-hide-sm', { style: { fontSize: '12px' }, title: c.description || '' }, c.intro || c.description.slice(0, 80)) : null,
         !c.mrr && c.reported ? h('div.muted', { style: { fontSize: '12px' } }, `reported ${c.reported.metric.toUpperCase()} ${usd(c.reported.value)}`) : null]),
       showTrack ? h('td.muted', {}, c.track_name || '待归类') : null,
       h('td.it-n', {}, c.mrr ? usd(c.mrr) : c.revenue_30d ? h('span', { title: '近 30 天收入' }, usd(c.revenue_30d)) : '-'),
@@ -292,7 +292,7 @@ async function renderStartup(el, ctx, c) {
       `${r.date} · ${r.metric.toUpperCase()} ${usd(r.value)} · `, r.source?.startsWith('http') ? h('a', { href: r.source, target: '_blank' }, '出处') : r.source || '',
       r.note ? h('div.muted', {}, `“${r.note}”`) : null]))));
   }
-  const kv = [['网站', x.website && h('a', { href: x.website, target: '_blank' }, x.website)], ['一句话', x.description], ['卖给谁', x.audience || x.persona],
+  const kv = [['网站', x.website && h('a', { href: x.website, target: '_blank' }, x.website)], ['一句话', x.intro_zh || x.description], ['原文简介', x.intro_zh && x.description], ['卖给谁', x.audience || x.persona],
     ['价值主张', x.value_prop], ['解决的问题', x.problem], ['定价', x.pricing], ['渠道', (x.channels || []).join('、')],
     ['创始人', [x.founder, x.x ? h('a', { href: `https://x.com/${x.x.replace(/^@/, '')}`, target: '_blank' }, ` @${x.x.replace(/^@/, '')}`) : null,
       x.x_followers ? `（${x.x_followers} 粉丝）` : null].filter(Boolean)], ['TrustMRR', x.trustmrr && h('a', { href: `https://trustmrr.com/startup/${x.trustmrr}`, target: '_blank' }, x.trustmrr)],

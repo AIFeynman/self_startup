@@ -176,7 +176,9 @@ def _days_before(day: str, n: int) -> str:
 # ---------- 赛道归类（DeepSeek） ----------
 
 TRACK_SYSTEM = """你在给 AI 创业公司 / 产品归赛道。输入 JSON：tracks：[{slug, name, scope}]；items：[{id, name, description, category}]。
-对每个 item 输出一项，返回 {"items": [{"id": ..., "ai": true/false, "track": "<slug>", "tracks": ["<slug>", ...]}]}：
+对每个 item 输出一项，返回 {"items": [{"id": ..., "ai": true/false, "track": "<slug>", "tracks": ["<slug>", ...], "intro": "..."}]}：
+- intro：中文一句话（≤45 字）说清楚「这个产品做什么 + 帮谁解决什么问题」，如「AI 监测 LinkedIn 上的购买信号，帮 B2B 销售找到正在找供应商的潜在客户」；
+  不要照抄英文营销语、不要形容词堆砌（最好的、终极的），description 为空时只按名字推不出来就给空字符串；
 - ai：产品的核心价值是否依赖 AI（大模型 / 生成式 / 机器学习）。只是「用 AI 写了网站」、普通 SaaS 加了个 AI 按钮 → false；
 - track：最主要的一个赛道 slug（必须来自 tracks）；ai=false 时也给最接近的；
 - tracks：次要赛道（0–2 个）。只根据输入判断。"""
@@ -184,13 +186,13 @@ TRACK_BATCH = 30
 
 
 def classify_tracks(items: list[dict]) -> tuple[dict[str, dict], list[str]]:
-    """{id: {ai, track, tracks}}，errors。"""
+    """{id: {ai, track, tracks, intro}}，errors。"""
     out, errors = {}, []
     tracks = [{"slug": s, "name": n, "scope": d} for s, n, d in TRACKS]
     for i in range(0, len(items), TRACK_BATCH):
         batch = items[i:i + TRACK_BATCH]
         try:
-            res = snap.llm_json(TRACK_SYSTEM, {"tracks": tracks, "items": batch}, max_tokens=4000)
+            res = snap.llm_json(TRACK_SYSTEM, {"tracks": tracks, "items": batch}, max_tokens=6000)
         except Exception as e:  # noqa: BLE001
             errors.append(f"赛道归类第 {i // TRACK_BATCH + 1} 批：{type(e).__name__}: {str(e)[:160]}")
             continue
@@ -200,7 +202,8 @@ def classify_tracks(items: list[dict]) -> tuple[dict[str, dict], list[str]]:
                 continue
             t = x.get("track") if x.get("track") in TRACK_NAMES else ""
             out[str(x["id"])] = {"ai": bool(x.get("ai")), "track": t,
-                                 "tracks": [s for s in (x.get("tracks") or []) if s in TRACK_NAMES and s != t][:2]}
+                                 "tracks": [s for s in (x.get("tracks") or []) if s in TRACK_NAMES and s != t][:2],
+                                 "intro": str(x.get("intro") or "").strip()[:80]}
     return out, errors
 
 

@@ -616,7 +616,7 @@ def _upsert_startup(slug: str, o: dict) -> dict:
     if r:
         c = _company(r)
         if (o.get("description") and not c["ext"].get("description")) or c["name"] != o.get("name", c["name"]):
-            _ext_patch(c["id"], {"description": (o.get("description") or "")[:1200]} if o.get("description") else {})
+            _ext_patch(c["id"], {"description": (o.get("description") or "")[:1200], "intro_zh": ""} if o.get("description") else {})
         return c
     s = slug if not db.row("SELECT 1 FROM intel_company WHERE slug=?", [slug]) else f"tm-{slug}"
     cid = db.insert("intel_company", {"slug": s, "name": (o.get("name") or slug)[:120], "tier": 3, "kind": "startup",
@@ -750,7 +750,7 @@ def startups(track: str = "", q: str = "", ai: bool = True, watch_only: bool = F
             continue
         out.append({"id": c["id"], "slug": c["slug"], "name": c["name"], "track": c["track"], "tracks": c["tracks"],
                     "track_name": st.TRACK_NAMES.get(c["track"], ""), "watch": c["watch"], "ai": c["ai"],
-                    "description": (c["ext"].get("description") or "")[:200], "website": c["ext"].get("website", ""),
+                    "description": (c["ext"].get("description") or "")[:200], "intro": c["ext"].get("intro_zh", ""), "website": c["ext"].get("website", ""),
                     "channels": c["ext"].get("channels", []), "profile_status": c["profile_status"],
                     "date": last.get("date", ""), "mrr": last.get("mrr"), "revenue_30d": last.get("revenue_30d"),
                     "growth_30d": last.get("growth_30d"), "on_sale": last.get("on_sale"), "asking_price": last.get("asking_price"),
@@ -765,18 +765,29 @@ def _rev(x: dict) -> float:
 
 # ---------- P2b 赛道 ----------
 
+NEEDS_INTRO = "ai!=0 AND coalesce(json_extract(ext, '$.intro_zh'), '')='' AND coalesce(json_extract(ext, '$.description'), '')!=''"
+
+
 def classify_startup_tracks(limit: int = 150) -> dict:
-    """没归过赛道（也没人手改过）的创业公司交给 DeepSeek：是不是 AI 产品 + 主赛道 + 次赛道。"""
-    rows = [_company(r) for r in db.rows("SELECT * FROM intel_company WHERE kind='startup' AND enabled=1 AND track='' AND track_manual=0 "
-                                         "ORDER BY id LIMIT ?", [limit])]
+    """没归过赛道（也没人手改过）、或还没有中文简介的创业公司交给 DeepSeek：是不是 AI 产品 + 主赛道 + 次赛道 + 中文一句话简介。
+    已有赛道的只补简介，不动赛道和 ai 标记；没归赛道的先做，再按收入从高到低补简介。"""
+    rows = [_company(r) for r in db.rows(
+        f"SELECT * FROM intel_company WHERE kind='startup' AND enabled=1 AND ((track='' AND track_manual=0) OR ({NEEDS_INTRO})) "
+        "ORDER BY (track='') DESC, ai DESC, (SELECT max(value) FROM intel_metric m WHERE m.company_id=intel_company.id "
+        "AND m.metric IN ('mrr', 'revenue_30d')) DESC, id LIMIT ?", [limit])]
     if not rows or not os.environ.get("DEEPSEEK_API_KEY") and snap.llm_json is snap._deepseek:
         return {"tracked": 0, "track_errors": []}
     items = [{"id": str(c["id"]), "name": c["name"], "description": (c["ext"].get("description") or "")[:400],
               "category": c["ext"].get("category", "")} for c in rows]
     got, errors = st.classify_tracks(items)
+    todo = {str(c["id"]): c for c in rows}
     for cid, x in got.items():
-        db.update("intel_company", int(cid), {"track": x["track"] or "vertical", "tracks": x["tracks"], "ai": 1 if x["ai"] else 0,
-                                              "updated_at": db.now()})
+        c = todo[cid]
+        if not c["track"] and not c["track_manual"]:
+            db.update("intel_company", int(cid), {"track": x["track"] or "vertical", "tracks": x["tracks"], "ai": 1 if x["ai"] else 0,
+                                                  "updated_at": db.now()})
+        if x["intro"]:
+            _ext_patch(int(cid), {"intro_zh": x["intro"]})
     return {"tracked": len(got), "track_errors": errors}
 
 

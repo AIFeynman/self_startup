@@ -415,6 +415,32 @@ def test_tracks_and_manual_override(startup_db, monkeypatch):
     assert lst["total"] == 1 and lst["startups"][0]["mrr"] == 9000
 
 
+def test_intro_zh_backfill(startup_db, monkeypatch):
+    _board(monkeypatch, [_tm("codebot", 9000, description="AI code review bot")])
+    intel.startup_snapshot(force=True)
+    c = _sc("codebot")
+    db.execute("UPDATE intel_company SET track='image', track_manual=1 WHERE id=?", [c["id"]])  # 已有人工赛道，只差简介
+    calls = []
+
+    def fake(system, payload, **kw):
+        calls.append([i["id"] for i in payload["items"]])
+        return {"items": [{"id": i["id"], "ai": False, "track": "coding", "intro": "AI 自动审代码，帮小团队省掉人工 code review"}
+                          for i in payload["items"]]}
+    monkeypatch.setattr(snap, "llm_json", fake)
+    intel.classify_startup_tracks()
+    c = _sc("codebot")
+    assert any(str(c["id"]) in b for b in calls)
+    assert c["track"] == "image" and c["ai"] == 1  # 只补简介，不动人工赛道和 ai 标记
+    assert c["ext"]["intro_zh"].startswith("AI 自动审代码")
+    row = next(x for x in startup_db.get("/api/intel/startups").json()["startups"] if x["slug"] == c["slug"])
+    assert row["intro"].startswith("AI 自动审代码") and row["description"] == "AI code review bot"
+    calls.clear()
+    intel.classify_startup_tracks()
+    assert all(str(c["id"]) not in b for b in calls)  # 有简介了不再重复送
+    intel._upsert_startup("codebot", {"name": "codebot", "description": "AI code review bot v2"})
+    assert _sc("codebot")["ext"]["intro_zh"] == ""  # 原文简介变了 → 下轮重写
+
+
 def test_profile_queue_and_done(startup_db, monkeypatch):
     _board(monkeypatch, [_tm("vidgen", 5000), _tm("codebot", 9000, description="AI code review bot")])
     intel.startup_snapshot(force=True)
