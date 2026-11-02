@@ -267,3 +267,25 @@ def test_auto_dispatch_due_tasks_respects_deps_time_and_concurrency(client, monk
     monkeypatch.setattr(settings, "load", lambda: {**settings.DEFAULTS, "plan_auto_dispatch": False})
     assert plan.auto_dispatch(datetime(2020, 3, 2, 16, 0)) == []
     assert {c, h, f}.isdisjoint({int(r.rsplit(":", 1)[1]) for r in submitted})
+
+
+def test_code_state_reads_branches_and_guesses_repo(tmp_path, monkeypatch):
+    import subprocess as sp
+    root = tmp_path / "projects"
+    repo = root / "demo_app"
+    repo.mkdir(parents=True)
+    git = lambda *a: sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "初始化")
+    git("checkout", "-q", "-b", "feat/demo-login")
+    git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "登录页做了一半")
+    git("checkout", "-q", "main")
+    (repo / "x.txt").write_text("改动")
+    monkeypatch.setattr(plan, "_projects_root", lambda: root)
+    tops = [{"id": 1, "title": "给 demo-app 加登录", "goal": "demo login 可用", "repo": ""},
+            {"id": 2, "title": "写周报", "goal": "", "repo": ""}]
+    text, repos = plan._code_state(tops, [])
+    one, two = text.split("### task_id=2")
+    assert str(repo) in one and "按标题猜的" in one and "1 个未提交改动" in one
+    assert "feat/demo-login" in one and "领先 main 1 个提交" in one and "登录页做了一半" in one
+    assert "没找到对应仓库" in two and repos == [str(repo)]
