@@ -213,7 +213,7 @@ def fetch_github_all(queries: list[str], *, min_stars: int = 100, trending_langu
     return list(items.values()), errors
 
 
-def _gh_headers() -> dict:
+def gh_headers() -> dict:
     headers = {"Accept": "application/vnd.github+json"}
     tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if tok:
@@ -221,17 +221,28 @@ def _gh_headers() -> dict:
     return headers
 
 
+def repo_base(it: dict) -> dict:
+    """REST 仓库对象 → 两边共用的基础字段（信息推荐的 _repo_item、开源雷达入库都用它）。"""
+    return {"name": it["full_name"], "desc": clean(it.get("description") or ""),
+            "stars": int(it.get("stargazers_count") or 0), "lang": it.get("language") or "",
+            "topics": list(it.get("topics") or []), "created": it.get("created_at") or "",
+            "pushed": it.get("pushed_at") or "", "archived": bool(it.get("archived")), "fork": bool(it.get("fork")),
+            "node_id": it.get("node_id") or "", "url": it.get("html_url") or f"https://github.com/{it['full_name']}"}
+
+
+_gh_headers = gh_headers   # 旧名，别处还在用
+
+
 def _repo_item(it: dict, **extra) -> dict:
-    name = it["full_name"]
-    desc = clean(it.get("description") or "")
+    b = repo_base(it)
+    name, desc = b["name"], b["desc"]
     short = re.split(r"(?<=[.!?。！？])\s", desc, maxsplit=1)[0][:90].rstrip(" .。")
     return {
         # 只有仓库名看不出是什么：标题带上一句话描述
         "id": f"github:{name}", "source": "github", "type": "repo",
         "title": f"{name.split('/', 1)[1]}：{short}" if short else name,
-        "summary": desc, "url": it.get("html_url") or f"https://github.com/{name}",
-        "date": it.get("created_at", ""), "popularity": float(it.get("stargazers_count") or 0),
-        "extra": {"language": it.get("language") or "", "topics": (it.get("topics") or [])[:6], **extra, "repo": name}}
+        "summary": desc, "url": b["url"], "date": b["created"], "popularity": float(b["stars"]),
+        "extra": {"language": b["lang"], "topics": b["topics"][:6], **extra, "repo": name}}
 
 
 def fetch_github_orgs(orgs: list[str], days: int = 14, min_stars: int = 5) -> list[dict]:
@@ -242,7 +253,7 @@ def fetch_github_orgs(orgs: list[str], days: int = 14, min_stars: int = 5) -> li
     with _client() as c:
         for org in orgs:
             # /users/ 对个人账号和机构都适用（/orgs/ 只认机构），用户关注的个人作者也走这里
-            r = c.get(f"https://api.github.com/users/{org}/repos", headers=_gh_headers(),
+            r = c.get(f"https://api.github.com/users/{org}/repos", headers=gh_headers(),
                       params={"sort": "created", "direction": "desc", "per_page": 30, "type": "owner"})
             if r.status_code != 200:
                 errors.append(f"{org}: HTTP {r.status_code}")
@@ -263,7 +274,7 @@ def fetch_github_orgs(orgs: list[str], days: int = 14, min_stars: int = 5) -> li
 
 def fetch_github(queries: list[str], days: int = 14, min_stars: int = 30, per_query: int = 20) -> list[dict]:
     since = _days_ago(days).strftime("%Y-%m-%d")
-    headers = _gh_headers()
+    headers = gh_headers()
     out: dict[str, dict] = {}
     with _client() as c:
         for q in queries:

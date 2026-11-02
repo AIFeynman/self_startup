@@ -1,6 +1,6 @@
 import json, collections, sys
 def load(p): return {x['name']: x for r in json.load(open(p)) for x in r.get('labels', [])}
-tax=json.load(open('/Users/libiao/project/test_feynman/self_startup/docs/designs/oss-radar-taxonomy.json'))
+tax=json.load(open('app/modules/oss_taxonomy.json'))
 codes={c['code'] for d in tax['domains'] for c in d['children']}
 parent={c['code']:d['code'] for d in tax['domains'] for c in d['children']}
 a,b=load(sys.argv[1]),load(sys.argv[2])

@@ -2,7 +2,7 @@
 
 - **分支**：`feat/product-intel-design`，属于「产品雷达」板块的第 6 个标签，见 [产品雷达设计稿](2026-11-01-product-intel-design.md) 第 9 节。本稿只有设计和原型实验，不改平台代码。
 - **一句话**：把 GitHub 上 stars > 1000 的 AI / 软件工具类项目（包括教程、书、awesome 列表）都打上「类型 + 领域 + 功能」标签，用户用一句中文说想做什么（「我想做 PDF 解析」），就能找到对应项目，可以按相关性排，也可以按 star 排。
-- **分类体系**：[oss-radar-taxonomy.json](oss-radar-taxonomy.json)（版本 `2026-11-01.1`）。
+- **分类体系**：[app/modules/oss_taxonomy.json](../../app/modules/oss_taxonomy.json)（版本 `2026-11-01.1`）。
 
 ## 0. 目标与完成标准
 
