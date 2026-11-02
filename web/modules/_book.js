@@ -55,6 +55,17 @@ export const BOOK_CSS = `
 .bk-sec .o, .bk-sec .e { font-size: 14px; margin-top: 4px; } .bk-sec .o b, .bk-sec .e b { color: var(--muted); font-weight: 500; margin-right: 4px; }
 .bk-sec .e { color: var(--text); } .bk-sec .e b { color: var(--accent); }
 .bk-terms { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 16px; font-size: 14px; }
+.bk-walk .bk-talk p { margin: 0 0 12px; } .bk-walk > .bk-talk:first-of-type p:first-child { font-size: 15.5px; }
+.bk-seg { padding: 14px 0 6px; border-top: 1px dashed var(--line); }
+.bk-seg .st { display: flex; align-items: baseline; gap: 8px; font-family: var(--serif); font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+.bk-seg .st .n { color: var(--accent); font-size: 13px; font-variant-numeric: tabular-nums; }
+.bk-seg blockquote { margin: 2px 0 10px; }
+.bk-orig { margin: 4px 0 10px; } .bk-orig summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.bk-orig-body { margin-top: 8px; padding: 14px 18px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; max-height: 60vh; overflow: auto; }
+.bk-orig-body pre { white-space: pre-wrap; word-break: break-word; font-family: var(--serif); font-size: 14.5px; line-height: 1.8; margin: 0; padding: 0; background: none; border: 0; color: var(--text); }
+.bk-take { margin: 18px 0 8px; padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; }
+.bk-take h4 { margin: 0 0 6px; font-size: 14px; color: var(--accent); } .bk-take ol { margin: 0; padding-left: 20px; }
+.bk-more { margin: 12px 0; } .bk-more summary { cursor: pointer; color: var(--muted); font-size: 13.5px; margin-bottom: 6px; }
 .bk-q { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; } .bk-q span { flex: 1; }
 .bk-page { max-width: 720px; margin: 0 auto 18px; padding: 28px 38px 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
   box-shadow: 0 1px 0 var(--line), 0 6px 16px rgba(0,0,0,.04); }
@@ -243,7 +254,7 @@ export async function renderBookChapter(el, ctx, bid, idx, { back, refresh, watc
     }
     if (mode === 'text') {
       main.append(h('div.muted.dots', {}, '加载原文'));
-      textCache = textCache || await api.get(`/api/learn/books/${bid}/chapters/${idx}/text`).catch(() => ({ pages: [] }));
+      await loadText();
       const body = h('div', {}, textCache.pages.map((p) => h('div.bk-page', { id: `bk-p-${p.n}` }, [h('pre', {}, reflow(p.text)), h('div.pn', {}, `— ${p.n} —`)])));
       main.replaceChildren(annotate(ctx, body, { doc: `learn:book:${bid}:ch:${idx}:text`, title: `${b.title} · ${c.title}（原文）`, link: chHref(bid, idx),
         source: textCache.pages.map((p) => reflow(p.text)).join('\n'), actions: [{ icon: 'chat', label: '这段在说什么', onPick: (q) => chat(`「${q}」\n这段在说什么？放在本章的论证里起什么作用？`) }] }), nav());
@@ -257,7 +268,7 @@ export async function renderBookChapter(el, ctx, bid, idx, { back, refresh, watc
   function guideView() {
     if (c.status === 'generating' || !c.status) {
       watchJob(ctx, c.job_id, 'generating');
-      const line = h('span.dots', {}, '正在读这一篇、写导读（来龙去脉 / 精髓 / 分节导读）');
+      const line = h('span.dots', {}, '正在读这一篇、写伴读（顺着原文一段段讲）');
       const tick = async () => {
         if (!line.isConnected || !c.job_id) return;
         const j = await api.get(`/api/jobs/${c.job_id}`).catch(() => null);
@@ -274,8 +285,67 @@ export async function renderBookChapter(el, ctx, bid, idx, { back, refresh, watc
         h('button.primary', { onclick: async () => { await api.post(`/api/learn/books/${bid}/chapters/${idx}/open`, { force: true }); refresh(); } }, [ui.icon('refresh'), '重试']))]);
     }
     const g = c.guide || {};
+    const body = g.walk ? walkView(g) : guideV1(g);
+    return h('div.card', { style: { padding: '22px 26px' } }, [
+      annotate(ctx, body, { doc: `learn:book:${bid}:ch:${idx}`, title: `${b.title} · ${c.title}`, link: chHref(bid, idx), source: body.textContent }),
+      h('div.row', { style: { marginTop: '14px', justifyContent: 'flex-end' } }, [
+        c.job_id ? h('a.muted', { href: `/api/jobs/${c.job_id}`, target: '_blank', style: { fontSize: '12px' } }, `job ${c.job_id}`) : null,
+        h('button.ghost.sm', { onclick: async () => { if (!confirm('重新生成这一篇的导读？')) return; await api.post(`/api/learn/books/${bid}/chapters/${idx}/open`, { force: true }); toast('正在重写本篇导读'); refresh(); } }, [ui.icon('refresh'), '重写导读'])]),
+    ]);
+  }
+
+  const loadText = async () => (textCache = textCache || await api.get(`/api/learn/books/${bid}/chapters/${idx}/text`).catch(() => ({ pages: [] })));
+  const toText = (anchor) => { mode = 'text'; paint(anchor); };
+  const paras = (t) => String(t || '').split(/\n+/).map((x) => x.trim()).filter(Boolean).map((x) => h('p', {}, x));
+
+  // 伴读：开场 → 顺着原文一段段讲（每段下面可展开对照原文这一段）→ 收尾 → 带走三句话
+  function walkView(g) {
+    let slices = null;
+    const fill = async (box, i) => {
+      if (box.dataset.done) return;
+      box.dataset.done = '1';
+      box.replaceChildren(h('div.muted.dots', {}, '加载原文'));
+      slices = slices || splitByAnchors((await loadText()).pages.map((p) => reflow(p.text)).join('\n\n'), g.walk.map((w) => w.anchor));
+      const t = slices[i];
+      box.replaceChildren(t ? h('pre', {}, t) : h('div.muted', {}, '没在原文里定位到这一段，可以到「原文」里找'),
+        h('div.row', { style: { justifyContent: 'flex-end', marginTop: '6px' } }, h('button.sm.ghost', { onclick: () => toText(g.walk[i].anchor) }, '在整篇原文里看 →')));
+    };
+    const segs = g.walk.map((w, i) => {
+      const box = h('div.bk-orig-body');
+      const det = h('details.bk-orig', { ontoggle: () => { if (det.open) fill(box, i); } }, [h('summary', {}, '对照原文这一段'), box]);
+      return h('section.bk-seg', {}, [
+        h('div.st', {}, [h('span.n', {}, String(i + 1).padStart(2, '0')), h('span', {}, w.title)]),
+        h('div.bk-talk', {}, paras(w.talk)),
+        w.quote ? h('blockquote', {}, w.quote) : null,
+        w.anchor ? det : null]);
+    });
+    const allBtn = h('button.sm.ghost', { onclick: () => {
+      const dets = [...body.querySelectorAll('details.bk-orig')];
+      const open = !dets.every((d) => d.open);
+      dets.forEach((d) => { d.open = open; });
+      allBtn.textContent = open ? '收起原文' : '展开全部原文';
+    } }, '展开全部原文');
+    const body = h('div.bk-guide.bk-walk', {}, [
+      g.one_line ? h('p.lead', {}, g.one_line) : null,
+      h('div.bk-talk', {}, paras(g.opening)),
+      h('div.row', { style: { justifyContent: 'flex-end', margin: '-4px 0 6px' } }, allBtn),
+      ...segs,
+      g.closing ? h('h3', {}, '回头看') : null,
+      h('div.bk-talk', {}, paras(g.closing)),
+      (g.essence || []).length ? h('div.bk-take', {}, [h('h4', {}, '带走三句话'),
+        h('ol', {}, g.essence.map((e) => h('li', {}, [typeof e === 'string' ? e : e.point, e.quote ? h('blockquote', {}, e.quote) : null])))]) : null,
+      (g.terms || []).length ? h('details.bk-more', {}, [h('summary', {}, `术语（${g.terms.length}）`),
+        h('div.bk-terms', {}, g.terms.map((t) => h('div', {}, [h('b', {}, t.term), '：', t.explain])))]) : null,
+      (g.questions || []).length ? h('h3', {}, '读完自问') : null,
+      ...(g.questions || []).map((q) => h('div.bk-q', {}, [h('span', {}, '· ' + q), h('button.sm.ghost', { onclick: () => chat(`${q}\n我的理解：`) }, '写下我的回答')])),
+    ]);
+    return body;
+  }
+
+  // 旧版导读（来龙去脉 / 精髓 / 分节卡片），已生成的照旧显示
+  function guideV1(g) {
     const cx = g.context || {};
-    const body = h('div.bk-guide', {}, [
+    return h('div.bk-guide', {}, [
       g.one_line ? h('p.lead', {}, g.one_line) : null,
       h('h3', {}, '来龙去脉'),
       h('div.bk-ctx', {}, [['为什么在这里', cx.why_here], ['背景', cx.background], ['前面讲过、这里要用', cx.prereq]].filter(([, v]) => v).map(([k, v]) => h('div', {}, [h('b', {}, k), v]))),
@@ -284,7 +354,7 @@ export async function renderBookChapter(el, ctx, bid, idx, { back, refresh, watc
       (g.sections || []).length ? h('h3', {}, '分节导读') : null,
       ...(g.sections || []).map((s, i) => h('div.bk-sec', {}, [
         h('div.st', {}, [h('span.n', {}, String(i + 1).padStart(2, '0')), h('span', {}, s.title),
-          s.anchor ? h('button.sm.ghost', { title: '跳到原文这一节', onclick: () => { mode = 'text'; store.set(MODE_KEY, 'guide'); paint(s.anchor); } }, '读原文 →') : null]),
+          s.anchor ? h('button.sm.ghost', { title: '跳到原文这一节', onclick: () => toText(s.anchor) }, '读原文 →') : null]),
         h('div', {}, s.summary),
         s.origin ? h('div.o', {}, [h('b', {}, '来龙去脉'), s.origin]) : null,
         s.essence ? h('div.e', {}, [h('b', {}, '精髓'), s.essence]) : null])),
@@ -295,12 +365,6 @@ export async function renderBookChapter(el, ctx, bid, idx, { back, refresh, watc
       g.links?.forward ? h('div', {}, [h('b', {}, '埋下伏笔：'), g.links.forward]) : null,
       (g.questions || []).length ? h('h3', {}, '读完自问') : null,
       ...(g.questions || []).map((q) => h('div.bk-q', {}, [h('span', {}, '· ' + q), h('button.sm.ghost', { onclick: () => chat(`${q}\n我的理解：`) }, '写下我的回答')])),
-    ]);
-    return h('div.card', { style: { padding: '22px 26px' } }, [
-      annotate(ctx, body, { doc: `learn:book:${bid}:ch:${idx}`, title: `${b.title} · ${c.title}`, link: chHref(bid, idx), source: body.textContent }),
-      h('div.row', { style: { marginTop: '14px', justifyContent: 'flex-end' } }, [
-        c.job_id ? h('a.muted', { href: `/api/jobs/${c.job_id}`, target: '_blank', style: { fontSize: '12px' } }, `job ${c.job_id}`) : null,
-        h('button.ghost.sm', { onclick: async () => { if (!confirm('重新生成这一篇的导读？')) return; await api.post(`/api/learn/books/${bid}/chapters/${idx}/open`, { force: true }); toast('正在重写本篇导读'); refresh(); } }, [ui.icon('refresh'), '重写导读'])]),
     ]);
   }
 
@@ -337,13 +401,46 @@ function reflow(text) {
 }
 
 // 在原文里找到分节导读给的开头几个词（忽略空白和断行连字符），高亮并滚过去
-function jumpTo(body, anchor) {
-  const words = anchor.replace(/[“”"'‘’]/g, '').split(/\s+/).filter(Boolean).slice(0, 6);
-  if (!words.length) return;
+function anchorRes(anchor) {
+  const words = String(anchor || '').replace(/[“”"'‘’]/g, '').split(/\s+/).filter(Boolean).slice(0, 6);
+  if (!words.length) return [];
   const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(words.map(esc).join('[\\s\\-­]+'), 'i');
-  const reShort = new RegExp(words.slice(0, 3).map(esc).join('[\\s\\-­]+'), 'i');
-  for (const r of [re, reShort]) {
+  return [new RegExp(words.map(esc).join('[\\s\\-­]+'), 'i'), new RegExp(words.slice(0, 3).map(esc).join('[\\s\\-­]+'), 'i')];
+}
+
+// 按伴读各段的 anchor 把整篇原文切开：第 i 段 = 它的开头到下一个定位到的开头；第一段从篇首起。
+// 定位不到、或位置倒退的段返回 null（前一段会顺延覆盖它）
+// 开头前一行是小标题（短、不以句末标点结尾）时，从标题行开始切，标题就不会挂在上一段末尾
+function headStart(full, p) {
+  const lineStart = full.lastIndexOf('\n', p - 1) + 1;
+  if (full.slice(lineStart, p).trim()) return p;
+  const prevStart = full.lastIndexOf('\n', lineStart - 2) + 1;
+  const prev = full.slice(prevStart, lineStart).trim();
+  return prev && prev.length <= 60 && !/[.!?。！？:;：；"”»)]$/.test(prev) ? prevStart : p;
+}
+
+function splitByAnchors(full, anchors) {
+  let last = -1;
+  const pos = anchors.map((a) => {
+    for (const r of anchorRes(a)) {
+      const m = new RegExp(r.source, 'gi');
+      m.lastIndex = last + 1;
+      const hit = m.exec(full);
+      if (hit) { last = hit.index; return headStart(full, hit.index); }
+    }
+    return null;
+  });
+  return pos.map((p, i) => {
+    if (p == null) return null;
+    const start = i === pos.findIndex((x) => x != null) ? 0 : p;
+    const next = pos.slice(i + 1).find((x) => x != null);
+    return full.slice(start, next ?? full.length).trim();
+  });
+}
+
+function jumpTo(body, anchor) {
+  const res = anchorRes(anchor);
+  for (const r of res) {
     for (const pre of body.querySelectorAll('pre')) {
       const node = pre.firstChild;
       if (!node || node.nodeType !== 3) continue;

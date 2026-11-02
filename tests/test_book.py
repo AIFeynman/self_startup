@@ -56,3 +56,13 @@ def test_no_toc_falls_back_to_fixed_ranges():
 def test_est_tokens_counts_cjk_per_char():
     assert bp.est_tokens("深度读书") == 4
     assert bp.est_tokens("abcd" * 10) == 10
+
+
+def test_guide_md_walk_and_legacy():
+    walk = {"one_line": "一句话", "opening": "开场", "closing": "收尾",
+            "walk": [{"title": "第一段", "anchor": "ONE OF THE", "talk": "先说\n\n再说", "quote": "a quote"}],
+            "essence": [{"point": "带走一"}], "questions": ["问？"]}
+    md = bp.guide_md(walk)
+    assert "## 第一段" in md and "> a quote" in md and "## 收尾" in md and "1. 带走一" in md
+    legacy = bp.guide_md({"one_line": "旧", "context": {"why_here": "因为"}, "sections": [{"title": "旧节", "summary": "s"}]})
+    assert "## 来龙去脉" in legacy and "### 旧节" in legacy
