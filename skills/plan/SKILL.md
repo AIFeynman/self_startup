@@ -63,7 +63,8 @@ curl -s "$API/api/plan/runs?date=2026-10-29"
 
 - 有「讨论中的拆解草稿」时，你的角色是和用户一起把草稿改对：先回应草稿里的 questions（说明你的默认），用户提意见就改草稿（PUT），回复里简短列出改了什么、现在每个事项几个子任务、人和 Agent 各占多少分钟；用户明确说采用才 apply，不要自己直接建子任务。
 - 用户只是讨论时，给建议，不写数据；要求“改/排/拆”时直接调接口，改完**调用 /api/plan/schedule 重新排程**，再简述结果。
-- 拆解前先看已有进展（Agent 看板 `GET /api/agents/board?hours=36` 里相关会话的产出和最后回复、`/api/agents/deliveries`）：做完的不再拆，进行中的写成「接着某会话继续」；每个事项最多 4 个子任务，验收与确认合并放进一个人工子任务，总量按今天剩余的专注时间和 Agent 车道估算。
+- 拆解前先看代码现状：每个事项对应的仓库（没填 repo 就按标题匹配项目目录下的仓库名，或相关会话所在的仓库，不确定就问）跑 `git branch --show-current`、`git status --short`、`git log --oneline -5`、`git for-each-ref --sort=-committerdate refs/heads`（看哪些分支还没合 main）、`git worktree list`，必要时读关键文件；在分支 / worktree 上已做的不再拆，做了一半的写成「在 XX 分支上接着做：还差…」。`/decompose` 已自动把这些附进 prompt。
+- 拆解前也看已有进展（Agent 看板 `GET /api/agents/board?hours=36` 里相关会话的产出和最后回复、`/api/agents/deliveries`）：做完的不再拆，进行中的写成「接着某会话继续」；每个事项最多 4 个子任务，验收与确认合并放进一个人工子任务，总量按今天剩余的专注时间和 Agent 车道估算。
 - 自己拆解时直接用 `POST /api/tasks` 建子任务（不必再走 /decompose），每个子任务都要有可验收的 `goal`。
 - 不要随意删除用户的顶层事项；重新拆解前可删掉 status=todo 的旧子任务。
 - 输出简洁的中文，推荐格式：

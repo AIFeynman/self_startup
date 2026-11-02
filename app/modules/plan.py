@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 from datetime import date as Date, datetime, timedelta
@@ -334,6 +335,13 @@ DECOMPOSE_PROMPT = """请把下面每个顶层事项拆解成可执行的子任�
 - 尽量把能自动化的部分拆成独立 auto 子任务（目标写清楚、可验收），把需要人判断的部分单独拆出。
 - est_minutes 为该子任务本身耗时（auto 为 Agent 运行时长估计），子任务一般 15-120 分钟。
 
+## 先看代码现状（硬性要求，拆解前做）
+- 下面「代码现状」列了每个事项对应仓库的当前分支、未提交改动、最近提交、相关分支与 worktree；相关目录可直接读。
+- 先据此判断：哪些已经在某个分支 / worktree 做了（做到哪、是否已合并 main）、还差什么，再拆子任务；
+  已经做完的不再拆，做了一半的子任务写成「在 XX 分支 / worktree 上接着做：还差…」。
+- 需要时打开关键文件确认现状（只读，不要改任何文件），basis 里至少写 1 条代码现状（如「feat/x 分支已实现 A，未合并 main」）。
+- 标着「按标题猜的」的仓库不确定时，在 questions 里确认；「没找到对应仓库」的事项若涉及代码，在 questions 里问是哪个仓库（默认按从零开始拆）；不涉及代码的跳过这一步。
+
 ## 少而精（硬性要求）
 - 每个事项最多 {max_subs} 个子任务，宁可一个 auto 子任务做完「实现+自测+对比报告+commit/push」，也不要拆成一串小步。
 - 人工部分合并：同一事项的验收、取舍、确认合并 main 放进一个人工子任务，不要单列 10 分钟的确认。
@@ -390,6 +398,9 @@ def decompose(body: DecomposeIn):
     ins = _insights()
     if ins:
         prompt += f"\n\n## 时间利用的历史规律（请据此安排 auto / 人工任务）\n{ins}"
+    code, code_dirs = _code_state(tops, dirs)
+    if code:
+        prompt += f"\n\n## 代码现状（各事项对应仓库的分支与提交，拆解前先看）\n{code}"
     les = _lessons(date)
     if les:
         prompt += f"\n\n## 复盘沉淀的规划经验（拆解时照做：完成标准、何时跑、怎么验收、哪些要人）\n{les}"
@@ -400,7 +411,7 @@ def decompose(body: DecomposeIn):
     if body.hint:
         prompt += f"\n\n## 用户补充要求\n{body.hint}"
     # 拆解只需要读：工作目录放在数据目录，事项关联的代码库作为额外可读目录
-    repos = sorted({str(Path(t["repo"]).expanduser()) for t in tops if t["repo"]} | set(dirs))
+    repos = sorted({str(Path(t["repo"]).expanduser()) for t in tops if t["repo"]} | set(dirs) | set(code_dirs))
     db.DATA_DIR.mkdir(parents=True, exist_ok=True)
     jid = jobs.submit("plan", prompt, ref=f"plan:decompose:{date}", engine=body.engine,
                       cwd=str(db.DATA_DIR), add_dirs=repos)
@@ -483,6 +494,107 @@ def _progress(date: str, tops: list[dict], hours: float = 36) -> tuple[str, list
         except Exception:  # noqa: BLE001
             pass
     return "\n\n".join(parts), dirs[:4]
+
+
+def _git(repo: str, *args: str) -> str:
+    try:
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _main_repo(d: str) -> str:
+    """目录所在仓库的主 checkout（worktree 也归到主仓库），不是 git 仓库返回空。"""
+    common = _git(d, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    return str(Path(common).parent) if common else ""
+
+
+def _projects_root() -> Path:
+    """候选仓库所在目录：设置 projects_root，否则取本平台仓库的上一级。"""
+    root = settings.load().get("projects_root") or os.environ.get("SELF_STARTUP_PROJECTS_ROOT")
+    if root:
+        return Path(root).expanduser()
+    return Path(_main_repo(str(Path(__file__).resolve().parent)) or Path(__file__).resolve().parents[2]).parent
+
+
+def _guess_repo(t: dict, session_dirs: list[str]) -> str:
+    """没填 repo 的事项：先按标题 / 目标匹配项目根目录下的主仓库名，再退到相关会话所在的仓库。"""
+    want = _words(f"{t['title']} {t['goal']}")
+    best, score = "", 0
+    try:
+        kids = [k for k in _projects_root().iterdir() if (k / ".git").is_dir()]
+    except OSError:
+        kids = []
+    for k in kids:
+        name = k.name.lower()
+        n = len(_words(name.replace("_", " ").replace("-", " ")) & want) + (3 if name.replace("-", "").replace("_", "") in want else 0)
+        if n > score:
+            best, score = str(k), n
+    if score >= 2:
+        return best
+    for d in session_dirs:
+        if (m := _main_repo(d)):
+            return m
+    return ""
+
+
+def _repo_state(repo: str, want: set[str]) -> str:
+    """一个仓库的现状：当前分支 + 未提交改动、最近提交、最近活跃的分支（领先 main 多少）、相关 worktree。"""
+    base = next((b for b in ("main", "master") if _git(repo, "rev-parse", "--verify", "-q", b)), "")
+    cur = _git(repo, "branch", "--show-current") or "(detached)"
+    dirty = len(_git(repo, "status", "--porcelain").splitlines())
+    lines = [f"- 当前分支 {cur}" + (f"，{dirty} 个未提交改动" if dirty else "，工作区干净")]
+    log = _git(repo, "log", "--format=%h %cd %s", "--date=format:%m-%d %H:%M", "-5")
+    if log:
+        lines.append("- 最近提交：\n" + "\n".join(f"  {x[:120]}" for x in log.splitlines()))
+    refs = _git(repo, "for-each-ref", "--sort=-committerdate", "--count=30", "--format=%(refname:short)\t%(committerdate:format:%m-%d %H:%M)\t%(subject)", "refs/heads")
+    open_, merged = [], []
+    for r in refs.splitlines():
+        name, at, subj = (r.split("\t") + ["", ""])[:3]
+        if name in (base, cur):
+            continue
+        ahead = _git(repo, "rev-list", "--count", f"{base}..{name}") if base else ""
+        hit = bool(_words(f"{name.replace('/', ' ').replace('-', ' ')} {subj}") & want)
+        if ahead and ahead != "0":
+            open_.append((hit, at, name, subj, f"领先 {base} {ahead} 个提交"))
+        elif hit:
+            merged.append((hit, at, name, subj, f"已合进 {base}"))
+    # 没合并的分支（和事项相关的优先）最多 5 个；已合并的只列相关的 2 个，说明这块做过
+    branches = sorted(open_, key=lambda b: not b[0])[:5] + merged[:2]
+    if branches:
+        out = [f"  {name}（{at}，{state}）：{subj[:80]}" for _, at, name, subj, state in branches]
+        lines.append("- 相关分支：\n" + "\n".join(out))
+    wts = [b for b in _git(repo, "worktree", "list", "--porcelain").split("\n\n") if b.strip()]
+    wt_lines = []
+    for b in wts[1:]:
+        path = next((x[9:] for x in b.splitlines() if x.startswith("worktree ")), "")
+        br = next((x[18:] for x in b.splitlines() if x.startswith("branch refs/heads/")), "")
+        if path and _words(f"{Path(path).name.replace('-', ' ').replace('_', ' ')} {br.replace('/', ' ').replace('-', ' ')}") & want:
+            wt_lines.append(f"  {path} [{br}]")
+    if wt_lines:
+        lines.append("- 相关 worktree：\n" + "\n".join(wt_lines[:4]))
+    return "\n".join(lines)
+
+
+def _code_state(tops: list[dict], session_dirs: list[str]) -> tuple[str, list[str]]:
+    """每个事项对应仓库的 git 现状，给拆解用。返回 (文本, 相关仓库目录)。"""
+    parts, repos = [], []
+    for t in tops:
+        head = f"### task_id={t['id']} {t['title'][:40]}"
+        repo, note = "", ""
+        if t["repo"] and Path(t["repo"]).expanduser().is_dir():
+            repo = _main_repo(str(Path(t["repo"]).expanduser())) or str(Path(t["repo"]).expanduser())
+        elif (repo := _guess_repo(t, session_dirs)):
+            note = "（按标题猜的，不确定就在 questions 里确认）"
+        if not repo:
+            parts.append(f"{head}\n没找到对应仓库")
+            continue
+        if repo not in repos:
+            repos.append(repo)
+        want = _words(f"{t['title']} {t['goal']}")
+        parts.append(f"{head}\n仓库 {repo}{note}\n" + _repo_state(repo, want))
+    return "\n\n".join(parts), repos[:4]
 
 
 def extract_json(text: str):
