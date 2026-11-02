@@ -3,8 +3,8 @@
 // 键盘：j/k 移动选中，l 赞，s 收藏，o 打开，d 深读，x 隐藏。
 import { toMs } from '../api.js';
 
-const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['video', '视频'], ['x_article', 'X 长文'], ['saved', '已收藏']];
-const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'video', 'x_article'];
+const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['hn', 'HN 精读'], ['video', '视频'], ['x_article', 'X 长文'], ['saved', '已收藏']];
+const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'hn', 'video', 'x_article'];
 const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论', video: '视频' };
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
 const fmtDur = (s) => s ? (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}` : `${Math.round(s / 60)} 分钟`) : '';
@@ -12,7 +12,9 @@ const PAGE = 40;
 const TOP_N = 5;
 const DAYS = [['0', '不限时间'], ['1', '24 小时内'], ['3', '3 天内'], ['7', '7 天内'], ['30', '30 天内']];
 const SORTS = [['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）']];
-const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score' };
+const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score', hnView: 'posts' };
+const HN_ITEM = (id) => `https://news.ycombinator.com/item?id=${id}`;
+const SENT = { pos: ['好评', 'ok'], neg: ['差评', 'err'], mixed: ['褒贬不一', 'warn'], neutral: ['提及', 'gray'] };
 
 const CSS = `
 .fd-refresh { position: relative; }
@@ -98,6 +100,48 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-int button:hover { background: rgba(0,0,0,.06); }
 .fd-int button svg { width: 12px; height: 12px; }
 .fd-tabref { white-space: nowrap; }
+/* HN 精读：评论区提炼（帖子内折叠块 + 经验库） */
+details.fd-hn { margin-top: 6px; font-size: 13px; border-left: 2px solid var(--warn); padding: 2px 0 2px 10px; }
+details.fd-hn > summary { cursor: pointer; list-style: none; line-height: 1.5; }
+details.fd-hn > summary::-webkit-details-marker { display: none; }
+details.fd-hn > summary b { color: var(--warn); font-weight: 600; margin-right: 6px; white-space: nowrap; }
+details.fd-hn > summary .n { color: var(--muted); font-size: 12px; margin-left: 6px; white-space: nowrap; }
+details.fd-hn > summary:hover { color: var(--accent); }
+.fd-hn-sec { margin-top: 8px; }
+.fd-hn-sec > h6 { margin: 0 0 3px; font: 600 12px var(--font); color: var(--muted); }
+.fd-hn-sec ul { margin: 0; padding-left: 0; list-style: none; }
+.fd-hn-sec li { padding: 2px 0; line-height: 1.5; }
+.fd-hn-sec li .k { display: inline-block; min-width: 34px; margin-right: 6px; padding: 0 5px; border-radius: 5px; background: var(--bg-2); color: var(--muted); font-size: 11.5px; text-align: center; }
+.fd-hn-sec li .k.ok { background: var(--ok-soft); color: var(--ok); } .fd-hn-sec li .k.err { background: var(--err-soft); color: var(--err); }
+.fd-hn-sec li .k.warn { background: var(--warn-soft); color: var(--warn); }
+.fd-hn-sec .d { color: var(--muted); }
+.fd-cid { font-size: 11px; color: var(--muted); margin-left: 3px; vertical-align: 1px; }
+a.fd-cid:hover { color: var(--accent); }
+.fd-ents { display: flex; flex-wrap: wrap; gap: 5px; }
+.fd-ent { padding: 0 8px; border-radius: 6px; font-size: 12px; line-height: 21px; background: var(--bg-2); color: var(--text); cursor: default; }
+.fd-ent.ok { background: var(--ok-soft); color: var(--ok); } .fd-ent.err { background: var(--err-soft); color: var(--err); } .fd-ent.warn { background: var(--warn-soft); color: var(--warn); }
+.fd-hn-none { margin-top: 4px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.fd-hnbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: -2px 0 10px; font-size: 12.5px; color: var(--muted); }
+.fd-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
+.fd-seg button { border: none; border-radius: 0; padding: 4px 14px; white-space: nowrap; font-size: 12.5px; background: var(--panel); color: var(--muted); }
+.fd-seg button.on { background: var(--accent-soft); color: var(--accent); }
+.fd-lib { display: grid; gap: 14px; }
+.fd-lib section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
+.fd-lib section > h4 { margin: 0 0 8px; font: 600 14px var(--font); } .fd-lib section > h4 span { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 6px; }
+.fd-lib details { border-top: 1px solid var(--line); padding: 6px 0; font-size: 13px; }
+.fd-lib details:first-of-type { border-top: none; }
+.fd-lib details > summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.fd-lib details > summary::-webkit-details-marker { display: none; }
+.fd-lib details > summary .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fd-lib details > summary .ct { margin-left: auto; white-space: nowrap; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.fd-lib details > summary .ct .ok { color: var(--ok); } .fd-lib details > summary .ct .err { color: var(--err); } .fd-lib details > summary .ct .warn { color: var(--warn); }
+.fd-lib details ul { margin: 6px 0 2px; padding-left: 14px; } .fd-lib details li { padding: 2px 0; line-height: 1.5; }
+.fd-lib .src { color: var(--muted); font-size: 12px; }
+.fd-exps { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.fd-exp { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font-size: 13px; line-height: 1.5; }
+.fd-exp .who { font-size: 12px; color: var(--muted); } .fd-exp .res { margin-top: 3px; color: var(--ok); }
+.fd-exp .src { display: block; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fd-lib .more { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .fd-tabref svg { width: 13px; height: 13px; }
 .fd-fresh { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .fd-fresh.ok { color: var(--ok); }
@@ -213,6 +257,8 @@ export default {
     const topBox = h('div');
     const tabs = h('div.tabs');
     const listBox = h('div.fd-list');
+    const hnBar = h('div.fd-hnbar');
+    const libBox = h('div.fd-lib');
     const sentinel = h('div.fd-sentinel');
     const kbd = h('span.fd-kbd', { title: 'j/k 移动 · l 赞 · s 收藏 · o 打开 · d 深读 · / 输入' }, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 移动 · ', h('kbd', {}, 'l'), ' 赞 · ',
       h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, 'o'), ' 打开 · ', h('kbd', {}, 'd'), ' 深读 · ', h('kbd', {}, '/'), ' 输入']);
@@ -231,7 +277,7 @@ export default {
     let fresh = null;   // { since, added, label }
     el.append(h('style', {}, CSS), head, kwBox, followBox, comp, intsEl, quick,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条'), topBox,
-      h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), listBox, sentinel);
+      h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
     function renderStatus() {
@@ -543,6 +589,45 @@ export default {
       d.addEventListener('toggle', () => { entry.paOpen = d.open; });
       return d;
     };
+    // HN 评论区提炼：一句话总结常显，展开看链接 / 技术产品 / 观点 / 经验；每条后面的小编号点开是 HN 上的原评论
+    const cids = (ids) => (ids || []).slice(0, 3).map((id, j) => h('a.fd-cid', { href: HN_ITEM(id), target: '_blank', rel: 'noopener', title: '打开这条 HN 评论' }, `#${j + 1}`));
+    const hnSec = (title, rows) => rows.length ? h('div.fd-hn-sec', {}, [h('h6', {}, title), h('ul', {}, rows)]) : null;
+    async function redigest(entry) {
+      entry.digesting = true; mount(entry);
+      try {
+        const r = await api.post('/api/feed/hn/digest', { id: entry.x.id });
+        for (const e of entries) if (e.x.id === entry.x.id) { e.x.extra = { ...(e.x.extra || {}), hn: r.hn }; e.hnOpen = true; }
+        toast('评论区已提炼');
+      } catch (e) { toast('提炼失败：' + e.message, true); }
+      for (const e of entries) if (e.x.id === entry.x.id) { e.digesting = false; mount(e); }
+    }
+    const hnBox = (entry) => {
+      const { x } = entry;
+      if (x.source !== 'hn') return null;
+      const d = x.extra?.hn;
+      const btn = (label) => h('button.ghost.sm', { disabled: !!entry.digesting, title: '读评论区（前若干条高赞楼）并提炼', onclick: (e) => { e.stopPropagation(); redigest(entry); } }, entry.digesting ? '提炼中…' : label);
+      if (!d) {
+        if (st.tab !== 'hn') return null;
+        const n = x.extra?.comments || 0;
+        return h('div.fd-hn-none', {}, [h('span', {}, n < 30 ? `评论 ${n} 条，不到 30 条不自动提炼` : `评论 ${n} 条 · 还没提炼（刷新时按热度挑前 30 帖）`), btn('现在提炼')]);
+      }
+      const links = (d.links || []).map((l) => h('li', {}, [h('span.k', {}, l.kind),
+        h('a', { href: l.url, target: '_blank', rel: 'noopener' }, l.title || host(l.url) || l.url), ' ', h('span.d', {}, [host(l.url), l.mentions > 1 ? ` · 提到 ${l.mentions} 次` : '', l.why ? ' · ' + l.why : '']), ...cids(l.cids)]));
+      const ents = (d.entities || []).length ? h('div.fd-hn-sec', {}, [h('h6', {}, '提到的技术 / 产品（悬停看评价）'),
+        h('div.fd-ents', {}, d.entities.map((e) => h('span.fd-ent.' + SENT[e.sentiment][1], { title: `${e.kind} · ${SENT[e.sentiment][0]}${e.note ? '：' + e.note : ''}` }, e.name)))]) : null;
+      const ops = (d.opinions || []).map((o) => h('li', {}, [h('span.k' + (o.stance === '主流' ? '.ok' : o.stance === '反对' ? '.err' : o.stance === '少数' ? '.warn' : ''), {}, o.stance),
+        o.claim, o.n ? h('span.d', {}, ` · 约 ${o.n} 条`) : null, ...cids(o.cids)]));
+      const exps = (d.experiences || []).map((e) => h('li', {}, [h('b', {}, e.who), '：', e.did, e.result ? h('span.d', {}, ' → ' + e.result) : null, ...cids(e.cids)]));
+      const box = h('details.fd-hn', {}, [
+        h('summary', { title: '点击展开 / 收起评论区提炼' }, [h('b', {}, '评论区'), d.tldr || '（无总结）',
+          h('span.n', {}, `读了 ${d.read}/${d.total} 条 · 链接 ${(d.links || []).length} · 经验 ${(d.experiences || []).length}`)]),
+        hnSec('观点与判断', ops), hnSec('实战经验', exps), hnSec('评论里推荐的链接', links), ents,
+        h('div.fd-hn-none', {}, [h('span', {}, `提炼于 ${fmtTime(x.extra?.hn_at) || '—'}，模型根据评论原文生成；链接都在评论里出现过`), btn('重新提炼')]),
+      ]);
+      box.open = !!entry.hnOpen;
+      box.addEventListener('toggle', () => { entry.hnOpen = box.open; });
+      return box;
+    };
     const why = (x) => (x.why ? h('div.fd-why', { title: x.why }, [h('b', {}, '推荐理由'), x.why]) : null);
 
     function build(entry) {
@@ -556,6 +641,7 @@ export default {
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
             paBox(entry),
+            hnBox(entry),
             why(x),
             verdictBox(entry),
             h('div.fd-meta', {}, metaChips(x)),
@@ -569,6 +655,7 @@ export default {
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
             paBox(entry),
+            hnBox(entry),
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
               x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
@@ -583,7 +670,7 @@ export default {
       }
       node.addEventListener('mousedown', (e) => { if (!e.target.closest('button, a')) select(entries.indexOf(entry), false); });
       node._hay = norm([x.title, x.gist, x.summary, x.source_label, x.why, x.extra?.feed, x.extra?.channel, x.extra?.subreddit, x.extra?.flair, TYPE_NAME[x.type],
-        x.extra?.revenue, ...Object.values(x.extra?.pa || {})].join(' '));
+        x.extra?.revenue, ...Object.values(x.extra?.pa || {}), x.extra?.hn?.tldr, ...(x.extra?.hn?.entities || []).map((e) => e.name)].join(' '));
       if (st.q && !matches(node)) node.classList.add('fd-hidden');
       return node;
     }
@@ -696,8 +783,54 @@ export default {
       if (fresh?.added && fresh.since) p.set('since', fresh.since);
       return p;
     }
+    // HN 精读：按帖子（普通列表 + 评论区提炼）/ 经验库（跨帖累计）
+    const libView = () => st.tab === 'hn' && st.hnView === 'lib';
+    function renderHnBar() {
+      if (st.tab !== 'hn') { hnBar.replaceChildren(); hnBar.style.display = 'none'; return; }
+      hnBar.style.display = '';
+      const seg = (id, name) => h('button' + (st.hnView === id ? '.on' : ''), { onclick: () => { if (st.hnView === id) return; st.hnView = id; renderHnBar(); loadList(); } }, name);
+      hnBar.replaceChildren(h('div.fd-seg', {}, [seg('posts', '按帖子'), seg('lib', '经验库')]),
+        h('span', {}, st.hnView === 'lib' ? '已提炼帖子的跨帖累计：技术与产品口碑、被反复推荐的链接、经验卡片；上面的筛选框和时间筛选也作用于这里'
+          : '评论 ≥30 的帖子每次刷新按热度提炼前 30 帖；点「评论区」展开'));
+    }
+    const postLink = (p) => h('a.src', { href: p.hn_url || '#', target: '_blank', rel: 'noopener', title: p.title }, `${p.date ? p.date.slice(5) + ' · ' : ''}${p.title}`);
+    const capNote = (n, cap) => (n > cap ? h('div.more', {}, `还有 ${n - cap} 个，用筛选框缩小范围`) : null);
+    async function loadLib(seq) {
+      const r = await api.get('/api/feed/hn/library?' + new URLSearchParams({ q: st.q, days: st.days }));
+      if (seq !== loadSeq) return;
+      listOffset = listTotal = 0; renderSentinel();
+      if (!r.posts) {
+        libBox.replaceChildren(ui.empty(st.q ? `经验库里没有匹配「${st.q}」的内容` : '还没有提炼过的帖子', '切到「按帖子」点「现在提炼」，或刷新 HN 精读'));
+        return;
+      }
+      const sentCt = (g) => h('span.ct', {}, [`${g.posts} 帖 · `, g.pos ? h('span.ok', {}, `好 ${g.pos} `) : null, g.neg ? h('span.err', {}, `差 ${g.neg} `) : null,
+        g.mixed ? h('span.warn', {}, `褒贬 ${g.mixed} `) : null, g.neutral ? `提及 ${g.neutral}` : null]);
+      const E = 40, L = 30, X = 60;
+      const ents = r.entities.slice(0, E).map((g) => h('details', {}, [h('summary', {}, [h('span.nm', {}, g.name), h('span.fd-chip.type', {}, g.kind), sentCt(g)]),
+        h('ul', {}, g.notes.map((n) => h('li', {}, [h('span.fd-ent.' + SENT[n.sentiment][1], {}, SENT[n.sentiment][0]), ' ', n.note || '—', ...cids(n.cids), ' ', postLink(n)])))]));
+      const links = r.links.slice(0, L).map((g) => h('details', {}, [h('summary', {}, [h('span.fd-chip.type', {}, g.kind),
+        h('a.nm', { href: g.url, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, g.title || host(g.url) || g.url),
+        h('span.src', {}, host(g.url)), h('span.ct', {}, `${g.posts} 帖 · 提到 ${g.mentions} 次`)]),
+        h('ul', {}, g.whys.map((w) => h('li', {}, [w.why || '—', ...cids(w.cids), ' ', postLink(w)])))]));
+      const exps = r.experiences.slice(0, X).map((x) => h('div.fd-exp', {}, [h('div.who', {}, x.who), h('div', {}, x.did),
+        x.result ? h('div.res', {}, '→ ' + x.result) : null, h('span.src', {}, [postLink(x.post), ...cids(x.cids)])]));
+      libBox.replaceChildren(
+        h('div.muted', { style: { fontSize: '12.5px' } }, `已提炼 ${r.posts} / ${r.total} 帖${st.q ? ` · 匹配「${st.q}」` : ''}`),
+        h('section', {}, [h('h4', {}, ['技术与产品', h('span', {}, `${r.entities.length} 个 · 按被几帖讨论排序，展开看每帖的评价`)]), ...(ents.length ? ents : [h('div.muted', {}, '无')]), capNote(r.entities.length, E)]),
+        h('section', {}, [h('h4', {}, ['被推荐的链接', h('span', {}, `${r.links.length} 个 · 博客 / 视频 / 仓库 / 产品…`)]), ...(links.length ? links : [h('div.muted', {}, '无')]), capNote(r.links.length, L)]),
+        h('section', {}, [h('h4', {}, ['经验卡片', h('span', {}, `${r.experiences.length} 条 · 评论者亲身做过的事和结果`)]), exps.length ? h('div.fd-exps', {}, exps) : h('div.muted', {}, '无'), capNote(r.experiences.length, X)]));
+    }
     async function loadList() {
       const seq = ++loadSeq;
+      renderHnBar();
+      listBox.style.display = libView() ? 'none' : '';
+      libBox.style.display = libView() ? '' : 'none';
+      if (libView()) {
+        entries = entries.filter((e) => e.kind !== 'list');
+        if (sel >= entries.length) sel = -1;
+        listBox.replaceChildren();
+        return loadLib(seq);
+      }
       const off = baseOffset();
       const r = await api.get('/api/feed/items?' + params(off));
       if (seq !== loadSeq) return;
@@ -713,7 +846,7 @@ export default {
       renderSentinel();
     }
     async function loadMore() {
-      if (loading || listOffset >= listTotal) return;
+      if (loading || listOffset >= listTotal || libView()) return;
       loading = true; renderSentinel();
       const seq = loadSeq;
       try {

@@ -42,6 +42,7 @@ README = """# 本地知识库（自动生成，勿手改）
 - `learn/papers/`、`learn/repos/`：论文 / GitHub 项目深读（TL;DR + 我的笔记 + 全文或产物路径）。
 - `learn/plans/`：主题学习计划（阶段、步骤、进度、理解度、反馈）。
 - `feed/saved.md`：点赞 / 收藏的信息流条目。
+- `feed/hn/`：点赞 / 收藏的 HN 帖子的评论区提炼（推荐链接、技术产品口碑、观点、实战经验），一帖一篇。
 - `annotations/`：阅读批注，一份材料一个文件：划线原文 + 我的评论 + 问 Claude 的问答。
 - `tags/<标签>.md`：按标签列出相关文件。
 
@@ -273,6 +274,42 @@ def _feed_saved() -> list[dict]:
                  summary=f"{len(rs)} 条点赞/收藏，最近：{rs[0]['title']}", path="feed/saved.md")]
 
 
+def _feed_hn() -> list[dict]:
+    """点赞 / 收藏的 HN 帖子：评论区提炼（讨论一句话、推荐链接、技术产品口碑、观点、经验）一帖一篇，放 feed/hn/。"""
+    if not _has("feed_feedback"):
+        return []
+    rs = db.rows("SELECT i.* FROM feed_items i JOIN feed_feedback f ON f.item_id=i.id "
+                 "WHERE i.source='hn' AND (f.vote=1 OR f.saved=1) AND f.hidden=0 ORDER BY i.date DESC")
+    sent = {"pos": "正面", "neg": "负面", "mixed": "褒贬不一", "neutral": "中性"}
+    out = []
+    for r in rs:
+        ex = json.loads(r.get("extra") or "{}")
+        d = ex.get("hn")
+        if not d:
+            continue
+        hn_url = ex.get("hn_url", "")
+        cref = lambda ids: " ".join(f"[c{i}](https://news.ycombinator.com/item?id={i})" for i in ids or [])  # noqa: E731
+        body = [f"- 原文：{r['url']}", f"- HN 讨论：{hn_url}（{int(r['popularity'] or 0)} 分 · {ex.get('comments', 0)} 条评论，"
+                f"提炼读了 {d.get('read', 0)} 条）", "", f"## 讨论一句话\n{d.get('tldr', '')}"]
+        if d.get("opinions"):
+            body.append("\n## 观点与判断")
+            body += [f"- 【{o['stance']}】{o['claim']}（约 {o['n']} 条评论）{cref(o.get('cids'))}" for o in d["opinions"]]
+        if d.get("experiences"):
+            body.append("\n## 实战经验")
+            body += [f"- {x['who']}：{x['did']} → {x['result']} {cref(x.get('cids'))}" for x in d["experiences"]]
+        if d.get("links"):
+            body.append("\n## 评论里推荐的链接")
+            body += [f"- [{l['kind']}] [{l['title'] or l['url']}]({l['url']})：{l['why']}（提及 {l['mentions']} 次）" for l in d["links"]]
+        if d.get("entities"):
+            body.append("\n## 提到的技术 / 产品")
+            body += [f"- {e['name']}（{e['kind']}，{sent.get(e['sentiment'], '中性')}）：{e['note']}" for e in d["entities"]]
+        oid = r["id"].split(":", 1)[-1]
+        out.append(_doc("feed", f"hn-{oid}", r["title"], "\n".join(body), date=r["date"], updated=ex.get("hn_at") or "",
+                        tags=["信息流", "HN", *[e["name"] for e in (d.get("entities") or [])[:5]]], url=r["url"],
+                        summary=d.get("tldr", ""), path=f"feed/hn/{oid}-{_slug(r['title'])}.md"))
+    return out
+
+
 def _paper_notes() -> list[dict]:
     """每日论文笔记：信息推荐里读完写下的一句话判断，按天一篇。"""
     if not _has("feed_feedback") or "verdict" not in {r["name"] for r in db.rows("PRAGMA table_info(feed_feedback)")}:
@@ -397,7 +434,7 @@ def _daily(docs: list[dict]) -> list[dict]:
 
 def build() -> list[dict]:
     docs: list[dict] = []
-    for fn in (_notes, _research, _products, _learn_items, _plans, _feed_saved, _paper_notes, _annotations):
+    for fn in (_notes, _research, _products, _learn_items, _plans, _feed_saved, _feed_hn, _paper_notes, _annotations):
         try:
             docs += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它
