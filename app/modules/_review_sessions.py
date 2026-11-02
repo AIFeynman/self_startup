@@ -8,6 +8,8 @@
 指标：
     active  相邻事件间隔里「以 agent 事件结尾」的部分之和（单段封顶 IDLE_CAP）
     wait    Agent 停下到下一条人工消息之间的间隔；≤ WAIT_MAX 计入「等你」（与 Agent 看板 · 时间利用同一口径），更长视为离开
+    leverage Agent 活跃分钟 ÷ 人工交互次数（每次人工介入换来多少分钟自主工作）
+口径与 session-report 技能（飞书「日开发汇总」）一致：人工交互 = 发消息 + 运行中插话（via=queued）+ 回答选择题（via=answer）。
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from typing import Iterable
 IDLE_CAP = 15 * 60      # 单段 Agent 活跃时间封顶（秒）：更长视为空闲
 WAIT_MAX = 3 * 3600     # 单段等待超过这个视为人离开，不计入「等你」（看板 · 时间利用共用）
 TEXT_MAX = 300
-VERSION = 2             # 统计口径版本：改了算法就 +1，复盘里旧的效率快照会重扫
+VERSION = 3             # 统计口径版本：改了算法就 +1，复盘里旧的效率快照会重扫
 
 KIND_LABELS = {"new_task": "新任务/追加", "correct": "纠正/转向", "approve": "确认/继续",
                "interrupt": "中断", "answer": "回答提问", "check": "询问进度"}
@@ -29,7 +31,12 @@ KIND_LABELS = {"new_task": "新任务/追加", "correct": "纠正/转向", "appr
 _SKIP_PREFIX = ("<task-notification>", "Another Claude session sent", "This session is being continued",
                 "Caveat:", "<system-reminder>", "<local-command-stdout>", "<local-command-stderr>",
                 "<environment_context>", "# AGENTS.md", "<user_instructions>",
-                "<bash-input>", "<bash-stdout>", "<bash-stderr>")
+                "<bash-input>", "<bash-stdout>", "<bash-stderr>", "<permissions instructions>",
+                "<side-sessions-event>", "<ci-monitor-event>")
+_ANSWERED = ("Your questions have been answered", "The user answered")   # AskUserQuestion 的回答
+_NUDGE = re.compile(r"进度|怎样了|怎么样了|好了吗|完\s*了吗|完了没|还有多少没|还有没|做到哪")   # 催进度（只看短消息）
+_COMMIT = re.compile(r"\[([\w./-]+) ([0-9a-f]{7,12})\] (.{0,120})")
+_URL = re.compile(r"https://(?:github\.com/[\w.-]+/[\w.-]+/pull/\d+|[\w-]+\.feishu\.cn/(?:wiki|docx)/\w+)")
 _APPROVE = re.compile(r"^(继续|好的?|可以|行|嗯|对|是的?|没问题|同意|确认|开始|提交|commit|ok|okay|yes|y|go|continue|proceed|lgtm|sure|do it|build it|"
                       r"go ahead|commit (it|them)|push|merge|就这样|按这个|照做|执行|先这样)\b", re.I)
 _CHECK = re.compile(r"(进度|怎么样了|怎样了|好了吗|完成了吗|做完了吗|到哪|status|还在跑|跑完)", re.I)
@@ -76,7 +83,7 @@ def _ev(kind: str, ts: datetime, **kw) -> dict:
 
 # ---------- Claude Code ----------
 
-_CLAUDE_TYPES = ("user", "assistant", "system", "custom-title")
+_CLAUDE_TYPES = ("user", "assistant", "system", "custom-title", "attachment")
 
 
 def _claude_text(content) -> str:
@@ -89,6 +96,17 @@ def _claude_text(content) -> str:
         elif isinstance(b, dict) and b.get("type") == "image":
             parts.append("[图片]")
     return "\n".join(p for p in parts if p)
+
+
+def _tool_brief(name: str, inp) -> str:
+    if not isinstance(inp, dict):
+        return ""
+    for k in ("command", "description", "file_path", "pattern", "url", "query", "prompt", "skill"):
+        if inp.get(k):
+            return str(inp[k])[:200]
+    if name == "AskUserQuestion":
+        return " / ".join(q.get("question", "") for q in inp.get("questions") or [] if isinstance(q, dict))[:300]
+    return ""
 
 
 def _slash(text: str) -> str:
@@ -106,9 +124,10 @@ def read_claude(path: Path) -> tuple[dict, list[dict]]:
         for line in f:
             if line.startswith('{"type":"'):
                 t = line[9:line.find('"', 9)]
-                if t not in _CLAUDE_TYPES:
+                if t not in _CLAUDE_TYPES or (t == "attachment" and '"queued_command"' not in line):
                     continue
-            elif '"type":"user"' not in line and '"type":"assistant"' not in line and '"type":"system"' not in line:
+            elif '"type":"user"' not in line and '"type":"assistant"' not in line and '"type":"system"' not in line \
+                    and '"queued_command"' not in line:
                 continue
             try:
                 o = json.loads(line)
@@ -127,14 +146,28 @@ def read_claude(path: Path) -> tuple[dict, list[dict]]:
                 meta["cwd"] = o["cwd"]
             msg = o.get("message") or {}
             content = msg.get("content")
+            if t == "attachment":   # Agent 运行中排队插入的消息：人发的才算人工，task-notification 等是系统通知
+                a = o.get("attachment") or {}
+                if a.get("type") != "queued_command":
+                    continue
+                text = str(a.get("prompt") or "").strip()
+                src = (a.get("origin") or {}).get("kind") or "" if isinstance(a.get("origin"), dict) else ""
+                if a.get("commandMode") == "prompt" and src in ("", "human") and text and not text.startswith(_SKIP_PREFIX):
+                    meta["human"] += 1
+                    events.append(_ev("human", ts, text=text, via="queued"))
+                else:
+                    events.append(_ev("notify", ts))
+                continue
             if t == "assistant":
                 for b in content or []:
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "text":
-                        events.append(_ev("agent", ts, asks=_asks(b.get("text", ""))))
+                        events.append(_ev("agent", ts, asks=_asks(b.get("text", "")), text=b.get("text", "")[:2000]))
                     elif b.get("type") == "tool_use":
-                        events.append(_ev("agent", ts, tool=b.get("name", ""), asks=b.get("name") == "AskUserQuestion"))
+                        name = b.get("name", "")
+                        events.append(_ev("agent", ts, tool=name, cmd=_tool_brief(name, b.get("input")),
+                                          asks=name == "AskUserQuestion"))
                     else:
                         events.append(_ev("agent", ts))
             elif t == "system":
@@ -147,9 +180,13 @@ def read_claude(path: Path) -> tuple[dict, list[dict]]:
                     for b in content:
                         if isinstance(b, dict) and b.get("type") == "tool_result":
                             c = b.get("content")
-                            c = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)[:2000]
+                            c = c if isinstance(c, str) else _claude_text(c) or json.dumps(c, ensure_ascii=False)[:2000]
+                            if c.startswith(_ANSWERED) and re.search(r'"="(?!\[User did not answer)', c):  # 没选、改发消息的不重复计
+                                meta["human"] += 1
+                                events.append(_ev("human", ts, text=c[:TEXT_MAX], via="answer"))
+                                continue
                             denied = any(s in c[:500] for s in _DENIAL)
-                            events.append(_ev("agent", ts, error=bool(b.get("is_error")), denied=denied))
+                            events.append(_ev("agent", ts, error=bool(b.get("is_error")), denied=denied, out=c[:600]))
                 text = _claude_text(content).strip()
                 if not text or o.get("isMeta"):
                     continue
@@ -207,7 +244,14 @@ def read_codex(path: Path) -> tuple[dict, list[dict]]:
                 continue
             if typ == "response_item":
                 if pt in ("function_call", "custom_tool_call", "local_shell_call", "web_search_call"):
-                    events.append(_ev("agent", ts, tool=p.get("name") or pt))
+                    args = p.get("arguments") or p.get("input") or ""
+                    try:
+                        a = json.loads(args) if isinstance(args, str) and args.startswith("{") else args
+                    except json.JSONDecodeError:
+                        a = args
+                    cmd = (a.get("cmd") or a.get("command")) if isinstance(a, dict) else a
+                    cmd = " ".join(map(str, cmd)) if isinstance(cmd, list) else str(cmd or "")
+                    events.append(_ev("agent", ts, tool=p.get("name") or pt, cmd=cmd[:200]))
                 elif pt in ("function_call_output", "custom_tool_call_output") or (pt == "message" and p.get("role") == "assistant"):
                     # developer / system 消息是每轮开头注入的上下文（和人的消息同一时刻），不是 Agent 在干活
                     events.append(_ev("agent", ts))
@@ -220,7 +264,7 @@ def read_codex(path: Path) -> tuple[dict, list[dict]]:
                 if text and not text.startswith(_SKIP_PREFIX):
                     events.append(_ev("auto" if meta["automated"] else "human", ts, text=text))
             elif pt == "agent_message":
-                events.append(_ev("agent", ts, asks=_asks(str(p.get("message") or ""))))
+                events.append(_ev("agent", ts, asks=_asks(str(p.get("message") or "")), text=str(p.get("message") or "")[:2000]))
             elif pt == "task_complete":
                 events.append(_ev("agent", ts, end=True, asks=_asks(str(p.get("last_agent_message") or ""))))
             elif pt == "turn_aborted":
@@ -256,6 +300,47 @@ def promote_platform_chat(meta: dict, events: list[dict], chat_ids: set[str]) ->
 
 # ---------- 统计 ----------
 
+def _trace_cat(e: dict) -> str:
+    """工具调用归类，用于轨迹耗时分布（与 session-report 同一分类）。"""
+    t, c = e.get("tool") or "", (e.get("cmd") or "").lower()
+    if "browser" in t.lower() or "chrome" in t.lower():
+        return "浏览器"
+    if t in ("Agent", "Task", "Workflow", "spawn_agent"):
+        return "子 Agent"
+    if t in ("Read", "Grep", "Glob", "Edit", "Write", "NotebookEdit", "apply_patch"):
+        return "读写代码"
+    if re.search(r"pytest|npm (run )?test|pnpm test|vitest|jest|go test|cargo test|make test|ruff|eslint|tsc\b|mypy", c):
+        return "测试与检查"
+    if re.search(r"ffmpeg|render|remotion|tts|playwright|curl |bench|e2e|measure|live\d|ffprobe", c):
+        return "实测与渲染"
+    if re.search(r"\bsleep\b|\buntil\b|\bwait\b|tail -f|monitor", c) or t in ("Monitor", "TaskOutput", "BashOutput"):
+        return "等待后台"
+    if re.search(r"^\s*(git|gh)\b", c):
+        return "git"
+    if re.search(r"docker|npm (i|install|ci)|pip install|uv (sync|pip)|build", c):
+        return "构建与环境"
+    return "其他命令" if t in ("Bash", "exec_command", "shell", "local_shell_call") else "其他工具"
+
+
+def trace(evs: list[dict]) -> dict:
+    """Agent 活跃时间按去向拆分（分钟）：工具调用到结果算该类工具，其余算模型推理；工具报错后的那段另计「报错重试」。"""
+    out: dict[str, float] = {}
+    for a, b in zip(evs, evs[1:]):
+        if b["kind"] != "agent":
+            continue
+        dt = min((b["ts"] - a["ts"]).total_seconds(), IDLE_CAP)
+        k = _trace_cat(a) if a.get("tool") else "模型推理"
+        out[k] = out.get(k, 0) + dt
+        if b.get("error"):
+            out["报错重试"] = out.get("报错重试", 0) + dt
+    return {k: round(v / 60, 1) for k, v in sorted(out.items(), key=lambda x: -x[1]) if v >= 6}
+
+
+def _p90(xs: list[float]) -> float:
+    xs = sorted(xs)
+    return xs[max(0, int(len(xs) * 0.9 + 0.5) - 1)] if xs else 0
+
+
 def summarize(meta: dict, events: list[dict], day: Date) -> dict | None:
     """把一个会话的事件流按某一天统计；当天没有事件返回 None。"""
     events = sorted(events, key=lambda e: e["ts"])
@@ -275,7 +360,7 @@ def summarize(meta: dict, events: list[dict], day: Date) -> dict | None:
     active = 0.0
     waits: list[float] = []
     msgs: list[dict] = []
-    prev = None
+    prev, agent_said = None, ""
     for e in day_ev:
         if prev is not None:
             dt = (e["ts"] - prev["ts"]).total_seconds()
@@ -284,15 +369,25 @@ def summarize(meta: dict, events: list[dict], day: Date) -> dict | None:
             elif e["kind"] == "human" and prev["kind"] in ("agent", "notify"):
                 e["wait"] = dt
                 waits.append(dt)
+        if e["kind"] == "agent" and e.get("text"):
+            agent_said = e["text"]
         if e["kind"] == "human":
-            msgs.append({"t": e["ts"].strftime("%H:%M"), "kind": e["cls"], "text": e.get("text", "")[:TEXT_MAX],
-                         "wait_min": round(e["wait"] / 60, 1) if "wait" in e else None})
+            m = {"t": e["ts"].strftime("%H:%M"), "kind": e["cls"], "text": e.get("text", "")[:TEXT_MAX],
+                 "wait_min": round(e["wait"] / 60, 1) if "wait" in e else None,
+                 "agent_before": agent_said.strip()[-200:]}   # 紧挨着的 Agent 上一句，AI 评分判断交互是否可避免
+            if e.get("via"):
+                m["via"] = e["via"]
+            msgs.append(m)
+            agent_said = ""
         prev = e
     kinds = {k: 0 for k in KIND_LABELS}
     for m in msgs:
         kinds[m["kind"]] += 1
     agent_ev = [e for e in day_ev if e["kind"] == "agent"]
     start, end = day_ev[0]["ts"], day_ev[-1]["ts"]
+    kept = [w for w in waits if w <= WAIT_MAX]
+    blob = "\n".join((e.get("out") or "") + "\n" + (e.get("text") or "") for e in agent_ev)
+    texts = [e["text"] for e in agent_ev if e.get("text", "").strip()]
     cwd = meta.get("cwd") or ""
     return {
         "engine": meta["engine"], "session_id": meta["session_id"], "file": meta["file"],
@@ -305,11 +400,21 @@ def summarize(meta: dict, events: list[dict], day: Date) -> dict | None:
         "auto_prompts": sum(1 for e in day_ev if e["kind"] == "auto"),
         "wait_total_min": round(sum(w for w in waits if w <= WAIT_MAX) / 60, 1),
         "wait_median_min": round(statistics.median(waits) / 60, 1) if waits else 0,
+        "wait_p90_min": round(_p90(kept) / 60, 1),
+        "waits_over_30m": sum(1 for w in kept if w > 1800),
+        "human_queued": sum(1 for m in msgs if m.get("via") == "queued"),
+        "human_answers": sum(1 for m in msgs if m.get("via") == "answer"),
+        "nudges": sum(1 for m in msgs if m.get("via") != "answer" and len(m["text"]) <= 20 and _NUDGE.search(m["text"])),
+        "leverage_min": round(active / 60 / len(msgs), 1) if msgs else None,
+        "trace_min": trace(day_ev),
         "tool_calls": sum(1 for e in agent_ev if e.get("tool")),
         "tool_errors": sum(1 for e in agent_ev if e.get("error")),
         "denials": sum(1 for e in agent_ev if e.get("denied")),
         "approval_requests": sum(1 for e in agent_ev if e.get("approval")),
         "api_errors": sum(1 for e in agent_ev if e.get("api_error")),
+        "commits": sorted({f"{m.group(2)} {m.group(3).strip()}" for m in _COMMIT.finditer(blob)})[:15],
+        "links": sorted(set(_URL.findall(blob)))[:10],
+        "final": texts[-1][-1200:] if texts else "",
         "messages": msgs,
     }
 
@@ -377,6 +482,12 @@ def aggregate(sessions: list[dict]) -> dict:
         p["human_turns"] += s["human_turns"]
         p["active_min"] = round(p["active_min"] + s["active_min"], 1)
     waits = [m["wait_min"] for s in sessions for m in s["messages"] if m["wait_min"] is not None]
+    turns_i = sum(s["human_turns"] for s in inter)
+    act_i = sum(s["active_min"] for s in inter)
+    tr: dict[str, float] = {}
+    for s in inter:
+        for k, v in (s.get("trace_min") or {}).items():
+            tr[k] = tr.get(k, 0) + v
     agg = {
         "v": VERSION, "sessions": len(sessions), "interactive": len(inter), "automated": len(sessions) - len(inter),
         "human_turns": sum(s["human_turns"] for s in sessions), "kinds": kinds,
@@ -389,6 +500,11 @@ def aggregate(sessions: list[dict]) -> dict:
         "tool_errors": sum(s["tool_errors"] for s in sessions),
         "denials": sum(s["denials"] for s in sessions),
         "approval_requests": sum(s["approval_requests"] for s in sessions),
+        "wait_p90_min": round(_p90([w for w in waits if w <= WAIT_MAX / 60]), 1),
+        "waits_over_30m": sum(s.get("waits_over_30m", 0) for s in sessions),
+        "nudges": sum(s.get("nudges", 0) for s in sessions),
+        "leverage_min": round(act_i / turns_i, 1) if turns_i else None,   # 交互会话：Agent 活跃分钟 ÷ 人工交互
+        "trace_min": {k: round(v, 1) for k, v in sorted(tr.items(), key=lambda x: -x[1])},
         "peak_parallel": _peak_parallel(inter),
         "peak_parallel_all": _peak_parallel(sessions),
         "by_project": by_project,
@@ -404,4 +520,5 @@ def headline(a: dict) -> str:
     return (f"交互会话 {a['interactive']}（另自动 {a['automated']}）· 人工介入 {a['human_turns']} 次"
             f"（纠正 {k.get('correct', 0)} / 中断 {k.get('interrupt', 0)} / 确认 {k.get('approve', 0)}）"
             f" · Agent 活跃 {a.get('active_min_interactive', a['active_min']) / 60:.1f}h（含自动 {a['active_min'] / 60:.1f}h）· 等待中位 {a['wait_median_min']} 分"
+            + (f" · 杠杆 {a['leverage_min']} 分/次" if a.get("leverage_min") is not None else "")
             + (f" · 等你 {a['wait_wall_min']} 分（墙钟）" if "wait_wall_min" in a else "") + f" · 峰值并行 {a['peak_parallel']}")

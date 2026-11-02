@@ -303,3 +303,46 @@ def test_check_auto_applies_evidence_backed_progress(client):
     assert tasks.get(a)["status"] == "done" and tasks.get(b)["status"] == "todo" and tasks.get(c)["progress"] == 80
     s = review.get_record(d)["task_suggestions"]
     assert s[0]["applied"] and s[0]["auto"] and not s[1].get("applied")
+
+
+def test_queued_and_answers_count_as_human(tmp_path):
+    proj = tmp_path / "claude" / "-w-proj"
+    proj.mkdir(parents=True)
+    f = _write(proj / "q.jsonl", [
+        _cu("09:00:00", "做个看板", origin={"kind": "human"}),
+        _ca("09:00:05", [{"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {}}]),
+        _cu("09:02:00", [{"type": "tool_result", "tool_use_id": "q1", "content": 'Your questions have been answered: "风格?"="简洁"'}]),
+        _ca("09:02:10", [{"type": "tool_use", "name": "Bash", "input": {"command": "pytest"}}]),
+        {"type": "attachment", "timestamp": _z("09:03:00"),
+         "attachment": {"type": "queued_command", "prompt": "顺便加个图例", "commandMode": "prompt"}},
+        _ca("09:05:00", [{"type": "text", "text": "好了"}]),
+    ])
+    meta, events = rs.read_claude(f)
+    s = rs.summarize(meta, events, DAY)
+    assert s["human_turns"] == 3 and s["human_queued"] == 1 and s["human_answers"] == 1
+    assert abs(s["leverage_min"] - s["active_min"] / 3) < 0.1
+
+
+def test_core_metrics_api_and_score_job(client, monkeypatch):
+    from app.modules import review
+    d = "2020-02-03"
+    sess = [{"session_id": "a", "engine": "claude", "project": "p", "title": "t", "start": f"{d}T09:00:00",
+             "end": f"{d}T10:00:00", "active_min": 60, "human_turns": 3, "automated": False, "leverage_min": 20.0,
+             "messages": [{"t": "09:00", "text": "做个看板", "kind": "new_task"}]}]
+    review._upsert_stats(d, {"summary": json.dumps({"v": rs.VERSION, "nudges": 1}), "sessions": json.dumps(sess),
+                             "scanned_at": "2020-02-04T01:00:00"})
+    r = client.get(f"/api/agents/core?date={d}").json()
+    assert r["core"]["leverage"] == 20.0 and r["core"]["result"] is None and r["unscored"] == ["a"]
+    assert [x["key"] for x in r["defs"]] == ["result", "throughput", "leverage", "avoidable_pct"]
+    got = []
+    monkeypatch.setattr(review.jobs, "submit", lambda m, p, **kw: got.append(kw["ref"]) or 4242)
+    assert client.post("/api/agents/core/score", json={"date": d}).json()["job_id"] == 4242 and got == [f"score:{d}"]
+    out = "```json\n" + json.dumps({"sessions": [{"id": "a", "tasks": [
+        {"scale": 2, "uncertainty": 2, "verify": 2, "cycle": 2, "done": 50, "quality": 30, "evidence": 20}],
+        "avoidable": {"催进度": 1}}]}, ensure_ascii=False) + "\n```"
+    review.on_job_done({"id": 4242, "ref": f"score:{d}", "status": "done", "output": out})
+    r = client.get(f"/api/agents/core?date={d}").json()
+    assert r["core"]["result"] == 100 and r["core"]["avoidable_pct"] == 33 and r["scored_at"] and not r["unscored"]
+    review.on_job_done({"id": 4243, "ref": f"score:{d}", "status": "done", "output": "坏输出"})
+    r = client.get(f"/api/agents/core?date={d}").json()
+    assert r["error"] and r["core"]["result"] == 100       # 坏输出不覆盖已有评分
