@@ -69,7 +69,8 @@ def match_feed_item(it: dict, companies: list[dict]) -> tuple[dict | None, bool]
 
 TYPES = {"launch": "新产品", "model": "新模型", "feature": "新功能", "api": "API / 开发者", "pricing": "定价",
          "packaging": "套餐 / 打包", "deprecation": "下线 / 弃用", "funding": "融资", "people": "人事",
-         "partnership": "合作", "policy": "政策 / 条款", "research": "研究", "other": "其它"}
+         "partnership": "合作", "policy": "政策 / 条款", "research": "研究", "other": "其它",
+         "revenue": "收入异动", "listing": "挂牌出售"}  # 后两种来自创业公司收入快照 / 公开报道，不走分类
 
 CLASSIFY_SYSTEM = """你在为一个 AI 产品雷达识别「产品变化事件」。输入 JSON：
 - company：公司名；

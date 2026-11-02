@@ -4,12 +4,17 @@
 → 识别（实体链接 → DeepSeek 分类 + 跨源去重 → 代码规则分级）→ 解读（后台 Claude 任务写解读卡，校验 6 节齐全）。
 名单见 _intel_watch.py，快照 / diff 见 _intel_snap.py，分类 / 分级 / 解读卡见 _intel_events.py。
 设计稿：docs/designs/2026-11-01-product-intel-design.md。
+
+P2 创业公司（kind=startup）：TrustMRR 每日收入快照 → intel_metric → 收入异动事件；16 个赛道归类；生意拆解卡；
+Product Hunt 日榜解读；新闻里的公开 ARR（reported，和 verified 分开）。纯函数见 _intel_startup.py，
+设计稿：docs/designs/2026-11-01-startup-intel-design.md。
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +27,7 @@ from pydantic import BaseModel
 from .. import db, jobs, settings
 from . import _intel_events as ev
 from . import _intel_snap as snap
+from . import _intel_startup as st
 from . import _intel_watch as watch
 
 log = logging.getLogger(__name__)
@@ -129,6 +135,36 @@ CREATE TABLE IF NOT EXISTS intel_level_log (
     old         TEXT, new TEXT, reason TEXT DEFAULT '', at TEXT
 );
 CREATE TABLE IF NOT EXISTS intel_state (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS intel_metric (      -- 只追加：每天每个指标一行
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL,
+    date        TEXT NOT NULL,
+    metric      TEXT NOT NULL,               -- mrr / revenue_30d / growth_30d / growth_mrr_30d / total_revenue / subscriptions / asking_price / on_sale / arr
+    value       REAL NOT NULL,
+    grade       TEXT DEFAULT 'verified',     -- verified：支付渠道验证（TrustMRR）；reported：公开报道 / 公司自述
+    source      TEXT DEFAULT 'trustmrr',     -- trustmrr 或报道链接
+    note        TEXT DEFAULT '',
+    created_at  TEXT,
+    UNIQUE(company_id, date, metric, source)
+);
+CREATE INDEX IF NOT EXISTS idx_intel_metric_co ON intel_metric(company_id, metric, date);
+CREATE TABLE IF NOT EXISTS intel_profile (     -- 生意拆解卡，只追加
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL,
+    content     TEXT DEFAULT '',
+    sections    TEXT DEFAULT '{}',
+    missing     TEXT DEFAULT '[]',
+    complete    INTEGER DEFAULT 0,
+    inputs_hash TEXT DEFAULT '',
+    job_id      INTEGER,
+    created_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS intel_ph_day (      -- Product Hunt 每日 AI 榜 + 解读
+    date        TEXT PRIMARY KEY,
+    items       TEXT DEFAULT '[]',           -- [{id, rank, name, title, url, votes, comments, track, why}]
+    summary     TEXT DEFAULT '',
+    created_at  TEXT
+);
 """
 
 SNAP_DIR = db.DATA_DIR / "intel" / "snapshots"
@@ -138,6 +174,11 @@ CFG_DEFAULTS = {
     "feed_lookback_days": 3,   # 首次认领信息推荐条目时往回看几天
     "cycle_minutes": 10,       # 后台多久跑一轮
     "max_age_days": 21,        # 发布日期早于这么多天的候选直接忽略（旧文被重新收录、页面重排冒出的老条目）
+    "startups": True,          # TrustMRR 每日快照 / 赛道 / 拆解卡 / PH 日榜 / 公开 ARR
+    "details_per_day": 40,     # 每天最多读几个 TrustMRR 详情页（补渠道、定价、分类）
+    "profiles_per_day": 10,    # 每天最多自动写几张生意拆解卡（手动不算）
+    "profile_days": 30,        # 同一家多少天内不重复自动写
+    "ph_top": 20,              # PH 日榜取前几名
 }
 _lock = threading.Lock()
 
@@ -169,7 +210,30 @@ COMPANY_JSON = ("aliases", "domains", "x", "github", "feed_urls")
 
 
 def _company(r: dict) -> dict:
-    return {**r, **{k: _j(r.get(k), []) for k in COMPANY_JSON}}
+    return {**r, **{k: _j(r.get(k), []) for k in (*COMPANY_JSON, "tracks")}, "ext": _j(r.get("ext"), {})}
+
+
+_migrated = False
+
+
+def _migrate() -> None:
+    """P2 加的列（老库迁移）。kind：lab 大公司 / native 明星 AI native / startup TrustMRR 等来源的创业公司。"""
+    global _migrated
+    if _migrated:
+        return
+    cols = {r["name"] for r in db.rows("PRAGMA table_info(intel_company)")}
+    for k, t in {"kind": "TEXT DEFAULT 'lab'", "track": "TEXT DEFAULT ''", "tracks": "TEXT DEFAULT '[]'",
+                 "track_manual": "INTEGER DEFAULT 0", "ai": "INTEGER DEFAULT 1",  # 1 是 AI 产品 / 0 不是（不再记指标）/ -1 待判断
+                 "watch": "INTEGER DEFAULT 0", "ext": "TEXT DEFAULT '{}'", "profile_status": "TEXT DEFAULT ''",
+                 "profile_requested_at": "TEXT"}.items():
+        if k not in cols:
+            db.execute(f"ALTER TABLE intel_company ADD COLUMN {k} {t}")
+            if k == "kind":
+                db.execute("UPDATE intel_company SET kind='native' WHERE tier>1")
+    if "ext_key" not in {r["name"] for r in db.rows("PRAGMA table_info(intel_event)")}:
+        db.execute("ALTER TABLE intel_event ADD COLUMN ext_key TEXT DEFAULT ''")  # 收入事件的去重键（里程碑 / 月度暴涨…）
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intel_company_kind ON intel_company(kind, ai)")
+    _migrated = True
 
 
 def _event(r: dict) -> dict:
@@ -180,6 +244,7 @@ def _event(r: dict) -> dict:
 
 def seed() -> int:
     """把默认名单里库中没有的公司 / 信息源补进去；已有的不动（用户可能改过）。返回新增数。"""
+    _migrate()
     n = 0
     for c in watch.COMPANIES:
         row = db.row("SELECT id FROM intel_company WHERE slug=?", [c["slug"]])
@@ -188,6 +253,7 @@ def seed() -> int:
         else:
             cid = db.insert("intel_company", {**{k: c.get(k, []) for k in COMPANY_JSON}, "slug": c["slug"], "name": c["name"],
                                               "tier": c["tier"], "category": c.get("category", ""), "created_at": db.now(),
+                                              "kind": "lab" if c["tier"] == 1 else "native",
                                               "updated_at": db.now()})
             n += 1
         for s in c.get("sources") or []:
@@ -201,7 +267,9 @@ def seed() -> int:
 
 
 def companies(enabled_only: bool = True) -> list[dict]:
-    sql = "SELECT * FROM intel_company" + (" WHERE enabled=1" if enabled_only else "") + " ORDER BY tier, id"
+    """产品名单（大公司 + AI native）；创业公司走 startups()，不参与信息推荐认领。"""
+    _migrate()
+    sql = "SELECT * FROM intel_company WHERE kind != 'startup'" + (" AND enabled=1" if enabled_only else "") + " ORDER BY tier, id"
     return [_company(r) for r in db.rows(sql)]
 
 
@@ -517,7 +585,8 @@ def queue_cards() -> int:
 
 
 def on_job_done(job: dict) -> None:
-    import re
+    if re.fullmatch(r"intel:company:\d+:profile(:\w+)?", job.get("ref") or ""):
+        return on_profile_done(job)
     m = re.fullmatch(r"intel:event:(\d+):card", job.get("ref") or "")
     if not m:
         return
@@ -529,6 +598,379 @@ def on_job_done(job: dict) -> None:
     db.insert("intel_analysis", {"event_id": eid, "kind": "card", "content": job.get("output") or "", "sections": q["sections"],
                                  "missing": q["missing"], "complete": int(q["complete"]), "job_id": job["id"], "created_at": db.now()})
     db.update("intel_event", eid, {"card_status": "done" if q["complete"] else "incomplete", "updated_at": db.now()})
+
+
+
+# ---------- P2 创业公司：TrustMRR 每日快照 → 指标 → 收入异动 ----------
+
+def _ext_patch(cid: int, patch: dict) -> dict:
+    r = db.row("SELECT ext FROM intel_company WHERE id=?", [cid]) or {}
+    ext = {**_j(r.get("ext"), {}), **patch}
+    db.update("intel_company", cid, {"ext": ext, "updated_at": db.now()})
+    return ext
+
+
+def _upsert_startup(slug: str, o: dict) -> dict:
+    """TrustMRR 对象 → intel_company（kind=startup）。slug 和产品名单撞了就加 tm- 前缀。"""
+    r = db.row("SELECT * FROM intel_company WHERE kind='startup' AND json_extract(ext, '$.trustmrr')=?", [slug])
+    if r:
+        c = _company(r)
+        if (o.get("description") and not c["ext"].get("description")) or c["name"] != o.get("name", c["name"]):
+            _ext_patch(c["id"], {"description": (o.get("description") or "")[:1200]} if o.get("description") else {})
+        return c
+    s = slug if not db.row("SELECT 1 FROM intel_company WHERE slug=?", [slug]) else f"tm-{slug}"
+    cid = db.insert("intel_company", {"slug": s, "name": (o.get("name") or slug)[:120], "tier": 3, "kind": "startup",
+                                      "ai": 1 if o.get("_ai_hint") else -1, "aliases": [], "domains": [], "x": [], "github": [],
+                                      "feed_urls": [], "ext": {"trustmrr": slug, "description": (o.get("description") or "")[:1200],
+                                                               **({"category": o["userCategory"]} if o.get("userCategory") else {})},
+                                      "created_at": db.now(), "updated_at": db.now()})
+    return _company(db.row("SELECT * FROM intel_company WHERE id=?", [cid]))
+
+
+def _write_metrics(cid: int, day: str, m: dict, grade: str = "verified", source: str = "trustmrr", note: str = "") -> int:
+    """只追加：同一天同一口径同一来源已有就跳过（不覆盖历史）。返回新写入的条数。"""
+    n = 0
+    for k, v in m.items():
+        if db.row("SELECT 1 FROM intel_metric WHERE company_id=? AND date=? AND metric=? AND source=?", [cid, day, k, source]):
+            continue
+        db.execute("INSERT OR IGNORE INTO intel_metric(company_id, date, metric, value, grade, source, note, created_at) "
+                   "VALUES(?,?,?,?,?,?,?,?)", [cid, day, k, float(v), grade, source, note, db.now()])
+        n += 1
+    return n
+
+
+def metric_series(cid: int, grade: str = "verified", since: str = "0000") -> list[dict]:
+    """按日期透视：[{date, mrr, revenue_30d, growth_30d, ...}]（只取 grade 这一种口径）。"""
+    by: dict[str, dict] = {}
+    for r in db.rows("SELECT date, metric, value FROM intel_metric WHERE company_id=? AND grade=? AND date>=? ORDER BY date",
+                     [cid, grade, since]):
+        by.setdefault(r["date"], {"date": r["date"]})[r["metric"]] = r["value"]
+    return list(by.values())
+
+
+def _prev_metrics(cid: int, day: str) -> dict | None:
+    r = db.row("SELECT max(date) AS d FROM intel_metric WHERE company_id=? AND grade='verified' AND source='trustmrr' AND date<?", [cid, day])
+    if not r or not r.get("d"):
+        return None
+    return {x["metric"]: x["value"] for x in db.rows("SELECT metric, value FROM intel_metric WHERE company_id=? AND date=? "
+                                                     "AND grade='verified' AND source='trustmrr'", [cid, r["d"]])}
+
+
+def _revenue_event(c: dict, x: dict, day: str, src: dict) -> int | None:
+    """收入 / 挂牌事件（不出五层解读卡，card_status=profile：看公司页的生意拆解卡）。同一 ext_key 只记一次。"""
+    if db.row("SELECT 1 FROM intel_event WHERE company_id=? AND ext_key=?", [c["id"], x["key"]]):
+        return None
+    return db.insert("intel_event", {"company_id": c["id"], "product": c["name"], "type": x["type"], "title": f"{c['name']}：{x['title']}"[:120],
+                                     "summary": x.get("summary", "")[:400], "date": day, "scale": "normal", "level_auto": x["level"],
+                                     "level": x["level"], "sources": [src], "card_status": "profile", "ext_key": x["key"],
+                                     "created_at": db.now(), "updated_at": db.now()})
+
+
+def startup_snapshot(force: bool = False) -> dict:
+    """每天一次：TrustMRR 首页 + AI 分类页 + 在售列表 → 指标；和上一次快照比出收入异动；再补一批详情页。"""
+    day = db.today()
+    if not force and _state("startup_day") == day:
+        return {}
+    board, errors = st.fetch_board()
+    res = {"companies": 0, "new_companies": 0, "metrics": 0, "revenue_events": 0, "details": 0, "errors": errors}
+    for slug, o in board.items():
+        before = db.row("SELECT 1 FROM intel_company WHERE kind='startup' AND json_extract(ext, '$.trustmrr')=?", [slug])
+        c = _upsert_startup(slug, o)
+        res["new_companies"] += 0 if before else 1
+        if c["ai"] == 0 or not c["enabled"]:
+            continue
+        res["companies"] += 1
+        cur = st.metrics_of(o)
+        prev = _prev_metrics(c["id"], day)
+        res["metrics"] += _write_metrics(c["id"], day, cur)
+        listed = (o.get("firstListedForSaleAt") or c["ext"].get("listed_at") or "")[:10]
+        src = {"label": "TrustMRR", "url": f"{st.TRUSTMRR}/startup/{slug}", "date": day, "official": True, "title": "支付渠道验证的收入"}
+        for x in st.detect(prev, cur, day, listed):
+            res["revenue_events"] += 1 if _revenue_event(c, x, day, src) else 0
+    if board:
+        res["details"] = fetch_details(int(cfg("details_per_day")), errors)
+        _set_state("startup_day", day)
+    res["at"] = db.now()
+    _set_state("startup_last", res)
+    return res
+
+
+def fetch_details(limit: int, errors: list[str]) -> int:
+    """AI 公司里没读过详情页（或 30 天前读的）的，按最新收入从高到低读 limit 个，补分类 / 渠道 / 定价 / 订阅数。"""
+    stale = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    rows = db.rows("SELECT c.id, c.ext, (SELECT value FROM intel_metric WHERE company_id=c.id AND metric IN ('mrr','revenue_30d') "
+                   "ORDER BY date DESC, metric LIMIT 1) AS rev FROM intel_company c WHERE c.kind='startup' AND c.ai!=0 AND c.enabled=1 "
+                   "AND json_extract(c.ext, '$.trustmrr') IS NOT NULL AND ifnull(json_extract(c.ext, '$.detail_at'), '') < ? "
+                   "ORDER BY rev DESC LIMIT ?", [stale, limit])
+
+    def one(r):
+        slug = _j(r["ext"], {})["trustmrr"]
+        try:
+            return r, st.fetch_detail(slug), None
+        except Exception as e:  # noqa: BLE001
+            return r, None, f"详情 {slug}: {type(e).__name__}: {str(e)[:80]}"
+
+    n = 0
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for r, o, err in ex.map(one, rows):
+            if err:
+                errors.append(err)
+            ext = {"detail_at": db.today()}
+            if o:
+                ext.update(st.detail_ext(o))
+                subs = st.metrics_of(o).get("subscriptions")
+                if subs:
+                    _write_metrics(r["id"], db.today(), {"subscriptions": subs})
+                n += 1
+            _ext_patch(r["id"], ext)
+    return n
+
+
+def startups(track: str = "", q: str = "", ai: bool = True, watch_only: bool = False) -> list[dict]:
+    """创业公司列表 + 最新 verified 指标 + 近 60 天 MRR 走势 + 最新 reported。"""
+    sql, args = "SELECT * FROM intel_company WHERE kind='startup' AND enabled=1", []
+    if ai:
+        sql += " AND ai=1"
+    if track:
+        sql += " AND (track=? OR EXISTS (SELECT 1 FROM json_each(intel_company.tracks) WHERE value=?))"
+        args += [track, track]
+    if q:
+        sql += " AND (name LIKE ? OR ext LIKE ?)"
+        args += [f"%{q}%"] * 2
+    if watch_only:
+        sql += " AND watch=1"
+    cos = [_company(r) for r in db.rows(sql, args)]
+    since = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+    out = []
+    for c in cos:
+        ser = metric_series(c["id"], since=since)
+        last = ser[-1] if ser else {}
+        rep = db.row("SELECT metric, value, date, source FROM intel_metric WHERE company_id=? AND grade='reported' ORDER BY date DESC LIMIT 1", [c["id"]])
+        if not last and not rep:
+            continue
+        out.append({"id": c["id"], "slug": c["slug"], "name": c["name"], "track": c["track"], "tracks": c["tracks"],
+                    "track_name": st.TRACK_NAMES.get(c["track"], ""), "watch": c["watch"], "ai": c["ai"],
+                    "description": (c["ext"].get("description") or "")[:200], "website": c["ext"].get("website", ""),
+                    "channels": c["ext"].get("channels", []), "profile_status": c["profile_status"],
+                    "date": last.get("date", ""), "mrr": last.get("mrr"), "revenue_30d": last.get("revenue_30d"),
+                    "growth_30d": last.get("growth_30d"), "on_sale": last.get("on_sale"), "asking_price": last.get("asking_price"),
+                    "subscriptions": last.get("subscriptions"), "reported": rep,
+                    "spark": [x.get("mrr") or x.get("revenue_30d") for x in ser if x.get("mrr") or x.get("revenue_30d")]})
+    return out
+
+
+def _rev(x: dict) -> float:
+    return x.get("mrr") or x.get("revenue_30d") or 0
+
+
+# ---------- P2b 赛道 ----------
+
+def classify_startup_tracks(limit: int = 150) -> dict:
+    """没归过赛道（也没人手改过）的创业公司交给 DeepSeek：是不是 AI 产品 + 主赛道 + 次赛道。"""
+    rows = [_company(r) for r in db.rows("SELECT * FROM intel_company WHERE kind='startup' AND enabled=1 AND track='' AND track_manual=0 "
+                                         "ORDER BY id LIMIT ?", [limit])]
+    if not rows or not os.environ.get("DEEPSEEK_API_KEY") and snap.llm_json is snap._deepseek:
+        return {"tracked": 0, "track_errors": []}
+    items = [{"id": str(c["id"]), "name": c["name"], "description": (c["ext"].get("description") or "")[:400],
+              "category": c["ext"].get("category", "")} for c in rows]
+    got, errors = st.classify_tracks(items)
+    for cid, x in got.items():
+        db.update("intel_company", int(cid), {"track": x["track"] or "vertical", "tracks": x["tracks"], "ai": 1 if x["ai"] else 0,
+                                              "updated_at": db.now()})
+    return {"tracked": len(got), "track_errors": errors}
+
+
+def track_summary() -> list[dict]:
+    cos = startups()
+    since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    evn = {r["track"]: r["n"] for r in db.rows(
+        "SELECT c.track, count(*) AS n FROM intel_event e JOIN intel_company c ON c.id=e.company_id "
+        "WHERE c.kind='startup' AND e.date>=? AND e.merged_into IS NULL GROUP BY c.track", [since])}
+    out = []
+    for slug, name, scope in st.TRACKS:
+        cs = sorted([c for c in cos if c["track"] == slug], key=_rev, reverse=True)
+        gs = sorted(c["growth_30d"] for c in cs if c.get("growth_30d") is not None)
+        out.append({"slug": slug, "name": name, "scope": scope, "companies": len(cs), "total_rev": sum(_rev(c) for c in cs),
+                    "median_growth": gs[len(gs) // 2] if gs else None, "growing": sum(1 for g in gs if g > 0),
+                    "on_sale": sum(1 for c in cs if c.get("on_sale") == 1), "events_30d": evn.get(slug, 0),
+                    "top": [{"slug": c["slug"], "name": c["name"], "rev": _rev(c)} for c in cs[:3]]})
+    return out
+
+
+# ---------- P2c 生意拆解卡 ----------
+
+def _profiles_today() -> int:
+    return (db.row("SELECT count(*) AS n FROM intel_company WHERE profile_requested_at >= ?", [db.today()]) or {}).get("n", 0)
+
+
+def _profile_inputs(c: dict) -> tuple[list[dict], list[dict], list[dict], str]:
+    metrics = metric_series(c["id"])
+    reported = db.rows("SELECT date, metric, value, source FROM intel_metric WHERE company_id=? AND grade='reported' ORDER BY date", [c["id"]])
+    events = db.rows("SELECT date, level, title FROM intel_event WHERE company_id=? AND merged_into IS NULL ORDER BY date DESC LIMIT 10", [c["id"]])
+    return metrics, reported, events, c["ext"].get("notes") or ""
+
+
+def request_profile(cid: int) -> int:
+    r = db.row("SELECT * FROM intel_company WHERE id=?", [cid])
+    if not r:
+        raise HTTPException(404, "公司不存在")
+    c = _company(r)
+    metrics, reported, events, notes = _profile_inputs(c)
+    h = st.profile_inputs_hash(c, metrics, notes)
+    jid = jobs.submit("intel", st.profile_prompt(c, metrics, reported, events, notes), ref=f"intel:company:{cid}:profile:{h}", tier="standard")
+    db.update("intel_company", cid, {"profile_status": "queued", "profile_requested_at": db.now()})
+    return jid
+
+
+def profile_queue() -> list[tuple[int, str]]:
+    """自动写拆解卡的候选（按优先级）：手动关注 → 近 30 天 B+ 收入事件 → 30 天增长 ≥100% 且收入 ≥$1k → 近 30 天挂牌且 ≥$5k → 各赛道收入前 10。"""
+    cos = startups()
+    since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    hot = {r["company_id"] for r in db.rows("SELECT DISTINCT company_id FROM intel_event WHERE type IN ('revenue','listing') "
+                                            "AND level IN ('S','A','B') AND date>=?", [since])}
+    top = set()
+    for slug, _, _ in st.TRACKS:
+        top |= {c["id"] for c in sorted([c for c in cos if c["track"] == slug], key=_rev, reverse=True)[:10]}
+    out = []
+    for c in cos:
+        ext = _j((db.row("SELECT ext FROM intel_company WHERE id=?", [c["id"]]) or {}).get("ext"), {})
+        why = ("关注" if c["watch"] else "收入异动" if c["id"] in hot
+               else "高增长" if (c.get("growth_30d") or 0) >= 100 and _rev(c) >= 1000
+               else "新挂牌" if c.get("on_sale") == 1 and (ext.get("listed_at") or "") >= since and _rev(c) >= 5000
+               else "赛道前 10" if c["id"] in top else "")
+        if why:
+            out.append((["关注", "收入异动", "高增长", "新挂牌", "赛道前 10"].index(why), -_rev(c), c["id"], why))
+    return [(cid, why) for _, _, cid, why in sorted(out)]
+
+
+def queue_profiles() -> int:
+    left = int(cfg("profiles_per_day")) - _profiles_today()
+    if left <= 0:
+        return 0
+    recent = (datetime.now() - timedelta(days=float(cfg("profile_days")))).strftime("%Y-%m-%d")
+    n = 0
+    for cid, _why in profile_queue():
+        if n >= left:
+            break
+        c = db.row("SELECT profile_status, profile_requested_at FROM intel_company WHERE id=?", [cid]) or {}
+        if c.get("profile_status") == "queued" or (c.get("profile_requested_at") or "") >= recent:
+            continue
+        request_profile(cid)
+        n += 1
+    return n
+
+
+def on_profile_done(job: dict) -> None:
+    m = re.fullmatch(r"intel:company:(\d+):profile(?::(\w+))?", job.get("ref") or "")
+    cid = int(m[1])
+    if job.get("status") != "done":
+        db.update("intel_company", cid, {"profile_status": "failed"})
+        return
+    q = st.profile_quality(job.get("output") or "")
+    db.insert("intel_profile", {"company_id": cid, "content": job.get("output") or "", "sections": q["sections"], "missing": q["missing"],
+                                "complete": int(q["complete"]), "inputs_hash": m[2] or "", "job_id": job["id"], "created_at": db.now()})
+    db.update("intel_company", cid, {"profile_status": "done" if q["complete"] else "incomplete", "updated_at": db.now()})
+
+
+# ---------- P2d Product Hunt 日榜解读 + 公开 ARR ----------
+
+def ph_daily(max_days: int = 3) -> int:
+    """信息推荐里收到的 Product Hunt 条目（AI 相关）按发布日分组；已过完的日子各取票数前 N，交给 DeepSeek 归赛道 + 写解读。"""
+    if not ev_has_table("feed_items"):
+        return 0
+    since = (datetime.now() - timedelta(days=max_days + 1)).strftime("%Y-%m-%d")
+    done = {r["date"] for r in db.rows("SELECT date FROM intel_ph_day WHERE date>=?", [since])}
+    rows = db.rows("SELECT * FROM feed_items WHERE source='producthunt' AND substr(date,1,10)>=? AND substr(date,1,10)<? "
+                   "ORDER BY popularity DESC", [since, db.today()])
+    by: dict[str, list] = {}
+    for r in rows:
+        by.setdefault(r["date"][:10], []).append({**r, "extra": _j(r.get("extra"), {})})
+    n = 0
+    for day, items in sorted(by.items(), reverse=True):
+        if day in done or len(items) < 3:
+            continue
+        items = items[:int(cfg("ph_top"))]
+        try:
+            res = snap.llm_json(st.PH_SYSTEM, st.ph_payload(day, items), max_tokens=4000)
+        except Exception as e:  # noqa: BLE001
+            log.warning("PH 日榜解读失败 %s: %s", day, e)
+            continue
+        info = {str(x.get("id")): x for x in res.get("items") or [] if isinstance(x, dict)}
+        out = [{"id": it["id"], "rank": i + 1, "name": it["title"].split("：")[0], "title": it["title"], "url": it["url"],
+                "website": it["extra"].get("website", ""), "votes": int(it.get("popularity") or 0),
+                "comments": it["extra"].get("comments", 0), "topics": it["extra"].get("topics", []),
+                "track": info.get(it["id"], {}).get("track") if info.get(it["id"], {}).get("track") in st.TRACK_NAMES else "",
+                "why": (info.get(it["id"], {}).get("why") or "")[:120]} for i, it in enumerate(items)]
+        db.execute("INSERT OR REPLACE INTO intel_ph_day(date, items, summary, created_at) VALUES(?,?,?,?)",
+                   [day, ev.dumps(out), str(res.get("summary") or "")[:4000], db.now()])
+        n += 1
+    return n
+
+
+def _find_company(name: str) -> dict | None:
+    k = name.strip().lower()
+    for r in db.rows("SELECT * FROM intel_company"):
+        c = _company(r)
+        if k in {c["name"].lower(), c["slug"], *[a.lower() for a in c["aliases"]]}:
+            return c
+    return None
+
+
+def scan_reported_arr(limit: int = 80) -> dict:
+    """信息推荐新收的条目里提到 ARR / MRR 的 → DeepSeek 抽「公司 + 数字」（数字必须在原文里）→ reported 指标 + 事件。"""
+    if not ev_has_table("feed_items"):
+        return {"reported": 0}
+    cursor = _state("arr_cursor") or (datetime.now() - timedelta(days=3)).isoformat(timespec="seconds")
+    rows = db.rows("SELECT * FROM feed_items WHERE fetched_at > ? AND source NOT IN ('trustmrr','arxiv','hf','github','analysis') "
+                   "ORDER BY fetched_at LIMIT 2000", [cursor])
+    if not rows:
+        return {"reported": 0}
+    items = [{"id": r["id"], "title": r["title"], "text": r.get("summary") or "", "url": r.get("url") or "",
+              "date": (r.get("date") or r["fetched_at"] or "")[:10], "source": r["source"]}
+             for r in rows if st.ARR_HINT.search(f"{r['title']} {r.get('summary') or ''}")][:limit]
+    found, errors = st.extract_arr(items) if items else ([], [])
+    by = {it["id"]: it for it in items}
+    n = 0
+    for x in found:
+        it = by[x["item_id"]]
+        c = _find_company(x["company"])
+        if not c:
+            slug = re.sub(r"[^a-z0-9]+", "-", x["company"].lower()).strip("-") or f"co-{int(time.time())}"
+            if db.row("SELECT 1 FROM intel_company WHERE slug=?", [slug]):
+                slug = f"rp-{slug}"
+            cid = db.insert("intel_company", {"slug": slug, "name": x["company"], "tier": 3, "kind": "startup", "ai": -1,
+                                              "aliases": [x["company"]], "domains": [], "x": [], "github": [], "feed_urls": [],
+                                              "ext": {"reported_only": True}, "created_at": db.now(), "updated_at": db.now()})
+            c = _company(db.row("SELECT * FROM intel_company WHERE id=?", [cid]))
+        if not _write_metrics(c["id"], it["date"], {x["metric"]: x["value"]}, grade="reported", source=it["url"] or it["id"],
+                              note=x["quote"]):
+            continue
+        n += 1
+        same = db.row("SELECT 1 FROM intel_event WHERE company_id=? AND ext_key LIKE ?", [c["id"], f"reported:{x['metric']}:{round(x['value'] / 1e6, 1)}%"])
+        if same:
+            continue
+        level = "A" if c["kind"] != "startup" or x["value"] >= 1e8 else "B" if x["value"] >= 1e6 else "C"
+        db.insert("intel_event", {"company_id": c["id"], "product": c["name"], "type": "revenue",
+                                  "title": f"{c['name']}：公开 {x['metric'].upper()} {st.usd(x['value'])}（reported）"[:120],
+                                  "summary": x["quote"][:400], "date": it["date"], "scale": "normal", "level_auto": level, "level": level,
+                                  "sources": [{"label": it["source"], "url": it["url"], "date": it["date"], "official": False, "title": it["title"][:160]}],
+                                  "card_status": "profile", "ext_key": f"reported:{x['metric']}:{round(x['value'] / 1e6, 1)}",
+                                  "created_at": db.now(), "updated_at": db.now()})
+    if not errors:
+        _set_state("arr_cursor", rows[-1]["fetched_at"])
+    return {"reported": n, "arr_errors": errors}
+
+
+def startup_cycle(force: bool = False, cards: bool = True) -> dict:
+    res = {}
+    for name, fn in (("snapshot", lambda: startup_snapshot(force)), ("tracks", classify_startup_tracks), ("ph", ph_daily),
+                     ("arr", scan_reported_arr), ("profiles", lambda: queue_profiles() if cards else 0)):
+        try:
+            res[name] = fn()
+        except Exception as e:  # noqa: BLE001
+            log.exception("intel startup %s failed", name)
+            res[name] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+    return res
 
 
 # ---------- 调度 ----------
@@ -547,6 +989,8 @@ def run_cycle(force_fetch: bool = False, cards: bool = True) -> dict:
                "snapshot_candidates": sum(f.get("candidates", 0) for f in fetched), "feed_candidates": scan_feed()}
         res.update(classify_pending())
         res["cards"] = queue_cards() if cards else 0
+        if cfg("startups"):
+            res["startups"] = startup_cycle(force=force_fetch, cards=cards)
         res["at"], res["seconds"] = db.now(), round(time.time() - t0, 1)
         _set_state("last_run", res)
         return res
@@ -600,7 +1044,7 @@ def _with_card(e: dict, full: bool = False) -> dict:
 
 
 @router.get("/events")
-def list_events(level: str = "", company: str = "", days: float = 30, q: str = "", limit: int = 100):
+def list_events(level: str = "", company: str = "", days: float = 30, q: str = "", limit: int = 100, type: str = "", kind: str = ""):
     sql = ("SELECT e.*, c.name AS company_name, c.slug AS company_slug, c.tier AS company_tier FROM intel_event e "
            "JOIN intel_company c ON c.id=e.company_id WHERE e.date >= ? AND e.merged_into IS NULL")
     args: list = [(datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d") if days else "0000"]
@@ -611,6 +1055,14 @@ def list_events(level: str = "", company: str = "", days: float = 30, q: str = "
     if company:
         sql += " AND c.slug=?"
         args.append(company)
+    if type == "revenue":  # 「收入」筛选：TrustMRR 异动 + 挂牌 + 公开 ARR
+        sql += " AND e.type IN ('revenue','listing')"
+    elif type:
+        sql += " AND e.type=?"
+        args.append(type)
+    if kind:
+        sql += " AND c.kind=?"
+        args.append(kind)
     if q:
         sql += " AND (e.title LIKE ? OR e.summary LIKE ? OR e.product LIKE ?)"
         args += [f"%{q}%"] * 3
@@ -676,6 +1128,15 @@ def get_company(slug: str):
     c = _company(r)
     c["events"] = [_with_card(e) for e in db.rows("SELECT * FROM intel_event WHERE company_id=? AND merged_into IS NULL ORDER BY date DESC, id DESC LIMIT 200", [c["id"]])]
     c["sources"] = db.rows("SELECT * FROM intel_source WHERE company_id=? ORDER BY id", [c["id"]])
+    since = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    c["metrics"] = metric_series(c["id"], since=since)
+    c["reported"] = db.rows("SELECT date, metric, value, source, note FROM intel_metric WHERE company_id=? AND grade='reported' ORDER BY date", [c["id"]])
+    c["track_name"] = st.TRACK_NAMES.get(c["track"], "")
+    c["track_options"] = [{"slug": s, "name": n} for s, n, _ in st.TRACKS]
+    p = db.row("SELECT * FROM intel_profile WHERE company_id=? ORDER BY id DESC LIMIT 1", [c["id"]])
+    c["profile"] = {"id": p["id"], "content": p["content"], "complete": bool(p["complete"]), "missing": _j(p["missing"], []),
+                    "created_at": p["created_at"]} if p else None
+    c["profile_versions"] = (db.row("SELECT count(*) AS n FROM intel_profile WHERE company_id=?", [c["id"]]) or {}).get("n", 0)
     c["experiences"] = []  # D1：调研板块里记过的一手产品体验
     if ev_has_table("products"):
         for a in [c["name"], *c["aliases"]][:12]:
@@ -709,7 +1170,13 @@ def add_company(body: CompanyIn):
 
 @router.patch("/companies/{cid}")
 def patch_company(cid: int, body: dict):
-    allowed = {k: v for k, v in body.items() if k in ("name", "tier", "category", "enabled", "note", *COMPANY_JSON)}
+    allowed = {k: v for k, v in body.items() if k in ("name", "tier", "category", "enabled", "note", "watch", "ai", "tracks", *COMPANY_JSON)}
+    if "track" in body:  # 人工改赛道：以后不再被模型覆盖
+        if body["track"] and body["track"] not in st.TRACK_NAMES:
+            raise HTTPException(400, f"赛道只能是 {', '.join(st.TRACK_NAMES)}")
+        allowed.update(track=body["track"], track_manual=1)
+    if isinstance(body.get("ext"), dict):  # BizPeel 链接、手动粘贴的资料等：合并，不覆盖其它字段
+        _ext_patch(cid, {k: v for k, v in body["ext"].items() if k in ("bizpeel_url", "notes", "website", "x")})
     db.update("intel_company", cid, {**allowed, "updated_at": db.now()})
     return _company(db.row("SELECT * FROM intel_company WHERE id=?", [cid]) or {})
 
@@ -720,6 +1187,68 @@ class SourceIn(BaseModel):
     url: str
     label: str = ""
     product: str = ""
+
+
+@router.post("/companies/{cid}/profile")
+def regen_profile(cid: int):
+    return {"job_id": request_profile(cid)}
+
+
+@router.get("/startups")
+def list_startups(track: str = "", q: str = "", sort: str = "rev", watch: int = 0, all: int = 0, limit: int = 300):
+    rows = startups(track=track, q=q, ai=not all, watch_only=bool(watch))
+    key = {"growth": lambda c: c.get("growth_30d") if c.get("growth_30d") is not None else -1e9,
+           "reported": lambda c: (c.get("reported") or {}).get("value") or 0}.get(sort, _rev)
+    rows.sort(key=key, reverse=True)
+    last = _state("startup_last") or {}
+    return {"startups": rows[:limit], "total": len(rows), "tracks": [{"slug": s, "name": n} for s, n, _ in st.TRACKS],
+            "last": last, "pending_tracks": (db.row("SELECT count(*) AS n FROM intel_company WHERE kind='startup' AND enabled=1 "
+                                                    "AND track='' AND track_manual=0") or {}).get("n", 0),
+            "profiles_today": _profiles_today(), "profiles_per_day": cfg("profiles_per_day")}
+
+
+@router.get("/tracks")
+def list_tracks():
+    return track_summary()
+
+
+@router.get("/tracks/{slug}")
+def get_track(slug: str):
+    if slug not in st.TRACK_NAMES:
+        raise HTTPException(404, "没有这个赛道")
+    t = next(x for x in track_summary() if x["slug"] == slug)
+    t["startups"] = sorted(startups(track=slug), key=_rev, reverse=True)
+    t["events"] = list_events(company="", days=60, limit=100, type="revenue", kind="startup")["events"]
+    ids = {c["id"] for c in t["startups"]}
+    t["events"] = [e for e in t["events"] if e["company_id"] in ids]
+    t["ph"] = [{**it, "date": d["date"], "track_name": t["name"]} for d in db.rows("SELECT * FROM intel_ph_day ORDER BY date DESC LIMIT 14")
+               for it in _j(d["items"], []) if it.get("track") == slug]
+    return t
+
+
+@router.get("/ph")
+def list_ph(days: int = 7):
+    return [{**d, "items": [{**it, "track_name": st.TRACK_NAMES.get(it.get("track") or "", "")} for it in _j(d["items"], [])]}
+            for d in db.rows("SELECT * FROM intel_ph_day ORDER BY date DESC LIMIT ?", [days])]
+
+
+_st_lock = threading.Lock()
+
+
+@router.post("/startups/run")
+def run_startups(body: dict | None = None):
+    """后台跑一遍创业公司链路（快照 / 赛道 / PH / 公开 ARR / 拆解卡排队）；结果看 /status 的 startup_last。"""
+    body = body or {}
+    if not _st_lock.acquire(blocking=False):
+        return {"started": False}
+
+    def go():
+        try:
+            _set_state("startup_cycle", startup_cycle(force=bool(body.get("force_fetch")), cards=body.get("cards", True)))
+        finally:
+            _st_lock.release()
+    threading.Thread(target=go, daemon=True, name="intel-startups").start()
+    return {"started": True}
 
 
 @router.get("/sources")
@@ -774,10 +1303,12 @@ def status():
     bad = db.rows("SELECT s.id, s.label, s.url, s.last_err, c.name AS company_name FROM intel_source s JOIN intel_company c ON c.id=s.company_id "
                   "WHERE s.enabled=1 AND s.last_err != ''")
     return {"running": _lock.locked(), "last_run": _state("last_run"), "pending_candidates": pend.get("n", 0),
-            "companies": (db.row("SELECT count(*) AS n FROM intel_company WHERE enabled=1") or {}).get("n", 0),
+            "companies": (db.row("SELECT count(*) AS n FROM intel_company WHERE enabled=1 AND kind!='startup'") or {}).get("n", 0),
             "sources": (db.row("SELECT count(*) AS n FROM intel_source WHERE enabled=1") or {}).get("n", 0),
             "events": (db.row("SELECT count(*) AS n FROM intel_event WHERE merged_into IS NULL") or {}).get("n", 0),
             "cards_today": _cards_today(), "cards_per_day": cfg("cards_per_day"), "failing_sources": bad,
+            "startups": (db.row("SELECT count(*) AS n FROM intel_company WHERE kind='startup' AND enabled=1 AND ai=1") or {}).get("n", 0),
+            "startup_last": _state("startup_last"), "profiles_today": _profiles_today(), "profiles_per_day": cfg("profiles_per_day"),
             "deepseek": bool(os.environ.get("DEEPSEEK_API_KEY"))}
 
 
