@@ -10,9 +10,12 @@
     learn:step:<id>:chapter  把计划的一步写成章节教程 + 章末测试（:prefetch = 用户读上一章时后台预生成）
     learn:step:<id>:grade    批改章末测试的简答题
     learn:step:<id>:check:<n> 点评第 n 个「停一下」：用户的判断和要点差在哪
+    learn:book:<id>:toc      深度读书：PDF 目录页解析不出来时，让轻量模型从前 25 页抄出目录
+    learn:book:<id>:overview 全书导读（精髓、作者与时代背景、结构、主线、读法，轻量模型）
+    learn:book:<id>:ch:<n>   第 n 篇的导读（来龙去脉、精髓、分节导读；打开时生成，并预生成下一篇）
 按需加一节：用户在某一章说「对 X 感兴趣 / X 没懂」→ 在这一章后面插一步（origin=interest|confused，parent_id 指向原章），
     立即按 learn:step:<新id>:chapter 生成一节短讲解 + 2–3 题小测试，之后和普通章节一样学、测、计入进度。
-对话 ref：learn:item:<id> / learn:plan:<id> / learn:step:<id>（读某一章时）/ 空（总览）。
+对话 ref：learn:item:<id> / learn:plan:<id> / learn:step:<id>（读某一章时）/ learn:book:<id>[:ch:<n>] / 空（总览）。
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ import logging
 import re
 import subprocess
 import sys
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -30,6 +34,7 @@ from pydantic import BaseModel
 
 from .. import agent, db, jobs, settings, tasks
 from ..db import ROOT
+from . import _book as bookparse
 from . import _deepdive
 from . import _reads
 from . import _video
@@ -114,6 +119,42 @@ CREATE TABLE IF NOT EXISTS learn_events (
     created_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_learn_events_step ON learn_events(step_id);
+CREATE TABLE IF NOT EXISTS learn_books (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    url             TEXT NOT NULL,             -- PDF / txt 的链接或本机路径
+    title           TEXT DEFAULT '',
+    author          TEXT DEFAULT '',
+    status          TEXT DEFAULT 'ingesting',  -- ingesting 解析中 / toc 让模型抄目录 / ready / failed
+    method          TEXT DEFAULT '',           -- 怎么拆的章：outline / toc / toc_llm / headings / fixed
+    pages           INTEGER DEFAULT 0,
+    error           TEXT DEFAULT '',
+    overview        TEXT DEFAULT '',           -- 全书导读 JSON
+    overview_status TEXT DEFAULT '',           -- generating / ready / failed
+    overview_job    INTEGER,
+    cur_idx         INTEGER DEFAULT 0,         -- 读到哪一篇
+    created_at      TEXT,
+    updated_at      TEXT
+);
+CREATE TABLE IF NOT EXISTS learn_book_chapters (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id     INTEGER NOT NULL,
+    idx         INTEGER NOT NULL,              -- 在书里的顺序（0 起）
+    title       TEXT DEFAULT '',
+    part        TEXT DEFAULT '',               -- 所属「部」
+    kind        TEXT DEFAULT 'chapter',        -- chapter / section（对话、插曲、小节）/ front（前言导论）/ matter（目录索引等，不写导读）
+    level       INTEGER DEFAULT 0,
+    page_start  INTEGER DEFAULT 0,             -- PDF 页（0 起，含）
+    page_end    INTEGER DEFAULT 0,
+    tokens      INTEGER DEFAULT 0,             -- 正文估算 token
+    split       INTEGER DEFAULT 0,             -- 长章节拆出的一段
+    status      TEXT DEFAULT '',               -- 导读：generating / ready / failed
+    job_id      INTEGER,
+    guide       TEXT DEFAULT '',               -- 章节导读 JSON
+    read_at     TEXT DEFAULT '',
+    created_at  TEXT,
+    updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_learn_book_ch ON learn_book_chapters(book_id, idx);
 """
 
 # 三轮由浅入深（新计划默认）：先拿到最新全貌和主干，再学会判断，最后跟前沿、用项目和产品实践检验；每轮结束都可以停
@@ -2484,6 +2525,301 @@ def reset_quiz(sid: int):
     return public_step(_step(sid))
 
 
+# ---------- D. 深度读书：一本书 → 分章 → 全书导读 + 逐章导读（轻量模型，按需生成） ----------
+
+HAIKU_PRICE = (0.10, 0.50)  # 轻量档每百万 token 美元（输入, 输出），只用来给页面一个费用估算
+GUIDE_OUT_TOKENS, CALL_OVERHEAD = 3500, 6000  # 每次调用大致的输出量、书的地图 + 前情 + 说明的输入量
+
+
+def _book_dir(bid: int) -> Path:
+    return _out_root() / "books" / str(bid)
+
+
+def _book(bid: int) -> dict:
+    b = db.row("SELECT * FROM learn_books WHERE id=?", [bid])
+    if not b:
+        raise HTTPException(404, "书不存在")
+    b["overview"] = _loads(b["overview"], {})
+    return b
+
+
+def _chapters(bid: int) -> list[dict]:
+    rows = db.rows("SELECT * FROM learn_book_chapters WHERE book_id=? ORDER BY idx", [bid])
+    for r in rows:
+        r["guide"] = _loads(r["guide"], {})
+    return rows
+
+
+def _chapter(bid: int, idx: int) -> dict:
+    c = db.row("SELECT * FROM learn_book_chapters WHERE book_id=? AND idx=?", [bid, idx])
+    if not c:
+        raise HTTPException(404, "没有这一篇")
+    c["guide"] = _loads(c["guide"], {})
+    return c
+
+
+def _book_pages(bid: int) -> list[str]:
+    p = _book_dir(bid) / "pages.json"
+    return _loads(p.read_text("utf-8"), []) if p.is_file() else []
+
+
+def _ch_text(bid: int, c: dict) -> str:
+    p = _book_dir(bid) / "ch" / f"{c['idx']}.txt"
+    return p.read_text("utf-8", errors="replace") if p.is_file() else ""
+
+
+def _cost(tokens_in: int, tokens_out: int) -> float:
+    return round((tokens_in * HAIKU_PRICE[0] + tokens_out * HAIKU_PRICE[1]) / 1e6, 4)
+
+
+def _book_summary(b: dict, chs: list[dict]) -> dict:
+    readable = [c for c in chs if c["kind"] != "matter"]
+    ready = [c for c in readable if c["status"] == "ready"]
+    tin = sum(c["tokens"] + CALL_OVERHEAD for c in readable)
+    return {**b, "chapters_total": len(readable), "chapters_ready": len(ready),
+            "chapters_read": sum(1 for c in readable if c["read_at"]),
+            "est_cost": _cost(tin, GUIDE_OUT_TOKENS * len(readable)), "est_tokens": tin}
+
+
+def _save_chapters(bid: int, pages: list[str], chs: list[dict]) -> None:
+    """（重新）写章节表和每章正文文件。只在书刚解析完时调用（解析中 / 识别目录中页面不让打开章节，还没有导读和阅读记录）。"""
+    d = _book_dir(bid) / "ch"
+    d.mkdir(parents=True, exist_ok=True)
+    db.execute("DELETE FROM learn_book_chapters WHERE book_id=?", [bid])
+    for i, c in enumerate(chs):
+        text = "\n".join(pages[c["page_start"]:c["page_end"] + 1])
+        (d / f"{i}.txt").write_text(text, "utf-8")
+        db.insert("learn_book_chapters", {"book_id": bid, "idx": i, "title": c["title"], "part": c.get("part", ""), "kind": c["kind"],
+                                          "level": c.get("level", 0), "page_start": c["page_start"], "page_end": c["page_end"],
+                                          "tokens": bookparse.est_tokens(text), "split": int(bool(c.get("split"))),
+                                          "created_at": db.now(), "updated_at": db.now()})
+
+
+def _ingest_book(bid: int) -> None:
+    b = _book(bid)
+    out = _book_dir(bid)
+    try:
+        src = bookparse.fetch(b["url"], out)
+        r = bookparse.detect(src)
+        if not r["pages"] or sum(len(p) for p in r["pages"]) < 2000:
+            raise ValueError("取不到文字（可能是扫描版 PDF，需要先 OCR）")
+        bookparse.save_json(out / "pages.json", r["pages"])
+        title = b["title"] or r["title"] or Path(b["url"]).stem
+        db.update("learn_books", bid, {"title": title, "author": b["author"] or r["author"], "pages": len(r["pages"]),
+                                       "method": r["method"], "updated_at": db.now()})
+        _save_chapters(bid, r["pages"], r["chapters"])
+        if r["method"] == "fixed" and src.suffix == ".pdf":  # 有目录但解析不出来：让模型抄目录，回来再定位
+            jid = jobs.submit("learn", bookparse.toc_prompt(title, bookparse.first_text_pages(r["pages"])),
+                              ref=f"learn:book:{bid}:toc", tier=_tier("book") or "light")
+            db.update("learn_books", bid, {"status": "toc", "overview_job": jid, "updated_at": db.now()})
+            return
+        db.update("learn_books", bid, {"status": "ready", "updated_at": db.now()})
+        start_book_overview(bid)
+    except Exception as e:  # noqa: BLE001 —— 下载 / 解析失败都记在书上，页面可重试
+        log.exception("book %s ingest failed", bid)
+        db.update("learn_books", bid, {"status": "failed", "error": str(e)[:500], "updated_at": db.now()})
+
+
+def _book_map(b: dict, chs: list[dict], upto: int | None = None) -> str:
+    ov = b["overview"] or {}
+    notes = {int(x.get("idx", -1)): x.get("one_line", "") for x in ov.get("chapters") or [] if isinstance(x, dict)}
+    lines = [f"书名：{b['title']}；作者：{b['author'] or ov.get('author', '')}",
+             f"核心主张：{ov.get('one_line', '（全书导读还没生成）')}", f"结构：{ov.get('structure', '')}", "目录："]
+    for c in chs:
+        if c["kind"] == "matter":
+            continue
+        mark = " ← 本篇" if c["idx"] == upto else ""
+        note = (c["guide"] or {}).get("one_line") or notes.get(c["idx"], "")
+        lines.append(f"- {c['idx']}. [{c['kind']}] {c['title']}" + (f" —— {note}" if note else "") + mark)
+    return "\n".join(lines)
+
+
+def start_book_overview(bid: int) -> int:
+    b, chs = _book(bid), _chapters(bid)
+    toc = "\n".join(f"{c['idx']} · {c['kind']} · {c['part'] + ' / ' if c['part'] else ''}{c['title']} · p{c['page_start'] + 1}" for c in chs)
+    front, budget = [], 40_000
+    for c in chs:
+        if c["kind"] == "front" and budget > 0:
+            t = _ch_text(bid, c)[:budget]
+            front.append(f"### {c['title']}\n{t}")
+            budget -= len(t)
+    openings = "\n\n".join(f"### {c['idx']}. {c['title']}\n{_ch_text(bid, c)[:900].strip()}"
+                           for c in chs if c["kind"] not in ("matter", "front"))
+    jid = jobs.submit("learn", bookparse.overview_prompt(b, toc, "\n\n".join(front), openings[:120_000]),
+                      ref=f"learn:book:{bid}:overview", tier=_tier("book") or "light")
+    db.update("learn_books", bid, {"overview_status": "generating", "overview_job": jid, "updated_at": db.now()})
+    return jid
+
+
+def start_book_chapter(bid: int, idx: int) -> int | None:
+    b, chs = _book(bid), _chapters(bid)
+    c = next((x for x in chs if x["idx"] == idx), None)
+    if not c or c["kind"] == "matter" or c["status"] in ("generating", "ready"):
+        return None
+    prior = [x for x in chs if x["idx"] < idx and x["kind"] != "matter"]
+    lines = []
+    for x in prior[:-3]:  # 远的只留一句，近的三篇给完整摘要
+        if (x["guide"] or {}).get("one_line"):
+            lines.append(f"- {x['idx']}. {x['title']}：{x['guide']['one_line']}")
+    for x in prior[-3:]:
+        g = x["guide"] or {}
+        if g:
+            lines.append(f"- {x['idx']}. {x['title']}：{g.get('summary_for_next') or g.get('one_line', '')}")
+    jid = jobs.submit("learn", bookparse.chapter_prompt(b, c, _book_map(b, chs, idx), "\n".join(lines), _ch_text(bid, c)),
+                      ref=f"learn:book:{bid}:ch:{idx}", tier=_tier("book") or "light")
+    db.execute("UPDATE learn_book_chapters SET status='generating', job_id=?, updated_at=? WHERE book_id=? AND idx=?",
+               [jid, db.now(), bid, idx])
+    return jid
+
+
+def _next_readable(chs: list[dict], idx: int) -> dict | None:
+    return next((x for x in chs if x["idx"] > idx and x["kind"] != "matter"), None)
+
+
+def _finish_book(bid: int, what: str, job: dict) -> None:
+    b = db.row("SELECT * FROM learn_books WHERE id=?", [bid])
+    if not b:
+        return
+    ok = job.get("status") == "done"
+    if what == "toc":
+        got = (extract_json(job.get("output") or "", "toc") or {}) if ok else {}
+        pages = _book_pages(bid)
+        ents = []
+        for e in got.get("toc") or []:
+            pg = e.get("page")
+            if not e.get("title") or pg in (None, ""):
+                continue
+            is_roman = isinstance(pg, str) and bool(bookparse.ROMAN.match(pg.strip()))
+            try:
+                num = bookparse.roman(pg.strip()) if is_roman else int(pg)
+            except (TypeError, ValueError):
+                continue
+            ents.append({"title": str(e["title"]), "num": num, "roman": is_roman, "indent": 0, "part": str(e.get("part") or "")})
+        located = bookparse.locate(ents, pages) if len(ents) >= 3 else []
+        if located:
+            _save_chapters(bid, pages, bookparse.build_chapters(located, pages))
+        db.update("learn_books", bid, {"status": "ready", "method": "toc_llm" if located else "fixed",
+                                       "title": b["title"] or got.get("title", ""), "author": b["author"] or got.get("author", ""),
+                                       "updated_at": db.now()})
+        start_book_overview(bid)
+    elif what == "overview":
+        ov = extract_json(job.get("output") or "", "essence") if ok else None
+        named = b["title"] and b["title"] != Path(b["url"]).stem  # 书名只是文件名时，换成模型认出的书名
+        db.update("learn_books", bid, {"overview": ov or "", "overview_status": "ready" if ov else "failed",
+                                       "title": b["title"] if named or not (ov or {}).get("title") else ov["title"],
+                                       "author": b["author"] or (ov or {}).get("author", ""), "updated_at": db.now()})
+    else:
+        idx = int(what.split(":")[1])
+        c = db.row("SELECT * FROM learn_book_chapters WHERE book_id=? AND idx=?", [bid, idx])
+        if not c or c["job_id"] not in (None, job.get("id")):
+            return
+        g = extract_json(job.get("output") or "", "essence") if ok else None
+        db.execute("UPDATE learn_book_chapters SET status=?, guide=?, updated_at=? WHERE id=?",
+                   ["ready" if g else "failed", json.dumps(g, ensure_ascii=False) if g else "", db.now(), c["id"]])
+        if g:
+            p = _book_dir(bid) / "guides" / f"{idx}.md"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(f"# {c['title']}\n\n" + bookparse.guide_md(g), "utf-8")
+
+
+class BookIn(BaseModel):
+    url: str
+    title: str = ""
+    author: str = ""
+
+
+@router.get("/books")
+def list_books():
+    return [_book_summary(b, _chapters(b["id"])) for b in
+            [_book(r["id"]) for r in db.rows("SELECT id FROM learn_books ORDER BY updated_at DESC, id DESC")]]
+
+
+@router.post("/books")
+def create_book(body: BookIn):
+    url = body.url.strip()
+    if not url:
+        raise HTTPException(400, "缺少书的链接或路径")
+    if old := db.row("SELECT id FROM learn_books WHERE url=? AND status!='failed'", [url]):
+        return {"id": old["id"], "existing": True}
+    bid = db.insert("learn_books", {"url": url, "title": body.title.strip(), "author": body.author.strip(), "status": "ingesting",
+                                    "created_at": db.now(), "updated_at": db.now()})
+    threading.Thread(target=_ingest_book, args=(bid,), daemon=True, name=f"book-{bid}").start()
+    return {"id": bid}
+
+
+@router.get("/books/{bid}")
+def get_book(bid: int):
+    b, chs = _book(bid), _chapters(bid)
+    for c in chs:  # 目录只要一句话和状态，导读全文按章取
+        c["one_line"] = (c.pop("guide") or {}).get("one_line", "")
+    return {**_book_summary(b, chs), "chapters": chs}
+
+
+@router.post("/books/{bid}/reingest")
+def reingest_book(bid: int):
+    if _book(bid)["status"] != "failed":
+        raise HTTPException(400, "只有解析失败的书可以重新解析")
+    db.update("learn_books", bid, {"status": "ingesting", "error": "", "updated_at": db.now()})
+    threading.Thread(target=_ingest_book, args=(bid,), daemon=True, name=f"book-{bid}").start()
+    return {"ok": True}
+
+
+@router.post("/books/{bid}/overview")
+def regen_book_overview(bid: int):
+    _book(bid)
+    return {"job_id": start_book_overview(bid)}
+
+
+@router.delete("/books/{bid}")
+def delete_book(bid: int):
+    db.execute("DELETE FROM learn_book_chapters WHERE book_id=?", [bid])
+    db.execute("DELETE FROM learn_books WHERE id=?", [bid])
+    return {"ok": True}
+
+
+@router.get("/books/{bid}/chapters/{idx}")
+def get_book_chapter(bid: int, idx: int):
+    b, c = _book(bid), _chapter(bid, idx)
+    chs = db.rows("SELECT idx, title, kind FROM learn_book_chapters WHERE book_id=? ORDER BY idx", [bid])
+    readable = [x for x in chs if x["kind"] != "matter"]
+    pos = next((k for k, x in enumerate(readable) if x["idx"] == idx), -1)
+    return {**c, "book_title": b["title"], "prev": readable[pos - 1] if pos > 0 else None,
+            "next": readable[pos + 1] if 0 <= pos < len(readable) - 1 else None,
+            "est_cost": _cost(c["tokens"] + CALL_OVERHEAD, GUIDE_OUT_TOKENS)}
+
+
+@router.post("/books/{bid}/chapters/{idx}/open")
+def open_book_chapter(bid: int, idx: int, body: dict | None = None):
+    """打开一篇：记进度；没导读就生成（force 重写），顺手预生成下一篇。"""
+    _book(bid)
+    c = _chapter(bid, idx)
+    db.update("learn_books", bid, {"cur_idx": idx, "updated_at": db.now()})
+    if not c["read_at"]:
+        db.execute("UPDATE learn_book_chapters SET read_at=? WHERE id=?", [db.now(), c["id"]])
+    if (body or {}).get("force") and c["status"] != "generating":
+        db.execute("UPDATE learn_book_chapters SET status='' WHERE id=?", [c["id"]])
+        c["status"] = ""
+    jid = start_book_chapter(bid, idx) if c["status"] in ("", "failed") else c["job_id"]
+    if (nxt := _next_readable(_chapters(bid), idx)) and nxt["status"] == "" and settings.get("learn.book_prefetch", True):
+        start_book_chapter(bid, nxt["idx"])
+    return {"job_id": jid, "status": "generating" if jid and c["status"] != "ready" else c["status"]}
+
+
+@router.get("/books/{bid}/chapters/{idx}/text")
+def book_chapter_text(bid: int, idx: int):
+    c, pages = _chapter(bid, idx), _book_pages(bid)
+    return {"pages": [{"n": i + 1, "text": pages[i]} for i in range(c["page_start"], min(c["page_end"] + 1, len(pages)))]}
+
+
+@router.get("/books/{bid}/pdf")
+def book_pdf(bid: int):
+    _book(bid)
+    p = _book_dir(bid) / "book.pdf"
+    if not p.is_file():
+        raise HTTPException(404, "没有 PDF")
+    return FileResponse(p, media_type="application/pdf")
+
+
 def on_job_done(job: dict) -> None:
     ref = job.get("ref") or ""
     if m := re.fullmatch(r"learn:item:(\d+)", ref):
@@ -2506,6 +2842,8 @@ def on_job_done(job: dict) -> None:
         _finish_qa(int(m.group(1)), m.group(2), job)
     elif m := re.fullmatch(r"learn:item:(\d+):qagen", ref):
         _finish_qa_gen(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:book:(\d+):(toc|overview|ch:(\d+))", ref):
+        _finish_book(int(m.group(1)), m.group(2), job)
 
 
 # ---------- C. 对话上下文 ----------
@@ -2564,6 +2902,23 @@ def agent_context(ref: str) -> str:
                     + (f"（点评 {round(100 * float(v['review'].get('score') or 0))}%，漏：{'；'.join(v['review'].get('missing') or [])[:160]}）" if v.get("review") else "")
                     for v in _reads.qa_answers(it)) + "\n\n") if _reads.qa_answers(it) else "")
                 + f"### 用户已学其他内容\n{_known_knowledge(it['id'], 10)}")
+    if m := re.fullmatch(r"learn:book:(\d+)(?::ch:(\d+))?", ref or ""):
+        bid = int(m.group(1))
+        b = db.row("SELECT id FROM learn_books WHERE id=?", [bid])
+        if not b:
+            return "书不存在"
+        b, chs = _book(bid), _chapters(bid)
+        ov = b["overview"] or {}
+        head = (f"用户在读《{b['title']}》（book_id={bid}，{b['pages']} 页，原文按章存在 {_book_dir(bid) / 'ch'}/<序号>.txt，需要时用 Read 读原文再答）。\n"
+                f"回答要扣住这本书和原文，引用时标 PDF 页码；他问背景知识时可以讲书外的，但要说明哪些是书外补充。\n\n"
+                f"### 全书导读\n{json.dumps(ov, ensure_ascii=False)[:6000] if ov else '（未生成）'}\n\n### 全书地图\n{_book_map(b, chs)[:6000]}")
+        if m.group(2) is None:
+            return head
+        c = next((x for x in chs if x["idx"] == int(m.group(2))), None)
+        if not c:
+            return head
+        return (f"正在读第 {c['idx']} 篇「{c['title']}」（PDF 第 {c['page_start'] + 1}-{c['page_end'] + 1} 页，原文 {_book_dir(bid) / 'ch' / (str(c['idx']) + '.txt')}）\n\n"
+                f"### 本篇导读\n{bookparse.guide_md(c['guide']) if c['guide'] else '（未生成）'}\n\n### 本篇原文（节选）\n{_ch_text(bid, c)[:30000]}\n\n{head}")
     if m := re.fullmatch(r"learn:step:(\d+)", ref or ""):
         s = db.row("SELECT * FROM learn_steps WHERE id=?", [int(m.group(1))])
         if not s:
