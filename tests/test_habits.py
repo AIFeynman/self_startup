@@ -15,14 +15,14 @@ def test_check_parts_and_stats(client, fake_submit):
     c = client.post(url, json={"q": "该上线吗？", "points": "看 pass^k", "parts": parts, "review": True}).json()
     assert c["parts"] == parts and c["answer"].startswith("结论：先别上线\n机制：")
     prompt = fake_submit[-1]["prompt"]
-    assert "机制" in prompt and '"parts"' in prompt
+    assert "不要求逐项都写" in prompt and '"parts"' not in prompt  # 维度只作提示，不再分栏打分
     learn.on_job_done(_job(c["job_id"], '```json\n{"covered": ["先别上线"], "missing": [], "better": "b", "score": 0.8,'
                                         ' "parts": {"结论": 1, "机制": 0.9, "例子": 0.4, "应用": 2}}\n```'))
     rv = client.get(f"/api/learn/steps/{s1['id']}").json()["checks"]["0"]["review"]
     assert rv["parts"] == {"结论": 1.0, "机制": 0.9, "例子": 0.4, "应用": 1.0}  # 夹到 0–1
     k = client.get(f"/api/learn/plans/{p['id']}/growth").json()["checks"]
     assert k["target"] == 65 and k["recent_avg"] == 80 and k["weakest"] == "例子"
-    # 老格式（只有 answer）照样能交
+    # 单框作答（只有 answer）
     old = client.post(f"/api/learn/steps/{s1['id']}/checks/1", json={"q": "q", "answer": "一句话"}).json()
     assert old["answer"] == "一句话" and not old.get("parts")
     assert client.get("/api/learn/habits").json()["check"]["recent_n"] >= 1

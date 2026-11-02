@@ -239,9 +239,6 @@ const CSS = `
 .ln-chap .md .dg-flash .dg-q { font-weight: 500; margin: 2px 0 8px; }
 .ln-chap .md .dg-flash > .dg-a { display: none; }
 .ln-chap .md .dg-flash textarea { width: 100%; font-size: 14px; background: var(--panel); }
-.ln-chap .md .dg-parts { display: grid; gap: 6px; }
-.ln-chap .md .dg-parts label { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: start; }
-.ln-chap .md .dg-parts label > span { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 7px; }
 .ln-apply .ln-applyform { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-top: 10px; }
 .ln-apply .ln-applyform .what { grid-column: 1 / -1; }
 @media (max-width: 720px) { .ln-apply .ln-applyform { grid-template-columns: 1fr; } }
@@ -252,8 +249,8 @@ const CSS = `
 @media (max-width: 640px) { .ln-habit { grid-template-columns: auto 1fr; } .ln-habit .muted { grid-column: 1 / -1; white-space: normal; } }
 a.ln-habit:hover b { text-decoration: underline; }
 .ln-chkstat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; font-size: 13px; }
+.ln-chap .md .dg-hint { font-size: 12px; margin: 0 0 4px; }
 .ln-chap .md .dg-ptags { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; }
-@media (max-width: 640px) { .ln-chap .md .dg-parts label { grid-template-columns: 1fr; gap: 2px; } .ln-chap .md .dg-parts label > span { padding-top: 0; } }
 .ln-chap .md .dg-flash .acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .ln-chap .md .dg-flash .acts .muted { font-size: 12px; }
 .ln-chap .md .dg-flash.open { border-style: solid; background: var(--panel); }
@@ -1540,14 +1537,14 @@ function keyPoints(ctx, s) {
     h('div.hd', {}, [h('b', {}, c.front), c.tag ? h('span.tg', {}, c.tag) : null]), md(c.back)])));
 }
 
-// 停一下的固定作答格式：结论 + 为什么（机制）+ 一个例子 + 在我项目里怎么用（前三栏必填才能请 Agent 点评）
+// 停一下可以想的维度（只作提示，单框作答、不强制逐项写；老作答 / 老点评里的分栏照常显示）
 const CHECK_PARTS = [
-  ['结论', '结论', '一句话下判断'],
-  ['机制', '为什么', '背后的机制 / 因果：为什么成立，不是复述结论'],
-  ['例子', '例子', '一个具体例子或数字（哪个产品 / 论文 / 场景）'],
-  ['应用', '用到我的项目', '在我的项目里怎么用（暂时用不上就写为什么）'],
+  ['结论', '结论'],
+  ['机制', '为什么'],
+  ['例子', '例子'],
+  ['应用', '用到我的项目'],
 ];
-const CHECK_REQUIRED = ['结论', '机制', '例子'];
+const CHECK_HINT = '可以想想：' + CHECK_PARTS.map(([, l]) => l).join(' / ') + '（不用都写）';
 
 function checkCard(ctx, card, s, idx) {
   const { api, h, toast } = ctx;
@@ -1555,19 +1552,13 @@ function checkCard(ctx, card, s, idx) {
   if (!qEl || !aEl) return;
   const q = qEl.textContent.trim(), points = aEl.innerText.trim(), pointsHtml = aEl.innerHTML;
   let c = (s.checks || {})[idx] || null;
+  const ta = h('textarea', { rows: 3, placeholder: '先写下你的判断和理由（写你真实的第一反应），再对照要点', value: c?.answer || '' });
   const draftKey = `ln-chk-${s.id}-${idx}`;
-  // 老作答没有分栏：整段放进「结论」，改写时再拆
-  const initial = () => c?.parts || (c?.answer ? { 结论: c.answer } : null);
-  let draft = initial();
-  if (!draft) { try { draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { draft = null; } }
-  const fields = Object.fromEntries(CHECK_PARTS.map(([k, , ph]) => [k, h('textarea', { rows: k === '结论' && (draft?.[k] || '').length < 30 ? 1 : 2, placeholder: ph, value: draft?.[k] || '' })]));
-  const parts = () => Object.fromEntries(CHECK_PARTS.map(([k]) => [k, fields[k].value.trim()]).filter(([, v]) => v));
-  const missing = () => CHECK_REQUIRED.filter((k) => !fields[k].value.trim());
-  Object.values(fields).forEach((ta) => ta.addEventListener('input', () => { try { localStorage.setItem(draftKey, JSON.stringify(parts())); } catch { /* ignore */ } }));
-  const form = h('div.dg-parts', {}, CHECK_PARTS.map(([k, label]) => h('label', {}, [h('span', {}, label + (CHECK_REQUIRED.includes(k) ? '' : '（选填）')), fields[k]])));
+  if (!c?.answer) { try { const d = localStorage.getItem(draftKey) || ''; ta.value = d.startsWith('{') ? '' : d; } catch { /* ignore */ } }
+  ta.addEventListener('input', () => { try { localStorage.setItem(draftKey, ta.value); } catch { /* ignore */ } });
   const box = h('div');
   const save = async (review) => {
-    try { c = await api.post(`/api/learn/steps/${s.id}/checks/${idx}`, { q, points, parts: parts(), review }); }
+    try { c = await api.post(`/api/learn/steps/${s.id}/checks/${idx}`, { q, points, answer: ta.value.trim(), review }); }
     catch (e) { toast('保存失败：' + e.message, true); return; }
     try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
     draw();
@@ -1578,11 +1569,7 @@ function checkCard(ctx, card, s, idx) {
     const st = await api.get(`/api/learn/steps/${s.id}`).catch(() => null);
     if (st?.checks?.[idx]) { c = st.checks[idx]; draw(); }
   };
-  const askReview = () => {
-    const miss = missing();
-    if (miss.length) { toast('按格式补上：' + miss.map((k) => CHECK_PARTS.find((x) => x[0] === k)[1]).join('、'), true); fields[miss[0]].focus(); return; }
-    save(true);
-  };
+  const askReview = () => (ta.value.trim() ? save(true) : toast('先写下你的判断，哪怕一句话', true));
   const list = (cls, label, arr) => (arr?.length ? h('div.row2.' + cls, {}, [h('b', {}, label), h('div', {}, arr.length > 1 ? h('ul', { style: { margin: 0, paddingLeft: '16px' } }, arr.map((x) => h('li', {}, x))) : arr[0])]) : null);
   const partTags = (ps) => {
     const ks = CHECK_PARTS.filter(([k]) => ps?.[k] !== undefined);
@@ -1596,18 +1583,18 @@ function checkCard(ctx, card, s, idx) {
     const kids = [];
     if (!shown) {
       const plain = h('button.sm', { onclick: () => save(false) });
-      const label = () => { plain.textContent = Object.keys(parts()).length ? '只对照要点' : '直接看要点'; };
-      Object.values(fields).forEach((ta) => { ta.oninput = label; });
+      const label = () => { plain.textContent = ta.value.trim() ? '只对照要点' : '直接看要点'; };
+      ta.oninput = label;
       label();
-      kids.push(form, h('div.acts', {}, [
+      kids.push(h('div.muted.dg-hint', {}, CHECK_HINT), ta, h('div.acts', {}, [
         h('button.sm.primary', { onclick: askReview }, '对照要点 + Agent 点评差异'),
         plain,
-        h('span.muted', {}, '结论、为什么、例子都写上再对照，差距才看得见'),
+        h('span.muted', {}, '写下来再对照，差距才看得见'),
       ]));
     } else {
       const mine = c.parts
         ? h('div', {}, CHECK_PARTS.filter(([k]) => c.parts[k]).map(([k, label]) => h('div', {}, [h('b', {}, label + '：'), c.parts[k]])))
-        : (c.answer || h('span.muted', {}, '（没写，直接看了要点）'));
+        : (c.answer ? h('div', { style: { whiteSpace: 'pre-wrap' } }, c.answer) : h('span.muted', {}, '（没写，直接看了要点）'));
       kids.push(h('div.dg-cmp', {}, [
         h('div.mine', {}, [h('div.k', {}, '我的判断'), mine]),
         h('div.pts', {}, [h('div.k', {}, '要点'), h('div', { html: pointsHtml })]),
@@ -1623,13 +1610,13 @@ function checkCard(ctx, card, s, idx) {
         ]));
       } else if (c.status === 'failed') kids.push(h('div.dg-rv', { style: { color: 'var(--err)' } }, '点评失败，可以重写后再试'));
       kids.push(h('div.acts', {}, [
-        h('button.sm', { onclick: () => { c = { ...c, status: 'editing' }; draw(); fields[missing()[0] || '结论'].focus(); } }, c.answer ? '改写我的判断' : '补写我的判断'),
+        h('button.sm', { onclick: () => { c = { ...c, status: 'editing' }; ta.value = c.answer || ''; draw(); ta.focus(); } }, c.answer ? '改写我的判断' : '补写我的判断'),
         c.answer && !rv && c.status !== 'reviewing' ? h('button.sm.outline', { onclick: askReview }, '请 Agent 点评差异') : null,
       ]));
     }
     box.replaceChildren(...kids.filter(Boolean));
   };
-  card.replaceChildren(h('div.lbl', {}, '停一下 · 结论 → 为什么 → 例子 → 用到我的项目'), qEl, aEl, box);
+  card.replaceChildren(h('div.lbl', {}, '停一下'), qEl, aEl, box);
   draw();
   if (c?.status === 'reviewing') poll();
 }
