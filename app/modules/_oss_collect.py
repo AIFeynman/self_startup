@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 import httpx
@@ -28,6 +29,8 @@ README_MAX = 1500
 GONE_PURGE_DAYS = 30
 SEARCH_CAP = 1000         # Search API 单个查询最多翻到 1000 条
 GQL_BATCH = 50
+README_BATCH = 20         # 带 README 正文的查询：50 个一批 GitHub 常 502，20 个一批约 6 秒
+README_PARALLEL = 6       # 实测 20×6 并发约 1,100 个 / 分钟、不触发 502；全库约 1 小时
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS oss_repos (
@@ -271,15 +274,20 @@ def fetch_readmes(names: list[str] | None = None, limit: int = 2000) -> dict:
     else:
         rows = db.rows("SELECT id, name, node_id FROM oss_repos WHERE readme_oid IS NULL AND node_id!='' AND status='ok' "
                        "ORDER BY stars DESC LIMIT ?", [limit])
+    def one(batch):
+        try:
+            with _client() as c:
+                return batch, gql_nodes(c, [r["node_id"] for r in batch], with_text=True)
+        except Exception as e:  # noqa: BLE001
+            log.warning("oss readme batch failed: %s", e)
+            return batch, None
+
     done = errors = 0
-    with _client() as c:
-        for i in range(0, len(rows), GQL_BATCH):
-            batch = rows[i:i + GQL_BATCH]
-            try:
-                got = gql_nodes(c, [r["node_id"] for r in batch], with_text=True)
-            except Exception as e:  # noqa: BLE001
+    batches = [rows[i:i + README_BATCH] for i in range(0, len(rows), README_BATCH)]
+    with ThreadPoolExecutor(README_PARALLEL) as ex:
+        for batch, got in ex.map(one, batches):   # 并发只用在 GitHub 请求上，写库留在当前线程
+            if got is None:
                 errors += 1
-                log.warning("oss readme batch failed: %s", e)
                 continue
             for r in batch:
                 n = got.get(r["node_id"])
