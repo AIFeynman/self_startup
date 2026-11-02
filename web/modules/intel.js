@@ -1,5 +1,6 @@
 // 产品雷达：关注公司的产品 / 商业变化流，B 级及以上带「五层解读卡」。
 // 路由：#intel（变化流）· #intel/e/<id>（事件 + 解读卡）· #intel/c/<slug>（公司时间线；创业公司带收入曲线 + 生意拆解卡）
+//       #intel/overview（总览：赛道格局 / 本周异动 / 头部与黑马 / 打法汇总）
 //       #intel/startups · #intel/tracks · #intel/t/<赛道> · #intel/ph · #intel/companies · #intel/sources
 const LV = { S: ['S', 'err'], A: ['A', 'warn'], B: ['B', 'ok'], C: ['C', 'gray'] };
 const CARD = { queued: ['解读中', 'line'], done: ['解读卡', 'ok'], incomplete: ['解读卡不完整', 'warn'], failed: ['解读失败', 'err'] };
@@ -7,7 +8,8 @@ const DAYS = [['7', '7 天'], ['30', '30 天'], ['90', '90 天'], ['0', '全部'
 const st = { level: 'S,A,B', days: '30', company: '', q: '', type: '' };
 const ss = { track: '', sort: 'rev', q: '', watch: false, all: false };  // 创业公司表的筛选
 const PROFILE = { queued: ['拆解中', 'line'], done: ['拆解卡', 'ok'], incomplete: ['拆解卡不完整', 'warn'], failed: ['拆解失败', 'err'] };
-const TABS = [['变化流', '#intel'], ['创业公司', '#intel/startups'], ['赛道', '#intel/tracks'], ['PH 日榜', '#intel/ph'],
+const os = { sort: 'rev' };  // 总览里赛道格局的排序
+const TABS = [['变化流', '#intel'], ['总览', '#intel/overview'], ['创业公司', '#intel/startups'], ['赛道', '#intel/tracks'], ['PH 日榜', '#intel/ph'],
   ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
 const tabs = (h, active) => h('div.tabs', {}, TABS.map(([t, href]) =>
   h('button' + (href === active ? '.active' : ''), { onclick: () => { location.hash = href; } }, t)));
@@ -51,7 +53,27 @@ const CSS = `
 .it-track .n { font: 700 20px var(--serif); } .it-track .scope { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
 .it-ph { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; gap: 2px 10px; padding: 8px 4px; font-size: 13.5px; }
 .it-ph + .it-ph { border-top: 1px solid var(--line); } .it-ph .rk { font: 700 15px var(--serif); color: var(--muted); text-align: center; }
-@media (max-width: 720px) { .it-hide-sm { display: none; } }
+.it-brow { display: grid; grid-template-columns: minmax(84px, 150px) minmax(60px, 1fr) minmax(0, 250px); gap: 10px; align-items: center;
+  font-size: 13px; padding: 4px 6px; border-radius: 6px; }
+.it-brow.click { cursor: pointer; } .it-brow.click:hover { background: var(--bg-2); }
+.it-brow .bar { height: 10px; } .it-brow .bar i { display: block; height: 100%; min-width: 2px; background: var(--accent); border-radius: 0 4px 4px 0; }
+.it-brow .r { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.it-brow .r b { color: var(--text); font-weight: 600; }
+.it-grid2 .it-brow { grid-template-columns: minmax(70px, 110px) minmax(40px, 1fr) auto; }
+.it-cols { columns: 2 320px; column-gap: 24px; } .it-cols .it-mini { break-inside: avoid; }
+.it-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.it-grid2 > .card { min-width: 0; } .it-grid2 h3 { font: 600 14px var(--serif); margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
+.it-grid2 h3 small { font: 400 12px var(--font); color: var(--muted); }
+.it-mini { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; padding: 6px 4px; font-size: 13px; cursor: pointer; border-radius: 6px; }
+.it-mini:hover { background: var(--bg-2); } .it-mini + .it-mini { border-top: 1px solid var(--line); }
+.it-mini .s { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.it-mini .v { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.it-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.it-seg button { border: 0; border-radius: 0; padding: 4px 10px; background: transparent; color: var(--muted); font-size: 12.5px; }
+.it-seg button.on { background: var(--bg-2); color: var(--text); font-weight: 600; }
+.it-play { padding: 10px 4px; } .it-play + .it-play { border-top: 1px solid var(--line); }
+.it-play .it-card { font-size: 13.5px; } .it-play .it-card ul { margin: 4px 0; }
+@media (max-width: 720px) { .it-hide-sm { display: none; } .it-brow { grid-template-columns: 90px minmax(40px, 1fr); } .it-brow .r { grid-column: 1 / -1; text-align: left; } }
 `;
 
 const tag = (h, [t, c]) => h('span.tag.' + c, {}, t);
@@ -71,8 +93,9 @@ function usd(v) {
   return '$' + (a >= 1e9 ? (v / 1e9).toFixed(1) + 'B' : a >= 1e6 ? (v / 1e6).toFixed(a >= 1e7 ? 0 : 1) + 'M'
     : a >= 1e3 ? (v / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'k' : Math.round(v));
 }
+const pctText = (g) => (g >= 1000 ? `×${Math.round(g / 100 + 1)}` : `${g > 0 ? '+' : ''}${Math.round(g)}%`);  // ≥10 倍写倍数
 const pct = (h, g) => (g === null || g === undefined ? h('span.muted', {}, '-')
-  : h('span.' + (g > 0 ? 'it-up' : g < 0 ? 'it-down' : 'muted'), {}, `${g > 0 ? '+' : ''}${Math.round(g)}%`));
+  : h('span.' + (g > 0 ? 'it-up' : g < 0 ? 'it-down' : 'muted'), { title: `30 天增长 ${Math.round(g)}%` }, pctText(g)));
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // 表格里的小走势：单色 2px 线，只看形状（具体数值在公司页曲线里悬停看）
@@ -359,6 +382,95 @@ async function renderStartups(el, ctx) {
   el.append(h('div.card', { style: { overflowX: 'auto' } }, startupTable(h, d.startups)));
 }
 
+// 横向条形：单色、圆角数据端；每行可点，悬停看完整数字
+function barRows(h, rows, { val, label, right, title, href }) {
+  const max = Math.max(...rows.map(val), 1);
+  return h('div', {}, rows.map((r) => h('div.it-brow' + (href ? '.click' : ''), { title: title ? title(r) : '', onclick: href ? () => { location.hash = href(r); } : null }, [
+    h('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, label(r)),
+    h('div.bar', {}, h('i', { style: { width: `${(val(r) / max * 100).toFixed(1)}%` } })),
+    h('div.r', {}, right(r)),
+  ])));
+}
+
+function miniRow(h, c, value) {
+  return h('div.it-mini', { onclick: () => { location.hash = `#intel/c/${c.slug}`; }, title: c.intro || '' }, [
+    h('div', { style: { minWidth: 0 } }, [h('div', {}, [h('b', {}, c.name), c.watch ? ' ★' : '']),
+      h('div.s', {}, [c.track_name || '待归类', c.intro ? ` · ${c.intro}` : ''])]),
+    h('div.v', {}, value),
+  ]);
+}
+const revGrowth = (h, c) => [usd(c.rev), h('div', { style: { fontSize: '12px' } }, pct(h, c.growth_30d))];
+
+async function renderOverview(el, ctx) {
+  const { api, h, md, ui } = ctx;
+  const d = await api.get('/api/intel/overview');
+  el.append(ui.pageHead('产品雷达 · 总览', `${d.total} 家有收入的 AI 创业公司 · 合计 MRR ${usd(d.total_rev)}` +
+    (d.last.at ? ` · 上次快照 ${ago(d.last.at)}` : '')), tabs(h, '#intel/overview'));
+
+  // 1 赛道格局
+  const key = { rev: (t) => t.total_rev, n: (t) => t.companies, growth: (t) => t.median_growth ?? -1e9 }[os.sort];
+  const ts = [...d.tracks].sort((a, b) => key(b) - key(a));
+  const seg = h('div.it-seg', {}, [['rev', '合计 MRR'], ['n', '公司数'], ['growth', '增长中位数']].map(([k, t]) =>
+    h('button' + (os.sort === k ? '.on' : ''), { onclick: () => { os.sort = k; ctx.refresh(); } }, t)));
+  const barVal = os.sort === 'n' ? (t) => t.companies : os.sort === 'growth' ? (t) => Math.max(t.median_growth || 0, 0) : (t) => t.total_rev;
+  el.append(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
+    [ui.section('赛道格局', '条长 = 当前排序的指标 · 点一行进赛道'), seg]));
+  el.append(h('div.card', {}, barRows(h, ts, {
+    val: barVal, label: (t) => t.name, href: (t) => `#intel/t/${t.slug}`,
+    title: (t) => `${t.name}：${t.companies} 家 · 合计 MRR ${usd(t.total_rev)} · 30 天增长中位数 ${t.median_growth == null ? '-' : Math.round(t.median_growth) + '%'} · ${t.growing} 家在涨 · ${t.on_sale} 家在售\n头部：${t.top.map((x) => `${x.name} ${usd(x.rev)}`).join('、')}`,
+    right: (t) => [h('b', {}, usd(t.total_rev)), ` · ${t.companies} 家 · 中位 `, pct(h, t.median_growth), ` · ${t.growing} 家在涨`],
+  })));
+
+  // 2 本周异动
+  el.append(ui.section('本周异动', `${d.since} 起 · 涨跌榜只看 MRR ≥ $1k 的公司，增长是 TrustMRR 的 30 天口径`));
+  const listCard = (title, sub, rows, empty) => h('div.card', {}, [h('h3', {}, [title, h('small', {}, sub)]),
+    ...(rows.length ? rows : [h('div.muted', { style: { fontSize: '13px', padding: '6px 4px' } }, empty)])]);
+  el.append(h('div.it-grid2', {}, [
+    listCard('涨得最快', '30 天增长', d.gainers.map((c) => miniRow(h, c, revGrowth(h, c))), '暂无'),
+    listCard('跌得最多', '30 天增长', d.losers.map((c) => miniRow(h, c, revGrowth(h, c))), '没有在跌的'),
+    listCard('新上榜', d.new_total ? `${d.new_total} 家` : '',
+      d.new.map((c) => miniRow(h, c, revGrowth(h, c))),
+      d.coverage_since ? `${d.coverage_since} 起还没有新出现的公司` : '从下一次快照起统计（扩大抓取范围那天新增的不算新上榜）'),
+    listCard('收入异动 / 挂牌', `${d.events.length} 条`, d.events.slice(0, 10).map((e) => h('div.it-mini', { onclick: () => { location.hash = `#intel/e/${e.id}`; } }, [
+      h('div', { style: { minWidth: 0 } }, [h('div', {}, e.title), h('div.s', {}, `${(e.date || '').slice(5, 10)} · ${e.type === 'listing' ? '挂牌出售' : '收入异动'}`)]),
+      h('div.v.muted', {}, e.company_name || '')])), '这周没有'),
+  ]));
+  if (d.on_sale.length) {
+    el.append(h('div.card', { style: { marginTop: '12px' } }, [h('h3', { style: { font: '600 14px var(--serif)', margin: '0 0 6px' } }, '在售中收入最高的'),
+      ...d.on_sale.map((c) => miniRow(h, c, [usd(c.rev), h('div.muted', { style: { fontSize: '12px' } }, c.asking_price ? `要价 ${usd(c.asking_price)}` : '要价未公开')]))]));
+  }
+
+  // 3 头部与黑马
+  const hr = d.horse_rule;
+  el.append(ui.section('头部与黑马', `黑马 = MRR ${usd(hr.min)}–${usd(hr.max)} 且 30 天增长 ≥ ${hr.growth}%`));
+  el.append(h('div.card', {}, [h('h3', { style: { font: '600 14px var(--serif)', margin: '0 0 6px' } }, `黑马 · ${d.horses.length} 家`),
+    d.horses.length ? h('div.it-cols', {}, d.horses.map((c) => miniRow(h, c, revGrowth(h, c)))) : h('div.muted', {}, '暂时没有符合条件的')]));
+  el.append(h('div.card', { style: { marginTop: '12px', overflowX: 'auto' } }, [h('h3', { style: { font: '600 14px var(--serif)', margin: '0 0 6px' } }, '各赛道前三（按 MRR）'),
+    h('table.it-tbl', {}, d.tops.filter((t) => t.top.length).map((t) => h('tr', {}, [
+      h('td.nw', {}, h('a', { href: `#intel/t/${t.slug}` }, t.name)),
+      ...[0, 1, 2].map((i) => { const c = t.top[i]; return h('td', { style: { width: '27%' } }, c ? [h('a', { href: `#intel/c/${c.slug}` }, c.name), h('span.muted', { style: { fontSize: '12px' } }, ` ${usd(c.rev)}`)] : ''); }),
+    ])))]));
+
+  // 4 打法汇总
+  el.append(ui.section('打法汇总', `基于 ${d.detail_n} 家已读详情页的公司（每天补读一批）· 条长 = 用这种方式的公司数`));
+  const share = (x) => `${x.n} 家 · ${Math.round(x.n / Math.max(d.detail_n - (d.no_channel || 0), 1) * 100)}%`;
+  el.append(h('div.it-grid2', {}, [
+    h('div.card', {}, [h('h3', {}, ['获客渠道大类', h('small', {}, `${d.no_channel} 家没填渠道`)]),
+      barRows(h, d.families, { val: (x) => x.n, label: (x) => x.name, right: (x) => h('b', {}, share(x)),
+        title: (x) => `${x.name}：${x.n} 家在用，这些公司合计 MRR ${usd(x.rev)}` })]),
+    h('div.card', {}, [h('h3', {}, ['具体渠道', h('small', {}, '前 15')]),
+      barRows(h, d.channels, { val: (x) => x.n, label: (x) => x.label, right: (x) => h('b', {}, `${x.n} 家`),
+        title: (x) => `${x.label}：${x.n} 家在用，这些公司合计 MRR ${usd(x.rev)}` })]),
+    h('div.card', {}, [h('h3', {}, ['定价方式', h('small', {}, '一家可以有多种')]),
+      d.pricing.length ? barRows(h, d.pricing, { val: (x) => x.n, label: (x) => x.name, right: (x) => h('b', {}, `${x.n} 家`),
+        title: (x) => `${x.name}：${x.n} 家，合计 MRR ${usd(x.rev)}` }) : h('div.muted', {}, '还没有定价数据')]),
+  ]));
+  el.append(h('div.card', { style: { marginTop: '12px' } }, [h('h3', { style: { font: '600 14px var(--serif)', margin: '0 0 2px' } }, `可抄的打法 · 来自最近 ${d.plays.length} 张生意拆解卡`),
+    ...(d.plays.length ? d.plays.map((p) => h('div.it-play', {}, [
+      h('div', {}, [h('a', { href: `#intel/c/${p.slug}` }, h('b', {}, p.name)), h('span.muted', { style: { fontSize: '12px' } }, ` · ${p.track_name || ''} · MRR ${usd(p.rev)} · ${(p.at || '').slice(0, 10)}`)]),
+      cardMd(md, p.plays)])) : [h('div.muted', {}, '还没有完整的拆解卡')])]));
+}
+
 async function renderTracks(el, ctx) {
   const { api, h, ui } = ctx;
   const ts = await api.get('/api/intel/tracks');
@@ -472,6 +584,7 @@ export default {
     if (view === 'c' && arg) return renderCompany(el, ctx, decodeURIComponent(arg));
     if (view === 'companies') return renderCompanies(el, ctx);
     if (view === 'sources') return renderSources(el, ctx);
+    if (view === 'overview') return renderOverview(el, ctx);
     if (view === 'startups') return renderStartups(el, ctx);
     if (view === 'tracks') return renderTracks(el, ctx);
     if (view === 't' && arg) return renderTrack(el, ctx, arg);

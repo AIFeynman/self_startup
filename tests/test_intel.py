@@ -564,3 +564,42 @@ def test_fetch_api_bad_key(monkeypatch):
     monkeypatch.setattr(st, "_client", lambda: C())
     got, errors = st.fetch_api("bad", sleep=lambda s: None)
     assert got == [] and "401" in errors[0]
+
+
+def test_channel_and_pricing_kinds():
+    assert st.channel_family("seo") == "内容 / SEO" and st.channel_family("reddit-ads") == "付费广告"
+    assert st.channel_family("carrier-pigeon") == "其它"
+    assert st.pricing_kinds("Free · In‑App Purchases") == ["免费增值 / 试用", "应用内购买"]
+    assert st.pricing_kinds("$19/mo subscription, enterprise on request") == ["订阅制", "企业 / 定制"]
+    assert st.pricing_kinds("Credits, pay-as-you-go") == ["按量 / 点数"]
+    assert st.pricing_kinds("") == []
+
+
+def test_overview(startup_db, monkeypatch):
+    details = {"vidgen": {**_tm("vidgen", 60_000), "marketingChannels": [{"slug": "seo"}, {"slug": "tiktok"}],
+                          "aiEnrichment": {"pricingModel": "Subscription with free trial"}},
+               "horse": {**_tm("horse", 5_000), "marketingChannels": [{"slug": "meta-ads"}], "aiEnrichment": {"pricingModel": "credits"}}}
+    _board(monkeypatch, [_tm("vidgen", 60_000, growth=20), _tm("horse", 5_000, growth=80), _tm("dropper", 3_000, growth=-40),
+                         _tm("tiny", 500, growth=900)], details=details)
+    intel.startup_snapshot(force=True)
+    assert intel._state("coverage_since") == TODAY  # 首次快照：标记覆盖起点
+    db.execute("UPDATE intel_company SET track='video' WHERE kind='startup' AND json_extract(ext,'$.trustmrr') IN ('vidgen','horse','dropper','tiny')")
+    o = startup_db.get("/api/intel/overview").json()
+    assert o["total"] >= 4 and o["new_total"] == 0  # 覆盖起点当天出现的都不算「新上榜」
+    assert [x["slug"] for x in o["gainers"]][:2] == ["horse", "vidgen"] and "tiny" not in {x["slug"] for x in o["gainers"]}  # 小基数不进涨跌榜
+    assert [x["slug"] for x in o["losers"]] == ["dropper"]
+    assert [x["slug"] for x in o["horses"]] == ["horse"]
+    video = next(t for t in o["tops"] if t["slug"] == "video")
+    assert [x["slug"] for x in video["top"]] == ["vidgen", "horse", "dropper"]
+    assert o["detail_n"] == 2 and o["no_channel"] == 0
+    fam = {x["name"]: x["n"] for x in o["families"]}
+    assert fam == {"内容 / SEO": 1, "社媒自然流量": 1, "付费广告": 1}
+    assert {x["label"] for x in o["channels"]} == {"SEO", "TikTok", "Meta 广告"}
+    assert {x["name"]: x["n"] for x in o["pricing"]} == {"订阅制": 1, "免费增值 / 试用": 1, "按量 / 点数": 1}
+    # 换抓取范围（加了 API key）→ 覆盖起点重置；之后某天才出现的才算新上榜
+    db.execute("UPDATE intel_metric SET date=?", [D1])
+    intel._set_state("coverage_since", D1)
+    _board(monkeypatch, [_tm("vidgen", 60_000, growth=20), _tm("fresh", 8_000, growth=10)])
+    intel.startup_snapshot(force=True)
+    o = startup_db.get("/api/intel/overview").json()
+    assert "fresh" in {x["slug"] for x in o["new"]} and "vidgen" not in {x["slug"] for x in o["new"]}

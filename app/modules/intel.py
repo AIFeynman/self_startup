@@ -175,7 +175,7 @@ CFG_DEFAULTS = {
     "cycle_minutes": 10,       # 后台多久跑一轮
     "max_age_days": 21,        # 发布日期早于这么多天的候选直接忽略（旧文被重新收录、页面重排冒出的老条目）
     "startups": True,          # TrustMRR 每日快照 / 赛道 / 拆解卡 / PH 日榜 / 公开 ARR
-    "details_per_day": 40,     # 每天最多读几个 TrustMRR 详情页（补渠道、定价、分类）
+    "details_per_day": 120,    # 每天最多读几个 TrustMRR 详情页（补渠道、定价、分类；总览的打法汇总靠它）
     "profiles_per_day": 10,    # 每天最多自动写几张生意拆解卡（手动不算）
     "profile_days": 30,        # 同一家多少天内不重复自动写
     "ph_top": 20,              # PH 日榜取前几名
@@ -693,6 +693,9 @@ def startup_snapshot(force: bool = False) -> dict:
     if board:
         res["details"] = fetch_details(int(cfg("details_per_day")), errors)
         _set_state("startup_day", day)
+        if _state("startup_source") != res["source"]:  # 首次 / 换了抓取范围：这天之前没见过的不算「新上榜」
+            _set_state("startup_source", res["source"])
+            _set_state("coverage_since", day)
     res["at"] = db.now()
     _set_state("startup_last", res)
     return res
@@ -720,7 +723,7 @@ def fetch_details(limit: int, errors: list[str]) -> int:
                 errors.append(err)
             ext = {"detail_at": db.today()}
             if o:
-                ext.update(st.detail_ext(o))
+                ext.update(st.detail_ext(o), detail_ok=1)
                 subs = st.metrics_of(o).get("subscriptions")
                 if subs:
                     _write_metrics(r["id"], db.today(), {"subscriptions": subs})
@@ -795,7 +798,10 @@ def classify_startup_tracks(limit: int = 0) -> dict:
 
 
 def track_summary() -> list[dict]:
-    cos = startups()
+    return track_summary_of(startups())
+
+
+def track_summary_of(cos: list[dict]) -> list[dict]:
     since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     evn = {r["track"]: r["n"] for r in db.rows(
         "SELECT c.track, count(*) AS n FROM intel_event e JOIN intel_company c ON c.id=e.company_id "
@@ -809,6 +815,74 @@ def track_summary() -> list[dict]:
                     "on_sale": sum(1 for c in cs if c.get("on_sale") == 1), "events_30d": evn.get(slug, 0),
                     "top": [{"slug": c["slug"], "name": c["name"], "rev": _rev(c)} for c in cs[:3]]})
     return out
+
+
+# ---------- 总览：赛道格局 / 本周异动 / 头部与黑马 / 打法汇总 ----------
+
+HORSE_MIN, HORSE_MAX, HORSE_GROWTH = 1000, 20000, 30   # 黑马：收入 $1k–20k、30 天增长 ≥30%
+MOVER_MIN = 1000                                       # 涨跌榜只看收入 ≥$1k 的，小基数的百分比没意义
+
+
+def _brief(c: dict) -> dict:
+    return {k: c.get(k) for k in ("id", "slug", "name", "track", "track_name", "intro", "mrr", "revenue_30d", "growth_30d",
+                                  "on_sale", "asking_price", "watch")} | {"rev": _rev(c)}
+
+
+def _detail_ok(e: dict) -> bool:
+    """真读到了详情页（读失败的只写 detail_at）；detail_ok 之前读的看有没有详情页才有的字段。"""
+    return bool(e.get("detail_ok")) or any(k in e for k in ("payment", "website", "channels", "pricing", "audience", "founded"))
+
+
+def overview(days: int = 7) -> dict:
+    cos = startups()
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    tracks = track_summary_of(cos)
+    # 本周异动：收入事件 + 新挂牌 + TrustMRR 30 天增长涨跌榜 + 新上榜
+    by_id = {c["id"]: c for c in cos}
+    events = [e for e in list_events(company="", days=days, limit=300, kind="startup")["events"]
+              if e["type"] in ("revenue", "listing") and _rev(by_id.get(e["company_id"]) or {}) >= MOVER_MIN]
+    big = [c for c in cos if _rev(c) >= MOVER_MIN and c.get("growth_30d") is not None]
+    cov = _state("coverage_since") or ""
+    first = {r["company_id"]: r["d"] for r in db.rows(
+        "SELECT company_id, min(date) AS d FROM intel_metric WHERE source='trustmrr' GROUP BY company_id")}
+    new = [c for c in cos if cov and first.get(c["id"], "") > cov and first[c["id"]] >= since]
+    # 头部与黑马
+    tops = [{"slug": t["slug"], "name": t["name"], "top": [_brief(c) for c in sorted((c for c in cos if c["track"] == t["slug"]),
+                                                                                       key=_rev, reverse=True)[:3]]} for t in tracks]
+    horses = sorted((c for c in cos if HORSE_MIN <= _rev(c) <= HORSE_MAX and (c.get("growth_30d") or 0) >= HORSE_GROWTH),
+                    key=lambda c: c["growth_30d"], reverse=True)[:12]
+    # 打法汇总：详情页里的获客渠道 / 定价方式（按家数 + 按收入），拆解卡里的「可抄的打法」
+    ext = {r["id"]: _j(r["ext"], {}) for r in db.rows("SELECT id, ext FROM intel_company WHERE kind='startup' AND ai=1 AND enabled=1")}
+    with_detail = [c for c in cos if _detail_ok(ext.get(c["id"], {}))]
+    def agg(key_of) -> list[dict]:  # 一家可以有多个渠道 / 定价方式：按家数计，同时累计这些公司的收入
+        n: dict[str, list] = {}
+        for c in with_detail:
+            for k in set(key_of(ext[c["id"]])):
+                n.setdefault(k, [0, 0.0])
+                n[k][0] += 1
+                n[k][1] += _rev(c)
+        return [{"name": k, "n": v[0], "rev": v[1]} for k, v in sorted(n.items(), key=lambda x: -x[1][0])]
+    chs = lambda e: e.get("channels") or []  # noqa: E731
+    channels = [{**x, "label": st.CHANNEL_ZH.get(x["name"], x["name"])} for x in agg(chs)]
+    families = agg(lambda e: [st.channel_family(ch) for ch in chs(e)])
+    pricing = agg(lambda e: st.pricing_kinds(str(e.get("pricing") or "")))
+    no_channel = sum(1 for c in with_detail if not chs(ext[c["id"]]))
+    plays = []
+    for r in db.rows("SELECT p.company_id, p.sections, p.created_at FROM intel_profile p WHERE p.complete=1 AND p.id IN "
+                     "(SELECT max(id) FROM intel_profile GROUP BY company_id) ORDER BY p.created_at DESC LIMIT 12"):
+        c = by_id.get(r["company_id"])
+        txt = _j(r["sections"], {}).get("可抄的打法", "")
+        if c and txt:
+            plays.append({**_brief(c), "plays": txt, "at": r["created_at"]})
+    return {"days": days, "since": since, "total": len(cos), "total_rev": sum(_rev(c) for c in cos), "tracks": tracks,
+            "events": events[:30], "gainers": [_brief(c) for c in sorted(big, key=lambda c: c["growth_30d"], reverse=True)[:8]],
+            "losers": [_brief(c) for c in sorted(big, key=lambda c: c["growth_30d"])[:8] if c["growth_30d"] < 0],
+            "new": [_brief(c) for c in sorted(new, key=_rev, reverse=True)[:20]], "new_total": len(new), "coverage_since": cov,
+            "on_sale": [_brief(c) for c in sorted((c for c in cos if c.get("on_sale") == 1), key=_rev, reverse=True)[:8]],
+            "tops": tops, "horses": [_brief(c) for c in horses],
+            "horse_rule": {"min": HORSE_MIN, "max": HORSE_MAX, "growth": HORSE_GROWTH},
+            "channels": channels[:15], "families": families, "pricing": pricing, "detail_n": len(with_detail), "no_channel": no_channel, "plays": plays,
+            "last": _state("startup_last") or {}}
 
 
 # ---------- P2c 生意拆解卡 ----------
@@ -1219,6 +1293,11 @@ def list_startups(track: str = "", q: str = "", sort: str = "rev", watch: int = 
             "last": last, "pending_tracks": (db.row("SELECT count(*) AS n FROM intel_company WHERE kind='startup' AND enabled=1 "
                                                     "AND track='' AND track_manual=0") or {}).get("n", 0),
             "profiles_today": _profiles_today(), "profiles_per_day": cfg("profiles_per_day")}
+
+
+@router.get("/overview")
+def get_overview(days: int = 7):
+    return overview(days)
 
 
 @router.get("/tracks")

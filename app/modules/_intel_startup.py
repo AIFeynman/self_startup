@@ -441,3 +441,43 @@ def extract_arr(items: list[dict]) -> tuple[list[dict], list[str]]:
             out.append({"item_id": it["id"], "company": x["company"].strip()[:80], "metric": x["metric"], "value": v,
                         "quote": (x.get("quote") or "")[:300]})
     return out, errors
+
+
+# ---------- 总览用的归类：获客渠道（详情页 marketingChannels）/ 定价方式（aiEnrichment.pricingModel 自由文本） ----------
+
+CHANNEL_ZH = {"seo": "SEO", "blog": "博客", "content-marketing": "内容营销", "newsletter": "Newsletter", "instagram": "Instagram",
+              "tiktok": "TikTok", "linkedin": "LinkedIn", "twitter": "X / Twitter", "youtube": "YouTube", "facebook": "Facebook",
+              "reddit": "Reddit", "pinterest": "Pinterest", "forums": "论坛", "discord": "Discord", "slack": "Slack 社群",
+              "hacker-news": "Hacker News", "product-hunt": "Product Hunt", "meta-ads": "Meta 广告", "google-ads": "Google 广告",
+              "tiktok-ads": "TikTok 广告", "youtube-ads": "YouTube 广告", "twitter-ads": "X 广告", "linkedin-ads": "LinkedIn 广告",
+              "influencers": "达人合作", "affiliate": "联盟分销", "partnerships": "渠道合作", "cold-email": "冷邮件",
+              "cold-dm": "冷私信", "cold-calling": "电话销售", "email-marketing": "邮件营销", "word-of-mouth": "口碑",
+              "app-store-optimization": "应用商店优化", "events": "线下活动", "press-pr": "媒体公关"}
+CHANNEL_FAMILY = [("内容 / SEO", {"seo", "blog", "content-marketing", "newsletter"}),
+                  ("社媒自然流量", {"instagram", "tiktok", "linkedin", "twitter", "youtube", "facebook", "reddit", "pinterest",
+                                "forums", "discord", "slack", "hacker-news", "product-hunt"}),
+                  ("付费广告", {"meta-ads", "google-ads", "tiktok-ads", "youtube-ads", "twitter-ads", "linkedin-ads"}),
+                  ("达人 / 联盟", {"influencers", "affiliate", "partnerships"}),
+                  ("主动外联", {"cold-email", "cold-dm", "cold-calling", "email-marketing"}),
+                  ("口碑 / 商店 / 公关", {"word-of-mouth", "app-store-optimization", "events", "press-pr"})]
+
+
+def channel_family(ch: str) -> str:
+    if ch.endswith("-ads"):
+        return "付费广告"
+    return next((f for f, s in CHANNEL_FAMILY if ch in s), "其它")
+
+
+PRICING_RULES = [("订阅制", r"subscription|/\s*mo(nth)?\b|per month|monthly|/\s*yr|per year|annual|billed|\bplans?\b"),
+                 ("免费增值 / 试用", r"\bfree\b|freemium|trial"),
+                 ("按量 / 点数", r"credit|token|usage|pay[- ]as[- ]you[- ]go|per (image|video|minute|request|generation)"),
+                 ("一次性 / 终身", r"one[- ]time|lifetime|once"),
+                 ("应用内购买", r"in[- ]app"),
+                 ("企业 / 定制", r"enterprise|custom|contact|agency")]
+
+
+def pricing_kinds(text: str) -> list[str]:
+    """定价方式自由文本 → 几类（可多选）；空文本 → []。"""
+    t = re.sub(r"[\u2010-\u2015]", "-", (text or "").lower())  # 详情页里常见不换行连字符（in‑app）
+    return [k for k, rx in PRICING_RULES if re.search(rx, t)] if t else []
+
