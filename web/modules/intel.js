@@ -1,7 +1,8 @@
 // 产品雷达：关注公司的产品 / 商业变化流，B 级及以上带「五层解读卡」。
 // 路由：#intel（变化流）· #intel/e/<id>（事件 + 解读卡）· #intel/c/<slug>（公司时间线；创业公司带收入曲线 + 生意拆解卡）
 //       #intel/overview（总览：赛道格局 / 本周异动 / 头部与黑马 / 打法汇总）
-//       #intel/startups · #intel/tracks · #intel/t/<赛道> · #intel/ph · #intel/companies · #intel/sources
+//       #intel/startups · #intel/tracks · #intel/t/<赛道> · #intel/ph · #intel/oss/<查询>（开源雷达，见 _intel_oss.js）· #intel/companies · #intel/sources
+import oss from './_intel_oss.js';
 const LV = { S: ['S', 'err'], A: ['A', 'warn'], B: ['B', 'ok'], C: ['C', 'gray'] };
 const CARD = { queued: ['解读中', 'line'], done: ['解读卡', 'ok'], incomplete: ['解读卡不完整', 'warn'], failed: ['解读失败', 'err'] };
 const DAYS = [['7', '7 天'], ['30', '30 天'], ['90', '90 天'], ['0', '全部']];
@@ -10,7 +11,7 @@ const ss = { track: '', sort: 'rev', q: '', watch: false, all: false };  // 创�
 const PROFILE = { queued: ['拆解中', 'line'], done: ['拆解卡', 'ok'], incomplete: ['拆解卡不完整', 'warn'], failed: ['拆解失败', 'err'] };
 const os = { sort: 'rev' };  // 总览里赛道格局的排序
 const TABS = [['变化流', '#intel'], ['总览', '#intel/overview'], ['创业公司', '#intel/startups'], ['赛道', '#intel/tracks'], ['PH 日榜', '#intel/ph'],
-  ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
+  ['开源雷达', '#intel/oss'], ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
 const tabs = (h, active) => h('div.tabs', {}, TABS.map(([t, href]) =>
   h('button' + (href === active ? '.active' : ''), { onclick: () => { location.hash = href; } }, t)));
 
@@ -589,6 +590,7 @@ export default {
     if (view === 'tracks') return renderTracks(el, ctx);
     if (view === 't' && arg) return renderTrack(el, ctx, arg);
     if (view === 'ph') return renderPh(el, ctx);
+    if (view === 'oss') return oss.render(el, ctx, tabs(ctx.h, '#intel/oss'));
     return renderStream(el, ctx);
   },
 };

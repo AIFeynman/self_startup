@@ -29,6 +29,7 @@ from . import _intel_events as ev
 from . import _intel_snap as snap
 from . import _intel_startup as st
 from . import _intel_watch as watch
+from . import _oss_radar as oss
 
 log = logging.getLogger(__name__)
 
@@ -165,7 +166,7 @@ CREATE TABLE IF NOT EXISTS intel_ph_day (      -- Product Hunt 每日 AI 榜 + �
     summary     TEXT DEFAULT '',
     created_at  TEXT
 );
-"""
+""" + oss.SCHEMA
 
 SNAP_DIR = db.DATA_DIR / "intel" / "snapshots"
 CFG_DEFAULTS = {
@@ -1115,6 +1116,7 @@ def on_startup():
     if os.environ.get("SELF_STARTUP_NO_AUTOREFRESH"):
         return
     threading.Thread(target=_loop, daemon=True, name="intel-loop").start()
+    oss.on_startup()
 
 
 # ---------- 接口 ----------
@@ -1416,4 +1418,8 @@ def agent_context(ref: str) -> str:
              "", "## 近 14 天 B+ 事件（日期 | 级别 | 公司 | 标题 | 解读卡）"]
     for r in rows:
         lines.append(f"- {r['date']} | {r['level']} | {r['cn']} | [{r['id']}] {r['title']} | {r['card_status'] or '-'}")
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n\n" + oss.agent_context(ref)
+
+
+router.include_router(oss.router)   # 开源雷达：/api/intel/oss/...
+labels_for = oss.labels_for        # 信息推荐给 GitHub 条目挂雷达标签用

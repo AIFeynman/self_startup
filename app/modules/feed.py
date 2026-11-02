@@ -440,7 +440,9 @@ def run_judge(now: datetime | None = None) -> dict:
     """给最近的 Trending 仓库（是否 AI）、官方内容（是否重要）、Reddit / 视频搜索结果（有没有干货）补 Jev 判断，写回 extra。没判过的排序时走关键词规则。"""
     now = now or datetime.now(timezone.utc)
     todo = []
-    for it in _load_items():
+    items = _load_items()
+    radar = oss_labels(items)
+    for it in items:
         ex = it["extra"]
         if ex.get("judge_src") == judge.judge_key(it):
             continue
@@ -448,6 +450,11 @@ def run_judge(now: datetime | None = None) -> dict:
         if not d or (now - d).total_seconds() > rk.PIN_DAYS * 86400:
             continue
         if rk.trending_only(it):
+            if lab := radar.get(ex.get("repo") or ""):
+                # 开源雷达库里有：用它的 AI 关系（看过 README 和功能标签），省一次 Jev
+                _patch_extra(it["id"], {"judge_ai": 0.0 if lab["ai"] == "none" else 1.0, "judge_by": "oss",
+                                        "judge_src": judge.judge_key(it)})
+                continue
             todo.append((it, "ai", ""))
         elif org := rk.official_org(it):
             todo.append((it, "important", org))
@@ -464,12 +471,41 @@ def run_judge(now: datetime | None = None) -> dict:
     return {"count": len(got), "errors": errors}
 
 
+def oss_labels(items: list[dict]) -> dict[str, dict]:
+    """GitHub 条目在开源雷达库里的标签（owner/repo → {ai, s, d, t}）；顺手把领域和功能标签写进 extra.oss，卡片上可跳「同类项目」。"""
+    names = [it["extra"].get("repo") for it in items if it.get("source") == "github" and (it.get("extra") or {}).get("repo")]
+    if not names:
+        return {}
+    try:
+        from . import intel
+        got = intel.labels_for(names)
+    except Exception as e:  # noqa: BLE001  雷达表还没建 / 板块没加载，不影响信息推荐
+        log.debug("oss labels unavailable: %s", e)
+        return {}
+    for it in items:
+        lab = got.get((it.get("extra") or {}).get("repo") or "")
+        if lab and (it["extra"].get("oss") or {}).get("src") != lab["label_src"]:
+            _patch_extra(it["id"], {"oss": {"d": lab["d"], "t": lab["t"][:6], "src": lab["label_src"]}})
+    return got
+
+
+def _patch_extra(item_id: str, patch: dict) -> None:
+    row = db.row("SELECT extra FROM feed_items WHERE id=?", [item_id])
+    ex = {**_extra(row or {}), **patch}
+    db.execute("UPDATE feed_items SET extra=? WHERE id=?", [json.dumps(ex, ensure_ascii=False), item_id])
+
+
 def run_gists() -> dict:
     """给排序前列里缺中文一句话（或标题 / 简介变了）的条目生成，写回 extra.gist。"""
     try:
         # 每个标签页的前列都要有：分类之外还有「X 长文」页
         tabs = {t: ranked(type_=t) for t in [*TYPES, "x_article", "hn"]}
         todo = gist.pick(ranked(), tabs, int(cfg("gist_top")), int(cfg("gist_per_type")))
+        radar = oss_labels(todo)
+        for it in [x for x in todo if (x["extra"].get("repo") or "") in radar]:
+            # 开源雷达已有中文一句话：直接用，不再单独生成
+            _patch_extra(it["id"], {"gist": radar[it["extra"]["repo"]]["s"], "gist_src": gist.gist_key(it)})
+        todo = [x for x in todo if (x["extra"].get("repo") or "") not in radar]
         if not todo:
             return {"count": 0, "errors": []}
         got, errors = gist.generate(todo, model=str(cfg("gist_model")))

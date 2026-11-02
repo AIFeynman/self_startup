@@ -1,0 +1,164 @@
+### 我想做PDF解析  （重排 16.0s, $0.0018）
+   3 opendataloader-project/opendataloader-pdf
+   3 pymupdf/PyMuPDF
+   3 jsvine/pdfplumber
+   3 opendatalab/MinerU
+   3 docling-project/docling
+   3 allenai/olmocr
+   3 datalab-to/marker
+   3 getomni-ai/zerox
+  按 star（分≥2）: ['markitdown', 'Stirling-PDF', 'PaddleOCR', 'MinerU', 'docling', 'pdf.js', 'marker', 'OCRmyPDF']
+
+### 识别图片里的文字  （重排 13.2s, $0.0013）
+   3 JaidedAI/EasyOCR
+   3 PaddlePaddle/PaddleOCR
+   3 tesseract-ocr/tesseract
+   3 datalab-to/surya
+   2 Stirling-Tools/Stirling-PDF
+   2 ocrmypdf/OCRmyPDF
+   2 opendatalab/MinerU
+   2 opendataloader-project/opendataloader-pdf
+  按 star（分≥2）: ['Stirling-PDF', 'PaddleOCR', 'MinerU', 'tesseract', 'docling', 'marker', 'OCRmyPDF', 'opendataloader-pdf']
+
+### 把网页转成 markdown 给大模型用  （重排 18.6s, $0.0022）
+   3 firecrawl/firecrawl
+   3 unclecode/crawl4ai
+   2 apify/crawlee
+   2 microsoft/markitdown
+   2 docling-project/docling
+   2 Unstructured-IO/unstructured
+   1 datalab-to/marker
+   1 opendatalab/MinerU
+  按 star（分≥2）: ['firecrawl', 'markitdown', 'crawl4ai', 'docling', 'crawlee', 'unstructured']
+
+### 生成 PDF 报表  （重排 20.2s, $0.0024）
+   3 pdfme/pdfme
+   2 Studiosity/grover
+   2 Stirling-Tools/Stirling-PDF
+   2 pymupdf/PyMuPDF
+   2 Hopding/pdf-lib
+   1 storytold/pdfcraft
+   1 ocrmypdf/OCRmyPDF
+   1 nexu-io/open-design
+  按 star（分≥2）: ['Stirling-PDF', 'PyMuPDF', 'pdf-lib', 'pdfme', 'grover']
+
+### 语音转文字  （重排 13.0s, $0.0009）
+   3 openai/whisper
+   3 murtaza-nasir/speakr
+   3 zachlatta/freeflow
+   2 debpalash/VoiceStudio
+   1 JaidedAI/EasyOCR
+   1 Unstructured-IO/unstructured
+   0 kishanrajput23/Jarvis-Desktop-Voice-Assistant
+   0 AUTOMATIC1111/stable-diffusion-webui
+  按 star（分≥2）: ['whisper', 'VoiceStudio', 'speakr', 'freeflow']
+
+### 搭一个 RAG 知识库  （重排 13.7s, $0.0014）
+   3 infiniflow/ragflow
+   2 open-webui/open-webui
+   2 volcengine/OpenViking
+   2 langchain-ai/langchainjs
+   2 oceanbase/seekdb
+   2 Unstructured-IO/unstructured
+   2 tianma-if/edgeever
+   2 rocketride-org/rocketride-server
+  按 star（分≥2）: ['open-webui', 'ragflow', 'OpenViking', 'rocketride-server', 'langchainjs', 'unstructured', 'seekdb', 'edgeever']
+
+### 让 AI 管理 k8s 集群  （重排 15.8s, $0.0021）
+   3 containers/kubernetes-mcp-server
+   2 kubernetes/kubernetes
+   1 kelseyhightower/kubernetes-the-hard-way
+   1 bitnami/charts
+   1 iam-veeramalla/kubernetes-troubleshooting-zero-to-hero
+   1 vilaca/awesome-k8s-tools
+   1 apache/yunikorn-core
+   1 k8gb-io/k8gb
+  按 star（分≥2）: ['kubernetes', 'kubernetes-mcp-server']
+
+### 路由器刷固件  （重排 12.4s, $0.0011）
+   3 coolsnowwolf/lede
+   3 openwrt/openwrt
+   3 lede-project/source
+   0 clash-verge-rev/clash-verge-rev
+   0 getlantern/lantern
+   0 233boy/v2ray
+   0 espressif/esp-idf
+   0 espressif/arduino-esp32
+  按 star（分≥2）: ['lede', 'openwrt', 'source']
+
+### 拦截广告  （重排 15.4s, $0.0015）
+   3 0xERR0R/blocky
+   3 217heidai/adblockfilters
+   3 blokadaorg/blokada
+   3 easylist/easylist
+   2 RPiList/specials
+   0 clash-verge-rev/clash-verge-rev
+   0 home-assistant/core
+   0 coolsnowwolf/lede
+  按 star（分≥2）: ['adblockfilters', 'blocky', 'blokada', 'easylist', 'specials']
+
+### 做一个 WhatsApp 机器人  （重排 11.2s, $0.0014）
+   3 Ainz-devs/OVL-MD-V2
+   3 souravkl11/raganork
+   1 anasty17/mirror-leech-telegram-bot
+   0 slackapi/bolt-python
+   0 RocketChat/Rocket.Chat
+   0 xtekky/gpt4free
+   0 firecrawl/firecrawl
+   0 codebymitch/TitanBot
+  按 star（分≥2）: ['OVL-MD-V2', 'raganork']
+
+### 统一多家大模型 API 的网关  （重排 15.4s, $0.0020）
+   3 cheaper-inference/OmniRoute
+   3 BerriAI/litellm
+   3 tbphp/gpt-load
+   2 xtekky/gpt4free
+   2 Draculabo/AntigravityManager
+   1 open-webui/open-webui
+   1 farion1231/cc-switch
+   1 vllm-project/vllm
+  按 star（分≥2）: ['OmniRoute', 'gpt4free', 'litellm', 'gpt-load', 'AntigravityManager']
+
+### 学 Spring Cloud 微服务的教程  （重排 15.3s, $0.0016）
+   3 forezp/SpringCloudLearning
+   1 xkcoding/spring-boot-demo
+   1 ityouknow/spring-boot-examples
+   1 JeffLi1993/springboot-learning-example
+   1 apolloconfig/apollo
+   1 spring-projects/spring-integration-samples
+   1 spring-guides/tut-spring-security-and-angular-js
+   1 spring-projects/spring-framework
+  按 star（分≥2）: ['SpringCloudLearning']
+
+### 数学公式截图转 LaTeX  （重排 19.7s, $0.0020）
+   3 lukas-blecher/LaTeX-OCR
+   2 opendatalab/MinerU
+   2 datalab-to/marker
+   2 PaddlePaddle/PaddleOCR
+   1 JaidedAI/EasyOCR
+   1 tesseract-ocr/tesseract
+   1 microsoft/markitdown
+   1 opendataloader-project/opendataloader-pdf
+  按 star（分≥2）: ['PaddleOCR', 'MinerU', 'marker', 'LaTeX-OCR']
+
+### 给 Claude Code 省 token  （重排 20.3s, $0.0019）
+   3 JuliusBrussee/caveman
+   2 cheaper-inference/OmniRoute
+   1 x1xhlol/system-prompts-and-models-of-ai-tools
+   1 shanraisshan/claude-code-best-practice
+   1 farion1231/cc-switch
+   1 mlflow/mlflow
+   1 tbphp/gpt-load
+   1 Draculabo/AntigravityManager
+  按 star（分≥2）: ['caveman', 'OmniRoute']
+
+### 本地音乐播放器  （重排 13.6s, $0.0010）
+   3 OxygenCobalt/Auxio
+   2 LUC4N3X/Levyra-deepsound
+   1 peach-mitao/peach
+   1 lklynet/aurral
+   1 Clash-Projects/LastWave-Native
+   1 eritislami/evobot
+   1 sunnypatell/sunnify-spotify-downloader
+   1 Binaryify/NeteaseCloudMusicApi
+  按 star（分≥2）: ['Auxio', 'Levyra-deepsound']
