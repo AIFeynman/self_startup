@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +16,8 @@ ASSETS = {
     "512890.SS": {"mu": 0.09, "spread": 0.14},
 }
 CORR = {a: {b: 1.0 if a == b else (0.0 if "512890.SS" in (a, b) else 0.6) for b in ASSETS} for a in ASSETS}
+# Mild enough that the drawdown limit does not bind unless a test tightens it.
+STRESS = {"QQQ": -0.05, "GOOGL": -0.05, "MSFT": -0.05, "512890.SS": -0.03}
 
 
 def replay(rule: float, equal: float, hold: float, drawdown: float = -0.3) -> dict:
@@ -98,7 +101,7 @@ if __name__ == "__main__":
 
 class SafeAllocationTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.safe = tp.safe_allocate(ASSETS, CORR, 0.10)
+        self.safe = tp.safe_allocate(ASSETS, CORR, 0.10, STRESS)
 
     def test_pick_meets_the_steady_constraints(self) -> None:
         stats, weights = self.safe["stats"], self.safe["weights"]
@@ -120,10 +123,38 @@ class SafeAllocationTest(unittest.TestCase):
 
     def test_falls_back_to_the_steadiest_mix_when_nothing_passes(self) -> None:
         with mock.patch.object(tp, "SAFE_NONNEG", 0.999):
-            safe = tp.safe_allocate(ASSETS, CORR, 0.10)
+            safe = tp.safe_allocate(ASSETS, CORR, 0.10, STRESS)
         self.assertTrue(safe["relaxed"])
         self.assertFalse(any(row["ok"] for row in safe["options"]))
         self.assertAlmostEqual(max(row["nonneg"] for row in safe["options"]), safe["stats"]["nonneg"])
+
+    def test_drawdown_limit_binds_and_moves_the_pick(self) -> None:
+        assets = {**ASSETS, tp.BOND: {"mu": 0.035, "spread": 0.02}}
+        corr = {a: {b: 1.0 if a == b else (0.0 if tp.BOND in (a, b) else CORR[a][b]) for b in assets} for a in assets}
+        loose = tp.safe_allocate(assets, corr, 0.10, {s: -0.01 for s in assets})
+        stress = {"QQQ": -0.30, "GOOGL": -0.40, "MSFT": -0.35, "512890.SS": -0.15, tp.BOND: -0.01}
+        safe = tp.safe_allocate(assets, corr, 0.10, stress)
+        self.assertFalse(safe["relaxed"])
+        self.assertGreaterEqual(safe["stats"]["stress_drawdown"], -tp.SAFE_MAX_DRAWDOWN - 1e-9)
+        self.assertAlmostEqual(sum(w * stress[s] for s, w in safe["weights"].items()), safe["stats"]["stress_drawdown"])
+        self.assertLess(safe["stats"]["probability"], loose["stats"]["probability"])
+        self.assertEqual({"max_drawdown": tp.SAFE_MAX_DRAWDOWN, "grid": 1 / tp.SAFE_GRID},
+                         {k: safe["constraints"][k] for k in ("max_drawdown", "grid")})
+        for row in safe["options"]:
+            if row["ok"]:
+                self.assertGreaterEqual(row["stress_drawdown"], -tp.SAFE_MAX_DRAWDOWN - 1e-9)
+        by_holdings = {tuple(row["holdings"]): row for row in safe["options"]}
+        self.assertFalse(by_holdings[("QQQ",)]["ok"])
+
+    def test_stress_drawdowns_use_the_window_and_the_funds_own_record(self) -> None:
+        start = int(datetime(2020, 1, 1, tzinfo=UTC).timestamp())
+        ts = [start - 86_400, start, start + 86_400, start + 2 * 86_400]
+        stress = tp.stress_drawdowns({
+            "A": {"ts": ts, "close": [100.0, 10.0, 8.0, 9.0]},       # the crash before the window does not count
+            "B": {"ts": ts, "close": [1.0, 1.0, 0.99, 1.0], "funds": {"x": {"max_drawdown": -0.03}, "y": {"max_drawdown": -0.001}}},
+        }, ["A", "B"])
+        self.assertAlmostEqual(-0.2, stress["A"])
+        self.assertAlmostEqual(-0.03, stress["B"])
 
 
 class LadderTest(unittest.TestCase):
@@ -197,6 +228,16 @@ class MixHistoryTest(unittest.TestCase):
         self.assertEqual(1.0, mix["nonneg_rate"])
         self.assertIsNone(tp.mix_history({"A": {"ts": ts, "close": up}}, {"A": 0.0}, 0.05))
         self.assertIsNone(tp.mix_history({"A": {"ts": ts[:tp.YEAR], "close": up[:tp.YEAR]}}, {"A": 1.0}, 0.05))
+
+    def test_max_drawdown_of_the_rebalanced_mix(self) -> None:
+        n = tp.YEAR * 2
+        ts = [86_400 * i for i in range(n)]
+        # A halves inside one rebalancing period, then stays flat; B never moves.
+        drop = [100.0 if i < tp.STEP // 2 else 50.0 for i in range(n)]
+        flat = [50.0] * n
+        histories = {"A": {"ts": ts, "close": drop}, "B": {"ts": ts, "close": flat}}
+        self.assertAlmostEqual(-0.1, tp.mix_history(histories, {"A": 0.2, "B": 0.8}, 0.05)["max_drawdown"])
+        self.assertAlmostEqual(0.0, tp.mix_history(histories, {"B": 1.0}, 0.05)["max_drawdown"])
 
 
 class FxTest(unittest.TestCase):

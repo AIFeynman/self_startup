@@ -68,9 +68,14 @@ TIE_PROBABILITY = 0.01
 GRID = 10
 STEP = 21
 # The steady mode: no minimum per asset (so “QQQ + dividend only” is allowed), but the year must end flat or
-# better with at least this probability and the bad decile must stay above the floor; then maximize the target.
+# better with at least this probability, the bad decile must stay above the floor and the stress drawdown within
+# the limit; then maximize the target. A 5% limit leaves room only for small equity slices, hence the finer grid.
 SAFE_NONNEG = 0.80
 SAFE_P10_FLOOR = -0.10
+SAFE_MAX_DRAWDOWN = 0.05
+SAFE_GRID = 20
+# Stress window: covers the 2020 crash and the 2022 bear market, not 2000 or 2008 (the bond funds and the ETF are younger).
+STRESS_START = "2020-01-01"
 # Buy ladder: part at market, the rest as limit orders this far below today's price, valid LADDER_DAYS; whatever
 # has not filled by then is bought at that day's price. Shapes are the share of cash per rung.
 LADDER_DEPTHS = (0.0, 0.03, 0.06, 0.10)
@@ -532,7 +537,7 @@ def portfolio(weights: dict[str, float], assets: dict[str, dict[str, float]], co
             "loss10": 1 - hit_probability(mu, s, -0.10), "nonneg": hit_probability(mu, s, 0.0)}
 
 
-def _grid(symbols: Sequence[str]) -> Iterable[dict[str, float]]:
+def _grid(symbols: Sequence[str], steps: int = GRID) -> Iterable[dict[str, float]]:
     def rec(index: int, left: int) -> Iterable[list[int]]:
         if index == len(symbols) - 1:
             yield [left]
@@ -540,8 +545,8 @@ def _grid(symbols: Sequence[str]) -> Iterable[dict[str, float]]:
         for units in range(left + 1):
             for rest in rec(index + 1, left - units):
                 yield [units, *rest]
-    for units in rec(0, GRID):
-        yield {symbol: unit / GRID for symbol, unit in zip(symbols, units)}
+    for units in rec(0, steps):
+        yield {symbol: unit / steps for symbol, unit in zip(symbols, units)}
 
 
 def allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str, float]], target: float) -> dict[str, Any]:
@@ -578,17 +583,32 @@ def allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str, floa
 SUMMARY_KEYS = ("probability", "nonneg", "p10", "p20", "p50", "p90", "loss10")
 
 
-def safe_allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str, float]], target: float) -> dict[str, Any]:
-    """Steady mix: any subset of the assets (single stocks still capped), P(year >= 0) >= SAFE_NONNEG and
-    P10 >= SAFE_P10_FLOOR, then the highest probability of the target; within a point of it, the most likely
-    to end flat or better. If nothing passes, the mix most likely to end flat or better, flagged ``relaxed``."""
+def stress_drawdowns(histories: dict[str, dict[str, Any]], symbols: Sequence[str]) -> dict[str, float]:
+    """Each asset's worst peak-to-trough since STRESS_START; a basket also answers for its funds' longer own records."""
+    start = datetime.fromisoformat(STRESS_START).replace(tzinfo=UTC).timestamp()
+    stress = {}
+    for symbol in symbols:
+        history = histories[symbol]
+        worst = _max_drawdown([close for ts, close in zip(history["ts"], history["close"]) if ts >= start])
+        stress[symbol] = min([worst, *(fund["max_drawdown"] for fund in history.get("funds", {}).values())])
+    return stress
+
+
+def safe_allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str, float]], target: float,
+                  stress: dict[str, float]) -> dict[str, Any]:
+    """Steady mix: any subset of the assets (single stocks still capped), P(year >= 0) >= SAFE_NONNEG,
+    P10 >= SAFE_P10_FLOOR and a stress drawdown (every holding at its worst at once, ``stress`` from
+    stress_drawdowns) within SAFE_MAX_DRAWDOWN, then the highest probability of the target; within a point of it,
+    the most likely to end flat or better. If nothing passes, the mix most likely to end flat or better, flagged ``relaxed``."""
     symbols = list(assets)
     rows = []
-    for weights in _grid(symbols):
+    for weights in _grid(symbols, SAFE_GRID):
         if any(weights.get(s, 0) > MAX_SINGLE_STOCK + 1e-9 for s in SINGLE_STOCKS):
             continue
         stats = portfolio(weights, assets, corr, target)
-        rows.append((weights, stats, stats["nonneg"] >= SAFE_NONNEG and stats["p10"] >= SAFE_P10_FLOOR))
+        stats["stress_drawdown"] = sum(w * stress[s] for s, w in weights.items())
+        rows.append((weights, stats, stats["nonneg"] >= SAFE_NONNEG and stats["p10"] >= SAFE_P10_FLOOR
+                     and stats["stress_drawdown"] >= -SAFE_MAX_DRAWDOWN - 1e-9))
     feasible = [row for row in rows if row[2]]
     if feasible:
         top = max(stats["probability"] for _, stats, _ in feasible)
@@ -602,16 +622,17 @@ def safe_allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str,
         rank = (ok, s["probability"] if ok else s["nonneg"])
         if key not in best or rank > best[key][0]:
             best[key] = (rank, w, s, ok)
-    options = sorted(({"holdings": list(key), "weights": w, "ok": ok, **{k: s[k] for k in SUMMARY_KEYS}}
+    options = sorted(({"holdings": list(key), "weights": w, "ok": ok, "stress_drawdown": s["stress_drawdown"], **{k: s[k] for k in SUMMARY_KEYS}}
                       for key, (_, w, s, ok) in best.items()), key=lambda row: (not row["ok"], -row["probability"]))
-    return {"weights": weights, "stats": stats, "relaxed": not feasible, "options": options,
-            "constraints": {"nonneg": SAFE_NONNEG, "p10_floor": SAFE_P10_FLOOR, "max_single_stock": MAX_SINGLE_STOCK,
-                            "grid": 1 / GRID, "tie": TIE_PROBABILITY}}
+    return {"weights": weights, "stats": stats, "relaxed": not feasible, "options": options, "stress": stress,
+            "constraints": {"nonneg": SAFE_NONNEG, "p10_floor": SAFE_P10_FLOOR, "max_drawdown": SAFE_MAX_DRAWDOWN,
+                            "stress_start": STRESS_START, "max_single_stock": MAX_SINGLE_STOCK, "grid": 1 / SAFE_GRID, "tie": TIE_PROBABILITY}}
 
 
 def mix_history(histories: dict[str, dict[str, list[float]]], weights: dict[str, float], target: float,
                 days: int = YEAR) -> dict[str, Any] | None:
-    """What fixed weights bought and held for ``days`` actually did, one start every STEP days on the common record."""
+    """What fixed weights bought and held for ``days`` actually did, one start every STEP days on the common record,
+    plus the worst drawdown of the same mix rebalanced every STEP days over that whole record."""
     held = [s for s, w in weights.items() if w > 0]
     if not held:
         return None
@@ -620,7 +641,12 @@ def mix_history(histories: dict[str, dict[str, list[float]]], weights: dict[str,
         return None
     returns = [sum(weights[s] * closes[s][t + days] / closes[s][t] for s in held) - 1 for t in range(0, len(ts) - days, STEP)]
     ordered = sorted(returns)
+    nav = [1.0]
+    for t in range(0, len(ts) - 1, STEP):
+        base = nav[-1]
+        nav += [base * sum(weights[s] * closes[s][u] / closes[s][t] for s in held) for u in range(t + 1, min(t + STEP, len(ts) - 1) + 1)]
     return {"start": datetime.fromtimestamp(ts[0], UTC).date().isoformat(), "n": len(returns), "n_eff": len(returns) * STEP / YEAR,
+            "max_drawdown": _max_drawdown(nav),
             "hit_rate": sum(r >= target for r in returns) / len(returns), "nonneg_rate": sum(r >= 0 for r in returns) / len(returns),
             "worst": ordered[0], "median": ordered[len(ordered) // 2]}
 

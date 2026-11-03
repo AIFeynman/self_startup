@@ -95,10 +95,10 @@ function renderTarget(box, ctx) {
   const weights = tpWeights(d, plan.weights);
   const fund = ['可分配资金', funding ? `${int(funding.net)} ${funding.currency}` : '—', funding ? `美团剩余 ${int(funding.shares)} 股 × ${funding.price}，扣费 ${int(funding.costs)}、税 ${int(funding.tax)}` : '没有读到美团持仓'];
   const top = tp.mode === 'safe' ? [
-    ['稳妥组合达标概率', pr(s.probability), (plan.relaxed ? `${weights}（没有组合同时满足两条约束，显示最不容易亏的）` : weights) + wait, true],
+    ['稳妥组合达标概率', pr(s.probability), (plan.relaxed ? `${weights}（没有组合同时满足三条约束，显示最不容易亏的）` : weights) + wait, true],
     ['一年不亏的概率', pr(s.nonneg), `约束 ≥ ${pr(plan.constraints.nonneg)}；亏超 10% 的概率 ${pr(s.loss10)}`],
-    ['80% 把握的收益', ret(s.p20), `有八成把握一年后至少这么多；中位 ${ret(s.p50)}`],
-    ['悲观 10%', ret(s.p10), `约束不低于 ${ret(plan.constraints.p10_floor, 0)}；乐观 10% ${ret(s.p90)}`],
+    ['80% 把握的收益', ret(s.p20), `中位 ${ret(s.p50)}；悲观 10% ${ret(s.p10)}（约束不低于 ${ret(plan.constraints.p10_floor, 0)}）；乐观 10% ${ret(s.p90)}`],
+    ['压力回撤', ret(s.stress_drawdown), `约束不超过 ${pr(plan.constraints.max_drawdown)}（${plan.constraints.stress_start.slice(0, 4)} 年起，不含 2000、2008）；实际历史 ${hist ? `${ret(hist.max_drawdown)}（${hist.start.slice(0, 4)} 年起）` : '—'}`],
     ['历史回放：不亏 / 达标', hist ? `${pr(hist.nonneg_rate)} / ${pr(hist.hit_rate)}` : '—', histNote], fund,
   ] : [
     ['组合达标概率', pr(s.probability), weights + wait, true],
@@ -235,19 +235,19 @@ function allocationCard(d) {
   const cmpTable = `<h4 class="wl-h4">和其他做法比</h4>` + table(['组合', '达标', '不亏', '80% 把握', '悲观 10%', '中位'], cmp.map(([n, s, cur]) => `<tr class="${cur ? 'sel' : ''}"><td>${n}</td><td><b>${pr(s.probability)}</b></td><td>${pr(s.nonneg)}</td><td class="${tone(s.p20)}">${ret(s.p20)}</td><td class="${tone(s.p10)}">${ret(s.p10)}</td><td class="${tone(s.p50)}">${ret(s.p50)}</td></tr>`).join(''));
   let side;
   if (safe) {
-    const c = plan.constraints, key = (w) => Object.entries(w).map(([s, v]) => `${s}:${Math.round(v * 10)}`).join();
-    side = `<h4 class="wl-h4">只买其中几只行不行：每种持有方式里最好的权重</h4>` + table(['持有', '达标', '不亏', '80% 把握', '悲观 10%', '历史 不亏 / 达标', '稳妥约束'], plan.options.map((o) => {
-      const fails = [o.nonneg < c.nonneg - 1e-9 ? `不亏 < ${pr(c.nonneg)}` : '', o.p10 < c.p10_floor - 1e-9 ? `悲观 < ${ret(c.p10_floor, 0)}` : ''].filter(Boolean);
+    const c = plan.constraints, key = (w) => Object.entries(w).map(([s, v]) => `${s}:${Math.round(v * 100)}`).join();
+    side = `<h4 class="wl-h4">只买其中几只行不行：每种持有方式里最好的权重</h4>` + table(['持有', '达标', '不亏', '80% 把握', '悲观 10%', '回撤 压力 / 历史', '历史 不亏 / 达标', '稳妥约束'], plan.options.map((o) => {
+      const fails = [o.nonneg < c.nonneg - 1e-9 ? '不亏' : '', o.p10 < c.p10_floor - 1e-9 ? '悲观' : '', o.stress_drawdown < -c.max_drawdown - 1e-9 ? '回撤' : ''].filter(Boolean);
       const qd = o.holdings.length === 2 && o.holdings.includes('QQQ') && o.holdings.includes('512890.SS');
-      return `<tr class="${key(o.weights) === key(plan.weights) ? 'sel' : ''} ${o.ok ? '' : 'dim'}"><td>${tpWeights(d, o.weights)}${qd ? ' <span class="tag line">只买 QQQ + 红利低波</span>' : ''}</td><td><b>${pr(o.probability)}</b></td><td>${pr(o.nonneg)}</td><td class="${tone(o.p20)}">${ret(o.p20)}</td><td class="${tone(o.p10)}">${ret(o.p10)}</td>
-        <td>${o.history ? `${pr(o.history.nonneg_rate)} / ${pr(o.history.hit_rate)}` : '—'}</td><td class="${o.ok ? 'up' : 'down'}">${o.ok ? '✓ 满足' : `✕ ${fails.join('、')}`}</td></tr>`;
+      return `<tr class="${key(o.weights) === key(plan.weights) ? 'sel' : ''} ${o.ok ? '' : 'dim'}"><td class="wl-wrap">${tpWeights(d, o.weights)}${qd ? ' <span class="tag line">只买 QQQ + 红利低波</span>' : ''}</td><td><b>${pr(o.probability)}</b></td><td>${pr(o.nonneg)}</td><td class="${tone(o.p20)}">${ret(o.p20)}</td><td class="${tone(o.p10)}">${ret(o.p10)}</td>
+        <td>${ret(o.stress_drawdown)} / ${o.history ? ret(o.history.max_drawdown) : '—'}</td><td>${o.history ? `${pr(o.history.nonneg_rate)} / ${pr(o.history.hit_rate)}` : '—'}</td><td class="${o.ok ? 'up' : 'down'}">${o.ok ? '✓ 满足' : `✕ ${fails.join('、')}`}</td></tr>`;
     }).join(''));
   } else {
     side = `<h4 class="wl-h4">概率最高的几种权重（未加悲观约束前）</h4>` + table(['权重', '达标', '悲观 10%', '中位'], al.frontier.slice(0, 5).map((r) => `<tr><td>${tpWeights(d, r.weights)}</td><td>${pr(r.probability)}</td><td class="${tone(r.p10)}">${ret(r.p10)}</td><td>${ret(r.p50)}</td></tr>`).join(''));
   }
   const corr = `红利低波与美股科技的相关性约 ${(al.correlations?.QQQ?.['512890.SS'] ?? 0).toFixed(2)}、纯债基金约 ${(al.correlations?.QQQ?.[BOND] ?? 0).toFixed(2)}，它们的权重主要来自分散，而不是更高的预期收益。金额按今天全部卖出美团的税后净额估算。`;
   const how = safe
-    ? `选法：以 10% 为步长枚举所有持有方式（可以只买一两只，单只个股 ≤ ${Math.round(plan.constraints.max_single_stock * 100)}%），先要求一年不亏的概率 ≥ ${pr(plan.constraints.nonneg)}、悲观 10% 不低于 ${ret(plan.constraints.p10_floor, 0)}，再在满足的组合里取达标概率最高的；差距不到 ${Math.round(plan.constraints.tie * 100)} 个百分点时选更不容易亏的。「历史」是 ${plan.history?.start?.slice(0, 4) || ''} 年以来按同样权重买入持有 ${d.delay?.held_days || 252} 个交易日的实际结果，窗口互相重叠，只有约 ${plan.history?.n_eff?.toFixed(0) || '—'} 个独立年。${corr}`
+    ? `选法：以 ${Math.round(plan.constraints.grid * 100)}% 为步长枚举所有持有方式（可以只买一两只，单只个股 ≤ ${Math.round(plan.constraints.max_single_stock * 100)}%），先要求一年不亏的概率 ≥ ${pr(plan.constraints.nonneg)}、悲观 10% 不低于 ${ret(plan.constraints.p10_floor, 0)}、压力回撤不超过 ${pr(plan.constraints.max_drawdown)}（各持仓 ${plan.constraints.stress_start.slice(0, 4)} 年以来最深回撤按权重相加，相当于假设它们同时跌到最深），再在满足的组合里取达标概率最高的；差距不到 ${Math.round(plan.constraints.tie * 100)} 个百分点时选更不容易亏的。「历史」是 ${plan.history?.start?.slice(0, 4) || ''} 年以来按同样权重买入持有 ${d.delay?.held_days || 252} 个交易日的实际结果，窗口互相重叠，只有约 ${plan.history?.n_eff?.toFixed(0) || '—'} 个独立年。${corr}`
     : `选法：以 10% 为步长枚举权重，单只个股 ≤ ${Math.round(al.constraints.max_single_stock * 100)}%、四只股票/ETF 每只 ≥ ${Math.round(al.constraints.min_weight * 100)}%（纯债基金可以不配）、悲观 10% 不低于 ${ret(al.constraints.p10_floor, 0)}；在达标概率与最高者相差不到 ${Math.round(al.constraints.tie * 100)} 个百分点的组合里，选悲观 10% 最好的一个。${corr}`;
   return card(`${MODES[tp.mode]}方案：美团卖出资金怎么分`,
     table(['标的', '权重', `金额（${al.funding?.currency || 'HKD'}）`, '折合当地币种', '单只达标', '信号', '建仓节奏'], rows)
@@ -332,7 +332,7 @@ function modelNote(d) {
   const m = d.model;
   return '收益按各自币种计算：QQQ、谷歌、微软为美元，红利低波和纯债基金为人民币；港币与美元挂钩，美元资产基本没有汇率风险，人民币资产另有 CNH 汇率波动，模型未计入。'
     + `模型：长期年化对数收益向 ${ret(m.prior, 0)} 收缩（ETF/指数先验权重 ${m.shrink_years} 年，个股 ${m.shrink_years_stock} 年以抵消“幸存者”偏差），波动率加趋势不确定性 κ=${m.kappa}。`
-    + `稳妥方案：可以只持有其中一两只，要求一年不亏的概率 ≥ ${pr(d.safe?.constraints.nonneg)}、悲观 10% 不低于 ${ret(d.safe?.constraints.p10_floor, 0)}，再在满足的组合里求达标概率最高；进取方案四只股票/ETF 都持有（纯债可选），直接求达标概率最高。纯债基金不向股票先验收缩，用近一年收益作中枢。`
+    + `稳妥方案：可以只持有其中一两只，要求一年不亏的概率 ≥ ${pr(d.safe?.constraints.nonneg)}、悲观 10% 不低于 ${ret(d.safe?.constraints.p10_floor, 0)}、压力回撤不超过 ${pr(d.safe?.constraints.max_drawdown)}，再在满足的组合里求达标概率最高；进取方案四只股票/ETF 都持有（纯债可选），直接求达标概率最高。纯债基金不向股票先验收缩，用近一年收益作中枢。`
     + `信号规则：低于 200 日均线或达标概率 < ${pr(m.reduce_probability)} → 减仓或暂缓；≥ ${pr(m.add_probability)} → 加仓；其余持有。${DISCLAIMER}`;
 }
 

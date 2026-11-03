@@ -622,7 +622,7 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
     allocation["correlations"] = corr
     funding = target_funding()
     allocation["funding"] = funding
-    safe = tp.safe_allocate(modeled, corr, goal)
+    safe = tp.safe_allocate(modeled, corr, goal, tp.stress_drawdowns(histories, list(modeled)))
     safe["curve"] = [{"target": g, "probability": tp.portfolio(safe["weights"], modeled, corr, g)["probability"]} for g in tp.CURVE]
     safe["funding"] = funding
     # 等待的代价：同样的组合如果今天就有钱、投满一年
