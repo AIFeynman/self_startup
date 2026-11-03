@@ -178,7 +178,7 @@ function assetCard(a) {
       <div><span>达标概率</span><b>${pr(a.probability)}</b>${bar(a.probability, 1, '')}</div>
       <div><span>中位</span><b class="${tone(a.p50)}">${ret(a.p50)}</b><small>${ret(a.p10)} ~ ${ret(a.p90)}</small></div>
       <div><span>${third[0]}</span><b>${third[1]}</b><small>${third[2]}</small></div>
-    </div>${fundTable}${timingPanel(a.timing)}
+    </div>${fundTable}${timingPanel(a.val_timing)}
     <p class="wl-pacing"><b>节奏</b>${esc(a.pacing)}</p>
     <details open><summary>理由</summary>${list(a.reasons)}</details>
     ${heads ? `<details><summary>最近资讯（${a.news.count} 条，偏正面 ${a.news.positive} / 偏负面 ${a.news.negative}）</summary><ul class="wl-ul">${heads}</ul></details>` : ''}
@@ -190,17 +190,16 @@ function timingPanel(t) {
   const rows = [['cheap', '便宜（< 30%）'], ['fair', '合理（30%–70%）'], ['dear', '偏贵（> 70%）']].map(([k, label]) => {
     const z = t.zones?.[k];
     const cells = z ? `<td>${z.n} 周</td><td class="${tone(z.median)}">${ret(z.median)}</td><td class="${tone(z.worst)}">${ret(z.worst)}</td><td>${pr(z.loss)}</td>` : '<td colspan="4">样本不足</td>';
-    return `<tr class="${k === t.zone ? 'sel' : ''}"><td>${label}</td>${cells}</tr>`;
+    const band = t.levels?.bands?.[k];
+    const level = band ? `<td><b>${esc(band.price)}</b>${band.metric ? `<br><small class="muted">${esc(band.metric)}</small>` : ''}</td>` : '<td>—</td>';
+    return `<tr class="${k === t.zone ? 'sel' : ''}"><td>${label}</td>${level}${cells}</tr>`;
   }).join('');
   return `<div class="wl-timing">
     <div class="row between"><b>估值择时 · ${esc(t.index)}</b><span class="tag ${t.zone === 'cheap' ? 'ok' : t.zone === 'dear' ? 'warn' : 'gray'}">${esc(t.zone_label)} · 综合分位 ${Math.round(t.score * 100)}%</span></div>
-    <div class="wl-mini">
-      <div><span>PE 分位</span><b>${Math.round(t.pe_percentile * 100)}%</b><small>PE ${t.pe.toFixed(2)}，越高越贵</small></div>
-      <div><span>利差分位</span><b>${Math.round(t.spread_percentile * 100)}%</b><small>盈利收益率 ${ret(t.earnings_yield, 2).replace('+', '')} − 国债 ${ret(t.cgb_10y, 2).replace('+', '')}，越低越贵</small></div>
-      ${t.dividend_yield == null ? '' : `<div><span>股息率 − 10 年国债</span><b>${(t.dividend_spread * 100).toFixed(2)} pp</b><small>股息率 ${ret(t.dividend_yield, 2).replace('+', '')}，仅作参考</small></div>`}
-    </div>
-    ${table([`${Number(t.since.slice(0, 4)) + 3} 年起每周估值`, '样本', '之后一年中位', '最差', '亏损占比'], rows)}
-    <p class="muted wl-small">估值日 ${esc(t.as_of)}，国债日 ${esc(t.cgb_date)}。分位只用当时之前的历史（自 2017 年），样本约 6 年，只用来调整买入节奏和挂单，不改达标概率。${t.stale ? '<b class="wl-warn">数据源暂不可用，显示缓存</b>' : ''}</p>
+    <div class="wl-mini">${t.cards.map((c) => `<div><span>${esc(c.label)}</span><b>${esc(c.value)}</b><small>${esc(c.note)}</small></div>`).join('')}</div>
+    ${t.levels?.headline ? `<p class="wl-levels">${esc(t.levels.headline)}</p>` : ''}
+    <div class="wl-scroll">${table([`${Number(t.since.slice(0, 4)) + 3} 年起每周估值`, t.levels?.header || '对应价格', '样本', '之后一年中位', '最差', '亏损占比'], rows)}</div>
+    <p class="muted wl-small">估值日 ${esc(t.as_of)}${t.cgb_date ? `，国债日 ${esc(t.cgb_date)}` : ''}。分位只用当时之前的历史（自 ${esc(t.since.slice(0, 4))} 年），样本约 ${Math.round(Object.values(t.zones).reduce((sum, z) => sum + (z?.n || 0), 0) / 52)} 年。${esc(t.note || '')}${t.stale ? '<b class="wl-warn">数据源暂不可用，显示缓存</b>' : ''}</p>
   </div>`;
 }
 
@@ -410,7 +409,7 @@ function renderSell(box, ctx) {
     ['期末未成交（期望）', `${int(Math.round(plan.expected_unfilled_shares / 100) * 100)} 股`, `未成交部分按${hl}后的价格计入`],
     ['现在全部卖出', money(plan.sell_all_now_avg), `扣费后 ${money(plan.sell_all_now_net_avg)} · ${pctv((plan.sell_all_now_avg / plan.target_avg - 1) * 100)} vs 目标`],
   ]);
-  box.innerHTML = head + top + ladderCard(plan, d, hl) + reasonsCard(plan) + ceilingCard(d, hl) + switchCard(d) + sweepCard(plan)
+  box.innerHTML = head + top + ladderCard(plan, d, hl) + (d.timing ? `<section class="card">${timingPanel(d.timing)}</section>` : '') + reasonsCard(plan) + ceilingCard(d, hl) + switchCard(d) + sweepCard(plan)
     + costsCard(plan, d) + shapesCard(plan) + sellBacktestCard(d) + executionCard(d) + hourlyCard(d) + newsCard(d)
     + `<p class="muted wl-note wl-foot">${DISCLAIMER}</p>`;
   drawCeiling(box, d);
@@ -771,6 +770,7 @@ const CSS = `
 .wl-mini { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
 .wl-mini > div { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--bg-2); border-radius: 10px; min-width: 0; }
 .wl-mini span { font-size: 12px; color: var(--muted); } .wl-mini b { font: 700 18px var(--serif); } .wl-mini small { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.wl-levels { margin: 0; font-weight: 600; font-size: 13.5px; line-height: 1.5; } .wl-scroll { overflow-x: auto; }
 .wl-timing { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .wl-pacing { font-size: 13px; margin: 0; } .wl-pacing b { margin-right: 8px; color: var(--accent); }
 .wl-ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.6; } .wl-ul li + li { margin-top: 3px; } .wl-ul li.cur { font-weight: 600; }

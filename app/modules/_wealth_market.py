@@ -85,7 +85,9 @@ def chart(symbol: str, history_range: str = "2y", interval: str = "1d") -> dict[
         "observed_at": observed, "price": price, "previous_close": previous,
         "change_pct": (price / previous - 1) * 100 if price is not None and previous else None,
         "volume": _number(meta.get("regularMarketVolume")), "market_state": str(meta.get("marketState") or "UNKNOWN"),
-        "currency": str(meta.get("currency") or ""), "retrieved_at": datetime.now(UTC).isoformat(timespec="seconds")}}
+        "currency": str(meta.get("currency") or ""), "retrieved_at": datetime.now(UTC).isoformat(timespec="seconds")},
+        "splits": sorted([datetime.fromtimestamp(int(s["date"]), UTC).date().isoformat(), s["numerator"] / s["denominator"]]
+                         for s in ((result.get("events") or {}).get("splits") or {}).values())}
 
 
 def _previous_close(closes: list[float], price: float | None) -> float | None:

@@ -6,7 +6,7 @@ description: 理财板块：一年收益目标（QQQ / 谷歌 / 微软 / 红利�
 # 理财
 
 数据在本地平台（默认 `http://127.0.0.1:8780`，环境变量 `SELF_STARTUP_API` 覆盖；下文 `$API` 指它）。
-代码：`app/modules/wealth.py`（接口 / 后台 / 提醒）、`_wealth_service.py`（持仓、行情存取、计划组装）、`_wealth_target_plan.py`（收益目标模型、估值择时、挂单）、`_wealth_sell_plan.py`（减持阶梯）、`_wealth_switch_plan.py`（换 QQQ 对比）、`_wealth_sell_backtest.py`、`_wealth_market.py`（Yahoo 行情 / 新闻）、`_wealth_alerts.py`（信号快照和变化）。
+代码：`app/modules/wealth.py`（接口 / 后台 / 提醒）、`_wealth_service.py`（持仓、行情存取、计划组装）、`_wealth_target_plan.py`（收益目标模型、估值择时、挂单）、`_wealth_valuation.py`（各标的估值数据和分档表）、`_wealth_sell_plan.py`（减持阶梯）、`_wealth_switch_plan.py`（换 QQQ 对比）、`_wealth_sell_backtest.py`、`_wealth_market.py`（Yahoo 行情 / 新闻）、`_wealth_alerts.py`（信号快照和变化）。
 数据：`data/wealth/positions.json`（持仓配置）、回测缓存 JSON、`alerts.json`（上次信号快照）；`app.db` 的 `wealth_*` 表（K 线、报价、新闻、估值、成交）。
 
 ## 链路
@@ -15,6 +15,8 @@ description: 理财板块：一年收益目标（QQQ / 谷歌 / 微软 / 红利�
 2. **信号**：每次刷新后重算目标计划和美团减持计划，和 `alerts.json` 的上次快照比：标的结论变化（增持 / 持有 / 减持）、红利低波估值区间变化、美团建议现卖股数变化、价格穿过挂单档、换仓比例变化 → 每条一个通知，带理由。
 3. **汇总**：每天 `wealth.summary_time`（16:30）之后第一次检查发一条「每日信号汇总」。
 4. **通知**：走通用 `app.notify.notify()` —— 写 `notifications` 表（页面右下角弹出、通知页可查），`notify.system` 打开时同时发 Mac 系统通知。
+
+估值分档表（`assets[].val_timing`、减持计划的 `timing`）：QQQ 用纳指 100 指数 PE + 美债利差，谷歌 / 微软用 SEC 财报算滚动 PE + 美债利差，红利低波用指数 PE + 国债利差，美团亏损期用市销率，债基用 10 年国债收益率。`levels` 是盈利不变时分界线对应的价格（债基给收益率）。只有红利低波的表会调节奏和挂单，其他只作参考，不改概率、挂单和提醒。数据缓存在 `data/wealth/asset_valuation.json`，过期后台刷新，某个源失败时留旧副本并标 `stale`。
 
 回答时先给结论（加 / 拿着 / 减、卖多少股），再给理由（概率、估值、回测证据），最后写「统计估算，不构成投资建议」。不要替用户下单，只给计划里的数。
 

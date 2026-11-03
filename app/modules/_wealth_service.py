@@ -20,6 +20,7 @@ from . import _wealth_sell_backtest as sell_backtest
 from . import _wealth_sell_plan as sell_plan
 from . import _wealth_switch_plan as switch_plan
 from . import _wealth_target_plan as target_plan
+from . import _wealth_valuation as asset_valuation
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS wealth_bars (
@@ -368,6 +369,7 @@ def sell(symbol: str, target_avg: float | None = None, horizon_days: int | None 
             "unrealized_pnl": ((price - cost) * (total - sold_shares)) if cost else None,
         },
         "plan": plan,
+        "timing": _sell_timing(symbol, meta["currency"], price),
         "costs": {"schedule": costs, "labels": sell_plan.COST_LABELS},
         "backtest": sell_backtest_evidence(horizon, target / price - 1),
         "ceiling": ceiling,
@@ -384,6 +386,17 @@ def sell(symbol: str, target_avg: float | None = None, horizon_days: int | None 
         "refresh_minutes": read_positions().get("refresh_minutes", 60),
         "generated_at": utc_now(),
     }
+
+
+def _sell_timing(symbol: str, currency: str, price: float) -> dict[str, Any] | None:
+    """持仓股的估值分档，只作卖出价位的参考。"""
+    try:
+        data = asset_valuation.load(DATA)
+        bars = ((data or {}).get("sources", {}).get(symbol) or {}).get("bars") or []
+        ts = [int(datetime.fromisoformat(day).replace(tzinfo=UTC).timestamp()) for day, _ in bars]
+        return asset_valuation.timing_for(symbol, data, [c for _, c in bars], ts, price, currency=currency)
+    except Exception:
+        return None
 
 
 def switch_comparison(symbol: str, name: str, item: dict[str, Any], *, price: float, sigma_daily: float, plan: dict[str, Any], total: int,
@@ -517,6 +530,8 @@ def run_target_backtest(refresh: bool = False) -> dict[str, Any]:
     try:
         report = target_plan.run_backtest(DATA, refresh=refresh)
         target_plan.load_valuation(DATA, refresh=refresh)
+        if refresh:
+            asset_valuation.refresh(DATA)
         target_plan.save(report, DATA)
         path = DATA / "target-plan-backtest.md"
         path.write_text(target_plan.markdown(report), encoding="utf-8")
@@ -571,7 +586,15 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
         h = histories[tp.TIMING_SYMBOL]
         timing = tp.dividend_timing(valuation_data, h["close"], h["ts"]) if valuation_data else None
     except Exception:       # 估值源是可选的：没有它就只用趋势信号
-        timing = None
+        valuation_data, timing = None, None
+    def asset_timing(symbol: str, closes: list[float], price: float, currency: str, forward_pe: float | None = None) -> dict[str, Any] | None:
+        """其他标的的估值分档：只展示，不进模型、不改挂单。"""
+        try:
+            return asset_valuation.timing_for(
+                symbol, asset_valuation.load(DATA), closes, histories[symbol]["ts"][-len(closes):], price, currency=currency, forward_pe=forward_pe,
+                cgb=(valuation_data or {}).get("cgb", ()), stale_cgb=bool((valuation_data or {}).get("stale")))
+        except Exception:
+            return None
     for symbol in tp.FOCUS:
         closes, quote = _with_latest_price(symbol, histories[symbol])
         closes_by_symbol[symbol] = closes
@@ -601,6 +624,7 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
             "pacing": (own_timing or {}).get("pacing") or tp.PACING[result["action"]],
             "curve": [{"target": g, "probability": tp.hit_probability(result["mu"], result["spread"], g)} for g in tp.CURVE],
             "similar": similar, "valuation": valuation, "news": news, "timing": own_timing, "reasons": lines,
+            "val_timing": own_timing or asset_timing(symbol, histories[symbol]["close"], closes[-1], asset(symbol)["currency"], valuation.get("forwardPE")),
         })
     # 债基组合：按净值，没有实时报价、趋势和新闻背景
     bond = histories[tp.BOND]
@@ -608,6 +632,7 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
     result = results[tp.BOND] = tp.assess_bond(bond["close"], bond["ts"], goal)
     assets.append({
         "symbol": tp.BOND, "name": tp.LABELS[tp.BOND], "currency": "CNY", "kind": "fund",
+        "val_timing": asset_timing(tp.BOND, bond["close"], bond["close"][-1], "CNY"),
         "price": bond["close"][-1], "quote": None, "history_start": datetime.fromtimestamp(bond["ts"][0], UTC).date().isoformat(),
         "nav_date": datetime.fromtimestamp(bond["ts"][-1], UTC).date().isoformat(), "funds": bond.get("funds", {}),
         **{k: result[k] for k in ("mu", "spread", "probability", "loss10", "p10", "p50", "p90", "action", "state", "volatility", "long_run", "max_drawdown")},

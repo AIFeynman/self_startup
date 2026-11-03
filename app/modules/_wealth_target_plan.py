@@ -221,7 +221,85 @@ def timing_zone(score: float) -> str:
     return "cheap" if score < TIMING_ZONES[0] else "dear" if score > TIMING_ZONES[1] else "fair"
 
 
-def dividend_timing(valuation: dict[str, Any], closes: Sequence[float], ts: Sequence[int]) -> dict[str, Any] | None:
+def _score(history: Sequence[Sequence[float]], directions: Sequence[int], metrics: Sequence[float]) -> tuple[float, list[float]]:
+    """Each metric's percentile in its own history; ``direction`` +1 means higher is dearer, -1 higher is cheaper."""
+    shares = [_share_at_most(column, value) for column, value in zip(history, metrics)]
+    return sum(s if d > 0 else 1 - s for s, d in zip(shares, directions)) / len(shares), shares
+
+
+def _first_above(score_at: Any, level: float, strict: bool) -> float | None:
+    """The smallest price multiple whose score reaches ``level`` (score rises with the price)."""
+    low, high = 0.02, 50.0
+    reached = (lambda m: score_at(m) > level) if strict else (lambda m: score_at(m) >= level)
+    if reached(low) or not reached(high):
+        return None
+    for _ in range(50):
+        middle = (low + high) / 2
+        low, high = (low, middle) if reached(middle) else (middle, high)
+    return high
+
+
+def zone_timing(weeks: Sequence[Sequence[Any]], directions: Sequence[int], metrics_at: Any, closes: Sequence[float], ts: Sequence[int],
+                price: float | None) -> dict[str, Any] | None:
+    """``weeks`` are (day, metric, ...). Replays the dearness score week by week (only the past at each point) against the
+    next-year return, then reads today's zone. ``metrics_at(m)`` gives the latest metrics had the price been m times its level
+    on the last valuation day, so the zone follows the live price and the zone edges can be stated as prices."""
+    if len(weeks) < TIMING_MIN_YEARS * 52:
+        return None
+    price_days = [datetime.fromtimestamp(t, UTC).date().isoformat() for t in ts]
+
+    def at(day: str) -> float | None:
+        i = bisect_right(price_days, day) - 1
+        return closes[i] if i >= 0 else None
+
+    rows = []
+    for i, week in enumerate(weeks):
+        day = week[0]
+        if (date.fromisoformat(day) - date.fromisoformat(weeks[0][0])).days < TIMING_MIN_YEARS * 365:
+            continue
+        past = [[w[k + 1] for w in weeks[:i + 1]] for k in range(len(directions))]
+        score, _ = _score(past, directions, week[1:])
+        ahead = (date.fromisoformat(day) + timedelta(days=365)).isoformat()
+        if day >= price_days[0] and ahead <= price_days[-1]:
+            rows.append((timing_zone(score), at(ahead) / at(day) - 1))
+    zones = {}
+    for zone in TIMING_LABELS:
+        values = sorted(r for z, r in rows if z == zone)
+        zones[zone] = {"n": len(values), "n_eff": len(values) / 52, "median": values[len(values) // 2], "worst": values[0],
+                       "loss": sum(v < 0 for v in values) / len(values)} if values else None
+    day = weeks[-1][0]
+    history = [[w[k + 1] for w in weeks] for k in range(len(directions))]
+    base = at(day)
+    recent = price is not None and base and (date.fromisoformat(price_days[-1]) - date.fromisoformat(day)).days <= 14
+    move = price / base if recent else 1.0
+    score_at = lambda m: _score(history, directions, metrics_at(m))[0]
+    score, shares = _score(history, directions, metrics_at(move))
+    zone = timing_zone(score)
+    edges = (_first_above(score_at, TIMING_ZONES[0], False), _first_above(score_at, TIMING_ZONES[1], True))
+    return {"as_of": day, "since": weeks[0][0], "score": score, "zone": zone, "zone_label": TIMING_LABELS[zone], "zones": zones,
+            "percentiles": shares, "move": move, "edges": [e / move if e else None for e in edges]}
+
+
+def price_levels(core: dict[str, Any], price: float, currency: str, metric: str, metric_now: float) -> dict[str, Any]:
+    """The zone edges as prices, assuming earnings (or sales) stay where they are."""
+    text = lambda v: f"{v:.3f}" if v < 10 else f"{v:.2f}"
+    cheap, dear = (price * e if e else None for e in core["edges"])
+    low, high = (metric_now * e if e else None for e in core["edges"])
+    if cheap is None or dear is None:
+        return {"currency": currency, "header": f"对应价格（{currency}）", "price": price, "bands": {}, "headline": ""}
+    down, up = f"{text(cheap)}（{(cheap / price - 1) * 100:+.1f}%）", f"{text(dear)}（{(dear / price - 1) * 100:+.1f}%）"
+    state = {"cheap": f"已在便宜区，便宜线 {down}；涨过 {up}才算偏贵", "dear": f"已在偏贵区，偏贵线 {up}；跌破 {down}才算便宜",
+             "fair": f"在合理区，跌破 {down}算便宜，涨过 {up}算偏贵"}[core["zone"]]
+    return {"currency": currency, "header": f"对应价格（{currency}）", "price": price, "cheap_below": cheap, "dear_above": dear,
+            "to_cheap": cheap / price - 1, "to_dear": dear / price - 1,
+            "bands": {"cheap": {"price": f"< {text(cheap)}", "metric": f"{metric} < {low:.2f}"},
+                      "fair": {"price": f"{text(cheap)}–{text(dear)}", "metric": f"{metric} {low:.2f}–{high:.2f}"},
+                      "dear": {"price": f"> {text(dear)}", "metric": f"{metric} > {high:.2f}"}},
+            "headline": f"现价 {text(price)} {currency} {state}。"}
+
+
+def dividend_timing(valuation: dict[str, Any], closes: Sequence[float], ts: Sequence[int], price: float | None = None,
+                    currency: str = "CNY") -> dict[str, Any] | None:
     """Dearness score = mean of the P/E percentile and (1 − the earnings-yield-spread percentile), each against the
     record up to that week. The zone table replays the same score week by week (only the past at each point)
     against the ETF's next-year return, so it shows how the zones did, not a fitted rule."""
@@ -234,37 +312,24 @@ def dividend_timing(valuation: dict[str, Any], closes: Sequence[float], ts: Sequ
     weeks = [(day, pe, 100 / pe - cgb(day)) for day, pe in valuation["pe"] if day >= TIMING_START and cgb(day) is not None]
     if len(weeks) < TIMING_MIN_YEARS * 52:
         return None
-    price_days = [datetime.fromtimestamp(t, UTC).date().isoformat() for t in ts]
-
-    def price(day: str) -> float | None:
-        i = bisect_right(price_days, day) - 1
-        return closes[i] if i >= 0 else None
-
-    rows = []
-    for i, (day, pe, spread_) in enumerate(weeks):
-        if (date.fromisoformat(day) - date.fromisoformat(weeks[0][0])).days < TIMING_MIN_YEARS * 365:
-            continue
-        past = weeks[:i + 1]
-        score = (_share_at_most([w[1] for w in past], pe) + 1 - _share_at_most([w[2] for w in past], spread_)) / 2
-        ahead = (date.fromisoformat(day) + timedelta(days=365)).isoformat()
-        if day >= price_days[0] and ahead <= price_days[-1]:
-            rows.append((timing_zone(score), price(ahead) / price(day) - 1))
-    zones = {}
-    for zone in TIMING_LABELS:
-        values = sorted(r for z, r in rows if z == zone)
-        zones[zone] = {"n": len(values), "n_eff": len(values) / 52, "median": values[len(values) // 2], "worst": values[0],
-                       "loss": sum(v < 0 for v in values) / len(values)} if values else None
-    day, pe, spread_ = weeks[-1]
-    pe_pct = _share_at_most([w[1] for w in weeks], pe)
-    spread_pct = _share_at_most([w[2] for w in weeks], spread_)
-    score = (pe_pct + 1 - spread_pct) / 2
-    zone = timing_zone(score)
     y10 = valuation["cgb"][-1][1]
+    _, pe, _ = weeks[-1]
+    price = closes[-1] if price is None else price
+    core = zone_timing(weeks, (1, -1), lambda m: (pe * m, 100 / (pe * m) - y10), closes, ts, price)
+    pe_pct, spread_pct = core["percentiles"]
+    live_pe = pe * core["move"]
+    spread_ = 100 / live_pe - y10
     dy = valuation.get("dividend_yield")
-    return {"index": TIMING_INDEX, "as_of": day, "cgb_date": valuation["cgb"][-1][0], "pe": valuation.get("pe_now") or pe, "pe_percentile": pe_pct,
-            "earnings_yield": 1 / pe, "cgb_10y": y10 / 100, "spread": spread_ / 100, "spread_percentile": spread_pct,
-            "dividend_yield": dy, "dividend_spread": dy - y10 / 100 if dy is not None else None,
-            "score": score, "zone": zone, "zone_label": TIMING_LABELS[zone], "zones": zones, "since": weeks[0][0],
+    zone = core["zone"]
+    cards = [{"label": "PE 分位", "value": f"{pe_pct * 100:.0f}%", "note": f"PE {live_pe:.2f}，越高越贵"},
+             {"label": "利差分位", "value": f"{spread_pct * 100:.0f}%", "note": f"盈利收益率 {100 / live_pe:.2f}% − 国债 {y10:.2f}%，越低越贵"}]
+    if dy is not None:
+        cards.append({"label": "股息率 − 10 年国债", "value": f"{(dy - y10 / 100) * 100:.2f} pp", "note": f"股息率 {dy * 100:.2f}%，仅作参考"})
+    return {**core, "symbol": TIMING_SYMBOL, "index": TIMING_INDEX, "cgb_date": valuation["cgb"][-1][0], "pe": live_pe, "pe_percentile": pe_pct,
+            "earnings_yield": 1 / live_pe, "cgb_10y": y10 / 100, "spread": spread_ / 100, "spread_percentile": spread_pct,
+            "dividend_yield": dy, "dividend_spread": dy - y10 / 100 if dy is not None else None, "cards": cards, "metric": "PE",
+            "levels": price_levels(core, price, currency, "PE", live_pe),
+            "note": "股价按 ETF 跟随指数估算，盈利不变时 PE 到分界线对应的价格。这张表会调整红利低波的买入节奏和挂单，不改达标概率。",
             "shape": zone if zone in TIMING_SHAPES else None, "pacing": TIMING_PACING.get(zone),
             "stale": bool(valuation.get("stale"))}
 

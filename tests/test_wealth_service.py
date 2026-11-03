@@ -19,6 +19,7 @@ def positions(client, tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "POSITIONS", tmp_path / "positions.json")
     monkeypatch.setattr(svc, "LIVE", None)
     monkeypatch.setattr(svc, "_switch_memo", None)
+    monkeypatch.setattr(svc.asset_valuation, "load", lambda _: None)
     for table in ("wealth_bars", "wealth_quotes", "wealth_trades"):
         db.execute(f"DELETE FROM {table}")
     svc.write_positions({"refresh_minutes": 60, "positions": [
