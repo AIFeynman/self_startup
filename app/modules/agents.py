@@ -212,6 +212,10 @@ def agent_context(ref: str) -> str:
         lines.append("\n## 时间利用\n" + planning_insights())
     except Exception:  # noqa: BLE001
         pass
+    try:
+        lines.append("\n## 核心指标\n" + core_line())
+    except Exception:  # noqa: BLE001
+        pass
     return "\n".join(lines)
 
 
@@ -400,3 +404,34 @@ def get_patterns(days: int = 7):
 @router.get("/insights")
 def get_insights():
     return {"text": planning_insights()}
+
+
+# ---------- 核心指标（结果分 / 吞吐 / 杠杆 / 可避免交互占比；数据与评分在复盘模块） ----------
+
+class CoreIn(BaseModel):
+    date: str = ""
+
+
+@router.get("/core")
+def get_core(date: str = ""):
+    from . import review
+    return review.core_metrics(review._day(date))
+
+
+@router.post("/core/score")
+def post_core_score(body: CoreIn):
+    from . import review
+    date = review._day(body.date)
+    return {"job_id": review.submit_score(date), "date": date}
+
+
+def core_line(date: str = "") -> str:
+    """一句话核心指标，给看板 / 复盘 Agent 的上下文用。"""
+    from . import review
+    c = review.core_metrics(review._day(date))
+    k, p = c["core"], (c.get("prev") or {}).get("core") or {}
+    fmt = lambda v, u="": "未评分" if v is None else f"{v}{u}"   # noqa: E731
+    vs = lambda key: f"（上次 {p[key]}）" if p.get(key) is not None else ""   # noqa: E731
+    return (f"{c['date']} 核心指标：结果分 {fmt(k['result'])}{vs('result')}、吞吐 {fmt(k['throughput'])}{vs('throughput')}、"
+            f"杠杆 {fmt(k['leverage'], ' 分钟')}{vs('leverage')}、可避免交互 {fmt(k['avoidable_pct'], '%')}{vs('avoidable_pct')}"
+            f"（已评分 {c['scored']}/{c['scorable']} 个交互会话）")

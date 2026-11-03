@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import agent, chat, db, jobs, settings, tasks
-from . import _review_sessions as rs, _utilization as util
+from . import _review_sessions as rs, _session_score as score, _utilization as util
 
 TITLE = "复盘"
 ORDER = 10
@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS review_agent_stats (
     sessions       TEXT DEFAULT '[]',          -- JSON 每个会话的统计 + 人工消息
     reflection     TEXT DEFAULT '',            -- AI 反思（markdown）
     reflect_job_id INTEGER,
-    scanned_at     TEXT
+    scanned_at     TEXT,
+    scores         TEXT DEFAULT '{}',          -- JSON AI 评分 {by_session:{id:{tasks,avoidable,...}}, turns_at:{id:n}, scored_at}
+    score_job_id   INTEGER
 );
 """
 router = APIRouter()
@@ -470,6 +472,9 @@ def on_job_done(job: dict) -> None:
             upsert_record(date, {"ai_analysis": msg})
         elif kind == "reflect":
             _upsert_stats(date, {"reflection": msg})
+        elif kind == "score":
+            _upsert_stats(date, {"scores": {**(get_efficiency(date, scan_if_missing=False) or {}).get("scores", {}),
+                                            "error": msg}})
         elif kind == "improve" and get_record(date).get("improve_job_id") == job["id"]:
             upsert_record(date, {"improve_md": msg})
         return
@@ -480,6 +485,8 @@ def on_job_done(job: dict) -> None:
         auto_apply(date)
     elif kind == "reflect":
         _upsert_stats(date, {"reflection": (job.get("output") or "").strip()})
+    elif kind == "score":
+        _save_scores(date, job.get("output") or "")
     elif kind == "improve" and get_record(date).get("improve_job_id") == job["id"]:  # 只认最新一次提交的分析
         upsert_record(date, {"improve_md": (job.get("output") or "").strip()})
 
@@ -673,12 +680,29 @@ def api_timeline(start: str = "", end: str = ""):
 
 # ---------- Agent 效率 ----------
 
+_STATS_COLS = {"scores": "TEXT DEFAULT '{}'", "score_job_id": "INTEGER"}
+_stats_cols_ok = False
+
+
 def _upsert_stats(date: str, data: dict) -> None:
+    _ensure_stats_cols()
     cur = db.row("SELECT id FROM review_agent_stats WHERE date=?", [date])
     if cur:
         db.update("review_agent_stats", cur["id"], data)
     else:
         db.insert("review_agent_stats", {"date": date, **data})
+
+
+def _ensure_stats_cols() -> None:
+    """老库补上 AI 评分列。"""
+    global _stats_cols_ok
+    if _stats_cols_ok:
+        return
+    cols = _cols("review_agent_stats")
+    for k, decl in _STATS_COLS.items():
+        if k not in cols:
+            db.execute(f"ALTER TABLE review_agent_stats ADD COLUMN {k} {decl}")
+    _stats_cols_ok = True
 
 
 def platform_runs(date: str) -> dict:
@@ -726,6 +750,7 @@ def scan_efficiency(date: str) -> dict:
 
 
 def get_efficiency(date: str, scan_if_missing: bool = True) -> dict | None:
+    _ensure_stats_cols()
     r = db.row("SELECT * FROM review_agent_stats WHERE date=?", [date])
     if scan_if_missing and (not r or not r.get("scanned_at") or _stale(date, r["scanned_at"])
                             or _loads(r["summary"], {}).get("v") != rs.VERSION
@@ -735,8 +760,53 @@ def get_efficiency(date: str, scan_if_missing: bool = True) -> dict | None:
         return None
     r["summary"] = _loads(r["summary"], {})
     r["sessions"] = _loads(r["sessions"], [])
+    r["scores"] = _loads(r.get("scores"), {})
     r["kind_labels"] = rs.KIND_LABELS
     return r
+
+
+# ---------- 核心指标（结果分 / 吞吐 / 杠杆 / 可避免交互占比，AI 评分 + 日志统计） ----------
+
+def submit_score(date: str) -> int:
+    """派一次 AI 评分；已在排队 / 运行的直接复用。"""
+    eff = get_efficiency(date) or {"sessions": []}
+    q = db.row("SELECT id FROM jobs WHERE module='review' AND ref=? AND status IN ('queued','running') ORDER BY id DESC LIMIT 1",
+               [f"score:{date}"])
+    if q:
+        return q["id"]
+    jid = jobs.submit("review", score.build_prompt(date, eff["sessions"]), ref=f"score:{date}",
+                      system=agent.build_system("review"))
+    _upsert_stats(date, {"score_job_id": jid})
+    return jid
+
+
+def _save_scores(date: str, output: str) -> None:
+    eff = get_efficiency(date, scan_if_missing=False) or {"sessions": []}
+    by = score.parse(output, eff["sessions"])
+    if not by:
+        _upsert_stats(date, {"scores": {**eff.get("scores", {}), "error": "评分输出里没有可用的 JSON"}})
+        return
+    turns = {s["session_id"]: s["human_turns"] for s in eff["sessions"] if s["session_id"] in by}
+    _upsert_stats(date, {"scores": {"by_session": by, "turns_at": turns, "scored_at": db.now()}})
+
+
+def core_metrics(date: str, prev: bool = True) -> dict:
+    eff = get_efficiency(date) or {"summary": {}, "sessions": [], "scores": {}}
+    sc = eff.get("scores") or {}
+    out = score.compute(sc.get("by_session") or {}, eff["sessions"])
+    at = sc.get("turns_at") or {}
+    out.update({"date": date, "scanned_at": eff.get("scanned_at"), "scored_at": sc.get("scored_at"), "error": sc.get("error", ""),
+                "new_turns": sum(max(0, s["human_turns"] - at[s["session_id"]]) for s in eff["sessions"] if s["session_id"] in at),
+                "unscored": [s["session_id"] for s in score.scorable(eff["sessions"]) if s["session_id"] not in (sc.get("by_session") or {})],
+                "nudges": eff["summary"].get("nudges", 0), "waits_over_30m": eff["summary"].get("waits_over_30m", 0),
+                "wait_p90_min": eff["summary"].get("wait_p90_min", 0), "trace_min": eff["summary"].get("trace_min", {}),
+                "defs": [{"key": k, "label": n, "unit": u, "higher_better": hb, "def": d} for k, n, u, hb, d in score.CORE]})
+    jid = eff.get("score_job_id")
+    out["job"] = db.row("SELECT id, status FROM jobs WHERE id=?", [jid]) if jid else None
+    if prev:
+        p = db.row("SELECT date FROM review_agent_stats WHERE date<? AND scores LIKE '%by_session%' ORDER BY date DESC LIMIT 1", [date])
+        out["prev"] = {"date": p["date"], "core": core_metrics(p["date"], prev=False)["core"]} if p else None
+    return out
 
 
 @router.get("/efficiency")
