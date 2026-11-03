@@ -287,7 +287,14 @@ def refresh_llm(m: dict, status: dict | None = None) -> str:
                 rc += 1
             except Exception:  # noqa: BLE001
                 log.exception("kb_judge recheck %s", card["sid"])
-    return f"判断台账：新归类 {n} 条，参考结论 {rc} 条"
+    st["msg"] = "到期预测派联网核验…"
+    try:
+        from . import kb_verify
+        vmsg = kb_verify.auto(ledger(m)["cards"])
+    except Exception:  # noqa: BLE001
+        log.exception("kb_verify auto")
+        vmsg = ""
+    return f"判断台账：新归类 {n} 条，参考结论 {rc} 条" + (f"，{vmsg}" if vmsg else "")
 
 
 # ---------- 复查节奏与台账 ----------
@@ -333,6 +340,8 @@ def ledger(m: dict | None = None, paths: dict[str, str] | None = None) -> dict:
     manual = {f"my:{r['id']}": r for r in db.rows("SELECT * FROM kb_judgments")} if _has("kb_judgments") else {}
     threads = _threads()
     t_of = {sid: t["question"] for t in threads for sid in t["sids"]}
+    from .kb_verify import latest as verify_latest
+    ver = verify_latest()
     cards, pending = [], 0
     for s in m["sigs"].values():
         if s["kind"] != "judgment":
@@ -351,7 +360,7 @@ def ledger(m: dict | None = None, paths: dict[str, str] | None = None) -> dict:
                       "reviews": [{"id": r["id"], "verdict": r["verdict"], "verdict_name": VERDICTS.get(r["verdict"], r["verdict"]),
                                    "note": r["note"], "due": r["due"], "at": r["at"]} for r in rs],
                       "agent": _agent_cached(s["sid"], m, cls, rs) if due else None, "thread": t_of.get(s["sid"], ""),
-                      "sources": _j(mr.get("sources"), [])})
+                      "sources": _j(mr.get("sources"), []), "verify": ver.get(s["sid"])})
     cards.sort(key=lambda x: x["date"], reverse=True)
     return {"cards": cards, "threads": threads, "pending": pending}
 

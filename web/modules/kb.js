@@ -26,6 +26,9 @@ const CSS = `
 .kb-cl a { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--text); font-size: 12.5px; background: var(--bg); }
 .kb-cl a:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
 .kb-cl a small { color: var(--muted); margin-left: 4px; }
+.kb-vf { border-left: 3px solid #3f7cac; }
+.kb-vsrc { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+.kb-vsrc li { margin: 2px 0; }
 .kb-j { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); margin-bottom: 10px; transition: box-shadow .3s; }
 .kb-j.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .kb-j .claim { font: 600 15.5px/1.55 var(--serif); margin: 4px 0; }
@@ -708,6 +711,36 @@ function jDetail(ctx, c, today) {
     x.ask ? h('div.muted', {}, '问问自己：' + x.ask) : null,
   ]) : '');
   showAgent(a);
+  // 联网核验：派后台调研任务查之后的证据，带来源给参考结论（预测到期会自动派）
+  const verBox = h('div');
+  let verTimer = 0;
+  const showVer = (v) => {
+    clearTimeout(verTimer);
+    if (!v) { verBox.replaceChildren(); return; }
+    if (v.status === 'running') {
+      verBox.replaceChildren(h('div.kb-ag.kb-vf', {}, [h('b', {}, '联网核验中'), h('span.muted.dots', {}, ` ${v.trigger === 'auto' ? '到期自动派的' : ''}后台调研任务，通常 3–10 分钟`),
+        v.job_id ? h('a.muted', { href: `/api/jobs/${v.job_id}`, target: '_blank', style: { marginLeft: '8px' } }, `job ${v.job_id}`) : null]));
+      verTimer = setTimeout(async () => { if (verBox.isConnected) showVer(await api.get('/api/kb/judgments/verify?sid=' + encodeURIComponent(c.sid)).catch(() => v)); }, 8000);
+      return;
+    }
+    if (v.status === 'failed') { verBox.replaceChildren(h('div.kb-ag.kb-vf', {}, [h('b', {}, '联网核验没成：'), h('span', {}, v.summary || '未知原因'), ' ', h('a.muted', { href: `/api/kb/judgments/verify/${v.id}/report`, target: '_blank' }, '看报告')])); return; }
+    verBox.replaceChildren(h('div.kb-ag.kb-vf', {}, [
+      h('div', {}, [h('b', {}, `联网核验：${v.suggest}`), h('span.muted', {}, ` · ${(v.finished_at || v.created_at).slice(0, 10)} · ${v.trigger === 'auto' ? '到期自动核验' : '手动'} · 仅供参考，结论由你定`)]),
+      v.criterion ? h('div', {}, [h('span.muted', {}, '可判定标准：'), v.criterion]) : null,
+      v.summary ? h('div', {}, v.summary) : null,
+      v.sources?.length ? h('ul.kb-vsrc', {}, v.sources.map((x) => h('li', {}, [x.url ? h('a', { href: x.url, target: '_blank', rel: 'noopener' }, x.title || x.url) : x.title,
+        h('span.muted', {}, x.date ? ' · ' + x.date : ''), x.finding ? h('span', {}, '：' + x.finding) : null]))) : null,
+      v.ask ? h('div.muted', {}, '问问自己：' + v.ask) : null,
+      h('a.muted', { href: `/api/kb/judgments/verify/${v.id}/report`, target: '_blank', style: { fontSize: '12px' } }, '完整报告'),
+    ]));
+  };
+  showVer(c.verify);
+  const verify = async (btn) => {
+    btn.disabled = true;
+    try { await api.post('/api/kb/judgments/verify', { sid: c.sid }); showVer(await api.get('/api/kb/judgments/verify?sid=' + encodeURIComponent(c.sid))); toast('已派联网核验，完成后在这里看'); }
+    catch (err) { toast('没派成：' + (err.message || err), true); }
+    btn.disabled = false;
+  };
   const note = h('textarea', { placeholder: c.type === '疑问' ? '现在怎么想？想清楚了就写结论' : '复查笔记：为什么还成立 / 哪里要改 / 新的看法是什么（修正、推翻时必填，会作为新判断进问题线）' });
   const date = h('input', { type: 'date', title: '改到哪天再看' });
   const send = async (verdict) => {
@@ -730,6 +763,7 @@ function jDetail(ctx, c, today) {
     srcList(h, c.sources),
     e ? h('div.kb-ev', {}, [h('b', {}, `依据 ${e.strength}`), h('span', {}, e.basis), h('b', {}, '反方'), h('span', {}, e.counter), h('b', {}, '怎么验证'), h('span', {}, e.verify)]) : null,
     agentBox,
+    verBox,
     c.reviews.length ? h('ul.kb-hist', {}, c.reviews.map((r) => h('li', {}, `${r.at.slice(0, 10)} · ${r.verdict_name}${r.due ? ' → ' + r.due : ''}${r.note ? '：' + r.note : ''}`))) : null,
     h('div.row', { style: { flexWrap: 'wrap', gap: '4px 12px', marginTop: '6px', fontSize: '12.5px', color: 'var(--muted)' } }, [
       h('span', {}, [c.sub_name, ' · ', srcLink(h, c)]),
@@ -745,6 +779,7 @@ function jDetail(ctx, c, today) {
       h('span.grow'),
       date, h('button.ghost', { onclick: () => send('snooze') }, '改期'),
       h('button.ghost', { onclick: (ev) => recheck(ev.currentTarget) }, '让 Agent 对照新材料'),
+      c.type === '疑问' ? null : h('button.ghost', { title: '派后台调研任务联网查之后的证据，带来源给参考结论', onclick: (ev) => verify(ev.currentTarget) }, '联网核验'),
     ]),
   ]);
 }

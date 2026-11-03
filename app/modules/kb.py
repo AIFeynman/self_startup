@@ -5,7 +5,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from .. import kb, kb_graph, kb_judge, kb_whynot
+import re
+
+from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
 
 TITLE = "知识库"
 ORDER = 60
@@ -158,6 +160,33 @@ def judgment_review(body: ReviewIn):
 
 class RecheckIn(BaseModel):
     sid: str
+
+
+@router.post("/judgments/verify")
+def judgment_verify(body: RecheckIn):
+    """联网核验：派一个后台调研任务（走 jobs，完成后 on_job_done 回填）。"""
+    try:
+        vid = kb_verify.start(body.sid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "id": vid}
+
+
+@router.get("/judgments/verify")
+def judgment_verify_get(sid: str):
+    kb_verify._init()
+    return kb_verify.latest().get(sid)
+
+
+@router.get("/judgments/verify/{vid}/report", response_class=PlainTextResponse)
+def judgment_verify_report(vid: int):
+    return kb_verify.report(vid)
+
+
+def on_job_done(job: dict) -> None:
+    m = re.fullmatch(r"kbverify:(\d+)", job.get("ref") or "")
+    if m:
+        kb_verify.finish(int(m.group(1)), job)
 
 
 @router.post("/judgments/recheck")
