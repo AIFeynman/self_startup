@@ -1,107 +1,102 @@
 # 后训练 研究脉络
 
-后训练旨在将预训练语言模型对齐到人类意图与安全规范，并激发推理等高级能力。其演进经历三阶段：早期以指令微调（FLAN、LIMA）和基于人类偏好的强化学习（RLHF，InstructGPT）奠定范式；随后DPO等直接偏好优化简化流程，开源模型（Llama 2、Qwen）推动规模化；近期以可验证奖励的强化学习（GRPO、DeepSeek-R1）激发推理，并探索SFT与RL的泛化差异、奖励模型与过程监督。
+后训练旨在将预训练语言模型对齐到人类意图与偏好，解决输出不真实、有害、不遵循指令及复杂推理弱等问题。其演进经历三阶段：早期以指令微调（FLAN、T0）和人类偏好强化学习（RLHF）奠定基础；随后DPO等直接偏好优化简化流程，并出现大量变体与开源配方；2024年后，可验证奖励强化学习（RLVR）成为推理模型后训练核心，同时蒸馏、过程奖励模型与多模态后训练蓬勃发展。
 
-**前置基础**：[Proximal Policy Optimization Algorithms](https://arxiv.org/abs/1707.06347)（2017，被引 33,097）；[Deep Reinforcement Learning from Human Preferences](https://arxiv.org/abs/1706.03741)（2017，被引 6,323）；[Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165)（2020，被引 66,022）；[BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding](https://arxiv.org/abs/1810.04805)（2019，被引 124,949）；[Chain of Thought Prompting Elicits Reasoning in Large Language Models](https://arxiv.org/abs/2201.11903)（2022，被引 23,524）；[LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)（2023，被引 22,487）
+**前置基础**：[Proximal Policy Optimization Algorithms](https://arxiv.org/abs/1707.06347)（2017，被引 33,097）；[Deep Reinforcement Learning from Human Preferences](https://arxiv.org/abs/1706.03741)（2017，被引 6,323）；[Attention is All you Need](https://arxiv.org/abs/1706.03762)（2017，被引 201,064）；[Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531)（2015，被引 27,519）；[Chain of Thought Prompting Elicits Reasoning in Large Language Models](https://arxiv.org/abs/2201.11903)（2022，被引 23,524）；[LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)（2023，被引 22,487）
 
-## 指令微调与数据构建
+## 指令微调与数据自举
 
-从FLAN验证指令微调可提升零样本泛化，到Self-Instruct自生成指令数据、LIMA证明少量精选数据即可对齐，再到Evol-Instruct提升指令复杂度，逐步降低对人工标注的依赖并提升数据效率。
+解决人工指令数据稀缺与零样本泛化弱的问题。从多任务指令微调（FLAN、T0）出发，发展到自生成指令（Self-Instruct、Evol-Instruct）和GPT-4生成数据，并探索数据规模与质量（LIMA、LIMO）。
 
-- **起点** [Finetuned Language Models Are Zero-Shot Learners](https://arxiv.org/abs/2109.01652)（2021，被引 5,585）：提出指令微调FLAN，60+任务微调显著提升零样本泛化
-- **改进** [Self-Instruct: Aligning Language Models with Self-Generated Instructions](https://arxiv.org/abs/2212.10560)（2022，被引 3,869）：用模型自生成指令数据，摆脱人工指令依赖
-- **里程碑** [LIMA: Less Is More for Alignment](https://arxiv.org/abs/2305.11206)（2023，被引 1,554）：仅1000条精选指令即达GPT-4级对话质量，揭示数据质量重于数量
-- **改进** [WizardLM: Empowering Large Pre-Trained Language Models to Follow Complex Instructions](https://arxiv.org/abs/2304.12244)（2023，被引 1,360）：Evol-Instruct演化指令复杂度，提升复杂指令遵循能力
-- **改进** [The Flan Collection: Designing Data and Methods for Effective Instruction Tuning](https://arxiv.org/abs/2301.13688)（2023，被引 1,028）：系统消融指令微调设计，任务平衡与混合提示提升效果
-- **最新** [LIMO: Less is More for Reasoning](https://arxiv.org/abs/2502.03387)（2025，被引 570）：LIMO用1%数据SFT激发强推理，提出少即是多假设
+- **相关** [Universal Language Model Fine-tuning for Text Classification](https://www.semanticscholar.org/paper/1e077413b25c4d34945cc2707e17e46ed4fe784a)（2018，被引 4,443）：提出ULMFiT通用语言模型微调方法，用判别式微调、斜三角学习率和逐层解冻，在六个文本分类任务上误差降低18-24%，100样本可媲美百倍数据从头训练。
+- **起点** [Finetuned Language Models Are Zero-Shot Learners](https://arxiv.org/abs/2109.01652)（2021，被引 5,585）：提出指令微调FLAN，零样本超越更大模型
+- **改进** [Multitask Prompted Training Enables Zero-Shot Task Generalization](https://arxiv.org/abs/2110.08207)（2021，被引 2,116）：多任务prompted训练T0，验证显式多任务诱导泛化
+- **里程碑** [Scaling Instruction-Finetuned Language Models](https://arxiv.org/abs/2210.11416)（2022，被引 4,562）：系统缩放指令微调任务数、模型规模与CoT数据
+- **改进** [Self-Instruct: Aligning Language Models with Self-Generated Instructions](https://arxiv.org/abs/2212.10560)（2022，被引 3,869）：自生成指令数据，降低人工依赖
+- **改进** [WizardLM: Empowering Large Pre-Trained Language Models to Follow Complex Instructions](https://arxiv.org/abs/2304.12244)（2023，被引 1,360）：Evol-Instruct演化指令复杂度，提升复杂指令遵循
+- **变体** [Instruction Tuning with GPT-4](https://arxiv.org/abs/2304.03277)（2023，被引 884）：用GPT-4生成高质量中英文指令数据
+- **里程碑** [LIMA: Less Is More for Alignment](https://arxiv.org/abs/2305.11206)（2023，被引 1,554）：LIMA证明千条精选指令即可有效对齐
+- **相关** [Qwen Technical Report](https://arxiv.org/abs/2309.16609)（2023，被引 4,564）：发布 Qwen 系列技术报告，含基础预训练模型与经 RLHF 对齐的 Qwen-Chat，并衍生代码与数学专用模型，性能接近闭源模型。
+- **最新** [LIMO: Less is More for Reasoning](https://arxiv.org/abs/2502.03387)（2025，被引 570）：LIMO用1%数据激发强数学推理，提出少即是多假设
+- **相关** [SFT Memorizes, RL Generalizes: A Comparative Study of Foundation Model Post-training](https://arxiv.org/abs/2501.17161)（2025，被引 781）：用GeneralPoints与V-IRL对比SFT与RL，发现RL在文本与视觉变体上泛化更好，SFT倾向记忆但为RL稳定输出格式所必需。
 
-## RLHF偏好优化
+## RLHF与偏好优化
 
-从人类偏好学习奖励模型并用PPO优化（InstructGPT），到分析奖励过优化与KL约束，再到DPO将奖励参数化实现闭式偏好优化，SimPO进一步去参考模型，降低RLHF复杂度与不稳定性。
+解决奖励难以定义与对齐不稳定问题。从人类偏好奖励学习（PPO）起步，InstructGPT确立SFT+RLHF范式，DPO简化流程，后续出现SimPO、REINFORCE式简化及RLAIF等变体，并关注奖励过优化。
 
-- **起点** [Fine-Tuning Language Models from Human Preferences](https://arxiv.org/abs/1909.08593)（2019，被引 2,836）：首次将人类偏好奖励学习用于语言模型微调
-- **改进** [Learning to summarize from human feedback](https://arxiv.org/abs/2009.01325)（2020，被引 3,637）：用人类比较训练奖励模型+PPO，摘要超越人类参考
-- **里程碑** [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)（2022，被引 25,663）：InstructGPT确立SFT+RM+PPO三阶段RLHF范式
-- **改进** [Training a Helpful and Harmless Assistant with Reinforcement Learning from Human Feedback](https://arxiv.org/abs/2204.05862)（2022，被引 4,475）：系统研究RLHF训练有帮助且无害助手，分析KL-奖励关系
-- **改进** [Scaling Laws for Reward Model Overoptimization](https://arxiv.org/abs/2210.10760)（2022，被引 1,453）：量化奖励过优化，揭示Goodhart效应与缩放规律
-- **里程碑** [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290)（2023，被引 11,470）：DPO将RLHF转为分类损失，无需显式奖励模型与RL
-- **改进** [SimPO: Simple Preference Optimization with a Reference-Free Reward](https://arxiv.org/abs/2405.14734)（2024，被引 1,264）：SimPO去参考模型并用平均对数概率作奖励，更简洁高效
+- **起点** [Fine-Tuning Language Models from Human Preferences](https://arxiv.org/abs/1909.08593)（2019，被引 2,836）：首次将人类偏好奖励学习用于语言任务
+- **改进** [Learning to summarize from human feedback](https://arxiv.org/abs/2009.01325)（2020，被引 3,637）：用偏好比较训练奖励模型并PPO微调摘要
+- **里程碑** [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)（2022，被引 25,663）：InstructGPT确立SFT+RLHF范式，1.3B超175B
+- **改进** [Training a Helpful and Harmless Assistant with Reinforcement Learning from Human Feedback](https://arxiv.org/abs/2204.05862)（2022，被引 4,475）：系统研究有用性与无害性RLHF，揭示KL-奖励关系
+- **变体** [Scaling Laws for Reward Model Overoptimization](https://arxiv.org/abs/2210.10760)（2022，被引 1,453）：定量刻画奖励模型过优化与缩放规律
+- **里程碑** [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290)（2023，被引 11,470）：DPO将RLHF简化为分类损失，无需显式奖励模型
+- **变体** [RLAIF vs. RLHF: Scaling Reinforcement Learning from Human Feedback with AI Feedback](https://arxiv.org/abs/2309.00267)（2023，被引 770）：RLAIF用AI反馈替代人类反馈，效果相当
+- **相关** [OpenAssistant Conversations - Democratizing Large Language Model Alignment](https://arxiv.org/abs/2304.07327)（2023，被引 983）：发布OpenAssistant Conversations，13.5万条消息、46万质量评分、35种语言的众包对话语料，训练模型在标准基准上稳定提升。
+- **相关** [AlpacaFarm: A Simulation Framework for Methods that Learn from Human Feedback](https://arxiv.org/abs/2305.14387)（2023，被引 971）：提出AlpacaFarm用LLM模拟人类反馈并自动评测，提供PPO/DPO等参考实现，模拟排名与真实人类数据排名一致。
+- **改进** [SimPO: Simple Preference Optimization with a Reference-Free Reward](https://arxiv.org/abs/2405.14734)（2024，被引 1,264）：SimPO去参考模型并加目标奖励边际，提升DPO
+- **改进** [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://arxiv.org/abs/2402.14740)（2024，被引 791）：简化REINFORCE式优化，超越PPO与DPO且成本更低
+- **最新** [TÜLU 3: Pushing Frontiers in Open Language Model Post-Training](https://arxiv.org/abs/2411.15124)（2024，被引 1,077）：Tulu 3全开放后训练配方，结合SFT、DPO与RLVR
 
-## 可验证奖励强化学习
+## 推理强化学习
 
-以GRPO替代PPO降低内存，DeepSeek-R1用纯RL+规则奖励激发自我反思等推理模式，DAPO等开源系统提升大规模RL稳定性，并探索RL在视觉任务与搜索中的扩展。
+解决复杂推理依赖人工标注与能力不足问题。从STaR自举推理链开始，DeepSeekMath提出GRPO降低PPO开销，DeepSeek-R1用纯RL激发长思维链，后续DAPO、Kimi k1.5等改进RL稳定性与规模，并出现对RLVR能力的反思。
 
-- **起点** [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300)（2024，被引 10,680）：提出GRPO替代PPO，数学推理达51.7%
-- **里程碑** [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning](https://arxiv.org/abs/2501.12948)（2025，被引 5,976）：纯RL+可验证奖励激发推理涌现，超越监督学习
-- **改进** [DAPO: An Open-Source LLM Reinforcement Learning System at Scale](https://arxiv.org/abs/2503.14476)（2025，被引 3,127）：DAPO开源大规模RL系统，解耦裁剪与动态采样提升稳定性
-- **改进** [Open-Reasoner-Zero: An Open Source Approach to Scaling Up Reinforcement Learning on the Base Model](https://arxiv.org/abs/2503.24290)（2025，被引 558）：Open-Reasoner-Zero用无KL的PPO复现R1-Zero缩放
-- **变体** [Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning](https://arxiv.org/abs/2503.09516)（2025，被引 1,752）：Search-R1将RL扩展到多轮检索推理
-- **变体** [VLM-R1: A Stable and Generalizable R1-style Large Vision-Language Model](https://arxiv.org/abs/2504.07615)（2025，被引 558）：VLM-R1将R1式规则奖励RL迁移到视觉语言任务
+- **起点** [STaR: Bootstrapping Reasoning With Reasoning](https://arxiv.org/abs/2203.14465)（2022，被引 1,223）：STaR自举推理链并迭代微调，低成本提升推理
+- **里程碑** [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300)（2024，被引 10,680）：提出GRPO替代PPO，大幅降低RL内存开销
+- **相关** [Qwen2.5-Math Technical Report: Toward Mathematical Expert Model via Self-Improvement](https://arxiv.org/abs/2409.12122)（2024，被引 1,231）：发布 Qwen2.5-Math 系列数学专家模型，贯穿预训练、后训练与推理的自改进流程，用奖励模型迭代 SFT 数据并做 RL，支持中英与 TIR。
+- **相关** [OpenAI o1 System Card](https://www.semanticscholar.org/paper/985298bd0b6f4c84ab34bb15cfed0b092f43b83a)（2024，被引 2,139）：OpenAI o1系统卡，介绍用大规模强化学习训练长思维链推理模型，并给出能力与安全评测结果。
+- **相关** [Qwen2.5 Technical Report](https://arxiv.org/abs/2412.15115)（2024，被引 5,760）：发布 Qwen2.5 系列，预训练数据扩至 18T token，后训练用百万级 SFT 与多阶段 RL，开源旗舰 72B-Instruct 性能媲美约 5 倍大
+- **里程碑** [DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning](https://arxiv.org/abs/2501.12948)（2025，被引 5,976）：DeepSeek-R1纯RL激励自我反思与验证等推理模式
+- **改进** [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://www.semanticscholar.org/paper/bf76cb3bd7a54c60138f9523ffb462a486c4807b)（2025，被引 6,378）：R1加冷启动与多阶段训练，提升可读性与稳定性
+- **改进** [DAPO: An Open-Source LLM Reinforcement Learning System at Scale](https://arxiv.org/abs/2503.14476)（2025，被引 3,127）：DAPO开源大规模RL系统，解耦裁剪与动态采样
+- **改进** [Kimi k1.5: Scaling Reinforcement Learning with LLMs](https://arxiv.org/abs/2501.12599)（2025，被引 1,146）：Kimi k1.5长上下文RL，不依赖MCTS与PRM
+- **变体** [Understanding R1-Zero-Like Training: A Critical Perspective](https://arxiv.org/abs/2503.20783)（2025，被引 1,555）：剖析R1-Zero，提出Dr. GRPO纠正长度偏差
+- **最新** [Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?](https://arxiv.org/abs/2504.13837)（2025，被引 1,205）：质疑RLVR未扩展推理边界，蒸馏才真正扩展能力
+- **相关** [Open-Reasoner-Zero: An Open Source Approach to Scaling Up Reinforcement Learning on the Base Model](https://arxiv.org/abs/2503.24290)（2025，被引 558）：开源Open-Reasoner-Zero，用无KL的PPO+规则奖励复现R1-Zero缩放现象，仅1/10步数超越基线。
 
-## 奖励模型与过程监督
+## 过程奖励与验证器
 
-从结果监督转向过程监督（PRM800K），Math-Shepherd自动构造步骤级监督，GenRM用生成式验证，PRIME用隐式过程奖励在线更新，并出现RewardBench等系统评测基准。
+解决多步推理中间错误与结果监督不足问题。从训练验证器重排序开始，过程监督（PRM800K）证明步骤级反馈更优，Math-Shepherd实现自动过程标注，PRIME在线更新隐式过程奖励，GenRM用生成式验证器统一验证与生成。
 
-- **起点** [Let's Verify Step by Step](https://arxiv.org/abs/2305.20050)（2023，被引 5,294）：系统比较过程与结果监督，过程监督显著更优并开源PRM800K
+- **起点** [Training Verifiers to Solve Math Word Problems](https://arxiv.org/abs/2110.14168)（2021，被引 11,892）：GSM8K基准与训练验证器重排序候选解
+- **里程碑** [Let's Verify Step by Step](https://arxiv.org/abs/2305.20050)（2023，被引 5,294）：系统比较过程与结果监督，开源PRM800K
 - **改进** [Math-Shepherd: Verify and Reinforce LLMs Step-by-step without Human Annotations](https://arxiv.org/abs/2312.08935)（2023，被引 1,313）：Math-Shepherd自动构造步骤级监督，无需人工标注
-- **改进** [Generative Verifiers: Reward Modeling as Next-Token Prediction](https://arxiv.org/abs/2408.15240)（2024，被引 572）：GenRM用下一token预测做生成式验证，Best-of-N大幅提升
-- **改进** [Process Reinforcement through Implicit Rewards](https://arxiv.org/abs/2502.01456)（2025，被引 499）：PRIME用隐式过程奖励在线更新，仅需结果标签
-- **变体** [RewardBench: Evaluating Reward Models for Language Modeling](https://arxiv.org/abs/2403.13787)（2024，被引 705）：RewardBench系统评测奖励模型，揭示拒答与推理缺陷
-- **最新** [RewardBench 2: Advancing Reward Model Evaluation](https://arxiv.org/abs/2506.01937)（2025，被引 163）：RewardBench 2用新人类prompt提升区分度并与下游表现相关
+- **相关** [Llama 2: Open Foundation and Fine-Tuned Chat Models](https://arxiv.org/abs/2307.09288)（2023，被引 18,914）：发布7B-70B预训练与对话模型Llama 2-Chat，详述SFT、RLHF与安全改进流程，多数基准超越开源对话模型，人类评测可替代闭源模型。
+- **相关** [GPT-4 Technical Report](https://arxiv.org/abs/2303.08774)（2023，被引 28,245）：发布GPT-4多模态技术报告，用可预测缩放的基础设施训练并用对齐后训练，模拟律师考试进入前10%。
+- **变体** [Generative Verifiers: Reward Modeling as Next-Token Prediction](https://arxiv.org/abs/2408.15240)（2024，被引 572）：GenRM用下一token预测做生成式验证器
+- **变体** [RewardBench: Evaluating Reward Models for Language Modeling](https://arxiv.org/abs/2403.13787)（2024，被引 705）：RewardBench系统评测奖励模型，揭示其缺陷
+- **相关** [HybridFlow: A Flexible and Efficient RLHF Framework](https://arxiv.org/abs/2409.19256)（2024，被引 2,647）：提出HybridFlow混合单/多控制器RLHF框架，配3D-HybridEngine零冗余重分片，吞吐提升1.53-20.57倍。
+- **改进** [Process Reinforcement through Implicit Rewards](https://arxiv.org/abs/2502.01456)（2025，被引 499）：PRIME仅用结果标签在线更新隐式过程奖励
 
-## SFT与RL泛化对比
+## 对齐与安全
 
-系统比较SFT与RL在后训练中的作用：SFT倾向记忆但稳定输出格式，RL泛化更好；RLVR是否真正扩展推理能力存疑，蒸馏可扩展能力；on-policy数据减少遗忘。
+解决无害性依赖人工标注与可扩展监督问题。从RLHF有用无害训练出发，Constitutional AI用原则自我批判与RLAIF减少人工标注，SELF-ALIGN用极少监督自对齐，弱到强泛化探索超人类模型监督。
 
-- **起点** [SFT Memorizes, RL Generalizes: A Comparative Study of Foundation Model Post-training](https://arxiv.org/abs/2501.17161)（2025，被引 781）：对比SFT与RL，发现RL泛化更好而SFT倾向记忆
-- **改进** [Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?](https://arxiv.org/abs/2504.13837)（2025，被引 1,205）：发现RLVR未产生新推理模式，蒸馏才真正扩展能力
-- **改进** [Retaining by Doing: The Role of On-Policy Data in Mitigating Forgetting](https://arxiv.org/abs/2510.18874)（2025，被引 104）：揭示RL因on-policy数据mode-seeking特性遗忘更少
-- **改进** [On-Policy RL Meets Off-Policy Experts: Harmonizing Supervised Fine-Tuning and Reinforcement Learning via Dynamic Weighting](https://arxiv.org/abs/2508.11408)（2025，被引 116）：CHORD动态加权协调SFT与RL，稳定训练并防过拟合
+- **起点** [Training a Helpful and Harmless Assistant with Reinforcement Learning from Human Feedback](https://arxiv.org/abs/2204.05862)（2022，被引 4,475）：RLHF训练有用且无害助手，揭示KL-奖励关系
+- **里程碑** [Constitutional AI: Harmlessness from AI Feedback](https://arxiv.org/abs/2212.08073)（2022，被引 3,959）：Constitutional AI用原则与AI反馈实现无害对齐
+- **改进** [Principle-Driven Self-Alignment of Language Models from Scratch with Minimal Human Supervision](https://arxiv.org/abs/2305.03047)（2023，被引 478）：SELF-ALIGN用少量原则自对齐，极少人工监督
+- **最新** [Weak-to-Strong Generalization: Eliciting Strong Capabilities With Weak Supervision](https://arxiv.org/abs/2312.09390)（2023，被引 591）：弱到强泛化，探索弱监督激发强模型能力
 
-## AI反馈与可扩展监督
+## 蒸馏与高效后训练
 
-为降低人类标注成本，Constitutional AI用原则自我批判与RLAIF训练无害助手，RLAIF验证AI反馈可替代人类反馈，弱到强泛化与辩论探索超人类监督。
+解决大模型部署成本高与小模型能力不足问题。从知识蒸馏软目标开始，序列级蒸馏与TinyBERT等压缩BERT，Zephyr用蒸馏DPO对齐小模型，GKD解决分布不匹配，Qwen3用蒸馏将推理能力迁移到小模型。
 
-- **起点** [Constitutional AI: Harmlessness from AI Feedback](https://arxiv.org/abs/2212.08073)（2022，被引 3,959）：Constitutional AI用原则自我批判与AI反馈，无需人工有害标注
-- **改进** [RLAIF vs. RLHF: Scaling Reinforcement Learning from Human Feedback with AI Feedback](https://arxiv.org/abs/2309.00267)（2023，被引 770）：RLAIF验证AI反馈在摘要与对话上媲美RLHF
-- **改进** [Weak-to-Strong Generalization: Eliciting Strong Capabilities With Weak Supervision](https://arxiv.org/abs/2312.09390)（2023，被引 591）：研究弱到强泛化，弱监督可激发强模型部分能力
-- **变体** [AI safety via debate](https://arxiv.org/abs/1805.00899)（2018，被引 513）：提出AI辩论框架，探索可扩展监督
+- **起点** [Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531)（2015，被引 27,519）：提出知识蒸馏，用软目标压缩集成知识
+- **改进** [DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter](https://arxiv.org/abs/1910.01108)（2019，被引 10,948）：DistilBERT预训练蒸馏，参数减40%保留97%能力
+- **改进** [MiniLM: Deep Self-Attention Distillation for Task-Agnostic Compression of Pre-Trained Transformers](https://arxiv.org/abs/2002.10957)（2020，被引 2,920）：MiniLM深度自注意力蒸馏，高效压缩Transformer
+- **变体** [Zephyr: Direct Distillation of LM Alignment](https://arxiv.org/abs/2310.16944)（2023，被引 680）：Zephyr用蒸馏DPO对齐7B小模型，超越Llama2-70B
+- **改进** [On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes](https://arxiv.org/abs/2306.13649)（2023，被引 1,239）：GKD在自生成序列上蒸馏，缓解分布不匹配
+- **最新** [Qwen3 Technical Report](https://arxiv.org/abs/2505.09388)（2025，被引 9,881）：Qwen3用蒸馏将大模型推理能力迁移到小模型
 
 ## 多模态后训练
 
-将指令微调与偏好优化扩展到视觉语言模型：LLaVA用GPT-4生成多模态指令数据，InstructBLIP引入指令感知Q-Former，InternVL3用混合偏好优化统一训练。
+解决视觉语言模型指令跟随与推理能力弱问题。从LLaVA视觉指令微调开始，LLaVA-1.5改进连接器与数据效率，InternVL3原生多模态预训练与混合偏好优化，Visual-RFT与VLM-R1将可验证奖励RL扩展到视觉任务。
 
-- **起点** [Visual Instruction Tuning](https://arxiv.org/abs/2304.08485)（2023，被引 11,807）：用GPT-4生成多模态指令数据，提出LLaVA视觉指令微调
-- **改进** [Improved Baselines with Visual Instruction Tuning](https://arxiv.org/abs/2310.03744)（2023，被引 6,153）：系统研究LMM设计选择，MLP连接器+学术VQA数据达SOTA
-- **改进** [InstructBLIP: Towards General-purpose Vision-Language Models with Instruction Tuning](https://arxiv.org/abs/2305.06500)（2023，被引 4,182）：InstructBLIP指令感知Q-Former，13个零样本数据集SOTA
-- **最新** [InternVL3: Exploring Advanced Training and Test-Time Recipes for Open-Source Multimodal Models](https://arxiv.org/abs/2504.10479)（2025，被引 2,058）：InternVL3原生多模态预训练+混合偏好优化，开源SOTA
-
-## 开源模型后训练实践
-
-开源模型系列（Llama 2、Qwen、GLM、Qwen2.5）将SFT+RLHF流程工程化，并引入多阶段RL、百万级SFT与工具调用，推动后训练规模化落地。
-
-- **起点** [Llama 2: Open Foundation and Fine-Tuned Chat Models](https://arxiv.org/abs/2307.09288)（2023，被引 18,914）：Llama 2详述SFT+RLHF+安全改进，开源对话模型可替代闭源
-- **改进** [Qwen Technical Report](https://arxiv.org/abs/2309.16609)（2023，被引 4,564）：Qwen系列用RLHF对齐中英双语模型，并衍生代码数学专用模型
-- **改进** [ChatGLM: A Family of Large Language Models from GLM-130B to GLM-4 All Tools](https://arxiv.org/abs/2406.12793)（2024，被引 1,884）：GLM-4多阶段SFT+RLHF对齐，支持自主工具调用
-- **改进** [Qwen2.5 Technical Report](https://arxiv.org/abs/2412.15115)（2024，被引 5,760）：Qwen2.5用百万级SFT与多阶段RL，72B媲美5倍大模型
-- **变体** [Qwen2.5-Math Technical Report: Toward Mathematical Expert Model via Self-Improvement](https://arxiv.org/abs/2409.12122)（2024，被引 1,231）：Qwen2.5-Math用奖励模型迭代SFT数据并RL，专攻数学推理
-
-## 后训练系统与效率
-
-针对RLHF训练开销大、流程复杂的问题，HybridFlow用混合控制器与零冗余重分片提升吞吐，LoRA以低秩适配降低微调成本，知识蒸馏将大模型能力压缩到小模型。
-
-- **起点** [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685)（2021，被引 25,273）：LoRA冻结预训练权重注入低秩矩阵，大幅降低微调成本
-- **改进** [Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531)（2015，被引 27,519）：知识蒸馏用软目标压缩集成知识，为后训练蒸馏奠基
-- **最新** [HybridFlow: A Flexible and Efficient RLHF Framework](https://arxiv.org/abs/2409.19256)（2024，被引 2,647）：HybridFlow混合单/多控制器RLHF框架，吞吐提升1.53-20.57倍
-
-## 偏好数据与评测
-
-为降低人类反馈数据成本并提升评测可信度，OpenAssistant众包构建开放对话语料，WebGPT用浏览环境收集人类反馈，GPT-4技术报告展示对齐后训练效果，MT-Bench提供LLM-as-a-judge评测。
-
-- **起点** [OpenAssistant Conversations - Democratizing Large Language Model Alignment](https://arxiv.org/abs/2304.07327)（2023，被引 983）：OpenAssistant众包多语言对话语料，开放对齐研究数据
-- **改进** [WebGPT: Browser-assisted question-answering with human feedback](https://arxiv.org/abs/2112.09332)（2021，被引 2,183）：WebGPT用浏览环境+人类反馈训练问答，答案胜率超人类示范
-- **里程碑** [GPT-4 Technical Report](https://arxiv.org/abs/2303.08774)（2023，被引 28,245）：GPT-4用RLHF后训练对齐，模拟律师考试进入前10%
-- **改进** [Judging LLM-as-a-judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685)（2023，被引 12,797）：MT-Bench与Chatbot Arena系统评测LLM-as-a-judge偏差
+- **起点** [Visual Instruction Tuning](https://arxiv.org/abs/2304.08485)（2023，被引 11,807）：LLaVA用GPT-4生成多模态指令数据做视觉指令微调
+- **改进** [Improved Baselines with Visual Instruction Tuning](https://arxiv.org/abs/2310.03744)（2023，被引 6,153）：LLaVA-1.5改进连接器与数据，提升VLM数据效率
+- **里程碑** [InternVL3: Exploring Advanced Training and Test-Time Recipes for Open-Source Multimodal Models](https://arxiv.org/abs/2504.10479)（2025，被引 2,058）：InternVL3原生多模态预训练与混合偏好优化
+- **变体** [Visual-RFT: Visual Reinforcement Fine-Tuning](https://arxiv.org/abs/2503.01785)（2025，被引 595）：Visual-RFT将可验证奖励RL扩展到视觉感知任务
+- **最新** [VLM-R1: A Stable and Generalizable R1-style Large Vision-Language Model](https://arxiv.org/abs/2504.07615)（2025，被引 558）：VLM-R1将R1式规则奖励RL用于VLM，泛化超SFT
 
 ## 推荐综述
 
@@ -111,8 +106,8 @@
 ## 仍未解决
 
 - RLVR是否真正扩展推理能力仍存争议
-- 奖励模型过优化与reward hacking难根治
-- SFT与RL的最优组合策略尚不明确
-- 多模态后训练的统一范式尚未形成
+- 奖励模型过优化与奖励欺骗难以根治
+- 后训练中的灾难性遗忘机制尚不明确
+- 多模态与推理后训练的统一配方缺失
 
-<sub>召回 1214 篇 → 子图 800 篇 → 选 88 篇成线；花费 $0.0039</sub>
+<sub>召回 1337 篇 → 子图 1313 篇 → 选 88 篇成线；花费 $0.004</sub>

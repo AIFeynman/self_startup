@@ -20,8 +20,8 @@ from . import _paper_collect as col, _paper_label as lab
 NODES, FRONTIER, ANCESTOR_SHARE, ANCESTOR_MAX = 80, 12, 0.08, 8
 OTHER = "_other"
 REWRITE_N = 2
-KEY = 30          # 分数最高的这些标 key，成线时必须出现，漏了补问一次
-RECALL_CAP = 800
+KEY, LEAD = 50, 3          # 分数最高的这些标 key，成线时必须出现，漏了补问一次
+RECALL_CAP = 2000
 
 REWRITE = """你把用户想了解的 AI 研究主题改写成论文检索意图。方向 code（二级）：{doms}
 只输出 JSON：{{"must":[这个主题的核心说法，英文为主（论文是英文），含常见缩写和同义说法，4-10 个],
@@ -116,11 +116,13 @@ def _pct(vals: dict[str, float]) -> dict[str, float]:
 def _pick(score: dict[str, float], group: dict[str, str], n: int, on_topic: set[str] = frozenset()) -> list[str]:
     """按子方向分名额再按分数取，避免一个大子方向挤掉其它子方向的里程碑；没用完的名额按全局分数补。
     名额 ∝ √(该方向里关键词命中主题的篇数)：MoE 主题下「架构」方向只有讲 MoE 的那部分算数，不会把整个架构方向的名额摊进来；
-    改写没列出的方向合成一组（OTHER），权重减半。"""
+    改写没列出的方向合成一组（OTHER），权重取 √篇数 和最大主题方向权重的较小者再减半：召回放宽后 OTHER 动辄上千篇，不封顶会挤掉主题方向的名额。"""
     by: dict[str, list[str]] = {}
     for s in sorted(score, key=lambda s: -score[s]):
         by.setdefault(group[s], []).append(s)
-    w = {g: (sum(s in on_topic for s in v) if on_topic else len(v)) ** 0.5 * (0.5 if g == OTHER else 1) for g, v in by.items()}
+    w = {g: (sum(s in on_topic for s in v) if on_topic else len(v)) ** 0.5 for g, v in by.items()}
+    if OTHER in w:
+        w[OTHER] = 0.5 * min(w[OTHER], max((x for g, x in w.items() if g != OTHER), default=w[OTHER]))
     tot = sum(w.values()) or 1
     pick = [s for g, v in by.items() for s in v[:max(1, round(n * w[g] / tot))]]
     pick = sorted(pick, key=lambda s: -score[s])[:n]
@@ -158,7 +160,7 @@ def subgraph(rel: dict[int, float], intent: dict | None = None) -> dict:
         indeg[t] += 1
     p_in = _pct({s: indeg[s] + 1e-6 * (by_s2[s]["cites"] or 0) for s in nodes})
     score = {s: 0.3 * p_pr[s] + 0.3 * p_c[s] + 0.1 * p_r[s] + 0.3 * p_in[s] for s in core}
-    kw = {items[i]["s2id"] for i in _kw(intent)} if intent else set()
+    kw = {items[i]["s2id"] for i in _kw(intent) if i in items} if intent else set()     # 索引里可能还有后来没过门槛的
     doms = set(intent["domains"]) if intent else set()
     grp = {s: d if (d := by_s2[s].get("d")) in doms else OTHER for s in core}
     pick = _pick(score, grp, NODES - FRONTIER, kw & core)
@@ -166,8 +168,9 @@ def subgraph(rel: dict[int, float], intent: dict | None = None) -> dict:
     fresh = sorted([s for s in core if s not in pick and (by_s2[s]["year"] or 0) >= yr - 1],
                    key=lambda s: -(col.log10p(by_s2[s]["cites"]) + by_s2[s]["hot"] + relv[s]))[:FRONTIER]
     chosen = pick + fresh + [a for a in ancestors if a not in pick]
-    lead = {g: max((s for s in chosen if grp.get(s) == g), key=lambda s: score[s], default=None) for g in set(grp.values()) - {OTHER}}
-    key = set(sorted([s for s in chosen if s in score], key=lambda s: -score[s])[:KEY]) | set(ancestors[:3]) | (set(lead.values()) - {None})
+    lead = {s for g in set(grp.values()) - {OTHER}
+            for s in sorted((s for s in chosen if grp.get(s) == g), key=lambda s: -score[s])[:LEAD]}   # 每个子方向前几名
+    key = set(sorted([s for s in chosen if s in score], key=lambda s: -score[s])[:KEY]) | set(ancestors[:3]) | lead
     return {"chosen": chosen, "key": key, "by_s2": by_s2, "edges": edges, "pr": pr, "ancestors": ancestors,
             "core": len(core), "anc_counts": {a: cnt[a] for a in ancestors}}
 

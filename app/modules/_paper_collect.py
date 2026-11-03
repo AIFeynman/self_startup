@@ -7,7 +7,7 @@
   6–24 个月引用 ≥ 60；2–5 年 ≥ 250；5 年以上 ≥ 1000。只收 arXiv 论文。
 - 经典回拉：被库内论文引用 ≥ CLASSIC_REFS 次、总被引 ≥ CLASSIC_MIN_CITES 的参考文献（含非 arXiv，如 PPO 之前的 RL 经典）也入库。
 - 详情（摘要、TLDR、参考文献）只给入库的论文取，S2 batch 100 篇一次。
-没有 S2_API_KEY 时走公共限流池（常 429，靠退避重试），有 key 时每秒 1 次。
+没有 SEMANTIC_SCHOLAR_API_KEY（或 S2_API_KEY）时走公共限流池（常 429，靠退避重试），有 key 时每秒 1 次。
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ usage = {"calls": 0, "retries": 0}
 
 
 def _headers() -> dict:
-    key = os.environ.get("S2_API_KEY", "").strip()
+    key = (os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or os.environ.get("S2_API_KEY") or "").strip()
     return {"x-api-key": key} if key else {}
 
 
@@ -250,11 +250,16 @@ def fetch_details(c: httpx.Client, on_page=None) -> int:
 
 
 def pull_classics(c: httpx.Client) -> list[str]:
-    """被库内论文引用 ≥ CLASSIC_REFS 次的参考文献：总被引够高就作为经典入库（不要求 arXiv）。返回新拉进来的 s2id。"""
+    """被库内论文引用 ≥ CLASSIC_REFS 次的参考文献：总被引够高就作为经典入库（不要求 arXiv）。返回新拉进来的 s2id。
+    只数非经典论文的引用：经典自己的参考文献不算，否则每跑一次就多拉一代（滚雪球）；已入库但不再满足的经典退回 out。"""
     cnt: dict[str, int] = {}
-    for r in db.rows("SELECT refs FROM paper_items WHERE status='in'"):
+    for r in db.rows("SELECT refs FROM paper_items WHERE status='in' AND COALESCE(tier,'')!='classic'"):
         for s in set(json.loads(r["refs"] or "[]")):
             cnt[s] = cnt.get(s, 0) + 1
+    for r in db.rows("SELECT * FROM paper_items WHERE status='in' AND tier='classic'"):
+        if cnt.get(r["s2id"], 0) < CLASSIC_REFS:      # 撤回经典身份，按普通门槛重判（arXiv 论文被引够也照样入库）
+            st, tier, why = decide(r)
+            db.execute("UPDATE paper_items SET status=?, tier=?, why=? WHERE id=?", [st, tier, why, r["id"]])
     have = {r["s2id"] for r in db.rows("SELECT s2id FROM paper_items WHERE status='in'")}
     want = [s for s, k in cnt.items() if k >= CLASSIC_REFS and s not in have]
     got = []

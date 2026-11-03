@@ -47,6 +47,19 @@ def test_decide_requires_arxiv():
     assert col.decide({"arxiv": "", "pub_date": "2018-01-01", "cites": 99999}, TODAY)[0] == "out"
 
 
+def test_pull_classics_counts_only_non_classic_citers(monkeypatch):
+    for i in range(8):
+        paper(f"N{i}", f"paper {i}", 2023, 500, refs=["C1"])
+    paper("OLDC", "second generation classic", 2010, 900, arxiv="")       # 上一轮被经典自己的参考文献拉进来的
+    db.execute("UPDATE paper_items SET tier='classic', refs=? WHERE s2id='C1'", ['[]'])
+    db.execute("UPDATE paper_items SET tier='classic' WHERE s2id='OLDC'")
+    monkeypatch.setattr(col, "batch", lambda ids, c: [{"paperId": s, "title": s, "year": 2014, "citationCount": 5000,
+                                                       "externalIds": {}, "references": [{"paperId": "OLDC"}]} for s in ids])
+    assert col.pull_classics(None) == ["C1"]
+    assert db.row("SELECT status FROM paper_items WHERE s2id='OLDC'")["status"] == "out"
+    assert col.pull_classics(None) == []                     # 再跑一次不会滚雪球（C1 自己引 OLDC 不算）
+
+
 def test_validate_maps_refs_and_rejects_bad_codes():
     refs = [{"s2id": "S_A", "title": "A", "year": 2020}, {"s2id": "S_B", "title": "B", "year": 2021}]
     x = {"k": "method", "d": "pref_opt", "d2": ["reward_model", "nope", "pref_opt"], "s": "直接偏好优化",
@@ -105,7 +118,9 @@ def test_build_map_recalls_pulls_ancestor_and_validates_ids(monkeypatch):
     paper("IGPT", "Training with human preferences feedback", 2022, 20000, refs=["RLHF", "PPO"])
     paper("DPO", "Direct preference optimization", 2023, 9000, refs=["IGPT", "RLHF", "PPO"])
     paper("MOE", "Sparsely gated mixture of experts", 2017, 5000)
+    paper("OUT", "Human preferences, revisited", 2025, 5)                        # 标注后没过门槛，全文索引里还在
     lab.run(call=fake_label())
+    db.execute("UPDATE paper_items SET status='out' WHERE s2id='OUT'")
     db.execute("UPDATE paper_labels SET d='rl' WHERE s2id='PPO'")
     calls = []
 
