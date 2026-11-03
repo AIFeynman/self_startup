@@ -58,7 +58,7 @@ DEFAULTS: dict = {
     # 开源雷达批量标注引擎：deepseek（默认，DeepSeek v4 flash API，全库约 1 小时 / $6）或 haiku（订阅 CLI，不另付费，约 6-9 小时）
     "oss": {"label_engine": "deepseek"},
     # 论文脉络的标注 / 脉络生成用哪个模型：haiku = 本机 Claude Code 登录（model_tiers.light）；deepseek = 官方 API
-    "paper": {"llm_engine": "haiku", "feed_ingest": True},
+    "paper": {"llm_engine": "haiku", "feed_ingest": True, "maintain_days": 7},
     # 理财：信号变化 / 每日汇总提醒；target = 一年收益目标；refresh_minutes = 行情和新闻刷新间隔
     "wealth": {"alerts": True, "target": 0.10, "summary_time": "16:30", "refresh_minutes": 60},
     # 通知：所有板块都写进通知记录、页面右下角弹出；system = 同时发 macOS 系统通知

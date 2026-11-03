@@ -327,3 +327,79 @@ def test_ingest_feed_marks_hot_and_labels(client, monkeypatch, labeled):
     r = db.row("SELECT * FROM paper_items WHERE s2id='HOT'")
     assert (r["status"], r["tier"], r["hot"], r["src"]) == ("in", "recent", 1, "feed")
     assert padd.ingest_feed()["labeled"] == 0                  # 再跑一次不重复标
+
+
+# ---------- 论文库维护（_paper_maintain） ----------
+
+from datetime import timedelta  # noqa: E402
+
+from app.modules import _paper_maintain as maint  # noqa: E402
+
+
+def months_ago(m):
+    return (datetime.now() - timedelta(days=m * 30.44)).strftime("%Y-%m-%d")
+
+
+def test_weekly_refreshes_cites_promotes_and_relabels_citers(client, monkeypatch, labeled):
+    maint.init()
+    db.execute("DELETE FROM paper_runs")
+    paper("A", "base paper", 2023, 900)
+    paper("CITER", "a paper that cites both", 2024, 400, refs=["A", "NEW"])
+    paper("NEW", "late bloomer", 2025, 30, pub=months_ago(17))
+    db.execute("UPDATE paper_items SET status='out', tier='young', detail_at=NULL, refs='[]' WHERE s2id='NEW'")
+    paper("AGED", "was recent with a hot signal", 2025, 3, pub=months_ago(12))
+    db.execute("UPDATE paper_items SET tier='recent' WHERE s2id='AGED'")
+    lab.run()
+    old_src = db.row("SELECT label_src FROM paper_labels WHERE s2id='CITER'")["label_src"]
+    seen = []
+
+    def batch(ids, c, fields=col.DETAIL_FIELDS):
+        seen.append((fields, sorted(ids)))
+        if fields == maint.CITE_FIELDS:
+            return [{"paperId": s, "citationCount": 80 if s == "NEW" else 3, "influentialCitationCount": 1} for s in ids]
+        return [detail(s, "late bloomer", 2025, 80, arxiv="xNEW", refs=["A"], pub=months_ago(17)) for s in ids]
+
+    monkeypatch.setattr(col, "batch", batch)
+    monkeypatch.setattr(lab, "judge_recent", lambda: {"judged": 0})
+    st = maint.record("weekly", maint.weekly)
+    assert seen[0] == (maint.CITE_FIELDS, ["AGED", "NEW"])            # 没入库的 + 入库的近两年论文；A / CITER 太老不刷
+    assert (st["admitted"], st["relabel"], st["left"], st["errors"]) == (1, 1, 0, [])
+    new = db.row("SELECT * FROM paper_items WHERE s2id='NEW'")
+    assert (new["status"], new["tier"], new["cites"], new["title"]) == ("in", "young", 80, "late bloomer")
+    assert db.row("SELECT 1 FROM paper_labels WHERE s2id='NEW'")
+    assert db.row("SELECT label_src FROM paper_labels WHERE s2id='CITER'")["label_src"] != old_src   # builds_on 重标了
+    assert db.row("SELECT status FROM paper_items WHERE s2id='AGED'")["status"] == "in"             # 变老门槛变高也不踢
+    col.admit_all()
+    assert db.row("SELECT status FROM paper_items WHERE s2id='AGED'")["status"] == "in"
+    s = maint.status()
+    assert s["weekly"]["status"] == "ok" and s["weekly"]["result"]["admitted"] == 1 and not s["weekly_alert"]
+    assert not maint.due() and maint.due(datetime.now() + timedelta(days=8))
+
+
+def test_runs_alert_after_two_failures(client):
+    maint.init()
+    db.execute("DELETE FROM paper_runs")
+
+    def boom(step):
+        raise RuntimeError("S2 down")
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            maint.record("feed", boom)
+    s = maint.status()
+    assert s["feed_alert"] and s["feed"]["status"] == "failed" and "S2 down" in s["feed"]["step"]
+    maint.record("feed", lambda step: {"admitted": 2, "errors": ["未配置 JEV_API_KEY"]})
+    s = maint.status()
+    assert not s["feed_alert"] and s["feed"]["status"] == "partial"
+
+
+def test_map_counts_papers_added_since_built(client, labeled):
+    paper("P1", "speculative decoding drafts", 2024, 300)
+    lab.run()
+    res = {"topic": "推测解码", "intent": {"must": ["speculative decoding"], "should": [], "domains": []}, "created": db.now(),
+           "lines": [], "chosen": []}
+    db.execute("INSERT INTO paper_maps(topic,result,cost,created) VALUES (?,?,?,?)", ["推测解码", json.dumps(res), 0.01, res["created"]])
+    assert [m["new"] for m in pmap.overview()["maps"]] == [0]                # 老脉络没存召回集：拿现在的召回当基线
+    assert "pool" in json.loads(db.row("SELECT result FROM paper_maps")["result"])
+    paper("P2", "faster speculative decoding", 2025, 100)
+    lab.run()
+    assert [m["new"] for m in pmap.overview()["maps"]] == [1]
