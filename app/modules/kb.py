@@ -120,12 +120,19 @@ class JudgmentIn(BaseModel):
     confidence: str = ""
     due: str = ""
     note: str = ""
+    sources: list = []      # 依据材料：[{sid,title,url,link,sub}]（看过的材料）/ 链接或一句话（自己指定）；空 = 没有源
+
+
+@router.get("/materials")
+def materials(q: str = "", limit: int = 20):
+    """记判断时引用：看过的材料，按关键词筛。"""
+    return kb_judge.materials(q, min(max(limit, 1), 50))
 
 
 @router.post("/judgments")
 def judgment_add(body: JudgmentIn):
     try:
-        jid = kb_judge.add(body.text, body.type, body.confidence, body.due, body.note)
+        jid = kb_judge.add(body.text, body.type, body.confidence, body.due, body.note, body.sources)
     except ValueError:
         raise HTTPException(400, "empty")
     kb_graph.schedule_refresh()       # 归类 + Agent 评价在后台跑

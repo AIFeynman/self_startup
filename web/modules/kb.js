@@ -71,6 +71,16 @@ const CSS = `
 .kb-tl > .kb-jr::before { content: ''; position: absolute; left: -18px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line-2); }
 .kb-tl > .kb-jr.chg::before { border-color: var(--accent); background: var(--accent); }
 .kb-new { display: grid; gap: 8px; padding: 14px 16px; margin-bottom: 14px; }
+.kb-src { display: grid; gap: 6px; }
+.kb-src .sel { display: flex; flex-wrap: wrap; gap: 6px; }
+.kb-src .chip { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 12px; font-size: 12.5px; max-width: 100%; }
+.kb-src .chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-src .chip button { border: 0; background: none; padding: 0; color: var(--muted); cursor: pointer; }
+.kb-src .hits { border: 1px solid var(--line); border-radius: 8px; max-height: 260px; overflow: auto; }
+.kb-src .hit { padding: 6px 10px; cursor: pointer; font-size: 13px; }
+.kb-src .hit:hover { background: var(--hover, rgba(127,127,127,.08)); }
+.kb-src .hit .muted { font-size: 12px; }
+.kb-srcs { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; font-size: 13px; }
 .kb-new textarea { width: 100%; min-height: 60px; font: inherit; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); resize: vertical; }
 .kb-new .row select, .kb-new .row input { width: auto; font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--panel); color: var(--text); }
 @media (max-width: 640px) { .kb-jd { margin-left: 0; } }
@@ -564,8 +574,9 @@ async function judgeTab(body, ctx, focus = '') {
     const cf = h('select', {}, [['', '信心：让 AI 判断'], ['高', '信心高'], ['中', '信心中'], ['低', '信心低']].map(([v, l]) => h('option', { value: v }, l)));
     const due = h('input', { type: 'date', title: '什么时候回来检查（预测填兑现日期；留空按默认节奏）' });
     const note = h('input', { placeholder: '依据 / 背景（可选）', style: { flex: 1, minWidth: '160px' } });
-    return h('div.card.kb-new', {}, [ta, h('div.row', { style: { flexWrap: 'wrap', gap: '8px' } }, [ty, cf, h('span.muted', {}, '复查日'), due, note,
-      h('button', { onclick: async () => { if (!ta.value.trim()) return; await addJudgment(ctx, { text: ta.value, type: ty.value, confidence: cf.value, due: due.value, note: note.value }); newBox.replaceChildren(); } }, '保存')])]);
+    const src = sourcePicker(ctx);
+    return h('div.card.kb-new', {}, [ta, src.el, h('div.row', { style: { flexWrap: 'wrap', gap: '8px' } }, [ty, cf, h('span.muted', {}, '复查日'), due, note,
+      h('button', { onclick: async () => { if (!ta.value.trim()) return; await addJudgment(ctx, { text: ta.value, type: ty.value, confidence: cf.value, due: due.value, note: note.value, sources: src.value() }); newBox.replaceChildren(); } }, '保存')])]);
   }
 
   // 待复查（展开），没有就显示接下来的复查日程
@@ -619,6 +630,52 @@ async function judgeTab(body, ctx, focus = '') {
   }
 }
 
+// 依据材料：从看过的材料里搜着引用，或自己贴链接 / 写一句来源；都不填 = 没有源
+function sourcePicker(ctx) {
+  const { api, h } = ctx;
+  const picked = [];
+  const chips = h('div.sel');
+  const hits = h('div.hits', { style: { display: 'none' } });
+  const q = h('input', { placeholder: '引用看过的材料：搜标题 / 关键词（深读、调研、读书、学习计划、收藏的信息）', style: { width: '100%' } });
+  const own = h('input', { placeholder: '或自己指定源：贴链接 / 写一句出处，回车加入', style: { width: '100%' } });
+  const draw = () => chips.replaceChildren(...(picked.length ? picked.map((x, i) => h('span.chip', { title: x.url || x.title }, [
+    h('span', {}, (x.sub_name ? x.sub_name + ' · ' : x.sid ? '' : '自定 · ') + (x.title || x.url)),
+    h('button', { title: '移除', onclick: () => { picked.splice(i, 1); draw(); } }, '×')])) : [h('span.muted', { style: { fontSize: '12.5px' } }, '依据材料：暂无（可不填）')]));
+  const add = (x) => { if (!picked.some((p) => (p.sid && p.sid === x.sid) || (!p.sid && (p.url || p.title) === (x.url || x.title)))) picked.push(x); draw(); };
+  let timer = 0, seq = 0;
+  const search = async () => {
+    const my = ++seq;
+    const rs = await api.get('/api/kb/materials?limit=12&q=' + encodeURIComponent(q.value.trim()));
+    if (my !== seq) return;
+    hits.style.display = '';
+    hits.replaceChildren(...(rs.length ? rs.map((r) => h('div.hit', { onclick: () => { add({ sid: r.sid, title: r.title, url: r.url, link: r.link, sub: r.sub, sub_name: r.sub_name }); hits.style.display = 'none'; q.value = ''; } }, [
+      h('div', {}, r.title), h('div.muted', {}, `${r.sub_name} · ${r.date}${r.context ? ' · ' + r.context : ''}`)])) : [h('div.hit.muted', {}, '没找到，换个词，或在下面直接贴链接')]));
+  };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 200); });
+  q.addEventListener('focus', () => { if (!hits.childElementCount) search(); else hits.style.display = ''; });
+  own.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' || !own.value.trim()) return;
+    ev.preventDefault();
+    const v = own.value.trim();
+    add(/^https?:\/\/\S+$/.test(v) ? { url: v, title: v } : { title: v });
+    own.value = '';
+  });
+  draw();
+  return {
+    el: h('div.kb-src', {}, [chips, q, hits, own]),
+    value: () => {   // 没按回车的自定源也算上
+      if (own.value.trim()) { const v = own.value.trim(); add(/^https?:\/\/\S+$/.test(v) ? { url: v, title: v } : { title: v }); own.value = ''; }
+      return picked.map(({ sub_name, ...x }) => x);
+    },
+  };
+}
+
+function srcList(h, srcs) {
+  if (!srcs?.length) return null;
+  return h('div.kb-srcs', {}, [h('b', { style: { color: 'var(--muted)', fontSize: '12px' } }, '依据材料'),
+    ...srcs.map((x) => (x.link || x.url) ? h('a', { href: x.link || x.url, ...(x.link ? {} : { target: '_blank', rel: 'noopener' }) }, x.title || x.url) : h('span', {}, x.title))]);
+}
+
 // 一行判断，点开看原话、Agent 评价、复查记录，并能复查
 function jRow(ctx, c, { open = false, today, chg = false, lead = '' } = {}) {
   const { h } = ctx;
@@ -639,6 +696,7 @@ function jDetail(ctx, c, today) {
   const e = c.eval;
   const a = c.agent;
   const due = c.due && c.due <= today;
+  const ctxText = c.sources?.length ? (c.context || '').split('\n').filter((l) => !l.startsWith('依据材料：')).join('\n') : c.context;
   const agentBox = h('div');
   const showAgent = (x) => agentBox.replaceChildren(x ? h('div.kb-ag', {}, [
     h('div', {}, [h('b', {}, `Agent 参考结论：${x.suggest}`), h('span.muted', {}, ` · 对照了 ${x.n_evidence ?? 0} 条之后的材料和判断${x.stale ? ' · 有新材料，可重新对照' : ''}`)]),
@@ -664,7 +722,8 @@ function jDetail(ctx, c, today) {
     : [['holds', '仍成立'], ['revised', '要修正'], ['overturned', '推翻了'], ['pending', '还看不出']];
   return h('div.kb-jd', { onclick: (ev) => ev.stopPropagation() }, [
     c.mine && !norm(c.mine).startsWith(norm(c.claim).slice(0, 16)) ? h('blockquote', {}, c.mine) : null,
-    c.context ? h('div.muted.clamp2', {}, '针对：' + c.context) : null,
+    ctxText ? h('div.muted.clamp2', {}, '针对：' + ctxText) : null,
+    srcList(h, c.sources),
     e ? h('div.kb-ev', {}, [h('b', {}, `依据 ${e.strength}`), h('span', {}, e.basis), h('b', {}, '反方'), h('span', {}, e.counter), h('b', {}, '怎么验证'), h('span', {}, e.verify)]) : null,
     agentBox,
     c.reviews.length ? h('ul.kb-hist', {}, c.reviews.map((r) => h('li', {}, `${r.at.slice(0, 10)} · ${r.verdict_name}${r.due ? ' → ' + r.due : ''}${r.note ? '：' + r.note : ''}`))) : null,

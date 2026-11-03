@@ -129,3 +129,29 @@ def test_schedule_rules():
     assert kb_judge.schedule(s, {"type": "观点"}, [], "2026-01-10") == ("open", "2026-01-10")
     assert kb_judge.schedule(s, {"type": "事实"}, []) == ("open", "")
 
+
+
+def test_sources_cited_and_searchable(monkeypatch):
+    """记判断可以引用看过的材料 / 自己指定源 / 不给源；引用的材料进 Agent 归类的上下文，复查时排在证据最前。"""
+    monkeypatch.setattr(kb_graph, "llm_json", _fake_llm)
+    monkeypatch.setattr(kb_graph, "signals", lambda: [kb_graph._sig("item:7", "material", "paper", "Mamba 论文深读", context="状态空间模型",
+                                                                    date="2026-10-01", link="#learn/item/7", url="https://arxiv.org/abs/2312.00752")]
+                        + kb_judge.signals())
+    hits = kb_judge.materials("mamba")
+    assert [h["sid"] for h in hits] == ["item:7"] and hits[0]["sub_name"] == "论文深读"
+    assert kb_judge.materials("不存在的词") == []
+    a = kb_judge.add("线性注意力会在长上下文里取代 Transformer", sources=[
+        {"sid": "item:7", "title": "Mamba 论文深读", "sub": "paper", "link": "#learn/item/7", "junk": 1},
+        "https://example.com/blog", "某次分享里听到的", {"sid": "item:7", "title": "重复"}, {}])
+    b = kb_judge.add("没有源的直觉判断")
+    rows = {r["id"]: r for r in db.rows("SELECT * FROM kb_judgments")}
+    srcs = kb_judge._j(rows[a]["sources"], [])
+    assert srcs == [{"sid": "item:7", "title": "Mamba 论文深读", "link": "#learn/item/7", "sub": "paper"},
+                    {"url": "https://example.com/blog"}, {"title": "某次分享里听到的"}]
+    assert kb_judge._j(rows[b]["sources"], []) == []
+    sig = {s["sid"]: s for s in kb_judge.signals()}
+    assert "依据材料：论文深读·Mamba 论文深读" in sig[f"my:{a}"]["context"] and sig[f"my:{a}"]["cites"] == ["item:7"]
+    assert sig[f"my:{b}"]["cites"] == [] and "依据材料" not in sig[f"my:{b}"]["context"]
+    m = kb_graph.model()
+    ev = kb_judge._evidence(m["sigs"][f"my:{a}"], m, {})
+    assert ev and ev[0]["sid"] == "item:7" and ev[0].get("cited")

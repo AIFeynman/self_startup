@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS kb_judgments (          -- 我直接记的判断 / �
     confidence TEXT DEFAULT '',
     due TEXT DEFAULT '',                           -- 我指定的复查日
     note TEXT DEFAULT '',
+    sources TEXT DEFAULT '[]',                     -- 依据材料 [{sid?,title,url?,link?,sub?}]：看过的材料或自己指定的源；空 = 没有源
     created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS kb_claim_reviews (      -- 复查记录（只追加）
@@ -57,6 +58,8 @@ def llm_json(system: str, payload: dict, max_tokens: int = 6000) -> dict:
 
 def _init() -> None:
     db.init([SCHEMA])
+    if "sources" not in {r["name"] for r in db.rows("PRAGMA table_info(kb_judgments)")}:   # 老库补列
+        db.execute("ALTER TABLE kb_judgments ADD COLUMN sources TEXT DEFAULT '[]'")
 
 
 def _has(table: str) -> bool:
@@ -80,8 +83,10 @@ def signals() -> list[dict]:
     out = []
     if _has("kb_judgments"):
         for r in db.rows("SELECT * FROM kb_judgments ORDER BY id"):
-            out.append(_sig(f"my:{r['id']}", "judgment", "mine", _clip(r["text"], 40), mine=r["text"],
-                            context=r["note"] or "", date=r["created_at"], link="#kb"))
+            srcs = _j(r.get("sources"), [])
+            out.append({**_sig(f"my:{r['id']}", "judgment", "mine", _clip(r["text"], 40), mine=r["text"],
+                               context="\n".join(x for x in [r["note"] or "", _sources_text(srcs)] if x), date=r["created_at"], link="#kb"),
+                        "cites": [x["sid"] for x in srcs if x.get("sid")]})
     if _has("kb_claim_reviews"):
         for r in db.rows("SELECT * FROM kb_claim_reviews WHERE verdict IN ('revised','overturned') AND trim(note)!='' ORDER BY id"):
             out.append(_sig(f"rev:{r['id']}", "judgment", "revise", f"{VERDICTS[r['verdict']]}：{_clip(r['note'], 30)}",
@@ -92,7 +97,7 @@ def signals() -> list[dict]:
 # ---------- LLM：归类 + Agent 评价 / 问题线 / 到期参考结论 ----------
 
 CLASSIFY_SYSTEM = """你在帮用户整理「判断台账」：把用户自己说过的话沉淀成以后能回头检查的判断。
-输入是一批记录：mine 是用户原话，context 是它针对的问题 / 材料（可能含 Agent 当时的点评），claim 是已有的一句话浓缩。
+输入是一批记录：mine 是用户原话，context 是它针对的问题 / 材料（可能含 Agent 当时的点评；「依据材料：」后是用户引用的来源），claim 是已有的一句话浓缩。
 逐条判断它属于哪一类：
 - 观点：对某件事「应该 / 是 / 不是 / 更好」的主张或结论（包括做法上的经验结论）；
 - 预测：对未来会发生什么的判断（会 / 将 / 未来 / 迟早 / 趋势），能在某个时间点被验证；
@@ -105,7 +110,7 @@ CLASSIFY_SYSTEM = """你在帮用户整理「判断台账」：把用户自己�
 - confidence：从措辞看用户有多确定：高 / 中 / 低；
 - horizon_days：仅预测填，从记录日期起大约多少天后能验证（30–720），其他填 null；
 - eval（疑问填 null）：以严格但公正的评审身份写，每项一句话：
-  strength 依据强弱（强 / 中 / 弱），basis 用户的依据是什么，counter 最有力的反方观点或反例，verify 以后看什么信号 / 做什么实验能验证或推翻。
+  strength 依据强弱（强 / 中 / 弱），basis 用户的依据是什么（引用了材料就说清这些材料能不能撑住这个判断，没有源就说明是凭经验 / 直觉），counter 最有力的反方观点或反例，verify 以后看什么信号 / 做什么实验能验证或推翻。
 输出 JSON：{"items": [{"sid": "原样返回", "type": "观点", "claim": "…", "confidence": "中", "horizon_days": null,
 "eval": {"strength": "中", "basis": "…", "counter": "…", "verify": "…"}}]}"""
 
@@ -206,14 +211,15 @@ def _threads() -> list[dict]:
 
 
 def _evidence(s: dict, m: dict, cls: dict) -> list[dict]:
+    cited = [m["sigs"][x] for x in s.get("cites") or [] if x in m["sigs"]]     # 判断时引用的材料排最前
     cs = set(s.get("concepts") or [])
-    if not cs:
-        return []
-    ev = [x for x in m["sigs"].values() if x["sid"] != s["sid"] and x["date"] >= s["date"] and cs & set(x.get("concepts") or [])]
+    ev = [x for x in m["sigs"].values() if cs and x["sid"] != s["sid"] and x not in cited and x["date"] >= s["date"]
+          and cs & set(x.get("concepts") or [])]
     ev.sort(key=lambda x: x["date"], reverse=True)
     return [{"sid": x["sid"], "date": x["date"], "kind": "我的判断" if x["kind"] == "judgment" else "看过的材料",
              "source": SUB_NAMES.get(x["sub"], x["sub"]), "title": _clip(x["title"], 60),
-             "text": _clip((cls.get(x["sid"]) or {}).get("claim") or x.get("claim") or x["mine"] or x["context"], 160)} for x in ev[:15]]
+             "text": _clip((cls.get(x["sid"]) or {}).get("claim") or x.get("claim") or x["mine"] or x["context"], 160),
+             **({"cited": True} if x in cited else {})} for x in (cited + ev)[:15]]
 
 
 def _recheck_payload(s: dict, c: dict, m: dict, cls: dict, reviews: list[dict]) -> dict:
@@ -338,12 +344,14 @@ def ledger(m: dict | None = None, paths: dict[str, str] | None = None) -> dict:
         if c.get("type") not in TYPES:
             continue
         rs = revs.get(s["sid"], [])
-        status, due = schedule(s, c, rs, (manual.get(s["sid"]) or {}).get("due") or "")
+        mr = manual.get(s["sid"]) or {}
+        status, due = schedule(s, c, rs, mr.get("due") or "")
         cards.append({**_sig_out(s, paths), "doc": s["doc"], "type": c["type"], "claim": c["claim"], "confidence": c.get("confidence", ""),
                       "horizon_days": c.get("horizon_days"), "eval": c.get("eval"), "status": status, "due": due,
                       "reviews": [{"id": r["id"], "verdict": r["verdict"], "verdict_name": VERDICTS.get(r["verdict"], r["verdict"]),
                                    "note": r["note"], "due": r["due"], "at": r["at"]} for r in rs],
-                      "agent": _agent_cached(s["sid"], m, cls, rs) if due else None, "thread": t_of.get(s["sid"], "")})
+                      "agent": _agent_cached(s["sid"], m, cls, rs) if due else None, "thread": t_of.get(s["sid"], ""),
+                      "sources": _j(mr.get("sources"), [])})
     cards.sort(key=lambda x: x["date"], reverse=True)
     return {"cards": cards, "threads": threads, "pending": pending}
 
@@ -379,14 +387,55 @@ def ledger_json() -> dict:
 
 # ---------- 写入（只追加） ----------
 
-def add(text: str, type_: str = "", confidence: str = "", due: str = "", note: str = "") -> int:
+def add(text: str, type_: str = "", confidence: str = "", due: str = "", note: str = "", sources: list | None = None) -> int:
     _init()
     text = text.strip()
     if not text:
         raise ValueError("empty")
     return db.insert("kb_judgments", {"text": text, "type": type_ if type_ in TYPES else "",
                                       "confidence": confidence if confidence in ("高", "中", "低") else "",
-                                      "due": due[:10], "note": note.strip(), "created_at": db.now()})
+                                      "due": due[:10], "note": note.strip(), "created_at": db.now(),
+                                      "sources": json.dumps(clean_sources(sources), ensure_ascii=False)})
+
+
+# ---------- 依据材料：看过的材料（sid）/ 自己指定的源（链接或一句话）/ 没有源 ----------
+
+_URL = re.compile(r"^https?://\S+$")
+
+
+def clean_sources(sources: list | None) -> list[dict]:
+    out, seen = [], set()
+    for x in sources or []:
+        if isinstance(x, str):
+            x = {"url": x} if _URL.match(x.strip()) else {"title": x}
+        if not isinstance(x, dict):
+            continue
+        d = {k: _clip(str(x.get(k) or "").strip(), 300) for k in ("sid", "title", "url", "link", "sub") if x.get(k)}
+        if not (d.get("title") or d.get("url")):
+            continue
+        key = d.get("sid") or d.get("url") or d["title"]
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out[:12]
+
+
+def _sources_text(sources: list[dict]) -> str:
+    if not sources:
+        return ""
+    return "依据材料：" + "；".join(f"{SUB_NAMES.get(x.get('sub', ''), '') + '·' if x.get('sub') else ''}{x.get('title') or x.get('url')}"
+                                + (f"（{x['url']}）" if x.get("url") and x.get("title") else "") for x in sources)
+
+
+def materials(q: str = "", limit: int = 20) -> list[dict]:
+    """记判断时选引用：看过的材料（深读 / 调研 / 读书 / 学习计划 / 收藏的信息），按关键词筛，最新的在前。"""
+    from .kb_graph import signals as all_signals
+    terms = [t for t in q.lower().split() if t]
+    ms = [s for s in all_signals() if s["kind"] == "material"
+          and all(t in f"{s['title']} {s['context']} {s['url']}".lower() for t in terms)]
+    ms.sort(key=lambda s: s["date"], reverse=True)
+    return [{"sid": s["sid"], "title": s["title"], "sub": s["sub"], "sub_name": SUB_NAMES.get(s["sub"], s["sub"]),
+             "date": s["date"], "url": s["url"], "link": s["link"], "context": _clip(s["context"], 120)} for s in ms[:limit]]
 
 
 def review(sid: str, verdict: str, note: str = "", due: str = "") -> int:
