@@ -45,6 +45,18 @@ const CSS = `
 .pm-role.rel { background: none; border: 1px dashed var(--line-2); color: var(--muted); }
 .pm-c { font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pm-tag { font-size: 11.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+.pm-rd { font-size: 11.5px; border-radius: 5px; padding: 0 7px; white-space: nowrap; border: 1px solid var(--line-2); color: var(--muted); background: none; cursor: pointer; font-family: inherit; line-height: 18px; }
+.pm-rd:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+.pm-rd.done { border-color: var(--accent); color: var(--accent); }
+.pm-rd.run { border-style: dashed; }
+.pm-lh { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; } .pm-lh h3 { flex: 1; }
+.pm-batch { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--focus); padding: 10px 14px; margin: 0 0 12px; font-size: 13px; }
+.pm-batch label { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; }
+.pm-batch label.off { color: var(--muted); }
+.pm-batch .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.pm-found > div { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); font-size: 13px; }
+.pm-found > div > a { color: var(--text); } .pm-found > div > a:hover { color: var(--accent); }
+.pm-found > div .pm-rd { margin-left: 6px; }
 .pm-open { margin: 4px 0 0; padding-left: 20px; } .pm-open li { margin: 4px 0; }
 @media (max-width: 640px) { .pm-lane, .pm-axis { grid-template-columns: 84px 1fr; min-width: 0; } .pm-lane > a { font-size: 11.5px; } .pm-nodes { margin-left: 8px; } .pm-node .y { position: static; width: auto; text-align: left; } }
 `;
@@ -57,6 +69,8 @@ const TIERS = [['classic', '经典'], ['old', '5 年以上'], ['mid', '2–5 年
 const MS = new Set(['起点', '里程碑']);
 const fmt = (n) => Number(n || 0).toLocaleString();
 const ago = (s) => (s || '').slice(5, 16).replace('T', ' ');
+const READ_MAX = 10;        // 和后端 PAPER_READ_MAX 一致：一次最多新开几篇深读
+const RUNNING = new Set(['queued', 'running']);
 
 export async function papersTab(body, ctx, topic = '') {
   css();
@@ -99,6 +113,81 @@ export async function papersTab(body, ctx, topic = '') {
     const P = m.papers;
     const nodeEls = {};
     const lineEls = [];
+    const badges = {};          // s2id → 页面上它的深读标记（同一篇可能出现在几处），轮询时原地更新
+    let timer = 0;
+    // 深读标记：已有条目 → 打开（跑完的看笔记 / 追问，没跑完的看进度）；没有 → 点一下新建并跳过去
+    const badge = (s) => {
+      const r = P[s]?.read;
+      const el = r ? h('a.pm-rd' + (RUNNING.has(r.status) ? '.run' : '.done'), { href: `#learn/item/${r.id}`, title: '在深度学习板块打开：笔记、练习题、追问讨论' },
+        RUNNING.has(r.status) ? '深读中' : '已深读')
+        : P[s]?.url?.includes('arxiv.org') ? h('button.pm-rd', { title: '送去深度学习板块深读（本机 Claude Code，约十几分钟）', onclick: async (e) => {
+          e.target.disabled = true;
+          try { const r = await api.post('/api/kb/papers/read', { s2ids: [s] }); const it = [...r.new, ...r.reuse][0]; if (it) location.hash = `#learn/item/${it.id}`; }
+          catch (err) { toast('开始深读失败：' + err.message, true); e.target.disabled = false; }
+        } }, '深读') : null;
+      (badges[s] ||= []).push(el);
+      return el;
+    };
+    const refresh = (got) => {
+      for (const [s, els] of Object.entries(badges)) {
+        if (!got[s]) continue;
+        P[s].read = got[s].read;
+        badges[s] = [];
+        els.forEach((el) => el?.replaceWith(badge(s) || ''));
+      }
+    };
+    const poll = () => {
+      clearTimeout(timer);
+      if (!Object.values(P).some((p) => RUNNING.has(p.read?.status))) return;
+      timer = setTimeout(async () => {
+        if (!out.isConnected || decodeURIComponent(location.hash) !== '#kb/papers/' + m.topic) return;
+        try { refresh((await api.get('/api/kb/papers/map?topic=' + enc(m.topic))).papers); } catch { /* 下一轮再试 */ }
+        poll();
+      }, 30000);
+    };
+    // 一组论文一起深读：先列出哪些复用、哪些新跑，按被引多少默认勾前 READ_MAX 篇，确认后才建任务
+    const batch = (ids, host) => async (e) => {
+      const btnEl = e.target;
+      if (host.firstChild?.classList?.contains('pm-batch')) { host.firstChild.remove(); return; }
+      btnEl.disabled = true;
+      let r;
+      try { r = await api.post('/api/kb/papers/read', { s2ids: ids, dry_run: true }); } catch (err) { toast(err.message, true); btnEl.disabled = false; return; }
+      btnEl.disabled = false;
+      const order = [...r.new].sort((a, b) => (P[b]?.cites || 0) - (P[a]?.cites || 0));
+      const pick = new Set(order.slice(0, READ_MAX));
+      const boxes = {};
+      const go = h('button', {}, '');
+      const sum = h('span.muted');
+      const upd = () => {
+        const n = pick.size;
+        go.textContent = n ? `开始深读 ${n} 篇` : '没有要新跑的';
+        go.disabled = !n;
+        sum.textContent = `复用已有深读 ${r.reuse.length} 篇 · 新跑 ${n} 篇（每篇十几分钟，最多 3 篇同时跑，约 ${Math.ceil(n / 3) * 15} 分钟）${r.skip.length ? ` · ${r.skip.length} 篇没有 arXiv 链接，跳过` : ''}`;
+        for (const s of order) { const c = boxes[s]; c.disabled = !pick.has(s) && n >= READ_MAX; c.parentNode.classList.toggle('off', !pick.has(s)); }
+      };
+      const row = (s, tag, input) => h('label', {}, [input, h('span', {}, [P[s]?.title || s, h('span.pm-c', {}, ` ${P[s]?.year || ''} · 被引 ${fmt(P[s]?.cites)}`)]), tag ? h('span.pm-tag', {}, tag) : null]);
+      const panel = h('div.pm-batch', {}, [
+        h('div', {}, `一次最多新开 ${READ_MAX} 篇，默认勾被引最多的；已深读过的直接复用，不重跑。`),
+        ...r.reuse.map((x) => row(x.s2id, RUNNING.has(x.status) ? '深读中' : '复用', h('input', { type: 'checkbox', checked: true, disabled: true }))),
+        ...order.map((s) => row(s, '', boxes[s] = h('input', { type: 'checkbox', checked: pick.has(s), onchange: (ev) => { ev.target.checked ? pick.add(s) : pick.delete(s); upd(); } }))),
+        h('div.act', {}, [go, h('button.ghost', { onclick: () => panel.remove() }, '取消'), sum]),
+      ]);
+      go.onclick = async () => {
+        go.disabled = true;
+        try {
+          const res = await api.post('/api/kb/papers/read', { s2ids: [...pick] });
+          const got = {};
+          for (const x of [...res.new, ...res.reuse]) got[x.s2id] = { read: { id: x.id, status: x.status } };
+          refresh(got);
+          panel.remove();
+          toast(`已排进深度学习：新开 ${res.new.length} 篇，跑完的点「已深读」看笔记和追问`);
+          poll();
+        } catch (err) { toast('开始深读失败：' + err.message, true); go.disabled = false; }
+      };
+      upd();
+      host.prepend(panel);
+    };
+    const batchBtn = (ids, host) => h('button.outline.sm', { onclick: batch(ids, host) }, '整组深读');
     const paperLink = (s) => { const p = P[s] || {}; return h('a', { href: p.url, target: '_blank', rel: 'noopener', title: p.s || '' }, p.title || s); };
     const node = (n) => {
       const p = P[n.s2id] || {};
@@ -106,7 +195,7 @@ export async function papersTab(body, ctx, topic = '') {
       const el = h('div.pm-node' + (ms ? '.ms' : ''), {}, [
         h('span.y', {}, p.year || ''),
         h('div.t', {}, [h('span.pm-role' + (ms ? '.ms' : n.role === '相关' ? '.rel' : ''), {}, n.role || '—'), paperLink(n.s2id),
-          h('span.pm-c', {}, `被引 ${fmt(p.cites)}`), p.kind ? h('span.pm-tag', {}, p.kind) : null]),
+          h('span.pm-c', {}, `被引 ${fmt(p.cites)}`), p.kind ? h('span.pm-tag', {}, p.kind) : null, badge(n.s2id)]),
         n.note ? h('div.n', {}, n.note) : null,
         !n.note && p.s ? h('div.s', {}, p.s) : null,
       ]);
@@ -114,7 +203,10 @@ export async function papersTab(body, ctx, topic = '') {
       return el;
     };
     const lines = m.lines.map((ln, i) => {
-      const el = h('div.card.pm-line', { id: 'pm-l' + i }, [h('h3', {}, ln.name), ln.summary ? h('p', {}, ln.summary) : null,
+      const host = h('div');
+      const el = h('div.card.pm-line', { id: 'pm-l' + i }, [
+        h('div.pm-lh', {}, [h('h3', {}, ln.name), h('button.outline.sm', { onclick: batch(ln.nodes.map((n) => n.s2id), host) }, '整条线深读')]),
+        ln.summary ? h('p', {}, ln.summary) : null, host,
         h('div.pm-nodes', {}, ln.nodes.map(node))]);
       lineEls.push(el);
       return el;
@@ -126,6 +218,15 @@ export async function papersTab(body, ctx, topic = '') {
       el.classList.add('flash');
       setTimeout(() => el.classList.remove('flash'), 1400);
     };
+    // 前置基础 / 推荐综述：卡片列表，每篇可单独深读，标题栏可整组深读
+    function group(title, sub, ids, more) {
+      if (!ids.length) return [];
+      const host = h('div');
+      return [ui.section(title, h('span', {}, [sub, sub ? ' ' : '', batchBtn(ids, host)])), host,
+        h('div.pm-found', {}, ids.map((s) => h('div', {}, [h('a', { href: P[s]?.url, target: '_blank', rel: 'noopener' }, P[s]?.title || s), badge(s),
+          h('small', {}, `${P[s]?.year || ''} · 被引 ${fmt(P[s]?.cites)}${more(s)}`)])))];
+    }
+    poll();
     out.replaceChildren(
       h('div.pm-meta', {}, [
         h('a', { href: '#kb/papers' }, '← 全部主题'),
@@ -136,14 +237,10 @@ export async function papersTab(body, ctx, topic = '') {
       ]),
       m.overview ? h('div.pm-ov', {}, m.overview) : null,
       lanes(h, m, jump),
-      m.foundations.length ? ui.section('前置基础', '这些不在主题里，但主题内的论文大量引用') : null,
-      m.foundations.length ? h('div.pm-found', {}, m.foundations.map((s) => h('a', { href: P[s]?.url, target: '_blank', rel: 'noopener' }, [
-        P[s]?.title || s, h('small', {}, `${P[s]?.year || ''} · 被引 ${fmt(P[s]?.cites)}${P[s]?.s ? ' · ' + P[s].s : ''}`)]))) : null,
+      ...group('前置基础', '这些不在主题里，但主题内的论文大量引用', m.foundations, (s) => P[s]?.s ? ' · ' + P[s].s : ''),
       ui.section('研究线', `${m.lines.length} 条 · 每条按年份排；实心点 = 起点 / 里程碑`),
       ...lines,
-      m.surveys.length ? ui.section('推荐综述') : null,
-      m.surveys.length ? h('div.pm-found', {}, m.surveys.map((s) => h('a', { href: P[s]?.url, target: '_blank', rel: 'noopener' }, [
-        P[s]?.title || s, h('small', {}, `${P[s]?.year || ''} · 被引 ${fmt(P[s]?.cites)}`)]))) : null,
+      ...group('推荐综述', '', m.surveys, () => ''),
       m.open.length ? ui.section('仍未解决') : null,
       m.open.length ? h('div.card', { style: { padding: '12px 16px' } }, h('ul.pm-open', {}, m.open.map((o) => h('li', {}, o)))) : null,
     );

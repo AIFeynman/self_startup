@@ -164,3 +164,30 @@ def test_kb_papers_endpoints(client):
     assert [n["s2id"] for n in got["lines"][0]["nodes"]] == ["A", "B"]        # 按年份排
     assert got["chosen"] == 2 and got["papers"]["A"]["year"] == 2017 and got["papers"]["A"]["url"].endswith("xA")
     assert client.get("/api/kb/papers").json()["maps"][0]["lines"] == 1
+
+
+def test_kb_papers_read_reuses_and_creates(client, monkeypatch):
+    from app import jobs
+    from app.modules import kb as kbmod
+    subs = []
+    monkeypatch.setattr(jobs, "submit", lambda module, prompt, **kw: subs.append(kw.get("ref")) or db.insert(
+        "jobs", {"module": module, "ref": kw.get("ref", ""), "engine": "fake", "prompt": prompt, "status": "queued", "created_at": db.now()}))
+    db.execute("DELETE FROM learn_items")
+    paper("A", "Proximal policy optimization", 2017, 30000, arxiv="1707.0")    # arxiv = 1707.0A 不是合法号也照样拼链接
+    paper("B", "Direct preference optimization", 2023, 9000, arxiv="2305.1829")
+    paper("C", "No arxiv", 2020, 10, arxiv="")
+    db.execute("UPDATE paper_items SET arxiv='' WHERE s2id='C'")
+    old = db.insert("learn_items", {"kind": "paper", "url": "https://arxiv.org/pdf/2305.1829Bv2", "status": "done",
+                                    "title": "DPO", "created_at": db.now(), "updated_at": db.now()})
+    dry = client.post("/api/kb/papers/read", json={"s2ids": ["A", "B", "C"], "dry_run": True}).json()
+    assert [x["id"] for x in dry["reuse"]] == [old] and dry["new"] == ["A"] and dry["skip"] == ["C"] and not subs
+    got = client.post("/api/kb/papers/read", json={"s2ids": ["A", "B"]}).json()
+    assert len(subs) == 1 and got["reuse"][0]["id"] == old
+    it = db.row("SELECT * FROM learn_items WHERE id=?", [got["new"][0]["id"]])
+    assert it["url"] == "https://arxiv.org/abs/1707.0A" and it["title"] == "Proximal policy optimization" and it["kind"] == "paper"
+    assert client.post("/api/kb/papers/read", json={"s2ids": ["A"]}).json()["reuse"][0]["id"] == it["id"] and len(subs) == 1
+    reads = pmap.reads(["A", "B", "C"])
+    assert set(reads) == {"A", "B"} and reads["B"]["status"] == "done"
+    monkeypatch.setattr(kbmod, "PAPER_READ_MAX", 0)
+    db.execute("DELETE FROM learn_items WHERE id=?", [it["id"]])
+    assert client.post("/api/kb/papers/read", json={"s2ids": ["A"]}).status_code == 400

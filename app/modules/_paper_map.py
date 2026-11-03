@@ -319,7 +319,25 @@ def view(res: dict) -> dict:
     papers = {r["s2id"]: {"title": r["title"], "year": r["year"], "cites": r["cites"] or 0, "classic": r["tier"] == "classic",
                           "url": f"https://arxiv.org/abs/{r['arxiv']}" if r["arxiv"] else f"https://www.semanticscholar.org/paper/{r['s2id']}",
                           "kind": kinds.get(r["k"] or "", ""), "domain": doms.get(r["d"] or "", ""), "s": r["s"] or ""} for r in rows}
+    for s2id, st in reads(list(papers)).items():
+        papers[s2id]["read"] = st
     yr = lambda n: papers.get(n["s2id"], {}).get("year") or 0
     lines = [{**ln, "nodes": sorted(ln["nodes"], key=yr)} for ln in res.get("lines") or []]   # 模型给的顺序偶尔不按年份
     keep = ("topic", "overview", "foundations", "surveys", "open", "recalled", "core", "cost", "created")
     return {k: res.get(k) for k in keep} | {"lines": lines, "chosen": len(res.get("chosen") or []), "papers": papers}
+
+
+def paper_url(r: dict) -> str:
+    return f"https://arxiv.org/abs/{r['arxiv']}" if r.get("arxiv") else ""
+
+
+def reads(s2ids: list[str]) -> dict:
+    """这些论文在深度学习板块里已有的深读条目（同一篇的 abs / pdf / 带版本号链接算一个；失败的不算）。"""
+    from ._reads import _key
+    if not s2ids or not db.row("SELECT name FROM sqlite_master WHERE name='learn_items'"):
+        return {}
+    have = {}
+    for it in db.rows("SELECT id, url, status, title FROM learn_items WHERE status!='failed' ORDER BY id"):
+        have[_key(it["url"])] = {"id": it["id"], "status": it["status"]}
+    rows = db.rows(f"SELECT s2id, arxiv FROM paper_items WHERE s2id IN ({','.join('?' * len(s2ids))})", s2ids)
+    return {r["s2id"]: have[k] for r in rows if (u := paper_url(r)) and (k := _key(u)) in have}

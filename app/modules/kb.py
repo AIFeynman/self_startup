@@ -257,6 +257,39 @@ def papers_map(topic: str):
     return paper_map.view(json.loads(row["result"]))
 
 
+class PaperReadIn(BaseModel):
+    s2ids: list[str]
+    dry_run: bool = False    # 只看哪些复用、哪些要新跑，不建任务
+
+
+PAPER_READ_MAX = 10          # 一次最多新开几篇深读（每篇是一个本机 Claude Code 任务，十几分钟）
+
+
+@router.post("/papers/read")
+def papers_read(body: PaperReadIn):
+    """脉络里的论文送去深度学习板块深读：已有深读的复用，没有的新建条目（排队跑，受 Agent 并发上限约束）。"""
+    from . import learn
+    paper_map._init()
+    ids = list(dict.fromkeys(s for s in body.s2ids if s))
+    rows = {r["s2id"]: r for r in paper_map.db.rows(
+        f"SELECT s2id, arxiv, title FROM paper_items WHERE s2id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
+    have = paper_map.reads(ids)
+    reuse = [{"s2id": s, **have[s]} for s in ids if s in have]
+    todo = [s for s in ids if s not in have and paper_map.paper_url(rows.get(s) or {})]
+    skip = [s for s in ids if s not in have and s not in todo]       # 不在库里 / 没有 arXiv 链接，深读不了
+    if body.dry_run:
+        return {"reuse": reuse, "new": todo, "skip": skip}
+    if len(todo) > PAPER_READ_MAX:
+        raise HTTPException(400, f"一次最多新开 {PAPER_READ_MAX} 篇深读，这次要新开 {len(todo)} 篇")
+    made = []
+    for s in todo:
+        it = learn.create_item(learn.ItemIn(url=paper_map.paper_url(rows[s]), kind="paper", reuse=True))
+        if not it.get("title"):
+            paper_map.db.update("learn_items", it["id"], {"title": rows[s]["title"]})   # 深度学习列表里跑完前就有标题
+        made.append({"s2id": s, "id": it["id"], "status": it["status"]})
+    return {"reuse": reuse, "new": made, "skip": skip}
+
+
 class PaperMapIn(BaseModel):
     topic: str
     force: bool = False      # 不用缓存，重新生成
