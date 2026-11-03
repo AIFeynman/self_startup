@@ -1,6 +1,6 @@
 ---
 name: wealth
-description: 理财板块：一年收益目标（QQQ / 谷歌 / 微软 / 红利低波ETF + 低回撤债基底仓）各标的增持 / 持有 / 减持的结论和理由、稳健 / 进取配比（稳妥方案带压力回撤上限）、红利低波估值择时、按资金生成的挂单；美团减持阶梯（目标均价、达标概率、费用、换 QQQ 对比、回测）、登记成交；信号变化和每日汇总提醒的记录。用于「QQQ / 谷歌 / 微软 / 红利低波现在该加还是拿着，为什么」「美团今天该卖多少」「目标 12% 的话怎么配」「最近有哪些理财提醒」「登记一笔美团成交」。统计估算，不构成投资建议。
+description: 理财板块：一年收益目标（QQQ / 谷歌 / 微软 / 红利低波ETF + 低回撤债基底仓）各标的增持 / 持有 / 减持的结论和理由、稳健 / 进取配比（稳妥方案压力回撤上限可调）、红利低波估值择时、按资金生成的挂单；美团减持阶梯（目标均价、达标概率、费用、换 QQQ 对比、回测）、登记成交；信号变化和每日汇总提醒的记录。用于「QQQ / 谷歌 / 微软 / 红利低波现在该加还是拿着，为什么」「美团今天该卖多少」「目标 12% 的话怎么配」「最近有哪些理财提醒」「登记一笔美团成交」。统计估算，不构成投资建议。
 ---
 
 # 理财
@@ -21,7 +21,7 @@ description: 理财板块：一年收益目标（QQQ / 谷歌 / 微软 / 红利�
 ## API
 
 ```bash
-curl -s "$API/api/wealth/target-plan?target=0.1&shape=balanced&delay=1"   # 目标计划：assets[].action / reasons / timing、modes（稳健 / 进取配比、挂单）
+curl -s "$API/api/wealth/target-plan?target=0.1&shape=balanced&delay=1&drawdown=0.05"   # 目标计划：assets[].action / reasons / timing、modes（稳健 / 进取配比、挂单）；drawdown 是稳妥方案的压力回撤上限（1%–40%，默认 5%）
 curl -s "$API/api/wealth/sell-plan?symbol=3690.HK"                        # 减持计划；可加 target_avg / horizon_days(0=不限) / now_shares / shape / compare_days / qqq_return
 curl -s -X POST $API/api/wealth/positions -H 'Content-Type: application/json' -d '{"symbol":"3690.HK","target_avg":88,"horizon_days":126}'
 curl -s -X POST $API/api/wealth/trades -H 'Content-Type: application/json' -d '{"symbol":"3690.HK","shares":500,"price":80.5,"note":"限价成交"}'

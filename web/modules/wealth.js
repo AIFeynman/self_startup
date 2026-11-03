@@ -22,7 +22,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('wealth-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('wealth-' + k, JSON.stringify(v)); } catch { /* 无痕模式 */ } },
 };
-const tp = { target: store.get('target', 0.10), mode: store.get('mode', 'safe'), shape: store.get('shape', 'balanced'), delay: store.get('delay', 1), data: null, seq: 0, timer: null };
+const tp = { target: store.get('target', 0.10), mode: store.get('mode', 'safe'), shape: store.get('shape', 'balanced'), delay: store.get('delay', 1), drawdown: store.get('drawdown', 0.05), data: null, seq: 0, timer: null };
 const sp = { target: null, horizon: null, shape: null, now: null, compare: null, metric: 'median_ratio', data: null, seq: 0, timer: null, saveTimer: null, pending: null, ...store.get('switch', {}) };
 
 // ---------------------------------------------------------------- 格式
@@ -76,7 +76,7 @@ async function loadTarget(box, ctx) {
   const seq = ++tp.seq;
   box.classList.add('wl-loading');
   try {
-    const d = await ctx.api.get(`/api/wealth/target-plan?target=${tp.target}&delay=${tp.delay}`);
+    const d = await ctx.api.get(`/api/wealth/target-plan?target=${tp.target}&delay=${tp.delay}&drawdown=${tp.drawdown}`);
     if (seq !== tp.seq) return;
     tp.data = d; renderTarget(box, ctx);
   } catch (e) {
@@ -110,6 +110,7 @@ function renderTarget(box, ctx) {
   const note = `一年后（${day(d.generated_at)} 起 252 个交易日）总收益 ≥ ${ret(d.target)}，各自币种计。`
     + (waiting ? `钱约 ${delay.months} 个月后（${after(d.generated_at, delay.months)}）到账，等待期间是现金、不计利息，实际只投资 ${delay.held_days} 个交易日。` : '') + (d.tax_note || '');
   const pct = Math.round(d.target * 1000) / 10;
+  const ddPct = d.safe ? Math.round(d.safe.constraints.max_drawdown * 100) : null;
   const controls = `<section class="card wl-controls">
     <div class="wl-ctl"><label class="card-label">一年收益目标</label>
       <div class="row wl-target"><input type="number" id="tp-target" min="0" max="50" step="0.5" value="${pct}"><span>%</span>
@@ -117,6 +118,8 @@ function renderTarget(box, ctx) {
         ${seg('preset', [[5, '5%'], [8, '8%'], [10, '10%'], [15, '15%'], [20, '20%']], pct)}</div></div>
     <div class="wl-ctl-row">
       <div class="wl-ctl"><label class="card-label">方案</label>${seg('mode', Object.entries(MODES), tp.mode)}</div>
+      ${tp.mode === 'safe' && d.safe ? `<div class="wl-ctl"><label class="card-label">压力回撤上限</label>
+        <div class="row wl-target"><input type="number" id="tp-drawdown" min="1" max="40" step="1" value="${ddPct}"><span>%</span>${seg('dd', [3, 5, 8, 10, 15, 20].map((v) => [v, `${v}%`]), ddPct)}</div></div>` : ''}
       <div class="wl-ctl"><label class="card-label">买法</label>${seg('shape', Object.entries(d.ladder_model.labels), tp.shape)}</div>
       <div class="wl-ctl"><label class="card-label">资金到账</label>${seg('delay', (delay.options || [0, 1, 2, 3]).map((m) => [m, m ? `${m} 个月后` : '今天']), delay.months)}</div>
     </div>
@@ -139,12 +142,21 @@ function setTarget(box, ctx, raw) {
   clearTimeout(tp.timer); tp.timer = setTimeout(() => loadTarget(box, ctx), 300);
 }
 
+function setDrawdown(box, ctx, raw) {
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 1 || v > 40) { ctx.toast('请输入 1%–40% 之间的数字'); return; }
+  tp.drawdown = Math.round(v) / 100; store.set('drawdown', tp.drawdown);
+  clearTimeout(tp.timer); tp.timer = setTimeout(() => loadTarget(box, ctx), 300);
+}
+
 function bindTarget(box, ctx) {
+  box.querySelector('#tp-drawdown')?.addEventListener('change', (e) => setDrawdown(box, ctx, e.target.value));
   box.querySelector('#tp-target').addEventListener('change', (e) => setTarget(box, ctx, e.target.value));
   box.querySelector('#tp-range').addEventListener('input', (e) => setTarget(box, ctx, e.target.value));
   box.querySelectorAll('[data-seg] button').forEach((b) => b.addEventListener('click', () => {
     const name = b.parentElement.dataset.seg, v = b.dataset.v;
     if (name === 'preset') return setTarget(box, ctx, v);
+    if (name === 'dd') return setDrawdown(box, ctx, v);
     if (name === 'delay') { tp.delay = Number(v); store.set('delay', tp.delay); return loadTarget(box, ctx); }
     tp[name] = v; store.set(name, v); renderTarget(box, ctx);   // 方案和买法：返回值里两套都有，只重画
   }));

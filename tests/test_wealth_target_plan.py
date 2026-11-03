@@ -146,6 +146,18 @@ class SafeAllocationTest(unittest.TestCase):
         by_holdings = {tuple(row["holdings"]): row for row in safe["options"]}
         self.assertFalse(by_holdings[("QQQ",)]["ok"])
 
+    def test_a_looser_limit_never_lowers_the_chance_and_is_reported(self) -> None:
+        assets = {**ASSETS, tp.BOND: {"mu": 0.035, "spread": 0.02}}
+        corr = {a: {b: 1.0 if a == b else (0.0 if tp.BOND in (a, b) else CORR[a][b]) for b in assets} for a in assets}
+        stress = {"QQQ": -0.30, "GOOGL": -0.40, "MSFT": -0.35, "512890.SS": -0.15, tp.BOND: -0.01}
+        tight = tp.safe_allocate(assets, corr, 0.10, stress, 0.03)
+        loose = tp.safe_allocate(assets, corr, 0.10, stress, 0.40)
+        self.assertEqual(0.40, loose["constraints"]["max_drawdown"])
+        self.assertFalse(tight["relaxed"])
+        self.assertGreaterEqual(tight["stats"]["stress_drawdown"], -0.03 - 1e-9)
+        self.assertGreaterEqual(loose["stats"]["probability"] + tp.TIE_PROBABILITY, tight["stats"]["probability"])
+        self.assertFalse(loose["relaxed"])
+
     def test_stress_drawdowns_use_the_window_and_the_funds_own_record(self) -> None:
         start = int(datetime(2020, 1, 1, tzinfo=UTC).timestamp())
         ts = [start - 86_400, start, start + 86_400, start + 2 * 86_400]

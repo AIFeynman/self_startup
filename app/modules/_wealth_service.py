@@ -547,7 +547,7 @@ def _with_latest_price(symbol: str, history: dict[str, list[float]]) -> tuple[li
     return closes, quote
 
 
-def target(goal: float | None = None, shape: str | None = None, delay: int | None = None) -> dict[str, Any]:
+def target(goal: float | None = None, shape: str | None = None, delay: int | None = None, drawdown: float | None = None) -> dict[str, Any]:
     tp = target_plan
     delay = tp.DEFAULT_DELAY if delay is None else int(delay)
     if delay not in tp.DELAY_MONTHS:
@@ -559,6 +559,10 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
     low, high = tp.TARGET_RANGE
     if not (math.isfinite(goal) and low <= goal <= high):
         raise ValueError(f"目标收益必须在 {low * 100:.0f}%–{high * 100:.0f}% 之间")
+    drawdown = tp.SAFE_MAX_DRAWDOWN if drawdown is None else float(drawdown)
+    low, high = tp.SAFE_DRAWDOWN_RANGE
+    if not (math.isfinite(drawdown) and low <= drawdown <= high):
+        raise ValueError(f"回撤上限必须在 {low * 100:.0f}%–{high * 100:.0f}% 之间")
     histories = target_histories()
     profiles, estimates, news_rows = latest_research("profile"), latest_research("estimates"), recent_news()
     assets, results, closes_by_symbol = [], {}, {}
@@ -622,7 +626,7 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
     allocation["correlations"] = corr
     funding = target_funding()
     allocation["funding"] = funding
-    safe = tp.safe_allocate(modeled, corr, goal, tp.stress_drawdowns(histories, list(modeled)))
+    safe = tp.safe_allocate(modeled, corr, goal, tp.stress_drawdowns(histories, list(modeled)), drawdown)
     safe["curve"] = [{"target": g, "probability": tp.portfolio(safe["weights"], modeled, corr, g)["probability"]} for g in tp.CURVE]
     safe["funding"] = funding
     # 等待的代价：同样的组合如果今天就有钱、投满一年

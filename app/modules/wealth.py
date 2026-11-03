@@ -47,8 +47,8 @@ def _call(fn, *args, **kwargs):
 # ---------------------------------------------------------------- 接口
 
 @router.get("/target-plan")
-def get_target_plan(target: float | None = None, shape: str | None = None, delay: int | None = None):
-    return _call(svc.target, target if target is not None else cfg("target"), shape, delay)
+def get_target_plan(target: float | None = None, shape: str | None = None, delay: int | None = None, drawdown: float | None = None):
+    return _call(svc.target, target if target is not None else cfg("target"), shape, delay, drawdown)
 
 
 @router.get("/sell-plan")

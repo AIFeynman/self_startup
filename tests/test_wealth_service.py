@@ -44,6 +44,12 @@ def _saved(symbol):
     return next(p for p in svc.read_positions()["positions"] if p["symbol"] == symbol)
 
 
+@pytest.mark.parametrize("drawdown", [0.0, 0.5, float("nan")])
+def test_target_rejects_a_drawdown_limit_out_of_range(drawdown):
+    with pytest.raises(ValueError, match="回撤上限"):
+        svc.target(0.1, drawdown=drawdown)
+
+
 def test_plan_for_hk_and_us_positions(positions):
     assert {p["symbol"] for p in svc.positions()} == {"3690.HK", "NVDA"}
     for symbol, price in (("3690.HK", 74.55), ("NVDA", 182.4)):

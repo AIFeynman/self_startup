@@ -73,6 +73,7 @@ STEP = 21
 SAFE_NONNEG = 0.80
 SAFE_P10_FLOOR = -0.10
 SAFE_MAX_DRAWDOWN = 0.05
+SAFE_DRAWDOWN_RANGE = (0.01, 0.40)  # below the bond funds' own drawdown nothing passes; above the heaviest allowed mix it no longer binds
 SAFE_GRID = 20
 # Stress window: covers the 2020 crash and the 2022 bear market, not 2000 or 2008 (the bond funds and the ETF are younger).
 STRESS_START = "2020-01-01"
@@ -595,10 +596,10 @@ def stress_drawdowns(histories: dict[str, dict[str, Any]], symbols: Sequence[str
 
 
 def safe_allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str, float]], target: float,
-                  stress: dict[str, float]) -> dict[str, Any]:
+                  stress: dict[str, float], max_drawdown: float = SAFE_MAX_DRAWDOWN) -> dict[str, Any]:
     """Steady mix: any subset of the assets (single stocks still capped), P(year >= 0) >= SAFE_NONNEG,
     P10 >= SAFE_P10_FLOOR and a stress drawdown (every holding at its worst at once, ``stress`` from
-    stress_drawdowns) within SAFE_MAX_DRAWDOWN, then the highest probability of the target; within a point of it,
+    stress_drawdowns) within ``max_drawdown``, then the highest probability of the target; within a point of it,
     the most likely to end flat or better. If nothing passes, the mix most likely to end flat or better, flagged ``relaxed``."""
     symbols = list(assets)
     rows = []
@@ -608,7 +609,7 @@ def safe_allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str,
         stats = portfolio(weights, assets, corr, target)
         stats["stress_drawdown"] = sum(w * stress[s] for s, w in weights.items())
         rows.append((weights, stats, stats["nonneg"] >= SAFE_NONNEG and stats["p10"] >= SAFE_P10_FLOOR
-                     and stats["stress_drawdown"] >= -SAFE_MAX_DRAWDOWN - 1e-9))
+                     and stats["stress_drawdown"] >= -max_drawdown - 1e-9))
     feasible = [row for row in rows if row[2]]
     if feasible:
         top = max(stats["probability"] for _, stats, _ in feasible)
@@ -625,7 +626,7 @@ def safe_allocate(assets: dict[str, dict[str, float]], corr: dict[str, dict[str,
     options = sorted(({"holdings": list(key), "weights": w, "ok": ok, "stress_drawdown": s["stress_drawdown"], **{k: s[k] for k in SUMMARY_KEYS}}
                       for key, (_, w, s, ok) in best.items()), key=lambda row: (not row["ok"], -row["probability"]))
     return {"weights": weights, "stats": stats, "relaxed": not feasible, "options": options, "stress": stress,
-            "constraints": {"nonneg": SAFE_NONNEG, "p10_floor": SAFE_P10_FLOOR, "max_drawdown": SAFE_MAX_DRAWDOWN,
+            "constraints": {"nonneg": SAFE_NONNEG, "p10_floor": SAFE_P10_FLOOR, "max_drawdown": max_drawdown,
                             "stress_start": STRESS_START, "max_single_stock": MAX_SINGLE_STOCK, "grid": 1 / SAFE_GRID, "tie": TIE_PROBABILITY}}
 
 
