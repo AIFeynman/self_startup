@@ -76,14 +76,6 @@ QUERIES = {
 }
 
 
-def slices(today: datetime | None = None) -> list[tuple[str, str, int, int]]:
-    """(名字, S2 year 参数, minCitationCount, 页数)：按引用排序时每个年龄段各取一截，避免老论文把新论文挤掉。
-    门槛见 col.TIERS（young ≥60 / mid ≥250 / old ≥1000），按自然年切会有重叠，入库与否由 decide 按发表日期判。"""
-    y, f = (today or datetime.now()).year, col.INDUSTRY_FACTOR     # 检索按工业界门槛（对折）取，入库再由 decide 分
-    return [("old", f"-{y - 5}", int(1000 * f), 3), ("mid", f"{y - 5}-{y - 2}", int(250 * f), 3),
-            ("young", f"{y - 2}-{y}", int(60 * f), 3), ("recent", f"{y - 1}-", 0, 1)]
-
-
 OUT = db.DATA_DIR / "paper_full.json"
 
 
@@ -106,7 +98,7 @@ def collect(only: list[str] | None = None) -> None:
         if (only and code not in only) or (not only and code in done):
             continue
         n, full = 0, []
-        for name, year, mc, pages in slices():
+        for name, year, mc, pages in col.slices():
             got = col.search_bulk(q, c, pages=pages, year=year, min_cites=mc)
             for p in got:
                 col.upsert(p, code)
@@ -139,15 +131,16 @@ def judge() -> None:
     logging.info("Jev %s", st)
 
 
-def label(step: int = 200) -> None:
-    """分段标注（每段 step 篇），每段落库；本机登录校验失败或整段 0 篇就停，不换别的模型。"""
+def label(step: int = 200, tail: bool = False) -> None:
+    """分段标注（每段 step 篇），每段落库；本机登录校验失败或整段 0 篇就停，不换别的模型。
+    tail=True 从队尾（被引少的）往前标，给第二个进程用（如 PAPER_LLM_ENGINE=deepseek），两头在中间汇合。"""
     t0, total, cost, tried = time.time(), 0, 0.0, set()
-    while rows := [x for x in lab.todo() if x[0]["s2id"] not in tried][:step]:   # 两次都没标上的不再反复问
+    while rows := [x for x in lab.todo()[::-1 if tail else 1] if x[0]["s2id"] not in tried][:step]:   # 两次都没标上的不再反复问
         tried |= {x[0]["s2id"] for x in rows}
         st = lab.run(items=rows)
         total, cost = total + st["labeled"], round(cost + st["cost"], 4)
         logging.info("标注 +%d（累计 %d，等价 $%.2f）%s", st["labeled"], total, cost, st["errors"][-2:] or "")
-        _save("label", {"labeled": total, "cost": cost, "seconds": round(time.time() - t0), "engine": lab.engine(),
+        _save("label_tail" if tail else "label", {"labeled": total, "cost": cost, "seconds": round(time.time() - t0), "engine": lab.engine(),
                         "errors": st["errors"][-5:]})
         if not st["labeled"] or any("没有走本机登录" in e for e in st["errors"]):
             logging.error("标注停止：%s", st["errors"][-3:])
@@ -167,7 +160,8 @@ def relabel_rec() -> None:
     logging.info("推荐论文重标 %d/%d %s", st["labeled"], len(rows), st["errors"][-2:] or "")
 
 
-STEPS = {"collect": collect, "judge": judge, "label": label, "relabel_rec": relabel_rec}
+STEPS = {"collect": collect, "judge": judge, "label": label, "label_tail": lambda: label(tail=True),
+         "relabel_rec": relabel_rec}
 
 
 def main() -> None:

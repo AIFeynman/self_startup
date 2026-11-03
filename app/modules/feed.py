@@ -571,6 +571,22 @@ def _bg(only, gists=None):
         res = {"_": {"count": 0, "errors": [str(e)]}}
     with _state_lock:
         _state.update(running=False, finished_at=db.now(), results=res)
+    if only is None or {"hf", "alphaxiv"} & set(only):
+        paper_ingest()
+
+
+def paper_ingest() -> dict | None:
+    """刷新后把最近的 HF 每日论文 / AlphaXiv 论文送进论文脉络库（记热门、过门槛、标注）；settings paper.feed_ingest 关掉就跳过。"""
+    from . import _paper_add
+    if not settings.get("paper.feed_ingest", True):
+        return None
+    try:
+        st = _paper_add.ingest_feed()
+        log.info("论文库每日热门入库：%s", st)
+        return st
+    except Exception as e:  # noqa: BLE001  论文库出错不影响信息推荐
+        log.warning("论文库每日热门入库失败：%s", e)
+        return None
 
 
 class HnDigestIn(BaseModel):

@@ -87,7 +87,8 @@ def tax_text() -> str:
 # ---------- 模型调用 ----------
 
 def engine() -> str:
-    return str(settings.get("paper.llm_engine", "haiku") or "haiku")
+    """PAPER_LLM_ENGINE 环境变量优先（全量脚本另开一个进程用别的模型从队尾并行标）。"""
+    return os.environ.get("PAPER_LLM_ENGINE") or str(settings.get("paper.llm_engine", "haiku") or "haiku")
 
 
 def chat(system: str, user: str, max_tokens: int = 16000, json_mode: bool = False) -> tuple[str, float]:

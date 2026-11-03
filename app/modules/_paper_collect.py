@@ -231,9 +231,9 @@ def industrial(r: dict) -> bool:
 
 
 def admit_all(today: datetime | None = None) -> dict:
-    """按门槛重新判全部非经典候选。经典回拉的不动。"""
+    """按门槛重新判全部候选。经典回拉的和用户补充的（tier=manual）不动。"""
     n = {"in": 0, "out": 0}
-    for r in db.rows("SELECT * FROM paper_items WHERE tier!='classic' OR tier IS NULL"):
+    for r in db.rows("SELECT * FROM paper_items WHERE COALESCE(tier,'') NOT IN ('classic','manual')"):
         st, tier, why = decide(r, today)
         if (st, tier, why) != (r["status"], r["tier"], r["why"]):
             db.execute("UPDATE paper_items SET status=?, tier=?, why=? WHERE id=?", [st, tier, why, r["id"]])
@@ -241,11 +241,24 @@ def admit_all(today: datetime | None = None) -> dict:
     return n
 
 
+ARXIV_ID = re.compile(r"(?<![\d.])(\d{4}\.\d{4,5})(?:v\d+)?(?![\d.])")
+
+
+def feed_arxiv_ids(days: float = 0) -> set[str]:
+    """信息推荐里的论文的 arXiv 编号：AlphaXiv（arxiv:<id>）和 HF 每日论文（hf:<id>，HF 的论文页编号就是 arXiv 编号）。
+    days>0 只要最近 days 天进来的。"""
+    since = f" AND fetched_at >= datetime('now', '-{float(days)} days')" if days else ""
+    try:
+        rows = db.rows(f"SELECT id FROM feed_items WHERE (id LIKE 'arxiv:%' OR id LIKE 'hf:%'){since}")
+    except Exception:  # noqa: BLE001  原型库里可能没有 feed_items
+        return set()
+    return {m[1] for r in rows if (m := ARXIV_ID.fullmatch(r["id"].split(":", 1)[1]))}
+
+
 def mark_hot() -> int:
     """信息推荐里出现过的论文（HF 每日论文 / AlphaXiv / 收藏）记 hot，作为近期论文的早期信号。"""
-    try:
-        ids = {r["id"].split(":", 1)[1] for r in db.rows("SELECT id FROM feed_items WHERE id LIKE 'arxiv:%'")}
-    except Exception:  # noqa: BLE001  原型库里可能没有 feed_items
+    ids = feed_arxiv_ids()
+    if not ids:
         return 0
     n = 0
     for r in db.rows("SELECT id, arxiv FROM paper_items WHERE arxiv!='' AND hot=0"):
@@ -306,6 +319,14 @@ def in_corpus_edges() -> list[tuple[str, str]]:
     for r in db.rows("SELECT s2id, refs FROM paper_items WHERE status='in'"):
         out += [(r["s2id"], t) for t in json.loads(r["refs"] or "[]") if t in have and t != r["s2id"]]
     return out
+
+
+def slices(today: datetime | None = None, pages: int = 3) -> list[tuple[str, str, int, int]]:
+    """(名字, S2 year 参数, minCitationCount, 页数)：按引用排序时每个年龄段各取一截，避免老论文把新论文挤掉。
+    门槛见 TIERS（young ≥60 / mid ≥250 / old ≥1000），按自然年切会有重叠，入库与否由 decide 按发表日期判。"""
+    y, f = (today or datetime.now()).year, INDUSTRY_FACTOR     # 检索按工业界门槛（对折）取，入库再由 decide 分
+    return [("old", f"-{y - 5}", int(1000 * f), pages), ("mid", f"{y - 5}-{y - 2}", int(250 * f), pages),
+            ("young", f"{y - 2}-{y}", int(60 * f), pages), ("recent", f"{y - 1}-", 0, 1)]
 
 
 def collect_topic(name: str, queries: list[str], c: httpx.Client, pages: int = 2) -> int:

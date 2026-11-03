@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from datetime import datetime
 
 import httpx
@@ -24,6 +25,8 @@ OTHER = "_other"
 REWRITE_N = 2
 KEY, LEAD = 50, 3          # 分数最高的这些标 key，成线时必须出现，漏了补问一次
 RECALL_CAP = 2000
+DOM_SHARE = 0.05      # 关键词命中占某方向论文数的比例低于这个数，这个方向就只是「沾边」，不靠方向分整片召回
+THIN_RECALL = 40      # 召回少于这个数，页面提示「库里这个方向论文少，补充一下」
 
 REWRITE = """你把用户想了解的 AI 研究主题改写成论文检索意图。方向 code（二级）：{doms}
 只输出 JSON：{{"must":[这个主题的核心说法，英文为主（论文是英文），含常见缩写和同义说法，4-10 个],
@@ -68,14 +71,32 @@ def rewrite(topic: str) -> tuple[dict, float]:
     return {k: list(dict.fromkeys(v))[:8] if k == "domains" else list(dict.fromkeys(v)) for k, v in out.items()}, cost
 
 
+def _fts_queries(term: str) -> list[str]:
+    """改写给的说法常带括注（「GRPO (group relative policy optimization)」），整句当短语几乎搜不到：
+    括号外整句、括号里、斜杠两边各算一个短语。索引是 trigram，NEAR 的距离按三字符片段算、没法按词定，所以只用短语。"""
+    paren = r"[(（]([^)）]*)[)）]"
+    parts = "/".join([re.sub(paren, " ", term), *re.findall(paren, term)]).split("/")
+    return [f'"{t}"' for t in (re.sub(r"\s+", " ", p.replace('"', " ")).strip() for p in parts) if len(t) >= 3]
+
+
+SHORT = 5     # 不超过这么长的单个词（缩写居多）要整词匹配
+
+
 def _fts(term: str) -> set[int]:
-    t = term.replace('"', " ").strip()
-    if len(t) < 3:
-        return set()
-    try:
-        return {r["rowid"] for r in db.rows("SELECT rowid FROM paper_fts WHERE paper_fts MATCH ?", [f'"{t}"'])}
-    except Exception:  # noqa: BLE001
-        return set()
+    """trigram 索引是子串匹配：ORM 会命中 transformer / performance，PPO 命中 support，REINFORCE 命中 reinforcement。
+    短的单个词命中后再按整词核对一遍标题和摘要（缩写区分大小写）。"""
+    ids: set[int] = set()
+    for q in _fts_queries(term):
+        try:
+            rows = db.rows("SELECT rowid, title, abstract FROM paper_fts WHERE paper_fts MATCH ?", [q])
+        except Exception:  # noqa: BLE001
+            continue
+        w = q.strip('"')
+        if " " not in w and (len(w) <= SHORT or w.isupper()):
+            word = re.compile(rf"(?<![\w-]){re.escape(w)}(?![\w-])", 0 if w.isupper() else re.I)
+            rows = [r for r in rows if word.search(f"{r['title']} {r['abstract']}")]
+        ids |= {r["rowid"] for r in rows}
+    return ids
 
 
 def _kw(intent: dict) -> dict[int, float]:
@@ -88,11 +109,18 @@ def _kw(intent: dict) -> dict[int, float]:
 
 
 def recall(intent: dict) -> dict[int, float]:
-    """paper_items.id → 相关度（关键词 + 方向）。"""
+    """paper_items.id → 相关度（关键词 + 方向）。
+    方向分只给「主题占了这个方向一定比例」的方向：脉冲神经网络被改写到 arch / cv 这类大方向时，关键词只命中其中 1%，
+    整个方向几千篇凭方向分就进了召回，再按被引排序就把真正讲 SNN 的论文挤没了。占比不到 DOM_SHARE 的方向只给 0.4，要靠关键词才进。"""
     score = _kw(intent)
-    doms = intent["domains"]
-    for r in db.rows("SELECT p.id, l.d, l.d2 FROM paper_labels l JOIN paper_items p ON p.s2id=l.s2id WHERE p.status='in'"):
-        if r["d"] in doms:
+    rows = db.rows("SELECT p.id, l.d, l.d2 FROM paper_labels l JOIN paper_items p ON p.s2id=l.s2id WHERE p.status='in'")
+    size, hit = Counter(r["d"] for r in rows), Counter(r["d"] for r in rows if score.get(r["id"], 0) >= 1)
+    doms = [d for d in intent["domains"] if not hit or hit[d] >= DOM_SHARE * size[d]]     # 关键词一篇没命中时不筛，免得召回为空
+    weak = set(intent["domains"]) - set(doms)
+    for r in rows:
+        if r["d"] in weak:
+            score[r["id"]] = score.get(r["id"], 0) + 0.4
+        elif r["d"] in doms:
             score[r["id"]] = score.get(r["id"], 0) + (1.2 if r["d"] == doms[0] else 1.0)
         elif set(json.loads(r["d2"] or "[]")) & set(doms):
             score[r["id"]] = score.get(r["id"], 0) + 0.5
@@ -324,7 +352,8 @@ def view(res: dict) -> dict:
     yr = lambda n: papers.get(n["s2id"], {}).get("year") or 0
     lines = [{**ln, "nodes": sorted(ln["nodes"], key=yr)} for ln in res.get("lines") or []]   # 模型给的顺序偶尔不按年份
     keep = ("topic", "overview", "foundations", "surveys", "open", "recalled", "core", "cost", "created")
-    return {k: res.get(k) for k in keep} | {"lines": lines, "chosen": len(res.get("chosen") or []), "papers": papers}
+    return {k: res.get(k) for k in keep} | {"lines": lines, "chosen": len(res.get("chosen") or []), "papers": papers,
+                                         "thin": (res.get("recalled") or 0) < THIN_RECALL}
 
 
 def paper_url(r: dict) -> str:

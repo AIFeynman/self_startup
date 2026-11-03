@@ -57,6 +57,13 @@ const CSS = `
 .pm-found > div { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); font-size: 13px; }
 .pm-found > div > a { color: var(--text); } .pm-found > div > a:hover { color: var(--accent); }
 .pm-found > div .pm-rd { margin-left: 6px; }
+.pm-add { padding: 12px 16px; margin-bottom: 14px; }
+.pm-add .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pm-add input { flex: 1; min-width: 200px; font: inherit; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); }
+.pm-add .muted { font-size: 12.5px; margin-top: 6px; }
+.pm-add ol { margin: 8px 0 4px; padding-left: 22px; font-size: 13px; max-height: 320px; overflow: auto; } .pm-add li { margin: 2px 0; }
+.pm-add .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+.pm-thin { border: 1px dashed var(--line-2); border-radius: var(--radius-sm); padding: 8px 12px; margin: 0 0 12px; font-size: 13px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .pm-open { margin: 4px 0 0; padding-left: 20px; } .pm-open li { margin: 4px 0; }
 @media (max-width: 640px) { .pm-lane, .pm-axis { grid-template-columns: 84px 1fr; min-width: 0; } .pm-lane > a { font-size: 11.5px; } .pm-nodes { margin-left: 8px; } .pm-node .y { position: static; width: auto; text-align: left; } }
 `;
@@ -84,7 +91,8 @@ export async function papersTab(body, ctx, topic = '') {
     ? `论文库 ${fmt(ov.total)} 篇（${tiers}），越老的论文门槛越高，近期论文过 Jev 筛水文；已标注 ${fmt(ov.labeled)} 篇。新主题生成一次约 20–60 秒、不到 1 分钱。`
     : '论文库还是空的：先跑采集和标注（scripts/paper_proto collect / judge / label）。');
   const out = h('div');
-  body.append(h('div.card.pm-ask', {}, [input, btn, note]), out);
+  const adder = addPanel(ctx, (t) => go(t, false));
+  body.append(h('div.card.pm-ask', {}, [input, btn, note]), adder.el, out);
 
   if (topic) {
     try { show(await api.get('/api/kb/papers/map?topic=' + enc(topic))); } catch { go(topic, false); }
@@ -235,6 +243,8 @@ export async function papersTab(body, ctx, topic = '') {
         h('span.grow'),
         h('button.outline', { onclick: () => go(m.topic, true) }, '重新生成'),
       ]),
+      m.thin ? h('div.pm-thin', {}, [h('span', {}, `库里和「${m.topic}」相关的论文只召回到 ${m.recalled} 篇，脉络可能不全。`),
+        h('button.outline', { onclick: () => adder.topic(m.topic) }, '补充这个方向')]) : null,
       m.overview ? h('div.pm-ov', {}, m.overview) : null,
       lanes(h, m, jump),
       ...group('前置基础', '这些不在主题里，但主题内的论文大量引用', m.foundations, (s) => P[s]?.s ? ' · ' + P[s].s : ''),
@@ -245,6 +255,69 @@ export async function papersTab(body, ctx, topic = '') {
       m.open.length ? h('div.card', { style: { padding: '12px 16px' } }, h('ul.pm-open', {}, m.open.map((o) => h('li', {}, o)))) : null,
     );
   }
+}
+
+// 补充论文：补一篇具体论文（直接入库并标注），或补一个方向（先预览「将新增 N 篇」，确认后后台入库、标注、重新生成脉络）
+function addPanel(ctx, openMap) {
+  const { api, h, toast } = ctx;
+  const input = h('input', { placeholder: 'arXiv 编号 / 链接 / 论文标题，或者一个方向（如：生成式推荐）' });
+  const one = h('button.outline', { onclick: () => paper() }, '加这篇论文');
+  const dir = h('button.outline', { onclick: () => topic(input.value) }, '补这个方向');
+  const res = h('div');
+  const el = h('div.card.pm-add', {}, [h('div.row', {}, [h('b', {}, '补充论文'), input, one, dir]),
+    h('div.muted', {}, '具体论文不看被引门槛直接入库，约 10–40 秒；方向按正常门槛检索，先给你看会新增哪些，确认后在后台入库。'), res]);
+  const busy = (b) => { one.disabled = dir.disabled = b; };
+  const pl = (p) => h('a', { href: p.arxiv ? `https://arxiv.org/abs/${p.arxiv}` : `https://www.semanticscholar.org/paper/${p.s2id}`, target: '_blank', rel: 'noopener' }, p.title);
+
+  async function paper() {
+    const t = input.value.trim();
+    if (!t) return;
+    busy(true);
+    res.replaceChildren(h('div.muted', {}, `正在查找「${t}」并标注…`));
+    try {
+      const r = await api.post('/api/kb/papers/add', { text: t });
+      const p = r.paper;
+      res.replaceChildren(h('div.act', {}, [h('span', {}, r.already ? '已经在库里：' : '已入库：'), pl(p),
+        h('span.pm-c', {}, `${p.year || ''} · 被引 ${fmt(p.cites)}${p.domain ? ' · ' + p.domain : ''}`),
+        p.s ? h('div.muted', { style: { width: '100%' } }, p.s) : h('div.muted', { style: { width: '100%' } }, '标注没成功，下次全量标注会补上')]));
+    } catch (e) { res.replaceChildren(); toast('补充失败：' + e.message, true); }
+    busy(false);
+  }
+
+  async function topic(t) {
+    t = (t || '').trim();
+    if (!t) return;
+    input.value = t;
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    busy(true);
+    res.replaceChildren(h('div.muted', {}, `正在检索「${t}」：改写成英文说法 → Semantic Scholar 按年龄段检索 → 按门槛预判，约 20–40 秒…`));
+    try { preview(await api.post('/api/kb/papers/topic/preview', { topic: t })); } catch (e) { res.replaceChildren(); toast('检索失败：' + e.message, true); }
+    busy(false);
+  }
+
+  function preview(a) {
+    const go = h('button', { onclick: async () => {
+      go.disabled = true;
+      try { poll(await api.post(`/api/kb/papers/topic/${a.id}/start`, {})); } catch (e) { go.disabled = false; toast(e.message, true); }
+    } }, `确认入库（${a.n_new + a.n_maybe} 篇候选）`);
+    res.replaceChildren(
+      h('div.act', {}, [h('span', {}, `「${a.topic}」将新增 ${fmt(a.n_new)} 篇` + (a.n_maybe ? `，另有 ${fmt(a.n_maybe)} 篇被引够工业界门槛、取摘要后再判` : '') + `；库里已有 ${fmt(a.have)} 篇。`),
+        a.n_new + a.n_maybe ? go : null, h('button.outline', { onclick: () => res.replaceChildren() }, '取消')]),
+      a.new.length ? h('ol', {}, a.new.map((p) => h('li', {}, [pl(p), h('span.pm-c', {}, ` ${p.year || ''} · 被引 ${fmt(p.cites)}`)]))) : null,
+      a.n_new > a.new.length ? h('div.muted', {}, `只列了被引最高的 ${a.new.length} 篇`) : null,
+      h('div.muted', {}, `检索式：${a.query}`));
+  }
+
+  async function poll(a) {
+    const done = a.status === 'done', bad = a.status === 'failed', r = a.result || {};
+    res.replaceChildren(h('div.act', {}, done
+      ? [h('span', {}, `「${a.topic}」补充完成：入库 ${fmt(r.admitted)} 篇，标注 ${fmt(r.labeled)} 篇，花费 $${r.cost ?? 0}。`),
+        r.map ? h('button', { onclick: () => openMap(a.topic) }, '看脉络') : h('span.muted', {}, '脉络没生成成功：' + (r.map_error || ''))]
+      : [h('span', {}, `「${a.topic}」${bad ? '' : '补充中：'}${a.step}`)]));
+    if (!done && !bad) setTimeout(async () => { if (el.isConnected) poll(await api.get(`/api/kb/papers/topic/${a.id}`)); }, 3000);
+  }
+
+  return { el, topic };
 }
 
 // 总览：每条线一行，论文按年份落点（有论文的年份等宽排开，近几年论文多也不挤），同年多篇横向错开；点一下跳到那篇

@@ -146,6 +146,27 @@ def test_build_map_recalls_pulls_ancestor_and_validates_ids(monkeypatch):
     assert pmap.build("后训练 ") == res and len(calls) == 2                       # 命中缓存
 
 
+def test_recall_skips_domains_the_topic_barely_touches():
+    for i in range(25):                                                          # 大方向：25 篇里只有 1 篇讲主题
+        paper(f"A{i}", "Spiking neural network training" if i == 0 else f"Generic architecture {i}", 2020, 5000)
+    paper("M", "Mixture of expert routing", 2021, 3000)                          # 主题方向：关键词全命中
+    lab.run(call=fake_label())
+    db.execute("UPDATE paper_labels SET d='arch' WHERE s2id LIKE 'A%'")
+    ids = {r["s2id"]: r["id"] for r in db.rows("SELECT id, s2id FROM paper_items")}
+    snn = pmap.recall({"must": ["spiking neural network"], "should": [], "domains": ["arch"]})
+    assert set(snn) == {ids["A0"]}                                               # 命中 1/25 < DOM_SHARE：方向分不够单独进
+    moe = pmap.recall({"must": ["mixture of expert"], "should": [], "domains": ["moe"]})
+    assert set(moe) == {ids["M"]}
+    assert pmap._fts_queries("GRPO (group relative policy optimization)") == ['"GRPO"', '"group relative policy optimization"']
+    assert set(pmap.recall({"must": ["SNN (spiking neural network)"], "should": [], "domains": []})) == {ids["A0"]}
+    paper("T", "A transformer that supports reinforcement learning", 2021, 4000)    # 缩写只是子串，不算命中
+    lab.run(call=fake_label())
+    assert pmap._fts("ORM") == pmap._fts("PPO") == pmap._fts("REINFORCE") == set()
+    assert pmap._fts("transformer") == {db.row("SELECT id FROM paper_items WHERE s2id='T'")["id"]}
+    wide = pmap.recall({"must": ["nothing matches"], "should": [], "domains": ["arch"]})
+    assert len(wide) == 25                                                       # 关键词全没命中时仍按方向召回
+
+
 def test_kb_papers_endpoints(client):
     paper("A", "Proximal policy optimization", 2017, 30000)
     paper("B", "Direct preference optimization", 2023, 9000)
@@ -162,7 +183,7 @@ def test_kb_papers_endpoints(client):
                ["后训练", json.dumps(res, ensure_ascii=False), 0.004, res["created"]])
     got = client.get("/api/kb/papers/map", params={"topic": "后训练"}).json()
     assert [n["s2id"] for n in got["lines"][0]["nodes"]] == ["A", "B"]        # 按年份排
-    assert got["chosen"] == 2 and got["papers"]["A"]["year"] == 2017 and got["papers"]["A"]["url"].endswith("xA")
+    assert got["thin"] is True and got["chosen"] == 2 and got["papers"]["A"]["year"] == 2017 and got["papers"]["A"]["url"].endswith("xA")
     assert client.get("/api/kb/papers").json()["maps"][0]["lines"] == 1
 
 
@@ -200,3 +221,109 @@ def test_decide_halves_threshold_for_industry_papers():
     st, _, why = col.decide(ind, TODAY)
     assert st == "in" and "工业界" in why
     assert col.decide(base | {"abstract": "We thank Google for compute."}, TODAY)[0] == "out"
+
+
+# ---------- 论文库补充（_paper_add） ----------
+
+from app.modules import _paper_add as padd  # noqa: E402
+
+
+def detail(s2id, title, year, cites, arxiv="", refs=(), abstract="", pub=None):
+    return {"paperId": s2id, "title": title, "year": year, "publicationDate": pub or f"{year}-06-01", "citationCount": cites,
+            "influentialCitationCount": 0, "venue": "", "externalIds": {"ArXiv": arxiv} if arxiv else {},
+            "abstract": abstract or title, "tldr": None, "authors": [], "references": [{"paperId": r} for r in refs]}
+
+
+@pytest.fixture
+def labeled(monkeypatch):
+    run = lab.run
+    monkeypatch.setattr(lab, "run", lambda limit=0, items=None, persist=True, call=None: run(limit, items, persist, fake_label()))
+
+
+def test_admit_all_keeps_manual_and_classic():
+    paper("M", "user picked", 2025, 1, pub="2025-06-01")
+    db.execute("UPDATE paper_items SET tier='manual' WHERE s2id='M'")
+    col.admit_all(TODAY)
+    assert db.row("SELECT status FROM paper_items WHERE s2id='M'")["status"] == "in"
+
+
+def test_feed_arxiv_ids_reads_hf_and_alphaxiv(client):
+    db.execute("DELETE FROM feed_items")
+    for i in ("hf:2611.03126", "arxiv:2510.00001v2", "hn:123", "hf:not-an-id"):
+        db.execute("INSERT INTO feed_items(id,source,type,title,url,fetched_at) VALUES (?,?,?,?,?,?)",
+                   [i, i.split(":")[0], "paper", i, "u", db.now()])
+    assert col.feed_arxiv_ids() == {"2611.03126", "2510.00001"}
+
+
+def test_add_paper_by_link_or_title_bypasses_threshold(client, monkeypatch, labeled):
+    paper("A", "Generative retrieval for recommendation", 2023, 900)
+    calls = []
+
+    def req(method, path, c, **kw):
+        calls.append(path)
+        if path == "/paper/search/match":
+            if "nothing" in kw["params"]["query"]:
+                raise RuntimeError("S2 /paper/search/match 404: no match")
+            return {"data": [{"paperId": "ONE", "title": "OneRec"}]}
+        assert path in ("/paper/ARXIV:2506.13695", "/paper/ONE")
+        return detail("ONE", "OneRec technical report", 2025, 34, arxiv="2506.13695", refs=["A", "Z"], pub="2025-06-16")
+
+    monkeypatch.setattr(col, "_req", req)
+    r = client.post("/api/kb/papers/add", json={"text": "https://arxiv.org/abs/2506.13695v2"}).json()
+    assert calls == ["/paper/ARXIV:2506.13695"] and r["already"] is False
+    row = db.row("SELECT * FROM paper_items WHERE s2id='ONE'")
+    assert (row["status"], row["tier"], row["src"]) == ("in", "manual", "user")
+    assert r["paper"]["s"] and json.loads(db.row("SELECT builds_on FROM paper_labels WHERE s2id='ONE'")["builds_on"]) == ["A"]
+    assert ("ONE", "A") in col.in_corpus_edges()
+    col.admit_all(TODAY)                                         # 被引 34 不够门槛，但用户补的不会被判出去
+    assert db.row("SELECT status FROM paper_items WHERE s2id='ONE'")["status"] == "in"
+    assert client.post("/api/kb/papers/add", json={"text": "OneRec Technical Report"}).json()["already"] is True
+    assert client.post("/api/kb/papers/add", json={"text": "nothing like this"}).status_code == 404
+
+
+def test_topic_preview_then_run(client, monkeypatch, labeled):
+    paper("HAVE", "already in", 2023, 900)
+    monkeypatch.setattr(pmap, "rewrite", lambda t: ({"must": ["generative recommendation", 'semantic "ID"', "GR", "TIGER"], "should": [],
+                                                     "domains": ["rec_gen"]}, 0.001))
+    hits = [detail("BIG", "Big rec paper", 2022, 900, arxiv="2201.1"),
+            detail("LOW", "Low cited", 2022, 10, arxiv="2201.2"),
+            detail("IND", "Kuaishou rec", 2022, 150, arxiv="2201.3"),
+            detail("HAVE", "already in", 2023, 900, arxiv="xHAVE")]
+    queries = []
+    monkeypatch.setattr(col, "search_bulk", lambda q, c, pages=1, year="", min_cites=0: queries.append(q) or [
+        {k: v for k, v in h.items() if k not in ("abstract", "references", "tldr", "authors")} for h in hits])
+    a = client.post("/api/kb/papers/topic/preview", json={"topic": "生成式推荐"}).json()
+    assert queries[0] == '"generative recommendation" | "semantic  ID"'           # 单独的缩写不进检索式
+    assert (a["n_new"], a["n_maybe"], a["have"]) == (1, 1, 1) and a["new"][0]["s2id"] == "BIG"
+    assert not db.row("SELECT 1 FROM paper_items WHERE s2id='BIG'")             # 预览不写库
+
+    full = {h["paperId"]: h for h in hits} | {"IND": detail("IND", "Kuaishou rec", 2022, 150, arxiv="2201.3",
+                                                         abstract="Deployed at Kuaishou, online A/B test", refs=["HAVE"])}
+    monkeypatch.setattr(col, "batch", lambda ids, c, fields=col.DETAIL_FIELDS: [full[i] for i in ids])
+    monkeypatch.setattr(lab, "judge_recent", lambda: {})
+    monkeypatch.setattr(pmap, "build", lambda t, use_cache=True: {"recalled": 7, "cost": 0.002})
+    assert client.post(f"/api/kb/papers/topic/{a['id']}/start").status_code == 200
+    for _ in range(100):
+        got = client.get(f"/api/kb/papers/topic/{a['id']}").json()
+        if got["status"] in ("done", "failed"):
+            break
+        import time; time.sleep(0.05)  # noqa: E702
+    assert got["status"] == "done", got["step"]
+    assert got["result"]["admitted"] == 2 and got["result"]["labeled"] == 2 and got["result"]["map"] is True
+    assert db.row("SELECT why FROM paper_items WHERE s2id='IND'")["why"].startswith("mid：工业界论文")
+    assert client.get("/api/kb/papers/adds").json()[0]["id"] == a["id"]
+
+
+def test_ingest_feed_marks_hot_and_labels(client, monkeypatch, labeled):
+    paper("A", "base paper", 2023, 900)
+    db.execute("DELETE FROM feed_items")
+    db.execute("INSERT INTO feed_items(id,source,type,title,url,fetched_at) VALUES ('hf:2610.00001','hf','paper','t','u',?)", [db.now()])
+    db.execute("INSERT INTO feed_items(id,source,type,title,url,fetched_at) VALUES ('hf:2610.00002','hf','paper','t','u',?)", [db.now()])
+    new = detail("HOT", "Fresh hot paper", 2026, 0, arxiv="2610.00001", refs=["A"], pub=datetime.now().strftime("%Y-%m-%d"))
+    monkeypatch.setattr(col, "batch", lambda ids, c, fields=col.DETAIL_FIELDS: [new if i.endswith("00001") else None for i in ids])
+    monkeypatch.setattr(lab, "judge_recent", lambda: {"judged": 0})
+    st = padd.ingest_feed()
+    assert (st["feed"], st["new"], st["admitted"], st["labeled"]) == (2, 1, 1, 1)
+    r = db.row("SELECT * FROM paper_items WHERE s2id='HOT'")
+    assert (r["status"], r["tier"], r["hot"], r["src"]) == ("in", "recent", 1, "feed")
+    assert padd.ingest_feed()["labeled"] == 0                  # 再跑一次不重复标

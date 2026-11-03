@@ -11,7 +11,7 @@ from pydantic import BaseModel
 import re
 
 from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
-from . import _paper_label as paper_label, _paper_map as paper_map
+from . import _paper_add as paper_add, _paper_label as paper_label, _paper_map as paper_map
 
 TITLE = "知识库"
 ORDER = 60
@@ -312,3 +312,60 @@ def papers_build(body: PaperMapIn):
         raise HTTPException(502, f"模型接口暂时不可用，稍后再试（{e.response.status_code if isinstance(e, httpx.HTTPStatusError) else type(e).__name__}）")
     except (RuntimeError, subprocess.TimeoutExpired) as e:
         raise HTTPException(502, f"模型调用失败：{str(e)[:200]}")
+
+
+class PaperAddIn(BaseModel):
+    text: str                # arXiv 编号 / 链接 / 论文标题
+
+
+def _paper_errors(fn, *a):
+    try:
+        return fn(*a)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"模型接口暂时不可用，稍后再试（{type(e).__name__}）")
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        raise HTTPException(502, f"调用失败：{str(e)[:200]}")
+
+
+@router.post("/papers/add")
+def papers_add(body: PaperAddIn):
+    """补一篇具体论文：不看门槛直接入库并标注，约 10–40 秒。"""
+    if not body.text.strip():
+        raise HTTPException(400, "填 arXiv 编号、链接或论文标题")
+    return _paper_errors(paper_add.add_paper, body.text)
+
+
+class PaperTopicIn(BaseModel):
+    topic: str
+
+
+@router.post("/papers/topic/preview")
+def papers_topic_preview(body: PaperTopicIn):
+    """补一个方向：改写 + S2 检索 + 按门槛预判「将新增 N 篇」，不写论文库，约 20–40 秒。"""
+    if not body.topic.strip():
+        raise HTTPException(400, "主题不能为空")
+    return _paper_errors(paper_add.preview_topic, body.topic)
+
+
+@router.post("/papers/topic/{aid}/start")
+def papers_topic_start(aid: int):
+    """确认预览，后台入库 → 标注 → 重新生成这个主题的脉络。"""
+    if not _paper_errors(paper_add.start_topic, aid):
+        raise HTTPException(409, "已有一个方向在补充，等它跑完再来")
+    return paper_add.adds_view(paper_map.db.row("SELECT * FROM paper_adds WHERE id=?", [aid]))
+
+
+@router.get("/papers/topic/{aid}")
+def papers_topic_get(aid: int, full: bool = False):
+    paper_add.init()
+    a = paper_map.db.row("SELECT * FROM paper_adds WHERE id=?", [aid])
+    if not a:
+        raise HTTPException(404, "没有这个补充记录")
+    return paper_add.adds_view(a, full)
+
+
+@router.get("/papers/adds")
+def papers_adds(limit: int = 10):
+    return paper_add.adds(limit)
