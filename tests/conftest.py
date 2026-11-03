@@ -39,6 +39,13 @@ def _idle_machine(request, monkeypatch):
     monkeypatch.setattr(jobs, "_free_mem_gb", lambda: 64.0)
 
 
+@pytest.fixture(autouse=True)
+def _no_graph_refresh(monkeypatch):
+    """kb.sync() 默认会在后台起概念抽取；测试里不调真实 DeepSeek，需要时直接调 kb_graph.refresh()。"""
+    from app import kb_graph
+    monkeypatch.setattr(kb_graph, "schedule_refresh", lambda: None)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_machine: 读本机真实的负载 / 内存")
     config.addinivalue_line("markers", "real_runner: 真的起 app.jobrun 进程（配合假的 claude CLI）")

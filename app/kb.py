@@ -24,19 +24,28 @@ MANIFEST = ".manifest.json"
 TYPE_DIRS = {
     "daily": "daily", "note": "notes", "research": "research", "product": "products",
     "paper": "learn/papers", "papernote": "learn/paper-notes", "repo": "learn/repos", "plan": "learn/plans", "book": "learn/books", "feed": "feed", "annotation": "annotations",
-    "intel": "intel/events", "intelco": "intel/companies",
+    "intel": "intel/events", "intelco": "intel/companies", "concept": "concepts",
 }
 TYPE_NAMES = {
     "daily": "每日记录", "note": "问题与经验", "research": "调研", "product": "产品体验",
     "paper": "论文深读", "papernote": "论文笔记", "repo": "项目解读", "plan": "学习计划", "book": "深度读书", "feed": "收藏的信息", "annotation": "阅读批注",
-    "intel": "产品变化解读", "intelco": "产品雷达公司",
+    "intel": "产品变化解读", "intelco": "产品雷达公司", "concept": "概念",
 }
 
 README = """# 本地知识库（自动生成，勿手改）
 
 由学习平台从 SQLite 自动同步；修改请在平台里做，或调用平台 API。
 
+可以直接用 Obsidian 打开 `data/kb` 这个目录（vault）：概念页之间、概念与来源之间用 `[[双链]]` 连接，图谱视图可用。
+
+## 两层结构
+- **概念层（我的知识）**：`concepts/<概念>.md`，一个概念一页，只收我看过、想过、判断过的内容——
+  我的理解（AI 据我的判断归纳）→ 我的判断（复盘经验、批注、作答、感想、论文判断…，带原话和来源）→ 看过的材料 → 相关概念。
+  `GRAPH.md` 是概念总览。产品雷达等我没互动过的自动内容不进概念层。
+- **来源层（原始记录）**：下面这些目录，从各板块原样镜像；文末「关联概念」双链回概念页。
+
 ## 目录
+- `GRAPH.md`：概念总览（按主题）。`topics/<主题>.md`：主题页（MOC）。`concepts/`：概念页。
 - `INDEX.md`：入口。各类数量、最近更新、全部标签。
 - `daily/YYYY-MM-DD.md`：一天的计划与完成、复盘、问题与经验、Agent 效率、当天产出（时间线检索用这里）。
 - `notes/`：问题 / 经验 / 洞察 / 想法，一条一个文件。
@@ -54,7 +63,8 @@ README = """# 本地知识库（自动生成，勿手改）
 `summary` 是 1–3 行摘要，判断相关性先看它，再决定是否读正文。
 
 ## 检索建议（给大模型）
-1. 先读 `INDEX.md`；按主题看 `tags/`；按日期看 `daily/`。
+1. 先读 `GRAPH.md` 找相关概念，读 `concepts/<概念>.md`（我的结论和来源都在里面）；再按需读来源文件。
+   也可读 `INDEX.md`；按主题看 `tags/`；按日期看 `daily/`。
 2. 关键词：`rg -l "关键词" data/kb`，或只搜摘要 `rg "^summary:.*关键词" data/kb`。
 3. 或调用 `GET /api/kb/search?q=关键词&type=note`（全文索引，返回路径 + 摘要 + 片段）。
 4. 只读命中的少数文件，引用时给出文件路径。
@@ -507,7 +517,8 @@ def _index(docs: list[dict]) -> tuple[str, dict[str, list[dict]]]:
         for t in d["tags"]:
             tags.setdefault(t, []).append(d)
     recent = sorted(docs, key=lambda d: d["updated"] or d["date"], reverse=True)[:40]
-    lines = [f"# 知识库索引\n\n更新于 {db.now()} · 共 {len(docs)} 个文件。先看这里，再按类型 / 标签 / 日期读具体文件。\n",
+    lines = [f"# 知识库索引\n\n更新于 {db.now()} · 共 {len(docs)} 个来源文件。我的知识按概念组织在 [GRAPH.md](GRAPH.md) 和 `concepts/`，先看那里；"
+             "这里是来源层，按类型 / 标签 / 日期找原始记录。\n",
              "## 分类", *[f"- {TYPE_NAMES[k]}（`{TYPE_DIRS[k]}/`）：{v}" for k, v in sorted(counts.items())],
              "\n## 最近更新", "| 日期 | 类型 | 标题 | 摘要 |", "|---|---|---|---|",
              *[f"| {(d['updated'] or d['date'])[:10]} | {TYPE_NAMES[d['type']]} | [{d['title']}]({d['path']}) | {d['summary'][:60]} |" for d in recent],
@@ -523,12 +534,33 @@ CREATE VIRTUAL TABLE IF NOT EXISTS kb_fts USING fts5(
 """
 
 
-def sync() -> dict:
-    """全量重建（数据量小，几百个文件毫秒级）；只写有变化的文件，删除已不存在的。"""
+def _graph_layer(docs: list[dict]) -> tuple[dict[str, str], list[dict], int]:
+    """概念层：(concepts/*.md + GRAPH.md, 概念的检索条目, 待抽取的信号数)；同时给来源文件追加「关联概念」双链。"""
+    from . import kb_graph
+    m = kb_graph.model()
+    files, by_doc = kb_graph.files(m, {d["id"]: d["path"] for d in docs})
+    for d in docs:
+        if by_doc.get(d["path"]):
+            d["text"] += "\n## 关联概念\n" + " · ".join(kb_graph.wl(c) for c in by_doc[d["path"]]) + "\n"
+    fts = [{"path": p, "type": "concept", "title": c["name"], "tags": [c["category"], *c["aliases"]], "date": c["last"],
+            "summary": f"{c['category']} · {len(c['judgments'])} 条判断 · {len(c['materials'])} 份材料",
+            "body": files.get(p, "")} for c in m["concepts"].values() for p in [f"concepts/{kb_graph.fname(c['name'])}.md"]]
+    return files, fts, m["stale"]
+
+
+def sync(refresh_graph: bool = True) -> dict:
+    """全量重建（数据量小，几百个文件毫秒级）；只写有变化的文件，删除已不存在的。
+    概念层只读 LLM 缓存；有新增 / 改动的信号时在后台触发 kb_graph.refresh()（它跑完会再调 sync(refresh_graph=False)）。"""
     with _lock:
         docs = build()
+        try:
+            gfiles, gfts, stale = _graph_layer(docs)
+        except Exception:  # noqa: BLE001 —— 概念层出错不影响来源层
+            log.exception("kb graph layer")
+            gfiles, gfts, stale = {}, [], 0
         index, tags = _index(docs)
         files = {d["path"]: d["text"] for d in docs}
+        files.update(gfiles)
         files["INDEX.md"] = index
         files["README.md"] = README
         for t, ds in tags.items():
@@ -553,9 +585,13 @@ def sync() -> dict:
             c = db.conn()
             c.execute("DELETE FROM kb_fts")
             c.executemany("INSERT INTO kb_fts(path,type,title,tags,summary,body,date) VALUES (?,?,?,?,?,?,?)",
-                          [(d["path"], d["type"], d["title"], " ".join(d["tags"]), d["summary"], d["body"], d["date"]) for d in docs])
+                          [(d["path"], d["type"], d["title"], " ".join(d["tags"]), d["summary"], d["body"], d["date"]) for d in docs + gfts])
             c.commit()
-        return {"docs": len(docs), "written": written, "removed": len(old - set(files)), "dir": str(KB_DIR)}
+    if refresh_graph and stale:
+        from . import kb_graph
+        kb_graph.schedule_refresh()
+    return {"docs": len(docs), "concepts": len(gfts), "stale": stale, "written": written,
+            "removed": len(old - set(files)), "dir": str(KB_DIR)}
 
 
 def schedule_sync(delay: float = 3.0) -> None:

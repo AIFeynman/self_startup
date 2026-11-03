@@ -1,8 +1,11 @@
 """知识库板块：检索 / 阅读 data/kb/ 下自动同步的 markdown 知识树（逻辑在 app/kb.py）。"""
+import threading
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 
-from .. import kb
+from .. import kb, kb_graph
 
 TITLE = "知识库"
 ORDER = 60
@@ -40,9 +43,59 @@ def stats():
 
 def agent_context(ref: str) -> str:
     try:
-        return kb.read("INDEX.md")[:6000]
+        return (kb.read("GRAPH.md")[:4000] + "\n\n" + kb.read("INDEX.md")[:3000]).strip()
     except FileNotFoundError:
-        return "知识库还没生成，可调用 POST /api/kb/sync。"
+        try:
+            return kb.read("INDEX.md")[:6000]
+        except FileNotFoundError:
+            return "知识库还没生成，可调用 POST /api/kb/sync。"
+
+
+# ---------- 概念图谱（逻辑在 app/kb_graph.py） ----------
+
+@router.get("/graph")
+def graph():
+    return kb_graph.graph_json()
+
+
+@router.get("/concept")
+def concept(name: str):
+    c = kb_graph.concept_json(name)
+    if not c:
+        raise HTTPException(404, "not found")
+    return c
+
+
+@router.get("/stream")
+def stream(limit: int = 60):
+    return kb_graph.stream_json(limit)
+
+
+@router.post("/graph/refresh")
+def graph_refresh(force: bool = False):
+    threading.Thread(target=kb_graph.refresh, kwargs={"force": force}, daemon=True).start()
+    return kb_graph.status()
+
+
+@router.get("/graph/status")
+def graph_status():
+    return kb_graph.status()
+
+
+class ConceptEdit(BaseModel):
+    op: str          # rename（目标已存在即合并）/ hide / unhide
+    src: str
+    dst: str = ""
+
+
+@router.post("/concept/edit")
+def concept_edit(body: ConceptEdit):
+    try:
+        kb_graph.edit(body.op, body.src, body.dst)
+    except ValueError:
+        raise HTTPException(400, "bad edit")
+    kb.sync(refresh_graph=False)
+    return {"ok": True, "name": body.dst if body.op == "rename" else body.src}
 
 
 @router.get("/list")
