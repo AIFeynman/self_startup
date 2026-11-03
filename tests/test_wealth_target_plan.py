@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -399,3 +399,74 @@ class TimingTest(unittest.TestCase):
         self.assertTrue(all(o["units"] > 0 for o in div["plan"]["orders"]))
         self.assertEqual("lump", qqq["shape"])
         self.assertEqual(["market"], [o["kind"] for o in qqq["plan"]["orders"]])
+
+
+class TestRegionMix(unittest.TestCase):
+    @staticmethod
+    def _history(yearly, start=datetime(2019, 1, 18, tzinfo=UTC), years=5, wobble=None):
+        ts, close, day = [], [], 0
+        while day <= years * 365:
+            ts.append(start.timestamp() + day * 86400)
+            close.append(100 * (1 + yearly) ** (day / 365) * (wobble(day) if wobble else 1))
+            day += 7
+        return {"ts": ts, "close": close}
+
+    def _histories(self):
+        late_bond = datetime(2022, 11, 15, tzinfo=UTC)
+        histories = {s: self._history(0.20) for s in ("QQQ", "GOOGL", "MSFT")}
+        histories["512890.SS"] = self._history(0.10)
+        histories[tp.BOND] = self._history(0.02, start=late_bond, years=2)
+        histories["^NDX"] = {"ts": histories["QQQ"]["ts"], "close": [100.0, 17.0] + [50.0] * (len(histories["QQQ"]["ts"]) - 2)}
+        return histories
+
+    def test_rows_follow_the_ratio_and_the_mainland_split(self):
+        report = tp.region_mix(self._histories(), 0.2)
+        self.assertEqual([r["dividend"] for r in report["rows"]], list(tp.REGION_DIVIDEND_SHARES))
+        first, last = report["rows"][0], report["rows"][-1]
+        self.assertAlmostEqual(sum(first["weights"].values()), 1)
+        self.assertAlmostEqual(first["weights"]["QQQ"], 0.2 / 3)
+        self.assertAlmostEqual(first["weights"]["512890.SS"], 0.8)
+        self.assertNotIn(tp.BOND, first["weights"])
+        self.assertAlmostEqual(last["weights"][tp.BOND], 0.8)
+        self.assertGreater(first["annual"], last["annual"])
+        self.assertEqual(report["start"], "2019-01-18")
+        self.assertAlmostEqual(report["nasdaq_drawdown"], -0.83)
+
+    def test_steady_growth_compounds_to_its_own_rate_and_never_falls(self):
+        histories = self._histories()
+        histories["512890.SS"] = self._history(0.20)
+        row = tp.region_mix(histories, 0.2)["rows"][0]
+        self.assertAlmostEqual(row["annual"], 0.20, places=2)
+        self.assertEqual(row["max_drawdown"], 0)
+        self.assertGreater(row["worst_year"], 0.15)
+
+    def test_rebalancing_sets_the_weights_back_each_year(self):
+        start = date(2019, 1, 18)
+        series = {"A": ([start, date(2020, 1, 18), date(2021, 1, 18)], [100.0, 200.0, 200.0]),
+                  "B": ([start, date(2020, 1, 18), date(2021, 1, 18)], [100.0, 100.0, 200.0])}
+        path = tp._rebalanced_path(series, {"A": 0.5, "B": 0.5}, tp._month_points(start, date(2021, 1, 18)))
+        self.assertAlmostEqual(path[12], 1.5)
+        self.assertAlmostEqual(path[24], 1.5 * 1.5)   # after the reset half the money is in B, which doubles
+
+    def test_bonds_before_their_record_use_the_stated_return(self):
+        days, closes = [date(2022, 11, 15)], [100.0]
+        self.assertAlmostEqual(tp._close_on((days, closes), date(2021, 11, 15)), 100 / 1.035, places=2)
+
+    def test_ends_of_the_ratio_and_bad_input(self):
+        all_overseas = tp.region_mix(self._histories(), 1.0)
+        self.assertEqual(len(all_overseas["rows"]), 1)
+        self.assertNotIn("512890.SS", all_overseas["rows"][0]["weights"])
+        self.assertNotIn("QQQ", tp.region_mix(self._histories(), 0.0)["rows"][0]["weights"])
+        for overseas in (-0.1, 1.1, float("nan")):
+            with self.assertRaisesRegex(ValueError, "海外比例"):
+                tp.region_mix(self._histories(), overseas)
+        with self.assertRaisesRegex(ValueError, "海外部分"):
+            tp.region_mix(self._histories(), 0.2, "nope")
+
+    def test_hk_basket_uses_the_stock_and_short_records_are_refused(self):
+        histories = self._histories()
+        histories[tp.HK_STOCK] = self._history(0.0)
+        self.assertAlmostEqual(tp.region_mix(histories, 0.2, "with_hk")["rows"][0]["weights"][tp.HK_STOCK], 0.05)
+        histories["512890.SS"] = self._history(0.1, start=datetime(2023, 6, 1, tzinfo=UTC), years=1)
+        with self.assertRaisesRegex(ValueError, "共同历史"):
+            tp.region_mix(histories, 0.2)

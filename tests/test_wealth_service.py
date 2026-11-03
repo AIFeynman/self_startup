@@ -206,4 +206,6 @@ def test_wealth_routes(client):
     assert client.get("/api/wealth/alerts?limit=1").json()["log"][0]["kind"] == "test"
     assert client.post("/api/wealth/backtest/nope").status_code == 404
     assert client.get("/api/wealth/sell-plan?symbol=NOPE").status_code == 400
+    assert client.get("/api/wealth/region-mix?overseas=2").status_code == 400
+    assert client.get("/api/wealth/region-mix?basket=nope").status_code == 400
     assert "wealth" in json.dumps(client.get("/api/meta").json(), ensure_ascii=False)

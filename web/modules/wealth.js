@@ -22,7 +22,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('wealth-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('wealth-' + k, JSON.stringify(v)); } catch { /* 无痕模式 */ } },
 };
-const tp = { target: store.get('target', 0.10), mode: store.get('mode', 'safe'), shape: store.get('shape', 'balanced'), delay: store.get('delay', 1), drawdown: store.get('drawdown', 0.05), data: null, seq: 0, timer: null };
+const tp = { target: store.get('target', 0.10), mode: store.get('mode', 'safe'), shape: store.get('shape', 'balanced'), delay: store.get('delay', 1), drawdown: store.get('drawdown', 0.05), region: store.get('region', 20), basket: store.get('basket', 'three'), regionData: null, regionSeq: 0, data: null, seq: 0, timer: null };
 const sp = { target: null, horizon: null, shape: null, now: null, compare: null, metric: 'median_ratio', data: null, seq: 0, timer: null, saveTimer: null, pending: null, ...store.get('switch', {}) };
 
 // ---------------------------------------------------------------- 格式
@@ -126,10 +126,56 @@ function renderTarget(box, ctx) {
     <p class="muted wl-note">${esc(note)}</p></section>`;
   box.innerHTML = controls + kpis(top) + `<h3 class="wl-h">逐个标的：加仓、持有还是减仓</h3><div class="wl-assets">${d.assets.map(assetCard).join('')}</div>`
     + card('收益目标 vs 达标概率', `<div class="wl-chart" id="tp-curve"></div><div class="wl-legend" id="tp-legend"></div>`, '点击曲线可把目标设为该值')
-    + allocationCard(d) + ordersCard(d) + backtestCard(d.backtest, d)
+    + allocationCard(d) + ordersCard(d) + '<div id="tp-region"></div>' + backtestCard(d.backtest, d)
     + `<p class="muted wl-note wl-foot">${esc(modelNote(d))}</p>`;
   curve(box.querySelector('#tp-curve'), box.querySelector('#tp-legend'), d, (t) => setTarget(box, ctx, Math.round(t * 100)));
   bindTarget(box, ctx);
+  loadRegion(box.querySelector('#tp-region'), ctx);
+}
+
+// 长期按地区分配：独立接口，改比例不用重算目标方案
+async function loadRegion(el, ctx) {
+  const seq = ++tp.regionSeq, rd = tp.regionData;
+  if (rd && Math.round(rd.overseas * 100) === tp.region && rd.basket === tp.basket) return renderRegion(el, ctx);
+  if (rd) el.classList.add('wl-loading');
+  try {
+    const d = await ctx.api.get(`/api/wealth/region-mix?overseas=${tp.region / 100}&basket=${tp.basket}`);
+    if (seq !== tp.regionSeq) return;
+    tp.regionData = d; renderRegion(el, ctx);
+  } catch (e) {
+    if (seq === tp.regionSeq) el.innerHTML = card('长期按地区分配', emptyText(e.message));
+  } finally { if (seq === tp.regionSeq) el.classList.remove('wl-loading'); }
+}
+
+function renderRegion(el, ctx) {
+  const d = tp.regionData, pct = Math.round(d.overseas * 100), part = (v) => `${+(v * 100).toFixed(1)}`;
+  const members = Object.entries(d.members).map(([s, w]) => `${esc(d.names[s] || s)} ${part(w)}`).join(' · ');
+  const share = !d.overseas ? '每 100 元全部放内地，按下表分' : !d.mainland ? `每 100 元全部放海外：${members}` : `每 100 元：海外 ${part(d.overseas)}（${members}），内地 ${part(d.mainland)} 按下表分`;
+  const split = (r) => (d.mainland > 0 ? `红利低波 ${part(d.mainland * r.dividend)} · 债基 ${part(d.mainland * (1 - r.dividend))}` : '全部在海外');
+  const rows = d.rows.map((r) => `<tr><td>${split(r)}</td><td><b>${ret(r.annual)}</b></td><td>${ret(r.max_drawdown, 0)}</td><td class="${tone(r.worst_year)}">${ret(r.worst_year, 0)}</td><td class="${tone(r.worst_3y)}">${ret(r.worst_3y, 0)}</td><td>${r.multiple.toFixed(2)} 倍</td></tr>`).join('');
+  const drop = d.nasdaq_drawdown == null || !d.overseas ? '' : `纳指 100 指数 ${d.nasdaq_start.slice(0, 4)} 年以来最大回撤 ${ret(d.nasdaq_drawdown, 0)}，这段样本里没有出现；海外部分如果也跌这么多，组合约少 ${Math.round(-d.nasdaq_drawdown * d.overseas * 100)} 个百分点。`;
+  const notes = `${d.start} 到 ${d.end}（${d.years.toFixed(1)} 年），按月取值、每 ${d.rebalance_months} 个月调回原比例。这段时间美股和红利都偏强，年化不能当未来预期；红利低波 ETF 上市至今才 ${d.years.toFixed(1)} 年，没经历过完整的长周期。`
+    + `${drop}债基 ${d.bond_start} 之前没有数据，按每年 ${+(d.bond_backfill * 100).toFixed(1)}% 补齐。没算汇率、费用和税，各标的按自身币种收益计。统计估算，不构成投资建议。`;
+  el.innerHTML = card('长期按地区分配：美股港股 : 内地', `
+    <div class="wl-ctl-row">
+      <div class="wl-ctl"><label class="card-label">美股港股占比</label>
+        <div class="row wl-target"><input type="number" id="tp-region-pct" min="0" max="100" step="1" value="${pct}"><span>%</span>${seg('region', [[10, '1:9'], [20, '1:4'], [25, '1:3'], [33, '1:2'], [50, '1:1']], pct)}</div></div>
+      <div class="wl-ctl"><label class="card-label">海外部分买什么</label>${seg('basket', Object.entries(d.baskets), d.basket)}</div>
+    </div>
+    <p class="muted wl-small wl-region-line">${share}</p>
+    ${table(['每 100 元的内地部分', '年化', '最大回撤', '最差一年', '最差三年累计', '1 元变成'], rows)}
+    <p class="muted wl-note">${esc(notes)}</p>`, '不看短期、长期持有的历史对比，只作展示');
+  el.querySelector('#tp-region-pct').addEventListener('change', (e) => setRegion(el, ctx, e.target.value));
+  el.querySelectorAll('[data-seg] button').forEach((b) => b.addEventListener('click', () => {
+    if (b.parentElement.dataset.seg === 'region') return setRegion(el, ctx, b.dataset.v);
+    tp.basket = b.dataset.v; store.set('basket', tp.basket); loadRegion(el, ctx);
+  }));
+}
+
+function setRegion(el, ctx, raw) {
+  const v = Number(raw);
+  tp.region = Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : 20;
+  store.set('region', tp.region); loadRegion(el, ctx);
 }
 
 function setTarget(box, ctx, raw) {
@@ -730,6 +776,7 @@ const CSS = `
 .wl-ctl { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .wl-ctl .tabs { margin: 0; }
 .wl-seg button { padding: 4px 12px; font-size: 13px; }
+.wl-region-line { margin: 10px 0 6px; }
 .wl-target { gap: 10px; flex-wrap: wrap; align-items: center; }
 .wl-target input[type=number] { width: 96px; }
 .wl-target input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }

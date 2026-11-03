@@ -562,6 +562,22 @@ def _with_latest_price(symbol: str, history: dict[str, list[float]]) -> tuple[li
     return closes, quote
 
 
+def region_mix(overseas: float | None = None, basket: str | None = None) -> dict[str, Any]:
+    """长期按地区分配资金的历史对比；只作展示。美团的日线在减持回测的缓存里，只读不刷新。"""
+    tp = target_plan
+    basket = basket or "three"
+    overseas = tp.REGION_DEFAULT_OVERSEAS if overseas is None else float(overseas)
+    tp.check_region(overseas, basket)
+    histories = dict(target_histories())
+    if tp.HK_STOCK in tp.REGION_BASKETS[basket]:
+        cache = DATA / "sell_backtest_history.json"
+        stored = json.loads(cache.read_text()).get("symbols", {}) if cache.exists() else {}
+        if tp.HK_STOCK not in stored:
+            raise ValueError("还没有美团的历史数据，先跑一次减持回测")
+        histories[tp.HK_STOCK] = stored[tp.HK_STOCK]
+    return tp.region_mix(histories, overseas, basket)
+
+
 def target(goal: float | None = None, shape: str | None = None, delay: int | None = None, drawdown: float | None = None) -> dict[str, Any]:
     tp = target_plan
     delay = tp.DEFAULT_DELAY if delay is None else int(delay)

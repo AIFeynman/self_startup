@@ -722,6 +722,93 @@ def mix_history(histories: dict[str, dict[str, list[float]]], weights: dict[str,
             "worst": ordered[0], "median": ordered[len(ordered) // 2]}
 
 
+# ---- long-run split by region ----------------------------------------------------------------------------
+
+# Overseas (US / HK) against mainland over the whole record, for a long holder: display only, nothing else reads it.
+REGION_DEFAULT_OVERSEAS = 0.20
+HK_STOCK = "3690.HK"
+REGION_BASKETS = {"three": ("QQQ", "GOOGL", "MSFT"), "qqq": ("QQQ",), "with_hk": ("QQQ", "GOOGL", "MSFT", HK_STOCK)}
+REGION_BASKET_LABELS = {"three": "QQQ + 谷歌 + 微软", "qqq": "只买 QQQ", "with_hk": "再加美团"}
+REGION_DIVIDEND_SHARES = (1.0, 0.75, 0.5, 0.25, 0.0)   # how the mainland part splits between the dividend ETF and bonds
+REGION_REBALANCE_MONTHS = 12
+REGION_BOND_BACKFILL = 0.035        # bond funds start in 2022; before that assume this yearly return, shown on the page
+REGION_MIN_MONTHS = 36
+
+
+def _month_points(start: date, end: date) -> list[date]:
+    points, year, month = [start], start.year, start.month
+    while True:
+        month += 1
+        year, month = (year + 1, 1) if month > 12 else (year, month)
+        point = date(year, month, min(start.day, 28))
+        if point > end:
+            return points
+        points.append(point)
+
+
+def _dated(history: dict[str, list[float]]) -> tuple[list[date], list[float]]:
+    return [datetime.fromtimestamp(ts, UTC).date() for ts in history["ts"]], history["close"]
+
+
+def _close_on(series: tuple[list[date], list[float]], day: date) -> float:
+    days, closes = series
+    if day < days[0]:   # only the bond funds get here: the window starts at the dividend ETF's listing
+        return closes[0] / (1 + REGION_BOND_BACKFILL) ** ((days[0] - day).days / 365.25)
+    return closes[bisect_right(days, day) - 1]
+
+
+def _rebalanced_path(series: dict[str, tuple[list[date], list[float]]], weights: dict[str, float], points: Sequence[date]) -> list[float]:
+    """Monthly value of fixed weights, set back to those weights every REGION_REBALANCE_MONTHS."""
+    units = {s: w / _close_on(series[s], points[0]) for s, w in weights.items()}
+    path = [1.0]
+    for i, day in enumerate(points[1:], 1):
+        value = sum(units[s] * _close_on(series[s], day) for s in weights)
+        path.append(value)
+        if i % REGION_REBALANCE_MONTHS == 0:
+            units = {s: w * value / _close_on(series[s], day) for s, w in weights.items()}
+    return path
+
+
+def _worst_window(path: Sequence[float], months: int) -> float | None:
+    returns = [path[i + months] / path[i] - 1 for i in range(len(path) - months)]
+    return min(returns) if returns else None
+
+
+def check_region(overseas: float, basket: str) -> None:
+    if basket not in REGION_BASKETS:
+        raise ValueError(f"海外部分必须是 {', '.join(REGION_BASKETS)} 之一")
+    if not (math.isfinite(overseas) and 0 <= overseas <= 1):
+        raise ValueError("海外比例必须在 0%–100% 之间")
+
+
+def region_mix(histories: dict[str, dict[str, list[float]]], overseas: float = REGION_DEFAULT_OVERSEAS, basket: str = "three") -> dict[str, Any]:
+    """What a fixed overseas / mainland split did over the common record, for each way of splitting the mainland part."""
+    check_region(overseas, basket)
+    members = REGION_BASKETS[basket]
+    symbols = (*members, TIMING_SYMBOL, BOND)
+    series = {s: _dated(histories[s]) for s in symbols}
+    start = max(series[s][0][0] for s in symbols if s != BOND)
+    end = min(series[s][0][-1] for s in symbols)
+    points = _month_points(start, end)
+    if len(points) <= REGION_MIN_MONTHS:
+        raise ValueError(f"共同历史不足 {REGION_MIN_MONTHS} 个月，没法比较")
+    mainland = 1 - overseas
+    rows = []
+    for dividend in REGION_DIVIDEND_SHARES if mainland > 0 else REGION_DIVIDEND_SHARES[:1]:
+        weights = {**{s: overseas / len(members) for s in members}, TIMING_SYMBOL: mainland * dividend, BOND: mainland * (1 - dividend)}
+        held = {s: w for s, w in weights.items() if w > 0}
+        path = _rebalanced_path(series, held, points)
+        rows.append({"dividend": dividend, "weights": held, "annual": path[-1] ** (12 / (len(path) - 1)) - 1, "multiple": path[-1],
+                     "max_drawdown": _max_drawdown(path), "worst_year": _worst_window(path, 12), "worst_3y": _worst_window(path, 36)})
+    nasdaq = histories.get("^NDX")
+    return {"overseas": overseas, "mainland": mainland, "basket": basket, "baskets": REGION_BASKET_LABELS,
+            "members": {s: overseas / len(members) for s in members}, "names": {**LABELS, HK_STOCK: "美团"},
+            "start": start.isoformat(), "end": end.isoformat(), "years": (len(points) - 1) / 12, "rows": rows,
+            "rebalance_months": REGION_REBALANCE_MONTHS, "bond_start": series[BOND][0][0].isoformat(), "bond_backfill": REGION_BOND_BACKFILL,
+            "nasdaq_drawdown": _max_drawdown(nasdaq["close"]) if nasdaq else None,
+            "nasdaq_start": _dated(nasdaq)[0][0].isoformat() if nasdaq else None}
+
+
 # ---- buy ladder ------------------------------------------------------------------------------------------
 
 def tick_for(symbol: str) -> float:

@@ -51,6 +51,11 @@ def get_target_plan(target: float | None = None, shape: str | None = None, delay
     return _call(svc.target, target if target is not None else cfg("target"), shape, delay, drawdown)
 
 
+@router.get("/region-mix")
+def get_region_mix(overseas: float | None = None, basket: str | None = None):
+    return _call(svc.region_mix, overseas, basket)
+
+
 @router.get("/sell-plan")
 def get_sell_plan(symbol: str = EXIT_SYMBOL, target_avg: float | None = None, horizon_days: int | None = None,
                   now_shares: int | None = None, shape: str | None = None, compare_days: int | None = None,
