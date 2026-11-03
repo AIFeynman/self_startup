@@ -17,7 +17,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, Callable
 
 
 class ProviderError(RuntimeError):
@@ -166,7 +166,7 @@ def research(symbol: str) -> dict[str, Any]:
 class LiveFeed:
     """yfinance 的 Yahoo WebSocket 实时报价，只存在内存里（定时刷新的报价仍是记录）。断线指数退避重连。"""
 
-    def __init__(self, symbols: list[str], proxy: str = ""):
+    def __init__(self, symbols: list[str], proxy: Callable[[], str] | None = None):
         try:
             import yfinance as yf
         except ImportError:
@@ -213,9 +213,10 @@ class LiveFeed:
         while not self._stop.is_set():
             try:
                 self._socket = self._yf.WebSocket(verbose=False)
-                if self.proxy:   # 平台进程可能带着 Claude Code 会话注入的代理，连不上 Yahoo；配了 wealth.proxy 就自己先连上
+                proxy = self.proxy() if self.proxy else ""   # 每次重连都读，改了设置不用重启
+                if proxy:   # 平台进程可能带着 Claude Code 会话注入的代理，连不上 Yahoo；配了 wealth.proxy 就自己先连上
                     from websockets.sync.client import connect
-                    self._socket._ws = connect(self._socket.url, proxy=self.proxy, open_timeout=15)
+                    self._socket._ws = connect(self._socket.url, proxy=proxy, open_timeout=15)
                 self._socket.subscribe(self.symbols)
                 self.connected, self.last_error, backoff = True, "", 2.0
                 self._socket.listen(self.handle)  # 阻塞到连接断开

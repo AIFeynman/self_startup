@@ -83,7 +83,7 @@ LIVE: market.LiveFeed | None = None   # 板块启动时打开（wealth.on_startu
 def start_live() -> None:
     global LIVE
     if LIVE is None:
-        LIVE = market.LiveFeed(list(ASSETS), proxy=settings.get("wealth.proxy", "") or "")
+        LIVE = market.LiveFeed(list(ASSETS), proxy=lambda: settings.get("wealth.proxy", "") or "")
         LIVE.start()
 
 
