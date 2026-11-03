@@ -3,6 +3,7 @@
 // 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
 // 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
 import { annotate } from './_annotate.js';
+import { whyNotSection } from './_whynot.js';
 
 const CSS = `
 .kb-graph { position: relative; padding: 0; overflow: hidden; }
@@ -25,6 +26,9 @@ const CSS = `
 .kb-cl a { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--text); font-size: 12.5px; background: var(--bg); }
 .kb-cl a:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
 .kb-cl a small { color: var(--muted); margin-left: 4px; }
+.kb-vf { border-left: 3px solid #3f7cac; }
+.kb-vsrc { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+.kb-vsrc li { margin: 2px 0; }
 .kb-j { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); margin-bottom: 10px; transition: box-shadow .3s; }
 .kb-j.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .kb-j .claim { font: 600 15.5px/1.55 var(--serif); margin: 4px 0; }
@@ -71,6 +75,16 @@ const CSS = `
 .kb-tl > .kb-jr::before { content: ''; position: absolute; left: -18px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line-2); }
 .kb-tl > .kb-jr.chg::before { border-color: var(--accent); background: var(--accent); }
 .kb-new { display: grid; gap: 8px; padding: 14px 16px; margin-bottom: 14px; }
+.kb-src { display: grid; gap: 6px; }
+.kb-src .sel { display: flex; flex-wrap: wrap; gap: 6px; }
+.kb-src .chip { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border: 1px solid var(--line-2); border-radius: 12px; font-size: 12.5px; max-width: 100%; }
+.kb-src .chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-src .chip button { border: 0; background: none; padding: 0; color: var(--muted); cursor: pointer; }
+.kb-src .hits { border: 1px solid var(--line); border-radius: 8px; max-height: 260px; overflow: auto; }
+.kb-src .hit { padding: 6px 10px; cursor: pointer; font-size: 13px; }
+.kb-src .hit:hover { background: var(--hover, rgba(127,127,127,.08)); }
+.kb-src .hit .muted { font-size: 12px; }
+.kb-srcs { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; font-size: 13px; }
 .kb-new textarea { width: 100%; min-height: 60px; font: inherit; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); resize: vertical; }
 .kb-new .row select, .kb-new .row input { width: auto; font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--panel); color: var(--text); }
 @media (max-width: 640px) { .kb-jd { margin-left: 0; } }
@@ -564,8 +578,9 @@ async function judgeTab(body, ctx, focus = '') {
     const cf = h('select', {}, [['', '信心：让 AI 判断'], ['高', '信心高'], ['中', '信心中'], ['低', '信心低']].map(([v, l]) => h('option', { value: v }, l)));
     const due = h('input', { type: 'date', title: '什么时候回来检查（预测填兑现日期；留空按默认节奏）' });
     const note = h('input', { placeholder: '依据 / 背景（可选）', style: { flex: 1, minWidth: '160px' } });
-    return h('div.card.kb-new', {}, [ta, h('div.row', { style: { flexWrap: 'wrap', gap: '8px' } }, [ty, cf, h('span.muted', {}, '复查日'), due, note,
-      h('button', { onclick: async () => { if (!ta.value.trim()) return; await addJudgment(ctx, { text: ta.value, type: ty.value, confidence: cf.value, due: due.value, note: note.value }); newBox.replaceChildren(); } }, '保存')])]);
+    const src = sourcePicker(ctx);
+    return h('div.card.kb-new', {}, [ta, src.el, h('div.row', { style: { flexWrap: 'wrap', gap: '8px' } }, [ty, cf, h('span.muted', {}, '复查日'), due, note,
+      h('button', { onclick: async () => { if (!ta.value.trim()) return; await addJudgment(ctx, { text: ta.value, type: ty.value, confidence: cf.value, due: due.value, note: note.value, sources: src.value() }); newBox.replaceChildren(); } }, '保存')])]);
   }
 
   // 待复查（展开），没有就显示接下来的复查日程
@@ -576,6 +591,9 @@ async function judgeTab(body, ctx, focus = '') {
     body.append(ui.section('接下来复查', `现在没有到期的 · 最近一次 ${j.upcoming[0].due}`));
     body.append(h('div.card', {}, j.upcoming.map((c) => jRow(ctx, c, { today: j.today, lead: c.due.slice(5) }))));
   }
+
+  // 论文「为什么不」：命中率 + 最近的（在深读论文页里写）
+  body.append(...await whyNotSection(ctx));
 
   // 问题线：同一问题上的判断按时间排开，看立场怎么变
   if (j.threads.length) {
@@ -619,6 +637,52 @@ async function judgeTab(body, ctx, focus = '') {
   }
 }
 
+// 依据材料：从看过的材料里搜着引用，或自己贴链接 / 写一句来源；都不填 = 没有源
+function sourcePicker(ctx) {
+  const { api, h } = ctx;
+  const picked = [];
+  const chips = h('div.sel');
+  const hits = h('div.hits', { style: { display: 'none' } });
+  const q = h('input', { placeholder: '引用看过的材料：搜标题 / 关键词（深读、调研、读书、学习计划、收藏的信息）', style: { width: '100%' } });
+  const own = h('input', { placeholder: '或自己指定源：贴链接 / 写一句出处，回车加入', style: { width: '100%' } });
+  const draw = () => chips.replaceChildren(...(picked.length ? picked.map((x, i) => h('span.chip', { title: x.url || x.title }, [
+    h('span', {}, (x.sub_name ? x.sub_name + ' · ' : x.sid ? '' : '自定 · ') + (x.title || x.url)),
+    h('button', { title: '移除', onclick: () => { picked.splice(i, 1); draw(); } }, '×')])) : [h('span.muted', { style: { fontSize: '12.5px' } }, '依据材料：暂无（可不填）')]));
+  const add = (x) => { if (!picked.some((p) => (p.sid && p.sid === x.sid) || (!p.sid && (p.url || p.title) === (x.url || x.title)))) picked.push(x); draw(); };
+  let timer = 0, seq = 0;
+  const search = async () => {
+    const my = ++seq;
+    const rs = await api.get('/api/kb/materials?limit=12&q=' + encodeURIComponent(q.value.trim()));
+    if (my !== seq) return;
+    hits.style.display = '';
+    hits.replaceChildren(...(rs.length ? rs.map((r) => h('div.hit', { onclick: () => { add({ sid: r.sid, title: r.title, url: r.url, link: r.link, sub: r.sub, sub_name: r.sub_name }); hits.style.display = 'none'; q.value = ''; } }, [
+      h('div', {}, r.title), h('div.muted', {}, `${r.sub_name} · ${r.date}${r.context ? ' · ' + r.context : ''}`)])) : [h('div.hit.muted', {}, '没找到，换个词，或在下面直接贴链接')]));
+  };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 200); });
+  q.addEventListener('focus', () => { if (!hits.childElementCount) search(); else hits.style.display = ''; });
+  own.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' || !own.value.trim()) return;
+    ev.preventDefault();
+    const v = own.value.trim();
+    add(/^https?:\/\/\S+$/.test(v) ? { url: v, title: v } : { title: v });
+    own.value = '';
+  });
+  draw();
+  return {
+    el: h('div.kb-src', {}, [chips, q, hits, own]),
+    value: () => {   // 没按回车的自定源也算上
+      if (own.value.trim()) { const v = own.value.trim(); add(/^https?:\/\/\S+$/.test(v) ? { url: v, title: v } : { title: v }); own.value = ''; }
+      return picked.map(({ sub_name, ...x }) => x);
+    },
+  };
+}
+
+function srcList(h, srcs) {
+  if (!srcs?.length) return null;
+  return h('div.kb-srcs', {}, [h('b', { style: { color: 'var(--muted)', fontSize: '12px' } }, '依据材料'),
+    ...srcs.map((x) => (x.link || x.url) ? h('a', { href: x.link || x.url, ...(x.link ? {} : { target: '_blank', rel: 'noopener' }) }, x.title || x.url) : h('span', {}, x.title))]);
+}
+
 // 一行判断，点开看原话、Agent 评价、复查记录，并能复查
 function jRow(ctx, c, { open = false, today, chg = false, lead = '' } = {}) {
   const { h } = ctx;
@@ -639,6 +703,7 @@ function jDetail(ctx, c, today) {
   const e = c.eval;
   const a = c.agent;
   const due = c.due && c.due <= today;
+  const ctxText = c.sources?.length ? (c.context || '').split('\n').filter((l) => !l.startsWith('依据材料：')).join('\n') : c.context;
   const agentBox = h('div');
   const showAgent = (x) => agentBox.replaceChildren(x ? h('div.kb-ag', {}, [
     h('div', {}, [h('b', {}, `Agent 参考结论：${x.suggest}`), h('span.muted', {}, ` · 对照了 ${x.n_evidence ?? 0} 条之后的材料和判断${x.stale ? ' · 有新材料，可重新对照' : ''}`)]),
@@ -646,6 +711,36 @@ function jDetail(ctx, c, today) {
     x.ask ? h('div.muted', {}, '问问自己：' + x.ask) : null,
   ]) : '');
   showAgent(a);
+  // 联网核验：派后台调研任务查之后的证据，带来源给参考结论（预测到期会自动派）
+  const verBox = h('div');
+  let verTimer = 0;
+  const showVer = (v) => {
+    clearTimeout(verTimer);
+    if (!v) { verBox.replaceChildren(); return; }
+    if (v.status === 'running') {
+      verBox.replaceChildren(h('div.kb-ag.kb-vf', {}, [h('b', {}, '联网核验中'), h('span.muted.dots', {}, ` ${v.trigger === 'auto' ? '到期自动派的' : ''}后台调研任务，通常 3–10 分钟`),
+        v.job_id ? h('a.muted', { href: `/api/jobs/${v.job_id}`, target: '_blank', style: { marginLeft: '8px' } }, `job ${v.job_id}`) : null]));
+      verTimer = setTimeout(async () => { if (verBox.isConnected) showVer(await api.get('/api/kb/judgments/verify?sid=' + encodeURIComponent(c.sid)).catch(() => v)); }, 8000);
+      return;
+    }
+    if (v.status === 'failed') { verBox.replaceChildren(h('div.kb-ag.kb-vf', {}, [h('b', {}, '联网核验没成：'), h('span', {}, v.summary || '未知原因'), ' ', h('a.muted', { href: `/api/kb/judgments/verify/${v.id}/report`, target: '_blank' }, '看报告')])); return; }
+    verBox.replaceChildren(h('div.kb-ag.kb-vf', {}, [
+      h('div', {}, [h('b', {}, `联网核验：${v.suggest}`), h('span.muted', {}, ` · ${(v.finished_at || v.created_at).slice(0, 10)} · ${v.trigger === 'auto' ? '到期自动核验' : '手动'} · 仅供参考，结论由你定`)]),
+      v.criterion ? h('div', {}, [h('span.muted', {}, '可判定标准：'), v.criterion]) : null,
+      v.summary ? h('div', {}, v.summary) : null,
+      v.sources?.length ? h('ul.kb-vsrc', {}, v.sources.map((x) => h('li', {}, [x.url ? h('a', { href: x.url, target: '_blank', rel: 'noopener' }, x.title || x.url) : x.title,
+        h('span.muted', {}, x.date ? ' · ' + x.date : ''), x.finding ? h('span', {}, '：' + x.finding) : null]))) : null,
+      v.ask ? h('div.muted', {}, '问问自己：' + v.ask) : null,
+      h('a.muted', { href: `/api/kb/judgments/verify/${v.id}/report`, target: '_blank', style: { fontSize: '12px' } }, '完整报告'),
+    ]));
+  };
+  showVer(c.verify);
+  const verify = async (btn) => {
+    btn.disabled = true;
+    try { await api.post('/api/kb/judgments/verify', { sid: c.sid }); showVer(await api.get('/api/kb/judgments/verify?sid=' + encodeURIComponent(c.sid))); toast('已派联网核验，完成后在这里看'); }
+    catch (err) { toast('没派成：' + (err.message || err), true); }
+    btn.disabled = false;
+  };
   const note = h('textarea', { placeholder: c.type === '疑问' ? '现在怎么想？想清楚了就写结论' : '复查笔记：为什么还成立 / 哪里要改 / 新的看法是什么（修正、推翻时必填，会作为新判断进问题线）' });
   const date = h('input', { type: 'date', title: '改到哪天再看' });
   const send = async (verdict) => {
@@ -664,9 +759,11 @@ function jDetail(ctx, c, today) {
     : [['holds', '仍成立'], ['revised', '要修正'], ['overturned', '推翻了'], ['pending', '还看不出']];
   return h('div.kb-jd', { onclick: (ev) => ev.stopPropagation() }, [
     c.mine && !norm(c.mine).startsWith(norm(c.claim).slice(0, 16)) ? h('blockquote', {}, c.mine) : null,
-    c.context ? h('div.muted.clamp2', {}, '针对：' + c.context) : null,
+    ctxText ? h('div.muted.clamp2', {}, '针对：' + ctxText) : null,
+    srcList(h, c.sources),
     e ? h('div.kb-ev', {}, [h('b', {}, `依据 ${e.strength}`), h('span', {}, e.basis), h('b', {}, '反方'), h('span', {}, e.counter), h('b', {}, '怎么验证'), h('span', {}, e.verify)]) : null,
     agentBox,
+    verBox,
     c.reviews.length ? h('ul.kb-hist', {}, c.reviews.map((r) => h('li', {}, `${r.at.slice(0, 10)} · ${r.verdict_name}${r.due ? ' → ' + r.due : ''}${r.note ? '：' + r.note : ''}`))) : null,
     h('div.row', { style: { flexWrap: 'wrap', gap: '4px 12px', marginTop: '6px', fontSize: '12.5px', color: 'var(--muted)' } }, [
       h('span', {}, [c.sub_name, ' · ', srcLink(h, c)]),
@@ -682,6 +779,7 @@ function jDetail(ctx, c, today) {
       h('span.grow'),
       date, h('button.ghost', { onclick: () => send('snooze') }, '改期'),
       h('button.ghost', { onclick: (ev) => recheck(ev.currentTarget) }, '让 Agent 对照新材料'),
+      c.type === '疑问' ? null : h('button.ghost', { title: '派后台调研任务联网查之后的证据，带来源给参考结论', onclick: (ev) => verify(ev.currentTarget) }, '联网核验'),
     ]),
   ]);
 }

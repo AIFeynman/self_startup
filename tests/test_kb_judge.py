@@ -31,7 +31,7 @@ def _fake_llm(system, payload, max_tokens=6000):
 def _clean():
     """测试共用一个临时库：前后清掉本文件用到的表，不和 test_kb_graph 的数据互相影响。"""
     def wipe():
-        for t in ("review_notes", "kb_sig_cache", "kb_llm_cache", "kb_claim_cache", "kb_judgments", "kb_claim_reviews", "kb_concept_edit"):
+        for t in ("review_notes", "kb_sig_cache", "kb_llm_cache", "kb_claim_cache", "kb_judgments", "kb_claim_reviews", "kb_concept_edit", "kb_verify"):
             if db.row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", [t]):
                 db.execute(f"DELETE FROM {t}")
     wipe()
@@ -129,3 +129,75 @@ def test_schedule_rules():
     assert kb_judge.schedule(s, {"type": "观点"}, [], "2026-01-10") == ("open", "2026-01-10")
     assert kb_judge.schedule(s, {"type": "事实"}, []) == ("open", "")
 
+
+
+def test_sources_cited_and_searchable(monkeypatch):
+    """记判断可以引用看过的材料 / 自己指定源 / 不给源；引用的材料进 Agent 归类的上下文，复查时排在证据最前。"""
+    monkeypatch.setattr(kb_graph, "llm_json", _fake_llm)
+    monkeypatch.setattr(kb_graph, "signals", lambda: [kb_graph._sig("item:7", "material", "paper", "Mamba 论文深读", context="状态空间模型",
+                                                                    date="2026-10-01", link="#learn/item/7", url="https://arxiv.org/abs/2312.00752")]
+                        + kb_judge.signals())
+    hits = kb_judge.materials("mamba")
+    assert [h["sid"] for h in hits] == ["item:7"] and hits[0]["sub_name"] == "论文深读"
+    assert kb_judge.materials("不存在的词") == []
+    a = kb_judge.add("线性注意力会在长上下文里取代 Transformer", sources=[
+        {"sid": "item:7", "title": "Mamba 论文深读", "sub": "paper", "link": "#learn/item/7", "junk": 1},
+        "https://example.com/blog", "某次分享里听到的", {"sid": "item:7", "title": "重复"}, {}])
+    b = kb_judge.add("没有源的直觉判断")
+    rows = {r["id"]: r for r in db.rows("SELECT * FROM kb_judgments")}
+    srcs = kb_judge._j(rows[a]["sources"], [])
+    assert srcs == [{"sid": "item:7", "title": "Mamba 论文深读", "link": "#learn/item/7", "sub": "paper"},
+                    {"url": "https://example.com/blog"}, {"title": "某次分享里听到的"}]
+    assert kb_judge._j(rows[b]["sources"], []) == []
+    sig = {s["sid"]: s for s in kb_judge.signals()}
+    assert "依据材料：论文深读·Mamba 论文深读" in sig[f"my:{a}"]["context"] and sig[f"my:{a}"]["cites"] == ["item:7"]
+    assert sig[f"my:{b}"]["cites"] == [] and "依据材料" not in sig[f"my:{b}"]["context"]
+    m = kb_graph.model()
+    ev = kb_judge._evidence(m["sigs"][f"my:{a}"], m, {})
+    assert ev and ev[0]["sid"] == "item:7" and ev[0].get("cited")
+
+
+def test_verify_auto_dispatch_and_finish(client, monkeypatch):
+    from app import jobs, kb_verify
+    _setup(monkeypatch)            # 整理时已经给到期的预测自动派了联网核验
+    vs = db.rows("SELECT * FROM kb_verify")
+    pred = next(c for c in client.get("/api/kb/judgments").json()["singles"] if c["type"] == "预测")
+    assert [(v["sid"], v["trigger"], v["status"]) for v in vs] == [(pred["sid"], "auto", "running")]
+    job = db.row("SELECT * FROM jobs WHERE id=?", [vs[0]["job_id"]])
+    assert job["module"] == "kb" and "乙概念明年会不行" in job["prompt"] and "兑现了 / 部分兑现 / 没兑现 / 还看不出" in job["prompt"]
+    assert pred["verify"]["status"] == "running"
+
+    # 再整理一次：在跑 / 冷却期内不重复派
+    kb_graph.refresh()
+    assert db.row("SELECT COUNT(*) n FROM kb_verify")["n"] == 1
+
+    # 任务完成 → 回调解析出结论和来源
+    out = """## 报告\n乙概念今年还在涨。\n```json\n{"suggest": "没兑现", "criterion": "到 2027-02 乙概念用户数下降", "summary": "没下降",
+      "sources": [{"title": "乙概念年报", "url": "https://x.com/a", "date": "2026-10-01", "finding": "用户数翻倍"}], "ask": "当时漏看了什么？"}\n```"""
+    jobs_mod = __import__("app.modules.kb", fromlist=["on_job_done"])
+    jobs_mod.on_job_done({**job, "status": "done", "output": out})
+    v = client.get("/api/kb/judgments/verify", params={"sid": pred["sid"]}).json()
+    assert v["status"] == "done" and v["suggest"] == "没兑现" and v["sources"][0]["url"] == "https://x.com/a"
+    assert "乙概念今年还在涨" in client.get(f"/api/kb/judgments/verify/{v['id']}/report").text
+    # 只是参考：复查状态不变，仍由我来写
+    assert next(c for c in client.get("/api/kb/judgments").json()["singles"] if c["sid"] == pred["sid"])["status"] == "open"
+
+    # 手动核验观点；疑问不核验；格式不对算失败
+    view = next(c for c in client.get("/api/kb/judgments").json()["due"] if c["type"] == "观点")
+    r = client.post("/api/kb/judgments/verify", json={"sid": view["sid"]}).json()
+    assert "仍成立 / 需修正 / 被推翻 / 证据不足" in db.row("SELECT prompt FROM jobs WHERE id=(SELECT job_id FROM kb_verify WHERE id=?)", [r["id"]])["prompt"]
+    assert client.post("/api/kb/judgments/verify", json={"sid": view["sid"]}).status_code == 400      # 正在核验
+    kb_verify.finish(r["id"], {"status": "done", "output": "没有 json"})
+    assert client.get("/api/kb/judgments/verify", params={"sid": view["sid"]}).json()["status"] == "failed"
+    q = client.get("/api/kb/judgments").json()["open"][0]
+    assert client.post("/api/kb/judgments/verify", json={"sid": q["sid"]}).status_code == 400
+
+
+def test_verify_daily_cap_and_switch(client, monkeypatch):
+    from app import kb_verify, settings
+    monkeypatch.setattr(kb_verify, "cfg", lambda: {**kb_verify.DEFAULTS, "auto": False})
+    _setup(monkeypatch)
+    assert not db.rows("SELECT * FROM kb_verify")                      # 关掉自动就不派
+    monkeypatch.setattr(kb_verify, "cfg", lambda: {**kb_verify.DEFAULTS, "daily_max": 0})
+    kb_graph.refresh()
+    assert not db.rows("SELECT * FROM kb_verify")                      # 到每天上限不派

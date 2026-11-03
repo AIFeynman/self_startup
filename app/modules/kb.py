@@ -5,7 +5,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from .. import kb, kb_graph, kb_judge
+import re
+
+from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
 
 TITLE = "知识库"
 ORDER = 60
@@ -120,12 +122,19 @@ class JudgmentIn(BaseModel):
     confidence: str = ""
     due: str = ""
     note: str = ""
+    sources: list = []      # 依据材料：[{sid,title,url,link,sub}]（看过的材料）/ 链接或一句话（自己指定）；空 = 没有源
+
+
+@router.get("/materials")
+def materials(q: str = "", limit: int = 20):
+    """记判断时引用：看过的材料，按关键词筛。"""
+    return kb_judge.materials(q, min(max(limit, 1), 50))
 
 
 @router.post("/judgments")
 def judgment_add(body: JudgmentIn):
     try:
-        jid = kb_judge.add(body.text, body.type, body.confidence, body.due, body.note)
+        jid = kb_judge.add(body.text, body.type, body.confidence, body.due, body.note, body.sources)
     except ValueError:
         raise HTTPException(400, "empty")
     kb_graph.schedule_refresh()       # 归类 + Agent 评价在后台跑
@@ -153,6 +162,33 @@ class RecheckIn(BaseModel):
     sid: str
 
 
+@router.post("/judgments/verify")
+def judgment_verify(body: RecheckIn):
+    """联网核验：派一个后台调研任务（走 jobs，完成后 on_job_done 回填）。"""
+    try:
+        vid = kb_verify.start(body.sid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "id": vid}
+
+
+@router.get("/judgments/verify")
+def judgment_verify_get(sid: str):
+    kb_verify._init()
+    return kb_verify.latest().get(sid)
+
+
+@router.get("/judgments/verify/{vid}/report", response_class=PlainTextResponse)
+def judgment_verify_report(vid: int):
+    return kb_verify.report(vid)
+
+
+def on_job_done(job: dict) -> None:
+    m = re.fullmatch(r"kbverify:(\d+)", job.get("ref") or "")
+    if m:
+        kb_verify.finish(int(m.group(1)), job)
+
+
 @router.post("/judgments/recheck")
 def judgment_recheck(body: RecheckIn):
     if not kb_graph.has_llm():
@@ -161,3 +197,42 @@ def judgment_recheck(body: RecheckIn):
     if r is None:
         raise HTTPException(404, "not found")
     return r
+
+
+# ---------- 论文「为什么不 XX」（逻辑在 app/kb_whynot.py） ----------
+
+@router.get("/whynot")
+def whynot_list(item_id: int = 0):
+    """item_id 给了 = 这篇论文下的；不给 = 判断页用的计分 + 最近的。"""
+    return kb_whynot.of_item(item_id) if item_id else kb_whynot.overview()
+
+
+class WhyNotIn(BaseModel):
+    item_id: int
+    alt: str                # 替代方案 XX
+    guess: str = "说不准"    # 我猜 XX 比论文做法：更好 / 差不多 / 更差 / 说不准
+    confidence: str = ""
+    reason: str = ""
+
+
+@router.post("/whynot")
+def whynot_add(body: WhyNotIn):
+    if not kb_graph.has_llm():
+        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
+    try:
+        wid = kb_whynot.add(body.item_id, body.alt, body.guess, body.confidence, body.reason)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    kb_graph.schedule_refresh()       # 同时进了判断台账：归类 + Agent 评价在后台跑
+    return {"ok": True, "id": wid}
+
+
+@router.post("/whynot/{wid}/recheck")
+def whynot_recheck(wid: int, layer: str = ""):
+    if not kb_graph.has_llm():
+        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
+    kb_whynot._init()
+    if not kb_whynot.db.row("SELECT 1 FROM kb_whynot WHERE id=?", [wid]):
+        raise HTTPException(404, "not found")
+    kb_whynot.start_check(wid, (layer,) if layer in ("paper", "followup") else ("paper", "followup"))
+    return {"ok": True}

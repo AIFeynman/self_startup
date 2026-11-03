@@ -5,6 +5,7 @@
 // 按需加一节：读某一章时说「X 没懂 / 对 X 感兴趣」（或划线后点），在这一章后插一节针对性讲解 + 小测试
 import { annotate } from './_annotate.js';
 import { BOOK_CSS, bookCards, renderBook, renderBookChapter } from './_book.js';
+import { whyNotPanel } from './_whynot.js';
 const CSS = `
 .ln-opts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: -4px 0 10px; }
 .ln-opts .lbl { font-size: 12px; color: var(--muted); margin-right: 2px; }
@@ -708,6 +709,8 @@ async function renderItem(el, ctx, iid) {
       // 追问清单那一节不在正文里列，改成下面的逐题作答区
       const note = text.replace(/^---[\s\S]*?---\s*/, '').replace(QA_SECTION, '');
       reader.append(h('div.card', {}, annotate(ctx, localImgs(md(note), `/api/learn/items/${it.id}/out/`), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
+      // 论文：「为什么不 XX」——写下替代方案和猜测，后台查论文自己 + 后续论文怎么回答
+      if (it.kind === 'paper') reader.append(...whyNotPanel(ctx, it));
       const qa = await api.get(`/api/learn/items/${it.id}/qa`).catch(() => null);
       if (qa) reader.append(qaSection(ctx, it, qa));
     }
