@@ -1,0 +1,90 @@
+{
+  "version": "2026-11-02.1",
+  "note": "论文脉络库分类体系。一篇论文 = 类型（单选）+ 主方向（1 个二级类）+ 副方向（0–2 个二级类）+ 检索标签（problem / method / bench / base）+ 中文一句话 + builds_on（只能从它的库内参考文献里选）。二级类 code 全局唯一。",
+  "kinds": [
+    {"code": "method", "name": "新方法", "desc": "提出新算法、损失、训练技巧或架构"},
+    {"code": "model", "name": "模型 / 技术报告", "desc": "发布模型或技术报告；报告里的新方法写进 method 标签"},
+    {"code": "survey", "name": "综述", "desc": "系统梳理一个方向"},
+    {"code": "benchmark", "name": "评测基准", "desc": "提出评测集、评测方法或排行榜（顺带评一批模型也算）"},
+    {"code": "dataset", "name": "训练数据", "desc": "训练 / 微调 / 偏好数据集或数据构造方法"},
+    {"code": "empirical", "name": "实验分析", "desc": "不提新方法，靠大规模实验得出发现：scaling law、某方法是否真的有效、消融研究"},
+    {"code": "theory", "name": "理论", "desc": "以证明或理论分析为主"},
+    {"code": "system", "name": "系统 / 工程", "desc": "训练 / 推理框架、分布式、算子"},
+    {"code": "position", "name": "观点", "desc": "立场文章、路线讨论"},
+    {"code": "application", "name": "应用", "desc": "把已有方法用到某个行业或任务上"}
+  ],
+  "domains": [
+    {"code": "pretrain", "name": "预训练", "children": [
+      {"code": "arch", "name": "模型架构", "eg": ["Transformer 变体", "注意力机制", "位置编码", "归一化"]},
+      {"code": "moe", "name": "混合专家 MoE", "eg": ["稀疏专家", "路由", "负载均衡", "专家并行"]},
+      {"code": "ssm", "name": "SSM / 线性注意力", "eg": ["Mamba", "RWKV", "线性注意力", "状态空间模型"]},
+      {"code": "pt_data", "name": "预训练数据", "eg": ["数据清洗", "数据配比", "合成数据", "去重"]},
+      {"code": "scaling", "name": "Scaling law", "eg": ["缩放定律", "计算最优", "涌现"]},
+      {"code": "tokenizer", "name": "分词", "eg": ["BPE", "字节级", "词表"]},
+      {"code": "long_ctx", "name": "长上下文", "eg": ["上下文扩展", "RoPE 插值", "长文本建模"]},
+      {"code": "pt_obj", "name": "预训练目标与表示学习", "eg": ["掩码语言模型", "自回归", "对比学习", "自监督"]}
+    ]},
+    {"code": "posttrain", "name": "后训练", "children": [
+      {"code": "sft", "name": "SFT / 指令微调", "eg": ["指令微调", "指令数据", "多任务微调", "数据选择"]},
+      {"code": "pref_opt", "name": "RLHF / 偏好优化", "eg": ["RLHF", "PPO", "DPO", "偏好数据", "离线偏好优化"]},
+      {"code": "reason_rl", "name": "推理 RL", "eg": ["可验证奖励 RLVR", "GRPO", "长思维链训练", "过程奖励"]},
+      {"code": "reward_model", "name": "奖励模型", "eg": ["奖励建模", "过程奖励模型 PRM", "奖励欺骗"]},
+      {"code": "distill", "name": "蒸馏", "eg": ["知识蒸馏", "推理蒸馏", "自蒸馏", "合成数据蒸馏"]},
+      {"code": "peft", "name": "参数高效微调", "eg": ["LoRA", "Adapter", "Prompt tuning", "QLoRA"]},
+      {"code": "alignment", "name": "对齐", "eg": ["RLAIF", "Constitutional AI", "价值对齐", "可扩展监督"]}
+    ]},
+    {"code": "infer", "name": "推理与效率", "children": [
+      {"code": "quant", "name": "量化与压缩", "eg": ["量化", "剪枝", "低比特", "模型压缩"]},
+      {"code": "accel", "name": "推理加速", "eg": ["投机解码", "KV cache", "FlashAttention", "并行解码"]},
+      {"code": "serving", "name": "服务系统", "eg": ["推理引擎", "批处理调度", "显存管理"]},
+      {"code": "tt_compute", "name": "推理时计算", "eg": ["test-time scaling", "自洽采样", "搜索", "best-of-n"]}
+    ]},
+    {"code": "capab", "name": "能力", "children": [
+      {"code": "reasoning", "name": "推理与数学", "eg": ["思维链", "数学推理", "逻辑推理"]},
+      {"code": "code", "name": "代码", "eg": ["代码生成", "代码模型", "程序修复"]},
+      {"code": "multiling", "name": "多语言", "eg": ["跨语言迁移", "低资源语言", "翻译"]},
+      {"code": "icl", "name": "上下文学习与提示", "eg": ["in-context learning", "提示工程", "few-shot"]}
+    ]},
+    {"code": "agent", "name": "Agent", "children": [
+      {"code": "tool_use", "name": "工具调用", "eg": ["函数调用", "API 调用", "ReAct"]},
+      {"code": "planning", "name": "规划与反思", "eg": ["任务分解", "反思", "自我改进"]},
+      {"code": "memory", "name": "Agent 记忆", "eg": ["长期记忆", "经验库"]},
+      {"code": "multi_agent", "name": "多智能体", "eg": ["多 Agent 协作", "角色扮演", "辩论"]},
+      {"code": "coding_agent", "name": "编程 Agent", "eg": ["SWE Agent", "仓库级修改"]},
+      {"code": "gui_agent", "name": "GUI / 操控电脑", "eg": ["网页 Agent", "手机操控", "computer use"]},
+      {"code": "agent_eval", "name": "Agent 评测与环境", "eg": ["Agent 基准", "模拟环境"]}
+    ]},
+    {"code": "knowledge", "name": "知识与检索", "children": [
+      {"code": "rag", "name": "检索增强 RAG", "eg": ["检索增强生成", "GraphRAG", "检索器-生成器联合训练"]},
+      {"code": "retrieval", "name": "检索与 Embedding", "eg": ["稠密检索", "向量表示", "重排序", "ColBERT"]},
+      {"code": "know_edit", "name": "知识编辑", "eg": ["模型编辑", "知识更新"]},
+      {"code": "hallucination", "name": "幻觉与事实性", "eg": ["幻觉检测", "事实性", "引用溯源"]}
+    ]},
+    {"code": "mm", "name": "多模态", "children": [
+      {"code": "vlm", "name": "视觉语言模型", "eg": ["VLM", "图文对齐", "多模态指令微调", "CLIP"]},
+      {"code": "img_gen", "name": "图像生成", "eg": ["扩散模型", "文生图", "GAN", "图像编辑"]},
+      {"code": "video_gen", "name": "视频 / 3D 生成", "eg": ["文生视频", "3D 生成", "世界模型"]},
+      {"code": "speech", "name": "语音与音频", "eg": ["语音识别", "语音合成", "音频生成"]},
+      {"code": "embodied", "name": "具身与机器人", "eg": ["机器人学习", "VLA", "自动驾驶"]}
+    ]},
+    {"code": "eval", "name": "评测与分析", "children": [
+      {"code": "eval_method", "name": "评测方法", "eg": ["基准构建", "污染", "排行榜"]},
+      {"code": "llm_judge", "name": "LLM-as-judge", "eg": ["模型评审", "偏好评估"]},
+      {"code": "interp", "name": "可解释性", "eg": ["机制可解释性", "探针", "稀疏自编码器"]}
+    ]},
+    {"code": "safety", "name": "安全", "children": [
+      {"code": "jailbreak", "name": "越狱与攻防", "eg": ["越狱攻击", "提示注入", "红队"]},
+      {"code": "safety_align", "name": "安全对齐", "eg": ["拒答", "有害性", "安全微调"]},
+      {"code": "privacy", "name": "隐私与水印", "eg": ["成员推断", "数据提取", "水印"]},
+      {"code": "fairness", "name": "偏见与公平", "eg": ["社会偏见", "公平性"]}
+    ]},
+    {"code": "ml", "name": "经典 ML", "children": [
+      {"code": "rl", "name": "强化学习（非 LLM）", "eg": ["策略梯度", "Q-learning", "离线 RL", "博弈"]},
+      {"code": "cv", "name": "视觉任务", "eg": ["分类", "检测", "分割", "ViT"]},
+      {"code": "nlp_classic", "name": "传统 NLP", "eg": ["序列标注", "机器翻译", "BERT 类模型"]},
+      {"code": "gnn", "name": "图学习", "eg": ["GNN", "图表示"]},
+      {"code": "optim", "name": "优化与训练理论", "eg": ["优化器", "泛化", "归一化", "初始化"]},
+      {"code": "other", "name": "其他", "eg": []}
+    ]}
+  ]
+}
