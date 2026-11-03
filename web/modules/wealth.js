@@ -196,9 +196,11 @@ function timingPanel(t) {
   }).join('');
   return `<div class="wl-timing">
     <div class="row between"><b>估值择时 · ${esc(t.index)}</b><span class="tag ${t.zone === 'cheap' ? 'ok' : t.zone === 'dear' ? 'warn' : 'gray'}">${esc(t.zone_label)} · 综合分位 ${Math.round(t.score * 100)}%</span></div>
+    ${t.decision ? `<div class="wl-decision"><div><span class="tag ${{ buy: 'ok', small_buy: 'ok', no_add: 'warn', sell: 'warn', wait: 'warn' }[t.decision.action] || ''}">${esc(t.decision.label)}</span> <b>${esc(t.decision.reason)}</b></div><p>${esc(t.decision.plan)}</p><p class="muted wl-small">${esc(t.decision.evidence)}</p></div>` : ''}
     <div class="wl-mini">${t.cards.map((c) => `<div><span>${esc(c.label)}</span><b>${esc(c.value)}</b><small>${esc(c.note)}</small></div>`).join('')}</div>
     ${t.levels?.headline ? `<p class="wl-levels">${esc(t.levels.headline)}</p>` : ''}
     <div class="wl-scroll">${table([`${Number(t.since.slice(0, 4)) + 3} 年起每周估值`, t.levels?.header || '对应价格', '样本', '之后一年中位', '最差', '亏损占比'], rows)}</div>
+    ${t.ma ? `<div class="wl-ma"><b>均线参考</b><p>${esc(t.ma.text)}</p><p class="muted wl-small">${esc(t.ma.verdict)}</p></div>` : ''}
     <p class="muted wl-small">估值日 ${esc(t.as_of)}${t.cgb_date ? `，国债日 ${esc(t.cgb_date)}` : ''}。分位只用当时之前的历史（自 ${esc(t.since.slice(0, 4))} 年），样本约 ${Math.round(Object.values(t.zones).reduce((sum, z) => sum + (z?.n || 0), 0) / 52)} 年。${esc(t.note || '')}${t.stale ? '<b class="wl-warn">数据源暂不可用，显示缓存</b>' : ''}</p>
   </div>`;
 }
@@ -770,6 +772,8 @@ const CSS = `
 .wl-mini { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
 .wl-mini > div { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--bg-2); border-radius: 10px; min-width: 0; }
 .wl-mini span { font-size: 12px; color: var(--muted); } .wl-mini b { font: 700 18px var(--serif); } .wl-mini small { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.wl-decision { padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; } .wl-decision p { margin: 4px 0 0; }
+.wl-ma { padding: 8px 10px; background: var(--bg-2); border-radius: 10px; font-size: 13px; line-height: 1.5; } .wl-ma p { margin: 4px 0 0; }
 .wl-levels { margin: 0; font-weight: 600; font-size: 13.5px; line-height: 1.5; } .wl-scroll { overflow-x: auto; }
 .wl-timing { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .wl-pacing { font-size: 13px; margin: 0; } .wl-pacing b { margin-right: 8px; color: var(--accent); }

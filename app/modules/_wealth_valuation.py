@@ -21,6 +21,16 @@ HK_REPORT_URL = ("https://datacenter.eastmoney.com/securities/api/data/v1/get?re
                  "&columns=REPORT_DATE,DATE_TYPE_CODE,OPERATE_INCOME,ISSUED_COMMON_SHARES,EPS_TTM&filter=(SECUCODE%3D%22{code}%22)"
                  "&pageNumber=1&pageSize=60&sortTypes=-1&sortColumns=REPORT_DATE&source=F10&client=PC")
 MEITUAN = "3690.HK"
+MA_WINDOW_WEEKS = 156       # 均线偏离的分位只看最近 3 年
+MA_MIN_ZONE_WEEKS = 26
+MA_MIN_GAP = 0.05           # 偏低档比偏高档之后一年中位至少高这么多，才算有区分度
+MA_LABELS = {"cheap": "偏低", "fair": "中性", "dear": "偏高"}
+RANK = {"cheap": -1, "fair": 0, "dear": 1}
+VALUATION_STUCK = 0.9       # 九成时间都在同一档，估值就分不出贵贱
+BUY_MAX_LOSS = 0.5          # 这个位置买入，一年后亏的占比超过它就不买
+SELL_MIN_LOSS = 0.3         # 这个位置之后一年亏的占比不到它，就先不卖
+ACTIONS = {-2: "buy", -1: "small_buy", 0: "hold", 1: "no_add", 2: "sell"}
+ACTION_LABELS = {"buy": "分批买", "small_buy": "可少量买", "hold": "持有不动", "no_add": "不追加", "sell": "分批减", "wait": "先不买"}
 REPORT_LAG_DAYS = 90        # 港股财报没有公告日字段：报告期结束 90 天后才算市场知道，不偷看
 SEC_LAG_DAYS = 75           # SEC 明细里部分老数据只留了后来重述的公布日；大公司 60 天内必须出财报，超过这个天数就按它算
 _refreshing = threading.Lock()
@@ -108,6 +118,8 @@ def _at(series: Sequence[Sequence[Any]], day: str) -> Sequence[Any] | None:
 
 
 def fetch_source(name: str) -> Any:
+    if name.startswith("bars:"):
+        return _daily(name.removeprefix("bars:"))["bars"]
     if name == "us10y":
         return _daily("^TNX")["bars"]
     if name == "QQQ":
@@ -123,7 +135,7 @@ def fetch_source(name: str) -> Any:
     raise ValueError(name)
 
 
-SOURCES = ("us10y", "QQQ", "GOOGL", "MSFT", MEITUAN)
+SOURCES = ("us10y", "QQQ", "GOOGL", "MSFT", MEITUAN, "bars:QQQ", f"bars:{tp.TIMING_SYMBOL}")
 
 
 def refresh(cache_dir: Path) -> dict[str, Any]:
@@ -151,7 +163,9 @@ def load(cache_dir: Path) -> dict[str, Any] | None:
     """不让页面等数据源：有缓存就直接用，过期或没有缓存都在后台刷新，刷好之后下次打开才有表。"""
     cache = cache_dir / CACHE_FILE
     stored = json.loads(cache.read_text()) if cache.exists() else None
-    if time.time() - (stored or {}).get("fetched_at", 0) >= tp.CACHE_HOURS * 3600 and _refreshing.acquire(blocking=False):
+    expired = time.time() - (stored or {}).get("fetched_at", 0) >= tp.CACHE_HOURS * 3600
+    incomplete = any(name not in (stored or {}).get("sources", {}) for name in SOURCES)
+    if (expired or incomplete) and _refreshing.acquire(blocking=False):
         def run() -> None:
             try:
                 refresh(cache_dir)
@@ -161,6 +175,134 @@ def load(cache_dir: Path) -> dict[str, Any] | None:
                 _refreshing.release()
         threading.Thread(target=run, daemon=True).start()
     return stored
+
+
+def _stats(values: Sequence[float | None]) -> dict[str, Any] | None:
+    known = sorted(v for v in values if v is not None)
+    return {"n": len(known), "median": known[len(known) // 2], "loss": sum(v < 0 for v in known) / len(known)} if known else None
+
+
+def _enough(stats: dict[str, Any] | None) -> bool:
+    return bool(stats) and stats["n"] >= MA_MIN_ZONE_WEEKS
+
+
+def _ma_useful(zones: dict[str, dict[str, Any] | None]) -> bool:
+    if not all(_enough(z) for z in zones.values()):
+        return False
+    low, mid, high = (zones[k]["median"] for k in tp.TIMING_LABELS)
+    return low > mid > high and low - high >= MA_MIN_GAP
+
+
+def ma_reference(bars: Sequence[Sequence[Any]], price: float) -> dict[str, Any] | None:
+    """现价相对 200 日均线的位置和对应价格。每周取样，分位只用当时之前 3 年，看之后的价格涨跌（不含分红）。"""
+    days, closes = [b[0] for b in bars], [b[1] for b in bars]
+    if len(closes) < 200 or (datetime.now(UTC).date() - date.fromisoformat(days[-1])).days > 14:
+        return None
+    weekly: dict[Any, tuple[int, float]] = {}
+    total = sum(closes[:199])
+    for i in range(199, len(closes)):
+        total += closes[i]
+        weekly[date.fromisoformat(days[i]).isocalendar()[:2]] = (i, closes[i] / (total / 200) - 1)
+        total -= closes[i - 199]
+    if len(weekly) < MA_WINDOW_WEEKS:
+        return None
+
+    def ahead(i: int, n: int) -> float | None:
+        day = (date.fromisoformat(days[i]) + timedelta(days=n)).isoformat()
+        return closes[bisect_right(days, day) - 1] / closes[i] - 1 if day <= days[-1] else None
+
+    history: list[float] = []
+    rows = []
+    for i, deviation in weekly.values():
+        history.append(deviation)
+        if len(history) >= MA_WINDOW_WEEKS:
+            window = history[-MA_WINDOW_WEEKS:]
+            rows.append({"day": days[i], "zone": tp.timing_zone(sum(v <= deviation for v in window) / len(window)), "year": ahead(i, 365), "quarter": ahead(i, 91)})
+    zones = {zone: _stats([r["year"] for r in rows if r["zone"] == zone]) for zone in tp.TIMING_LABELS}
+    ma50, ma200 = sum(closes[-50:]) / 50, sum(closes[-200:]) / 200
+    ordered = sorted(history[-MA_WINDOW_WEEKS:])
+    low, high = ma200 * (1 + ordered[int(len(ordered) * 0.3)]), ma200 * (1 + ordered[int(len(ordered) * 0.7)])
+    zone = "cheap" if price < low else "dear" if price > high else "fair"
+    return {"ma50": ma50, "ma200": ma200, "low": low, "high": high, "zone": zone, "zone_label": MA_LABELS[zone], "zones": zones,
+            "useful": _ma_useful(zones), "rows": rows}
+
+
+def decision(valuation_zone: str, replay: Sequence[Sequence[str]], cheap: float | None, dear: float | None, ma: dict[str, Any], price: float) -> dict[str, Any]:
+    """估值看长期贵不贵，均线看这段涨跌过头没有，两边合成一个买卖动作。规则对所有标的相同；
+    每个位置在这个标的上的历史结果只用来否决：买了多半亏就不买，卖了多半还涨就先不卖。"""
+    replay_days = [r[0] for r in replay]
+    rows = []
+    for row in ma["rows"]:
+        i = bisect_right(replay_days, row["day"]) - 1
+        if i >= 0 and (date.fromisoformat(row["day"]) - date.fromisoformat(replay_days[i])).days <= 14:
+            rows.append({**row, "valuation": replay[i][1]})
+    # 美团这种估值一路走低的，估值几乎永远“便宜”，说明不了贵贱，只看均线
+    stuck = not rows or max(sum(r["valuation"] == z for r in rows) for z in tp.TIMING_LABELS) / len(rows) >= VALUATION_STUCK
+    score = lambda v, m: RANK[m] * 2 if stuck else RANK[v] + RANK[m]
+    tiers = {}
+    for tier in range(-2, 3):
+        same = [r for r in rows if score(r["valuation"], r["zone"]) == tier]
+        tiers[tier] = {"year": _stats([r["year"] for r in same]), "quarter": _stats([r["quarter"] for r in same])}
+    buy_vetoed = lambda t: _enough(tiers[t]["year"]) and tiers[t]["year"]["loss"] > BUY_MAX_LOSS
+    sell_vetoed = _enough(tiers[2]["year"]) and tiers[2]["year"]["loss"] < SELL_MIN_LOSS
+
+    def action(tier: int) -> str:
+        if tier <= 0 and buy_vetoed(tier):
+            return "wait"
+        if tier == 2 and sell_vetoed:
+            return "no_add"
+        return ACTIONS[tier]
+
+    tier = score(valuation_zone, ma["zone"])
+    act = action(tier)
+    buy_line = ma["low"] if stuck or not cheap else min(cheap, ma["low"])
+    sell_line = ma["high"] if stuck or not dear else max(dear, ma["high"])
+    text = tp.price_text
+    reason = f"均线{MA_LABELS[ma['zone']]}，估值只看不算（长期偏一边，分不出贵贱）" if stuck else f"估值{tp.TIMING_LABELS[valuation_zone]}，均线{MA_LABELS[ma['zone']]}"
+
+    def seen(stats: dict[str, Any] | None, span: str) -> str:
+        if not stats:
+            return f"{span}没有样本"
+        return f"{span}中位 {stats['median'] * 100:+.1f}%、亏损占比 {stats['loss'] * 100:.0f}%（{stats['n']} 周{'，样本少' if not _enough(stats) else ''}）"
+
+    plans = []
+    if action(-2) == "buy":
+        plans.append(f"分批买线 {text(buy_line)}" + ("（已到）" if price <= buy_line else f"（{(buy_line / price - 1) * 100:+.1f}%）"))
+    else:
+        plans.append(f"偏低线 {text(buy_line)} 到了也不买：历史上这个位置多半亏")
+    if action(2) == "sell":
+        plans.append(f"分批减线 {text(sell_line)}" + ("（已到）" if price >= sell_line else f"（{(sell_line / price - 1) * 100:+.1f}%）"))
+    else:
+        plans.append(f"偏高线 {text(sell_line)} 到了也先不卖，只是不追加：历史上这个位置之后多半还涨")
+    quarter = tiers[tier]["quarter"]
+    warning = "短期可能继续跌，分批别一次买满。" if act in ("buy", "small_buy") and quarter and quarter["loss"] > 0.5 else ""
+    return {"action": act, "label": ACTION_LABELS[act], "tier": tier, "reason": reason, "stuck": stuck, "buy_line": buy_line, "sell_line": sell_line,
+            "plan": "；".join(plans) + "。", "tiers": {str(k): v for k, v in tiers.items()},
+            "evidence": f"同样位置历史：{seen(tiers[tier]['year'], '之后一年')}；{seen(quarter, '之后 3 个月')}。{warning}统计估算，不构成投资建议。"}
+
+
+def attach_ma(timing: dict[str, Any] | None, symbol: str, data: dict[str, Any] | None, price: float) -> dict[str, Any] | None:
+    """给分档表加均线参考和合并后的买卖判断。只作展示，不进模型、不改挂单和提醒。"""
+    if not timing:
+        return timing
+    replay = timing.pop("replay", ())
+    sources = (data or {}).get("sources", {})
+    source = sources.get(symbol)
+    bars = source.get("bars") if isinstance(source, dict) else sources.get(f"bars:{symbol}")
+    ma = ma_reference(bars, price) if bars else None
+    if not ma:
+        return timing
+    text = tp.price_text
+    cheap, dear = timing["levels"]["cheap_below"], timing["levels"]["dear_above"]
+    judged = decision(timing["zone"], replay, cheap, dear, ma, price)
+    gap = lambda v: f"{text(v)}（{(v / price - 1) * 100:+.1f}%）"
+    zones = ma.pop("rows") and ma["zones"]
+    record = " / ".join(f"{MA_LABELS[k]} {z['median'] * 100:+.1f}%" if (z := zones[k]) else f"{MA_LABELS[k]} 无样本" for k in tp.TIMING_LABELS)
+    ma["text"] = f"现价 {text(price)} {ma['zone_label']}：50 日 {text(ma['ma50'])} · 200 日 {text(ma['ma200'])} · 偏低线 {gap(ma['low'])} · 偏高线 {gap(ma['high'])}"
+    ma["verdict"] = f"只看均线位置，之后一年中位（不含分红）：{record}。" + ("历史上有区分度。" if ma["useful"] else "只作价位参考，历史上不能预测涨跌。")
+    if timing.get("metric") == "PS":
+        timing["levels"] = {**timing["levels"], "headline": f"市销率这张表只看估值水平，不是目标价；操作价位看上面的判断。现价 {text(price)} {timing['levels']['currency']}。"}
+    return {**timing, "ma": ma, "decision": judged}
 
 
 def _earnings_timing(symbol: str, weeks: list[tuple], y: float, closes: Sequence[float], ts: Sequence[int], price: float,

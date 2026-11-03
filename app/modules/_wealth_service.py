@@ -394,7 +394,7 @@ def _sell_timing(symbol: str, currency: str, price: float) -> dict[str, Any] | N
         data = asset_valuation.load(DATA)
         bars = ((data or {}).get("sources", {}).get(symbol) or {}).get("bars") or []
         ts = [int(datetime.fromisoformat(day).replace(tzinfo=UTC).timestamp()) for day, _ in bars]
-        return asset_valuation.timing_for(symbol, data, [c for _, c in bars], ts, price, currency=currency)
+        return asset_valuation.attach_ma(asset_valuation.timing_for(symbol, data, [c for _, c in bars], ts, price, currency=currency), symbol, data, price)
     except Exception:
         return None
 
@@ -587,14 +587,15 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
         timing = tp.dividend_timing(valuation_data, h["close"], h["ts"]) if valuation_data else None
     except Exception:       # 估值源是可选的：没有它就只用趋势信号
         valuation_data, timing = None, None
-    def asset_timing(symbol: str, closes: list[float], price: float, currency: str, forward_pe: float | None = None) -> dict[str, Any] | None:
-        """其他标的的估值分档：只展示，不进模型、不改挂单。"""
+    def asset_timing(symbol: str, closes: list[float], price: float, currency: str, forward_pe: float | None = None, own: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """其他标的的估值分档和各标的的均线参考：只展示，不进模型、不改挂单。"""
         try:
-            return asset_valuation.timing_for(
-                symbol, asset_valuation.load(DATA), closes, histories[symbol]["ts"][-len(closes):], price, currency=currency, forward_pe=forward_pe,
-                cgb=(valuation_data or {}).get("cgb", ()), stale_cgb=bool((valuation_data or {}).get("stale")))
+            data = asset_valuation.load(DATA)
+            return asset_valuation.attach_ma(own or asset_valuation.timing_for(
+                symbol, data, closes, histories[symbol]["ts"][-len(closes):], price, currency=currency, forward_pe=forward_pe,
+                cgb=(valuation_data or {}).get("cgb", ()), stale_cgb=bool((valuation_data or {}).get("stale"))), symbol, data, price)
         except Exception:
-            return None
+            return own
     for symbol in tp.FOCUS:
         closes, quote = _with_latest_price(symbol, histories[symbol])
         closes_by_symbol[symbol] = closes
@@ -624,7 +625,7 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
             "pacing": (own_timing or {}).get("pacing") or tp.PACING[result["action"]],
             "curve": [{"target": g, "probability": tp.hit_probability(result["mu"], result["spread"], g)} for g in tp.CURVE],
             "similar": similar, "valuation": valuation, "news": news, "timing": own_timing, "reasons": lines,
-            "val_timing": own_timing or asset_timing(symbol, histories[symbol]["close"], closes[-1], asset(symbol)["currency"], valuation.get("forwardPE")),
+            "val_timing": asset_timing(symbol, histories[symbol]["close"], closes[-1], asset(symbol)["currency"], valuation.get("forwardPE"), own_timing),
         })
     # 债基组合：按净值，没有实时报价、趋势和新闻背景
     bond = histories[tp.BOND]

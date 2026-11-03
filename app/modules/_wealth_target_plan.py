@@ -252,7 +252,7 @@ def zone_timing(weeks: Sequence[Sequence[Any]], directions: Sequence[int], metri
         i = bisect_right(price_days, day) - 1
         return closes[i] if i >= 0 else None
 
-    rows = []
+    rows, replay = [], []
     for i, week in enumerate(weeks):
         day = week[0]
         if (date.fromisoformat(day) - date.fromisoformat(weeks[0][0])).days < TIMING_MIN_YEARS * 365:
@@ -262,6 +262,7 @@ def zone_timing(weeks: Sequence[Sequence[Any]], directions: Sequence[int], metri
         ahead = (date.fromisoformat(day) + timedelta(days=365)).isoformat()
         if day >= price_days[0] and ahead <= price_days[-1]:
             rows.append((timing_zone(score), at(ahead) / at(day) - 1))
+        replay.append((day, timing_zone(score)))
     zones = {}
     for zone in TIMING_LABELS:
         values = sorted(r for z, r in rows if z == zone)
@@ -277,12 +278,16 @@ def zone_timing(weeks: Sequence[Sequence[Any]], directions: Sequence[int], metri
     zone = timing_zone(score)
     edges = (_first_above(score_at, TIMING_ZONES[0], False), _first_above(score_at, TIMING_ZONES[1], True))
     return {"as_of": day, "since": weeks[0][0], "score": score, "zone": zone, "zone_label": TIMING_LABELS[zone], "zones": zones,
-            "percentiles": shares, "move": move, "edges": [e / move if e else None for e in edges]}
+            "percentiles": shares, "move": move, "edges": [e / move if e else None for e in edges], "replay": replay}
+
+
+def price_text(value: float) -> str:
+    return f"{value:.3f}" if value < 10 else f"{value:.2f}"
 
 
 def price_levels(core: dict[str, Any], price: float, currency: str, metric: str, metric_now: float) -> dict[str, Any]:
     """The zone edges as prices, assuming earnings (or sales) stay where they are."""
-    text = lambda v: f"{v:.3f}" if v < 10 else f"{v:.2f}"
+    text = price_text
     cheap, dear = (price * e if e else None for e in core["edges"])
     low, high = (metric_now * e if e else None for e in core["edges"])
     if cheap is None or dear is None:

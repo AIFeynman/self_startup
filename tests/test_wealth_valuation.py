@@ -106,6 +106,101 @@ def test_loss_making_earnings_or_short_history_shows_no_table():
     assert av.timing_for("QQQ", None, closes, ts, 100, currency="USD") is None
 
 
+def _bars(level, years=8):
+    start = datetime.now(UTC).date() - timedelta(days=int(years * 365))
+    return [[(start + timedelta(days=i)).isoformat(), level(i)] for i in range(int(years * 365) + 1)]
+
+
+class TestMaReference:
+    def test_lines_bracket_the_average_and_follow_the_price(self):
+        bars = _bars(lambda i: 100 + 20 * math.sin(i / 90))
+        ma = av.ma_reference(bars, bars[-1][1])
+        assert ma["low"] < ma["high"]
+        assert ma["ma200"] == pytest.approx(sum(b[1] for b in bars[-200:]) / 200)
+        assert av.ma_reference(bars, ma["low"] * 0.99)["zone"] == "cheap"
+        assert av.ma_reference(bars, ma["high"] * 1.01)["zone"] == "dear"
+        assert av.ma_reference(bars, (ma["low"] + ma["high"]) / 2)["zone"] == "fair"
+
+    def test_useful_only_when_higher_positions_did_worse_by_enough(self):
+        zone = lambda median, n=52: {"n": n, "median": median, "loss": 0.2}
+        assert av._ma_useful({"cheap": zone(0.2), "fair": zone(0.1), "dear": zone(0.0)})
+        assert not av._ma_useful({"cheap": zone(0.1), "fair": zone(0.2), "dear": zone(0.0)})
+        assert not av._ma_useful({"cheap": zone(0.12), "fair": zone(0.11), "dear": zone(0.1)})
+        assert not av._ma_useful({"cheap": zone(0.2, 5), "fair": zone(0.1), "dear": zone(0.0)})
+        assert not av._ma_useful({"cheap": None, "fair": zone(0.1), "dear": zone(0.0)})
+
+    def test_short_or_old_history_gives_nothing(self):
+        assert av.ma_reference(_bars(lambda i: 100.0, years=1), 100) is None
+        old = [[(date(2020, 1, 1) + timedelta(days=i)).isoformat(), 100.0] for i in range(1400)]
+        assert av.ma_reference(old, 100) is None
+
+    def test_attach_strips_the_replay_and_keeps_the_table_without_bars(self):
+        timing = {"metric": "PE", "zone": "fair", "replay": [("2020-01-01", "fair")], "levels": {"currency": "USD", "headline": "old", "cheap_below": 90, "dear_above": 110}}
+        assert av.attach_ma(timing, tp.BOND, {"sources": {}}, 1.0) == {k: v for k, v in timing.items() if k != "replay"}
+        assert av.attach_ma(None, "QQQ", {"sources": {}}, 1.0) is None
+
+    def test_sales_table_says_it_is_not_a_target_price(self):
+        bars = _bars(lambda i: 100 + 20 * math.sin(i / 90))
+        timing = {"metric": "PS", "zone": "cheap", "replay": [(b[0], "cheap") for b in bars[::7]], "levels": {"currency": "HKD", "headline": "old", "cheap_below": 180, "dear_above": 447}}
+        out = av.attach_ma(timing, "3690.HK", {"sources": {"3690.HK": {"bars": bars}}}, 100)
+        assert "不是目标价" in out["levels"]["headline"] and out["decision"]["stuck"] and "rows" not in out["ma"]
+        # 估值分不出贵贱时，价位只来自均线，不用市销率算出来的 180 / 447
+        assert out["decision"]["buy_line"] == out["ma"]["low"] and out["decision"]["sell_line"] == out["ma"]["high"]
+
+
+def _ma(zone, rows):
+    return {"zone": zone, "low": 90.0, "high": 110.0, "rows": rows}
+
+
+def _rows(pairs, year, quarter=0.01):
+    """pairs: (估值档, 均线档) 各放 30 周。"""
+    start = date(2020, 1, 3)
+    rows, replay = [], []
+    for k, (v, m) in enumerate(p for p in pairs for _ in range(30)):
+        day = (start + timedelta(days=7 * k)).isoformat()
+        replay.append((day, v))
+        rows.append({"day": day, "zone": m, "year": year(v, m), "quarter": quarter})
+    return rows, replay
+
+
+class TestDecision:
+    MIXED = [("cheap", "cheap"), ("cheap", "fair"), ("fair", "fair"), ("dear", "fair"), ("dear", "dear")]
+
+    def test_both_sides_combine_into_five_actions(self):
+        rows, replay = _rows(self.MIXED, lambda v, m: -0.1 if v == m == "dear" else 0.1)
+        cases = {("cheap", "cheap"): "buy", ("cheap", "fair"): "small_buy", ("fair", "cheap"): "small_buy", ("fair", "fair"): "hold",
+                 ("cheap", "dear"): "hold", ("dear", "fair"): "no_add", ("fair", "dear"): "no_add", ("dear", "dear"): "sell"}
+        for (v, m), action in cases.items():
+            assert av.decision(v, replay, 80.0, 120.0, _ma(m, rows), 100.0)["action"] == action, (v, m)
+
+    def test_lines_need_both_sides_to_agree(self):
+        rows, replay = _rows(self.MIXED, lambda v, m: -0.1 if v == m == "dear" else 0.1)
+        out = av.decision("fair", replay, 80.0, 120.0, _ma("fair", rows), 100.0)
+        assert (out["buy_line"], out["sell_line"]) == (80.0, 120.0)
+        assert "分批买线 80.00（-20.0%）" in out["plan"] and "分批减线 120.00（+20.0%）" in out["plan"]
+
+    def test_history_can_veto_a_buy_or_a_sell(self):
+        losing = lambda v, m: -0.2 if v == m == "cheap" else 0.1
+        rows, replay = _rows(self.MIXED, losing)
+        out = av.decision("cheap", replay, 80.0, 120.0, _ma("cheap", rows), 100.0)
+        assert out["action"] == "wait" and "到了也不买" in out["plan"]
+        rows, replay = _rows(self.MIXED, lambda v, m: 0.1)
+        out = av.decision("dear", replay, 80.0, 120.0, _ma("dear", rows), 100.0)
+        assert out["action"] == "no_add" and "到了也先不卖" in out["plan"]
+
+    def test_stuck_valuation_is_ignored(self):
+        rows, replay = _rows([("cheap", "cheap"), ("cheap", "fair"), ("cheap", "dear")], lambda v, m: -0.1 if m == "dear" else 0.1)
+        out = av.decision("cheap", replay, 180.0, 447.0, _ma("fair", rows), 100.0)
+        assert out["stuck"] and out["action"] == "hold" and (out["buy_line"], out["sell_line"]) == (90.0, 110.0)
+        assert av.decision("cheap", replay, 180.0, 447.0, _ma("cheap", rows), 100.0)["action"] == "buy"
+
+    def test_thin_history_keeps_the_rule_and_says_so(self):
+        rows, replay = _rows(self.MIXED, lambda v, m: 0.1)
+        rows, replay = rows[:-20], replay[:-20]
+        out = av.decision("dear", replay, 80.0, 120.0, _ma("dear", rows), 100.0)
+        assert out["action"] == "sell" and "样本少" in out["evidence"]
+
+
 def test_refresh_keeps_the_old_copy_of_a_failed_source(tmp_path, monkeypatch):
     def fetch(name):
         if name == "QQQ":
@@ -131,5 +226,6 @@ def test_load_never_waits_for_the_sources(tmp_path, monkeypatch):
     assert called == [tmp_path]
     (tmp_path / av.CACHE_FILE).write_text(json.dumps({"fetched_at": time.time(), "sources": {"QQQ": []}}))
     called.clear()
-    assert av.load(tmp_path)["sources"] == {"QQQ": []}
+    (tmp_path / av.CACHE_FILE).write_text(json.dumps({"fetched_at": time.time(), "sources": {name: [] for name in av.SOURCES}}))
+    assert set(av.load(tmp_path)["sources"]) == set(av.SOURCES)
     assert called == []
