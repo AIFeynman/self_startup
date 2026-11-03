@@ -1,6 +1,7 @@
 // 知识库：两层。概念层是「我看过、想过、判断过」的内容按概念组织成的图谱（像 Obsidian）；
 // 来源层是各板块同步来的 markdown 原文，可检索、可批注。
-// 路由：#kb（图谱）#kb/topics #kb/stream #kb/source · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
+// 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
+// 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
 import { annotate } from './_annotate.js';
 
 const CSS = `
@@ -40,6 +41,39 @@ const CSS = `
 .kb-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 13px; margin: -6px 0 4px; align-items: center; }
 .kb-day { font: 600 13px var(--font); color: var(--muted); margin: 18px 0 8px; }
 .kb-status { font-size: 12.5px; color: var(--muted); }
+.kb-ty { font-size: 11.5px; border-radius: 5px; padding: 1px 7px; color: #fff; flex: none; }
+.kb-st { font-size: 11.5px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line-2); color: var(--muted); flex: none; white-space: nowrap; }
+.kb-st.holds, .kb-st.resolved { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+.kb-st.revised { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.kb-st.overturned { color: var(--err); border-color: var(--err); background: var(--err-soft); }
+.kb-st.due { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.kb-jr { display: flex; gap: 8px; align-items: baseline; padding: 7px 0; cursor: pointer; }
+.kb-jr .d { color: var(--muted); font-size: 12px; width: 44px; flex: none; font-variant-numeric: tabular-nums; }
+.kb-jr .c { flex: 1; min-width: 0; font-size: 14px; line-height: 1.55; }
+.kb-jr:hover .c { color: var(--accent); }
+.kb-jd { margin: 2px 0 10px 52px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; }
+.kb-jd blockquote { margin: 0 0 8px; padding: 2px 0 2px 10px; border-left: 3px solid var(--line-2); white-space: pre-wrap; }
+.kb-ev { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 8px 0; }
+.kb-ev b { font-weight: 600; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.kb-ag { padding: 8px 12px; border-radius: var(--radius-sm); background: var(--focus); margin: 8px 0; }
+.kb-rv { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.kb-rv textarea { width: 100%; min-height: 38px; resize: vertical; font: inherit; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--panel); color: var(--text); }
+.kb-rv button { font-size: 12.5px; padding: 3px 10px; }
+.kb-rv input[type=date] { width: auto; font: inherit; font-size: 12.5px; padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--panel); color: var(--text); }
+.kb-hist { margin: 6px 0 0; padding: 0; list-style: none; color: var(--muted); }
+.kb-hist li { margin: 2px 0; }
+.kb-th { margin-bottom: 14px; }
+.kb-th h3 { margin: 0 0 4px; font: 600 17px/1.45 var(--serif); }
+.kb-th .stance { font-size: 13.5px; }
+.kb-shift { margin: 8px 0 4px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 7px 7px 0; font-size: 13px; }
+.kb-tl { margin: 10px 0 0 4px; border-left: 2px solid var(--line-2); padding-left: 12px; }
+.kb-tl > .kb-jr { position: relative; }
+.kb-tl > .kb-jr::before { content: ''; position: absolute; left: -18px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line-2); }
+.kb-tl > .kb-jr.chg::before { border-color: var(--accent); background: var(--accent); }
+.kb-new { display: grid; gap: 8px; padding: 14px 16px; margin-bottom: 14px; }
+.kb-new textarea { width: 100%; min-height: 60px; font: inherit; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); resize: vertical; }
+.kb-new .row select, .kb-new .row input { width: auto; font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--panel); color: var(--text); }
+@media (max-width: 640px) { .kb-jd { margin-left: 0; } }
 `;
 
 // 主题配色：深浅两种主题下都看得清；「未归类」用灰
@@ -53,42 +87,44 @@ const enc = encodeURIComponent;
 const cLink = (name) => '#kb/c/' + enc(name);
 const tLink = (name) => '#kb/t/' + enc(name);
 const dLink = (path) => '#kb/doc/' + enc(path);
+const jLink = (q) => '#kb/judge/' + enc(q);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export default {
   async render(el, ctx) {
     const { h } = ctx;
     if (!document.getElementById('kb-style')) document.head.append(h('style#kb-style', {}, CSS));
-    const [tab = 'graph', ...rest] = ctx.sub;
+    const [tab = 'judge', ...rest] = ctx.sub;
     let arg = rest.join('/');
     try { arg = decodeURIComponent(arg); } catch { /* 保持原样 */ }
     if (tab === 'c') return conceptPage(el, ctx, arg);
     if (tab === 't') return topicPage(el, ctx, arg);
     if (tab === 'doc') return docPage(el, ctx, arg);
-    return home(el, ctx, tab);
+    return home(el, ctx, tab, arg);
   },
 };
 
 // ---------- 首页：页头 + 搜索 + 四个视图 ----------
-async function home(el, ctx, tab) {
+async function home(el, ctx, tab, arg = '') {
   const { api, h, ui, ask, toast } = ctx;
   const [g, st] = await Promise.all([api.get('/api/kb/graph'), api.get('/api/kb/stats')]);
-  const tabs = [['graph', '图谱'], ['topics', '主题'], ['stream', '最近思考'], ['source', '来源库']];
-  const cur = tabs.some(([id]) => id === tab) ? tab : 'graph';
+  const tabs = [['judge', '判断'], ['graph', '图谱'], ['topics', '主题'], ['stream', '最近思考'], ['source', '来源库']];
+  const cur = tabs.some(([id]) => id === tab) ? tab : 'judge';
   const tabBar = h('div.tabs', { style: { marginBottom: 0 } }, tabs.map(([id, name]) =>
-    h('button' + (cur === id ? '.active' : ''), { onclick: () => { location.hash = id === 'graph' ? '#kb' : '#kb/' + id; } }, name)));
+    h('button' + (cur === id ? '.active' : ''), { onclick: () => { location.hash = id === 'judge' ? '#kb' : '#kb/' + id; } }, name)));
   const status = h('span.kb-status');
   const refreshBtn = h('button.outline', { title: '用大模型把新的判断和材料整理进概念图谱', onclick: () => runRefresh() }, [ui.icon('refresh'), '整理']);
   const results = h('div');
 
   el.append(
-    ui.pageHead('知识库', `${g.nodes.length} 个概念 · ${g.signals.judgment || 0} 条我的判断 · ${g.signals.material || 0} 份看过的材料 · 来源文件 ${st.total} 份`, [refreshBtn]),
+    ui.pageHead('知识库', `${g.nodes.length} 个概念 · ${g.signals.judgment || 0} 条我写下的想法 · ${g.signals.material || 0} 份看过的材料 · 来源文件 ${st.total} 份`, [refreshBtn]),
     ui.composer({
       placeholder: '搜概念或关键词，或切到「问 Agent」用一句话问你的积累…',
       modes: [{ id: 'search', label: '搜索', placeholder: '搜概念或关键词（中文 3 个字以上更准）…' },
+        { id: 'judge', label: '记判断', placeholder: '写下一个判断或预测，比如：开源 Agent 框架年底会收敛到两三家' },
         { id: 'ask', label: '问 Agent', placeholder: '比如：我之前关于 Agent 评测有哪些判断？' }],
       hint: 'Obsidian 可直接打开 ' + st.dir,
-      onSubmit: (t, mode) => (mode === 'ask' ? ask(t) : search(t)),
+      onSubmit: (t, mode) => (mode === 'ask' ? ask(t) : mode === 'judge' ? addJudgment(ctx, { text: t }) : search(t)),
     }),
     results,
     h('div.row', { style: { margin: '14px 0 12px', alignItems: 'center' } }, [tabBar, h('span.grow'), status]),
@@ -98,7 +134,8 @@ async function home(el, ctx, tab) {
   showStatus(g.status, g.stale);
   if (g.status.running) poll();
 
-  if (cur === 'graph') graphTab(body, ctx, g);
+  if (cur === 'judge') judgeTab(body, ctx, arg);
+  else if (cur === 'graph') graphTab(body, ctx, g);
   else if (cur === 'topics') topicsTab(body, ctx, g);
   else if (cur === 'stream') streamTab(body, ctx);
   else sourceTab(body, ctx, st);
@@ -109,7 +146,7 @@ async function home(el, ctx, tab) {
   }
   async function runRefresh() {
     await api.post('/api/kb/graph/refresh');
-    toast('开始整理：抽概念、归主题、写归纳，约 1 分钟');
+    toast('开始整理：抽概念、归主题、写归纳、给判断归类和评价，约 1–2 分钟');
     poll();
   }
   async function poll() {
@@ -468,7 +505,9 @@ function judgmentCard(ctx, s, n, self = '') {
   const norm = (x) => (x || '').replace(/\s/g, '');
   const dup = !s.claim || norm(s.mine).startsWith(norm(s.claim).slice(0, 20));
   return h('div.kb-j', n ? { 'data-j': String(n) } : {}, [
-    h('div.row', {}, [h('span.tag', {}, s.sub_name), h('span.muted.grow', {}, s.date)]),
+    h('div.row', {}, [h('span.tag', {}, s.sub_name), s.type ? typeTag(h, s.type) : null, h('span.muted.grow', {}, s.date),
+      s.thread ? h('a', { href: jLink(s.thread), title: '这条判断所在的问题线' }, '问题线：' + s.thread) : null,
+      s.type ? statusTag(h, s) : null]),
     h('div.claim', {}, [n ? h('span.n', {}, `[${n}]`) : null, s.claim || s.mine]),
     s.mine && !dup ? h('blockquote', {}, s.mine) : null,
     s.context ? h('div.ctx.clamp2', {}, '针对：' + s.context) : null,
@@ -477,6 +516,172 @@ function judgmentCard(ctx, s, n, self = '') {
       s.path && s.link ? h('a', { href: dLink(s.path), title: '知识库里的 markdown' }, '原文') : null,
       h('span.grow'),
       h('span.kb-cl', {}, s.concepts.filter((x) => x !== self).map((x) => h('a', { href: cLink(x) }, x))),
+    ]),
+  ]);
+}
+
+// ---------- 判断台账 ----------
+const TYPE_COLOR = { 观点: '#3f7cac', 预测: '#8a5cb8', 评价: '#2a9d8f', 疑问: '#b7791f' };
+const STATUS_NAME = { open: '未复查', holds: '仍成立', revised: '修正过', overturned: '已推翻', pending: '还看不出', resolved: '已解决' };
+const typeTag = (h, t) => h('span.kb-ty', { style: { background: TYPE_COLOR[t] || '#8b8178' } }, t);
+function statusTag(h, c, today = new Date().toISOString().slice(0, 10)) {
+  if (c.due && c.due <= today) return h('span.kb-st.due', { title: '到了该回来检查的时候' }, '待复查');
+  const t = h('span.kb-st.' + c.status, {}, STATUS_NAME[c.status] || c.status);
+  if (c.due) t.title = '下次复查 ' + c.due;
+  return t;
+}
+
+async function addJudgment(ctx, body) {
+  await ctx.api.post('/api/kb/judgments', body);
+  ctx.toast('记下了。后台会归类并写 Agent 评价，稍后在「判断」里看到');
+  if (location.hash === '#kb' || location.hash.startsWith('#kb/judge')) setTimeout(() => ctx.refresh(), 400);
+}
+
+async function judgeTab(body, ctx, focus = '') {
+  const { api, h, ui } = ctx;
+  const j = await api.get('/api/kb/judgments');
+  const S = j.stats;
+  if (!S.total) {
+    body.append(ui.empty('还没有整理出判断', S.pending ? `有 ${S.pending} 条记录待归类，点右上角「整理」` : '复盘、批注、学习作答里写下的看法会自动汇总到这里，也可以用上面的「记判断」直接写'));
+    return;
+  }
+  let fType = '', fStatus = '';
+  body.append(ui.stats([
+    { k: `我的判断 · 观点 ${S.by_type.观点} · 预测 ${S.by_type.预测} · 评价 ${S.by_type.评价} · 疑问 ${S.by_type.疑问}`, v: S.total },
+    { k: '待复查', v: S.due },
+    { k: `问题线 · 立场变过 ${S.changed}`, v: S.threads },
+    { k: `已复查 · 仍成立 ${S.verdicts.holds} · 修正 ${S.verdicts.revised} · 推翻 ${S.verdicts.overturned}`, v: S.reviewed },
+  ]));
+  if (S.pending) body.append(h('div.kb-status', { style: { margin: '8px 0 0' } }, `还有 ${S.pending} 条新记录没归类，点右上角「整理」`));
+
+  // 记一条（带类型 / 信心 / 复查日；只想快速记就用上面输入框的「记判断」）
+  const newBox = h('div');
+  body.append(h('div.row', { style: { margin: '14px 0 4px' } }, [h('span.grow'),
+    h('button.ghost', { onclick: () => { newBox.replaceChildren(...(newBox.childElementCount ? [] : [newForm()])); } }, [ui.icon('plus'), '记一条判断 / 预测'])]), newBox);
+  function newForm() {
+    const ta = h('textarea', { placeholder: '一句话写清楚你的判断，越具体越好检查。例如：Claude Code 的插件生态半年内会超过 Cursor' });
+    const ty = h('select', {}, [['', '类型：让 AI 判断'], ['观点', '观点'], ['预测', '预测'], ['评价', '评价']].map(([v, l]) => h('option', { value: v }, l)));
+    const cf = h('select', {}, [['', '信心：让 AI 判断'], ['高', '信心高'], ['中', '信心中'], ['低', '信心低']].map(([v, l]) => h('option', { value: v }, l)));
+    const due = h('input', { type: 'date', title: '什么时候回来检查（预测填兑现日期；留空按默认节奏）' });
+    const note = h('input', { placeholder: '依据 / 背景（可选）', style: { flex: 1, minWidth: '160px' } });
+    return h('div.card.kb-new', {}, [ta, h('div.row', { style: { flexWrap: 'wrap', gap: '8px' } }, [ty, cf, h('span.muted', {}, '复查日'), due, note,
+      h('button', { onclick: async () => { if (!ta.value.trim()) return; await addJudgment(ctx, { text: ta.value, type: ty.value, confidence: cf.value, due: due.value, note: note.value }); newBox.replaceChildren(); } }, '保存')])]);
+  }
+
+  // 待复查（展开），没有就显示接下来的复查日程
+  if (j.due.length) {
+    body.append(ui.section('待复查', `${j.due.length} 条 · 当时的判断现在还成立吗？`));
+    body.append(h('div.card', {}, j.due.map((c) => jRow(ctx, c, { open: true, today: j.today }))));
+  } else if (j.upcoming.length) {
+    body.append(ui.section('接下来复查', `现在没有到期的 · 最近一次 ${j.upcoming[0].due}`));
+    body.append(h('div.card', {}, j.upcoming.map((c) => jRow(ctx, c, { today: j.today, lead: c.due.slice(5) }))));
+  }
+
+  // 问题线：同一问题上的判断按时间排开，看立场怎么变
+  if (j.threads.length) {
+    body.append(ui.section('问题线', `${j.threads.length} 条 · 同一个问题上我的判断按时间排开`));
+    const wrap = h('div');
+    for (const t of j.threads) {
+      const card = h('div.card.kb-th', { id: 'th-' + t.question }, [
+        h('div.row', { style: { alignItems: 'baseline' } }, [h('h3.grow', {}, t.question), h('span.muted', {}, `${t.items.length} 条 · ${t.items[0].date.slice(5)} → ${t.last.slice(5)}`)]),
+        h('div.stance', {}, [h('span.muted', {}, '现在：'), t.stance]),
+        t.shift ? h('div.kb-shift', {}, [t.changed ? h('b', {}, '立场变了 · ') : null, t.shift]) : null,
+        h('div.kb-tl', {}, t.items.map((c, i) => jRow(ctx, c, { today: j.today, chg: t.changed && i === t.items.length - 1 }))),
+      ]);
+      wrap.append(card);
+    }
+    body.append(wrap);
+    if (focus) {
+      const el = document.getElementById('th-' + focus);
+      if (el) setTimeout(() => { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); el.classList.add('kb-j', 'flash'); setTimeout(() => el.classList.remove('flash'), 1800); }, 80);
+    }
+  }
+
+  if (j.open.length) {
+    body.append(ui.section('开放问题', `${j.open.length} 个还没想清楚的`));
+    body.append(h('div.card', {}, j.open.map((c) => jRow(ctx, c, { today: j.today }))));
+  }
+
+  // 其余判断：按类型 / 状态筛
+  if (j.singles.length) {
+    const list = h('div.card');
+    const legend = h('div.kb-legend');
+    const draw = () => {
+      const cs = j.singles.filter((c) => (!fType || c.type === fType) && (!fStatus || (fStatus === 'reviewed' ? c.status !== 'open' : c.status === 'open')));
+      list.replaceChildren(...(cs.length ? cs.map((c) => jRow(ctx, c, { today: j.today })) : [h('div.muted', {}, '没有符合的')]));
+      legend.replaceChildren(
+        ...[['', '全部'], ['观点', '观点'], ['预测', '预测'], ['评价', '评价']].map(([v, l]) => h('button' + (fType === v ? '.on' : ''), { onclick: () => { fType = v; draw(); } }, [v ? h('span.kb-dot', { style: { background: TYPE_COLOR[v] } }) : null, l])),
+        h('span.sp'),
+        ...[['', '不限'], ['open', '未复查'], ['reviewed', '复查过']].map(([v, l]) => h('button' + (fStatus === v ? '.on' : ''), { onclick: () => { fStatus = v; draw(); } }, l)));
+    };
+    body.append(ui.section('其他判断', `${j.singles.length} 条 · 还没串进问题线的`), legend, list);
+    draw();
+  }
+}
+
+// 一行判断，点开看原话、Agent 评价、复查记录，并能复查
+function jRow(ctx, c, { open = false, today, chg = false, lead = '' } = {}) {
+  const { h } = ctx;
+  const detail = h('div');
+  const row = h('div.kb-jr' + (chg ? '.chg' : ''), { onclick: () => toggle() }, [
+    h('span.d', { title: c.date }, lead || c.date.slice(5)), typeTag(h, c.type),
+    h('span.c', {}, [c.claim, c.confidence ? h('span.muted', { style: { fontSize: '12px', marginLeft: '6px' } }, '信心' + c.confidence) : null]),
+    statusTag(h, c, today),
+  ]);
+  const toggle = () => detail.replaceChildren(...(detail.childElementCount ? [] : [jDetail(ctx, c, today)]));
+  if (open) toggle();
+  return h('div', {}, [row, detail]);
+}
+
+function jDetail(ctx, c, today) {
+  const { api, h, toast } = ctx;
+  const norm = (x) => (x || '').replace(/\s/g, '');
+  const e = c.eval;
+  const a = c.agent;
+  const due = c.due && c.due <= today;
+  const agentBox = h('div');
+  const showAgent = (x) => agentBox.replaceChildren(x ? h('div.kb-ag', {}, [
+    h('div', {}, [h('b', {}, `Agent 参考结论：${x.suggest}`), h('span.muted', {}, ` · 对照了 ${x.n_evidence ?? 0} 条之后的材料和判断${x.stale ? ' · 有新材料，可重新对照' : ''}`)]),
+    x.why ? h('div', {}, x.why) : null,
+    x.ask ? h('div.muted', {}, '问问自己：' + x.ask) : null,
+  ]) : '');
+  showAgent(a);
+  const note = h('textarea', { placeholder: c.type === '疑问' ? '现在怎么想？想清楚了就写结论' : '复查笔记：为什么还成立 / 哪里要改 / 新的看法是什么（修正、推翻时必填，会作为新判断进问题线）' });
+  const date = h('input', { type: 'date', title: '改到哪天再看' });
+  const send = async (verdict) => {
+    if ((verdict === 'revised' || verdict === 'overturned') && !note.value.trim()) { toast('修正 / 推翻时写一句新的看法', true); note.focus(); return; }
+    if (verdict === 'snooze' && !date.value) { toast('先选一个日期', true); date.focus(); return; }
+    await api.post('/api/kb/judgments/review', { sid: c.sid, verdict, note: note.value, due: verdict === 'snooze' ? date.value : '' });
+    toast('已记录复查');
+    ctx.refresh();
+  };
+  const recheck = async (btn) => {
+    btn.disabled = true; btn.textContent = 'Agent 对照中…';
+    try { showAgent(await api.post('/api/kb/judgments/recheck', { sid: c.sid })); } catch (err) { toast('没对照成：' + (err.message || err), true); }
+    btn.disabled = false; btn.textContent = '让 Agent 对照新材料';
+  };
+  const verdicts = c.type === '疑问' ? [['resolved', '想清楚了'], ['pending', '还没想清楚']]
+    : [['holds', '仍成立'], ['revised', '要修正'], ['overturned', '推翻了'], ['pending', '还看不出']];
+  return h('div.kb-jd', { onclick: (ev) => ev.stopPropagation() }, [
+    c.mine && !norm(c.mine).startsWith(norm(c.claim).slice(0, 16)) ? h('blockquote', {}, c.mine) : null,
+    c.context ? h('div.muted.clamp2', {}, '针对：' + c.context) : null,
+    e ? h('div.kb-ev', {}, [h('b', {}, `依据 ${e.strength}`), h('span', {}, e.basis), h('b', {}, '反方'), h('span', {}, e.counter), h('b', {}, '怎么验证'), h('span', {}, e.verify)]) : null,
+    agentBox,
+    c.reviews.length ? h('ul.kb-hist', {}, c.reviews.map((r) => h('li', {}, `${r.at.slice(0, 10)} · ${r.verdict_name}${r.due ? ' → ' + r.due : ''}${r.note ? '：' + r.note : ''}`))) : null,
+    h('div.row', { style: { flexWrap: 'wrap', gap: '4px 12px', marginTop: '6px', fontSize: '12.5px', color: 'var(--muted)' } }, [
+      h('span', {}, [c.sub_name, ' · ', srcLink(h, c)]),
+      c.due ? h('span', {}, (due ? '该复查了（' : '下次复查 ') + c.due + (due ? '）' : '')) : null,
+      c.horizon_days ? h('span', {}, `预计 ${c.horizon_days} 天见分晓`) : null,
+      c.thread ? h('a', { href: jLink(c.thread) }, '问题线：' + c.thread) : null,
+      h('span.grow'),
+      h('span.kb-cl', { style: { marginTop: 0 } }, c.concepts.map((x) => h('a', { href: cLink(x) }, x))),
+    ]),
+    c.status === 'overturned' || c.status === 'resolved' ? null : h('div.kb-rv', {}, [
+      note,
+      ...verdicts.map(([v, l]) => h('button' + (v === 'holds' || v === 'resolved' ? '' : '.outline'), { onclick: () => send(v) }, l)),
+      h('span.grow'),
+      date, h('button.ghost', { onclick: () => send('snooze') }, '改期'),
+      h('button.ghost', { onclick: (ev) => recheck(ev.currentTarget) }, '让 Agent 对照新材料'),
     ]),
   ]);
 }

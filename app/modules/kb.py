@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from .. import kb, kb_graph
+from .. import kb, kb_graph, kb_judge
 
 TITLE = "知识库"
 ORDER = 60
@@ -43,7 +43,8 @@ def stats():
 
 def agent_context(ref: str) -> str:
     try:
-        return (kb.read("GRAPH.md")[:4000] + "\n\n" + kb.read("INDEX.md")[:3000]).strip()
+        return (kb.read("GRAPH.md")[:4000] + "\n\n" + kb.read("INDEX.md")[:3000]
+                + "\n\n我的判断台账在 JUDGMENTS.md / judgments/（问题线、复查记录）。").strip()
     except FileNotFoundError:
         try:
             return kb.read("INDEX.md")[:6000]
@@ -104,3 +105,59 @@ def list_docs(type: str = "", limit: int = 200):
     docs = [d for d in kb.build() if not type or d["type"] == type]
     docs.sort(key=lambda d: d["date"] or d["updated"] or "", reverse=True)
     return [{k: d[k] for k in ("path", "type", "title", "date", "summary")} for d in docs[:limit]]
+
+
+# ---------- 判断台账（逻辑在 app/kb_judge.py） ----------
+
+@router.get("/judgments")
+def judgments():
+    return kb_judge.ledger_json()
+
+
+class JudgmentIn(BaseModel):
+    text: str
+    type: str = ""          # 观点 / 预测 / 评价；空 = 让 LLM 判断
+    confidence: str = ""
+    due: str = ""
+    note: str = ""
+
+
+@router.post("/judgments")
+def judgment_add(body: JudgmentIn):
+    try:
+        jid = kb_judge.add(body.text, body.type, body.confidence, body.due, body.note)
+    except ValueError:
+        raise HTTPException(400, "empty")
+    kb_graph.schedule_refresh()       # 归类 + Agent 评价在后台跑
+    return {"ok": True, "sid": f"my:{jid}"}
+
+
+class ReviewIn(BaseModel):
+    sid: str
+    verdict: str            # holds / revised / overturned / pending / resolved / snooze
+    note: str = ""
+    due: str = ""
+
+
+@router.post("/judgments/review")
+def judgment_review(body: ReviewIn):
+    try:
+        kb_judge.review(body.sid, body.verdict, body.note, body.due)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    kb.sync(refresh_graph=body.verdict in ("revised", "overturned") and bool(body.note.strip()))
+    return {"ok": True}
+
+
+class RecheckIn(BaseModel):
+    sid: str
+
+
+@router.post("/judgments/recheck")
+def judgment_recheck(body: RecheckIn):
+    if not kb_graph.has_llm():
+        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
+    r = kb_judge.recheck(body.sid, force=True)
+    if r is None:
+        raise HTTPException(404, "not found")
+    return r

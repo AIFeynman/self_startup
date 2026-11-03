@@ -29,7 +29,7 @@ TYPE_DIRS = {
 TYPE_NAMES = {
     "daily": "每日记录", "note": "问题与经验", "research": "调研", "product": "产品体验",
     "paper": "论文深读", "papernote": "论文笔记", "repo": "项目解读", "plan": "学习计划", "book": "深度读书", "feed": "收藏的信息", "annotation": "阅读批注",
-    "intel": "产品变化解读", "intelco": "产品雷达公司", "concept": "概念",
+    "intel": "产品变化解读", "intelco": "产品雷达公司", "concept": "概念", "thread": "问题线",
 }
 
 README = """# 本地知识库（自动生成，勿手改）
@@ -42,10 +42,13 @@ README = """# 本地知识库（自动生成，勿手改）
 - **概念层（我的知识）**：`concepts/<概念>.md`，一个概念一页，只收我看过、想过、判断过的内容——
   我的理解（AI 据我的判断归纳）→ 我的判断（复盘经验、批注、作答、感想、论文判断…，带原话和来源）→ 看过的材料 → 相关概念。
   `GRAPH.md` 是概念总览。产品雷达等我没互动过的自动内容不进概念层。
+- **判断台账**：`JUDGMENTS.md` 汇总我的观点 / 预测 / 评价 / 疑问（附 Agent 评价、复查状态、下次复查日），
+  `judgments/<问题>.md` 是问题线：同一个问题上我的判断按时间排开，能看到立场怎么变、复查结论是什么。
 - **来源层（原始记录）**：下面这些目录，从各板块原样镜像；文末「关联概念」双链回概念页。
 
 ## 目录
 - `GRAPH.md`：概念总览（按主题）。`topics/<主题>.md`：主题页（MOC）。`concepts/`：概念页。
+- `JUDGMENTS.md`：判断台账。`judgments/<问题>.md`：问题线（立场变化 + 复查记录）。
 - `INDEX.md`：入口。各类数量、最近更新、全部标签。
 - `daily/YYYY-MM-DD.md`：一天的计划与完成、复盘、问题与经验、Agent 效率、当天产出（时间线检索用这里）。
 - `notes/`：问题 / 经验 / 洞察 / 想法，一条一个文件。
@@ -64,6 +67,7 @@ README = """# 本地知识库（自动生成，勿手改）
 
 ## 检索建议（给大模型）
 1. 先读 `GRAPH.md` 找相关概念，读 `concepts/<概念>.md`（我的结论和来源都在里面）；再按需读来源文件。
+   问「我之前怎么判断 X / 我的立场变了吗」读 `JUDGMENTS.md` 和 `judgments/`。
    也可读 `INDEX.md`；按主题看 `tags/`；按日期看 `daily/`。
 2. 关键词：`rg -l "关键词" data/kb`，或只搜摘要 `rg "^summary:.*关键词" data/kb`。
 3. 或调用 `GET /api/kb/search?q=关键词&type=note`（全文索引，返回路径 + 摘要 + 片段）。
@@ -545,6 +549,13 @@ def _graph_layer(docs: list[dict]) -> tuple[dict[str, str], list[dict], int]:
     fts = [{"path": p, "type": "concept", "title": c["name"], "tags": [c["category"], *c["aliases"]], "date": c["last"],
             "summary": f"{c['category']} · {len(c['judgments'])} 条判断 · {len(c['materials'])} 份材料",
             "body": files.get(p, "")} for c in m["concepts"].values() for p in [f"concepts/{kb_graph.fname(c['name'])}.md"]]
+    try:
+        from . import kb_judge
+        jf = kb_judge.files(m, {d["id"]: d["path"] for d in docs})
+        files.update(jf)
+        fts += kb_judge.fts_rows(jf)
+    except Exception:  # noqa: BLE001 —— 判断台账出错不影响概念层
+        log.exception("kb judgments layer")
     return files, fts, m["stale"]
 
 

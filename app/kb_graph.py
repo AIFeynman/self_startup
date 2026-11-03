@@ -40,7 +40,7 @@ SUB_NAMES = {
     "note": "复盘经验", "annotation": "批注", "answer": "学习作答", "quiz": "测试反馈", "feedback": "步骤反馈",
     "thought": "感想", "ask": "追问", "verdict": "论文判断", "product": "产品体验", "mynote": "深读笔记",
     "research": "调研", "paper": "论文深读", "repo": "项目解读", "article": "文章深读", "plan": "学习计划",
-    "book": "读书", "hn": "HN 讨论", "feed": "看过的信息",
+    "book": "读书", "hn": "HN 讨论", "feed": "看过的信息", "mine": "我记的判断", "revise": "复查时的新看法",
 }
 CATEGORIES = ["领域", "方法", "产品", "项目", "论文", "数据集", "人物", "公司", "其他"]
 MAX_SUMMARIES = 40         # 每次刷新最多重写几个概念的「我的理解」
@@ -87,7 +87,8 @@ def _item_doc(it: dict) -> str:
 
 def signals() -> list[dict]:
     out: list[dict] = []
-    for fn in (_s_notes, _s_annotations, _s_learn, _s_items, _s_feed, _s_products, _s_materials):
+    from . import kb_judge
+    for fn in (_s_notes, _s_annotations, _s_learn, _s_items, _s_feed, _s_products, _s_materials, kb_judge.signals):
         try:
             out += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它
@@ -552,9 +553,14 @@ def refresh(force: bool = False) -> dict:
                 wrote += 1
             except Exception:  # noqa: BLE001
                 log.exception("kb_graph summary %s", c["name"])
-        from . import kb
+        from . import kb, kb_judge
+        try:
+            jmsg = "；" + kb_judge.refresh_llm(model(), _status)
+        except Exception:  # noqa: BLE001 —— 判断台账出错不影响概念图谱
+            log.exception("kb_judge refresh")
+            jmsg = ""
         kb.sync(refresh_graph=False)
-        _status.update(state="idle", at=db.now(), msg=f"抽取 {n} 条信号，{len(m['concepts'])} 个概念，更新 {wrote} 段「我的理解」")
+        _status.update(state="idle", at=db.now(), msg=f"抽取 {n} 条信号，{len(m['concepts'])} 个概念，更新 {wrote} 段「我的理解」{jmsg}")
         return dict(_status)
     except Exception as e:  # noqa: BLE001
         log.exception("kb_graph refresh")
@@ -707,10 +713,13 @@ def concept_json(name: str) -> dict | None:
     rel = sorted(((e["b"] if e["a"] == name else e["a"], e["w"]) for e in edges(m) if name in (e["a"], e["b"])), key=lambda x: -x[1])
     sm = summary_of(name, c, m) or {}
     js = sorted((m["sigs"][x] for x in c["judgments"]), key=lambda s: s["date"])
+    from . import kb_judge
+    led = {x["sid"]: x for x in kb_judge.ledger(m, paths)["cards"]}
     return {"name": name, "category": c["category"], "topic": c["topic"], "topic_desc": m["topics"].get(c["topic"], ""),
             "aliases": c["aliases"], "first": c["first"], "last": c["last"],
             "summary": sm, "path": f"concepts/{fname(name)}.md",
-            "judgments": [_sig_out(s, paths) for s in js],
+            "judgments": [{**_sig_out(s, paths), **({k: led[s["sid"]][k] for k in ("type", "status", "due", "thread")} if s["sid"] in led else {})}
+                          for s in js],
             "materials": [_sig_out(m["sigs"][x], paths) for x in sorted(c["materials"], key=lambda x: m["sigs"][x]["date"], reverse=True)],
             "related": [{"name": n, "w": w, "category": m["concepts"][n]["category"]} for n, w in rel[:24]]}
 
