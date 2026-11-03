@@ -1,10 +1,10 @@
 """论文脉络：一句话主题 → 几条按时间演进的研究线（设计稿 §5）。
 
-① 改写：DeepSeek 把「后训练」改成 {must, should, domains}（中英文多种说法 + 分类体系的二级方向）。
-② 召回：FTS5 trigram 短语命中（标题 / 一句话 / 标签 / 摘要）+ 方向命中（d 主方向、d2 副方向）。
+① 改写：DeepSeek 把「后训练」改成 {must, should, domains}（中英文多种说法 + 分类体系的二级方向），改写两次取并集。
+② 召回：FTS5 trigram 短语命中（标题 / 一句话 / 标签 / 摘要）+ 方向命中（主方向命中主题首要方向 1.2、其它方向 1.0，副方向 0.5）。
 ③ 子图：召回集合内的库内引用边；被 ≥ ANCESTOR_SHARE 的召回论文引用的库内论文作为「前置基础」拉进来（如 PPO 之于 RLHF）。
-④ 选点：PageRank（引用方 → 被引方）+ 总被引 + 相关度的分位加权，按子方向分名额取 NODES 篇，再给近 2 年的论文留 FRONTIER 个位置；
-   分数最高的 KEY 篇必须出现在结果里，漏了补问一次。
+④ 选点：PageRank（引用方 → 被引方）+ 主题内被引次数 + 年均被引 + 相关度的分位加权（0.3 / 0.3 / 0.3 / 0.1），按子方向分名额（∝ √该方向里关键词命中的篇数）取 NODES 篇，再给近 2 年的论文留 FRONTIER 个位置；
+   分数最高的 KEY 篇 + 每个子方向的第一名必须出现在结果里，漏了补问一次；还漏就按引用边挂到最相关的线上。
 ⑤ 成线：把选出的论文（含 builds_on 和子图里的引用关系）交给模型分成 3–7 条线，每个节点写「相比前一步解决了什么」；
    只能用给定的论文编号，校验后落库缓存。
 """
@@ -17,8 +17,10 @@ from datetime import datetime
 from .. import db
 from . import _paper_collect as col, _paper_label as lab
 
-NODES, FRONTIER, ANCESTOR_SHARE, ANCESTOR_MAX = 60, 10, 0.08, 8
-KEY = 25          # 分数最高的这些标 key，成线时必须出现，漏了补问一次
+NODES, FRONTIER, ANCESTOR_SHARE, ANCESTOR_MAX = 80, 12, 0.08, 8
+OTHER = "_other"
+REWRITE_N = 2
+KEY = 30          # 分数最高的这些标 key，成线时必须出现，漏了补问一次
 RECALL_CAP = 800
 
 REWRITE = """你把用户想了解的 AI 研究主题改写成论文检索意图。方向 code（二级）：{doms}
@@ -34,8 +36,8 @@ on=它引用或直接改进的库内论文编号），把它们整理成研究�
  "surveys":[综述论文编号],
  "open":["2-4 条仍未解决的问题（≤30 字）"]}
 规则：
-- lines 3-7 条，按这个主题里真实存在的技术路线分（不要按年份或论文类型分）；每条 3-10 个节点，按年份排。
-- 只能用给出的编号；同一篇最多出现在 2 条线里；标了 key 的论文必须出现（放进某条线，或 foundations / surveys）。
+- lines 3-7 条，按这个主题里真实存在的技术路线分（不要按年份或论文类型分）；每条 3-14 个节点，按年份排。
+- 只能用给出的编号；同一篇最多出现在 2 条线里；「必须出现」列出的每个编号都要出现（放进某条线，或 foundations / surveys），输出前逐个核对。
 - note 要说清「解决了前者的什么问题」，依据给出的 problem / method / on 关系，不要编造论文里没有的内容。"""
 
 
@@ -44,13 +46,19 @@ def norm(q: str) -> str:
 
 
 def rewrite(topic: str) -> tuple[dict, float]:
+    """改写 REWRITE_N 次取并集：单次改写列哪些方向有随机性（「后训练」时有时没有 peft / alignment），并集更稳。"""
     doms = "；".join(f"{c}={n}" for c, n in lab.domain_names().items())
-    text, cost = lab.chat(REWRITE.format(doms=doms), topic, max_tokens=1200, json_mode=True)
-    x = json.loads(text)
     ok = lab.codes()["d"]
-    return {"must": [str(t) for t in x.get("must") or [] if str(t).strip()][:10],
-            "should": [str(t) for t in x.get("should") or [] if str(t).strip()][:12],
-            "domains": [d for d in x.get("domains") or [] if d in ok][:6]}, cost
+    out: dict[str, list[str]] = {"must": [], "should": [], "domains": []}
+    cost = 0.0
+    for _ in range(REWRITE_N):
+        text, c = lab.chat(REWRITE.format(doms=doms), topic, max_tokens=1200, json_mode=True)
+        cost += c
+        x = json.loads(text)
+        out["must"] += [str(t) for t in x.get("must") or [] if str(t).strip()][:10]
+        out["should"] += [str(t) for t in x.get("should") or [] if str(t).strip()][:12]
+        out["domains"] += [d for d in x.get("domains") or [] if d in ok][:6]
+    return {k: list(dict.fromkeys(v))[:8] if k == "domains" else list(dict.fromkeys(v)) for k, v in out.items()}, cost
 
 
 def _fts(term: str) -> set[int]:
@@ -63,15 +71,18 @@ def _fts(term: str) -> set[int]:
         return set()
 
 
-def recall(intent: dict) -> dict[int, float]:
-    """paper_items.id → 相关度。"""
+def _kw(intent: dict) -> dict[int, float]:
+    """只算关键词：must 每个 1 分、should 每个 0.4 分。"""
     score: dict[int, float] = {}
-    for t in intent["must"]:
+    for t, w in [(t, 1.0) for t in intent["must"]] + [(t, 0.4) for t in intent["should"]]:
         for i in _fts(t):
-            score[i] = score.get(i, 0) + 1.0
-    for t in intent["should"]:
-        for i in _fts(t):
-            score[i] = score.get(i, 0) + 0.4
+            score[i] = score.get(i, 0) + w
+    return score
+
+
+def recall(intent: dict) -> dict[int, float]:
+    """paper_items.id → 相关度（关键词 + 方向）。"""
+    score = _kw(intent)
     doms = intent["domains"]
     for r in db.rows("SELECT p.id, l.d, l.d2 FROM paper_labels l JOIN paper_items p ON p.s2id=l.s2id WHERE p.status='in'"):
         if r["d"] in doms:
@@ -102,12 +113,14 @@ def _pct(vals: dict[str, float]) -> dict[str, float]:
     return {k: i / max(1, len(order) - 1) for i, k in enumerate(order)}
 
 
-def _pick(score: dict[str, float], group: dict[str, str], n: int) -> list[str]:
-    """按子方向分名额（∝ √篇数）再按分数取，避免一个大子方向挤掉其它子方向的里程碑；没用完的名额按全局分数补。"""
+def _pick(score: dict[str, float], group: dict[str, str], n: int, on_topic: set[str] = frozenset()) -> list[str]:
+    """按子方向分名额再按分数取，避免一个大子方向挤掉其它子方向的里程碑；没用完的名额按全局分数补。
+    名额 ∝ √(该方向里关键词命中主题的篇数)：MoE 主题下「架构」方向只有讲 MoE 的那部分算数，不会把整个架构方向的名额摊进来；
+    改写没列出的方向合成一组（OTHER），权重减半。"""
     by: dict[str, list[str]] = {}
     for s in sorted(score, key=lambda s: -score[s]):
         by.setdefault(group[s], []).append(s)
-    w = {g: len(v) ** 0.5 for g, v in by.items()}
+    w = {g: (sum(s in on_topic for s in v) if on_topic else len(v)) ** 0.5 * (0.5 if g == OTHER else 1) for g, v in by.items()}
     tot = sum(w.values()) or 1
     pick = [s for g, v in by.items() for s in v[:max(1, round(n * w[g] / tot))]]
     pick = sorted(pick, key=lambda s: -score[s])[:n]
@@ -115,12 +128,17 @@ def _pick(score: dict[str, float], group: dict[str, str], n: int) -> list[str]:
     return pick + rest[:n - len(pick)]
 
 
-def subgraph(rel: dict[int, float]) -> dict:
+def _rate(r: dict) -> float:
+    """年均被引（对数）：新论文不因为发表时间短吃亏。"""
+    return col.log10p((r["cites"] or 0) / max(1, datetime.now().year - (r["year"] or 2000) + 1))
+
+
+def subgraph(rel: dict[int, float], intent: dict | None = None) -> dict:
     """召回结果 → 选好的节点、边、前置基础。"""
     items = {r["id"]: r for r in db.rows("SELECT p.*, l.k, l.d, l.d2, l.problem, l.method, l.builds_on, l.s "
                                           "FROM paper_items p LEFT JOIN paper_labels l ON l.s2id=p.s2id WHERE p.status='in'")}
     by_s2 = {r["s2id"]: r for r in items.values()}
-    top = sorted(rel, key=lambda i: -(rel[i] + 0.25 * col.log10p(items[i]["cites"])) if i in items else 0)[:RECALL_CAP]
+    top = sorted(rel, key=lambda i: -(rel[i] + 0.25 * _rate(items[i])) if i in items else 0)[:RECALL_CAP]
     core = {items[i]["s2id"] for i in top if i in items}
     cnt: dict[str, int] = {}
     for s in core:
@@ -134,14 +152,22 @@ def subgraph(rel: dict[int, float]) -> dict:
     edges = [(s, t) for s in nodes for t in set(json.loads(by_s2[s]["refs"] or "[]")) if t in ns and t != s]
     pr = _pagerank(nodes, edges)
     relv = {s: rel.get(by_s2[s]["id"], 0.5) for s in nodes}
-    p_pr, p_c, p_r = _pct(pr), _pct({s: col.log10p(by_s2[s]["cites"]) for s in nodes}), _pct(relv)
-    score = {s: 0.35 * p_pr[s] + 0.45 * p_c[s] + 0.2 * p_r[s] for s in core}
-    pick = _pick(score, {s: by_s2[s].get("d") or "?" for s in core}, NODES - FRONTIER)
+    p_pr, p_c, p_r = _pct(pr), _pct({s: _rate(by_s2[s]) for s in nodes}), _pct(relv)
+    indeg = {s: 0 for s in nodes}
+    for _, t in edges:
+        indeg[t] += 1
+    p_in = _pct({s: indeg[s] + 1e-6 * (by_s2[s]["cites"] or 0) for s in nodes})
+    score = {s: 0.3 * p_pr[s] + 0.3 * p_c[s] + 0.1 * p_r[s] + 0.3 * p_in[s] for s in core}
+    kw = {items[i]["s2id"] for i in _kw(intent)} if intent else set()
+    doms = set(intent["domains"]) if intent else set()
+    grp = {s: d if (d := by_s2[s].get("d")) in doms else OTHER for s in core}
+    pick = _pick(score, grp, NODES - FRONTIER, kw & core)
     yr = datetime.now().year
     fresh = sorted([s for s in core if s not in pick and (by_s2[s]["year"] or 0) >= yr - 1],
                    key=lambda s: -(col.log10p(by_s2[s]["cites"]) + by_s2[s]["hot"] + relv[s]))[:FRONTIER]
     chosen = pick + fresh + [a for a in ancestors if a not in pick]
-    key = set(sorted([s for s in chosen if s in score], key=lambda s: -score[s])[:KEY]) | set(ancestors[:3])
+    lead = {g: max((s for s in chosen if grp.get(s) == g), key=lambda s: score[s], default=None) for g in set(grp.values()) - {OTHER}}
+    key = set(sorted([s for s in chosen if s in score], key=lambda s: -score[s])[:KEY]) | set(ancestors[:3]) | (set(lead.values()) - {None})
     return {"chosen": chosen, "key": key, "by_s2": by_s2, "edges": edges, "pr": pr, "ancestors": ancestors,
             "core": len(core), "anc_counts": {a: cnt[a] for a in ancestors}}
 
@@ -183,24 +209,46 @@ def _shown(res: dict) -> set[str]:
     return {n["s2id"] for ln in res["lines"] for n in ln["nodes"]} | set(res["foundations"]) | set(res["surveys"])
 
 
+def _attach(res: dict, miss: list[str], g: dict) -> dict:
+    """补问后仍漏掉的 key 论文：按引用边挂到关联最多的研究线（按年份插入），一条都不沾的放进「其它重要工作」。"""
+    nb: dict[str, set[str]] = {}
+    for a, b in g["edges"]:
+        nb.setdefault(a, set()).add(b)
+        nb.setdefault(b, set()).add(a)
+    yr = lambda s: g["by_s2"][s]["year"] or 0  # noqa: E731
+    extra = []
+    for m in miss:
+        node = {"s2id": m, "role": "相关", "note": str(g["by_s2"][m].get("s") or "")[:80]}
+        hits = [len(nb.get(m, set()) & {n["s2id"] for n in ln["nodes"]}) for ln in res["lines"]]
+        if hits and max(hits):
+            ln = res["lines"][hits.index(max(hits))]
+            ln["nodes"] = sorted(ln["nodes"] + [node], key=lambda n: yr(n["s2id"]))
+        else:
+            extra.append(node)
+    if extra:
+        res["lines"].append({"name": "其它重要工作", "summary": "", "nodes": sorted(extra, key=lambda n: yr(n["s2id"]))})
+    return res
+
+
 def build(topic: str, use_cache: bool = True) -> dict:
     key = norm(topic)
     if use_cache and (c := db.row("SELECT result FROM paper_maps WHERE topic=?", [key])):
         return json.loads(c["result"])
     intent, c1 = rewrite(topic)
     rel = recall(intent)
-    g = subgraph(rel)
+    g = subgraph(rel, intent)
     text, back = _node_text(g)
-    user = f"主题：{topic}\n论文：\n{text}"
+    must = ", ".join(sorted((fwd := {v: k for k, v in back.items()})[s] for s in g["key"]))
+    user = f"主题：{topic}\n必须出现：{must}\n论文：\n{text}"
     raw, c2 = lab.chat(LINES, user, max_tokens=6000, json_mode=True)
     res = _clean(json.loads(raw), back)
-    fwd = {v: k for k, v in back.items()}
     if miss := [fwd[s] for s in g["key"] if s not in _shown(res)]:
         raw, c3 = lab.chat(LINES, f"{user}\n\n上一版结果：{raw}\n\n上一版漏了这些 key 论文：{', '.join(miss)}。"
                                   "把它们放进合适的线（或 foundations / surveys），输出完整的新 JSON。",
                            max_tokens=6000, json_mode=True)
         c2 += c3
         res = _clean(json.loads(raw), back)
+        res = _attach(res, [s for s in g["key"] if s not in _shown(res)], g)
     res = res | {
         "topic": topic, "intent": intent, "recalled": len(rel), "core": g["core"], "chosen": g["chosen"], "key": sorted(g["key"]),
         "ancestors": g["ancestors"], "cost": round(c1 + c2, 4), "created": db.now()}
