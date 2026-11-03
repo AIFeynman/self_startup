@@ -1,6 +1,8 @@
 """论文库维护（设计稿 §11）：每周刷新被引、重判门槛、补标注；每次每日入库 / 每周维护都记一条运行记录，页面能看到状态。
 
-- 刷新被引：没入库的 arXiv 论文（落选时被引不够）和入库的近两年论文，走 S2 batch 只取引用数（500 篇一次）。
+- 刷新被引：走 S2 batch 只取引用数（500 篇一次）。每周只刷离门槛够近的落选论文（被引到门槛的 NEAR_FRAC，
+  工业界按减半后的门槛算；近期论文看早期信号的 NEAR_FRAC）；离得远的落选论文和入库的近两年论文（只影响排序）
+  每 FULL_DAYS 天全量刷一次兜底。
 - 重判门槛：只看没入库的，够了就收进来；已入库的不往外踢（见 admit_all）。
   新收的补详情 → 近期论文过 Jev → 标注。
 - 补标注：新论文入库后，引用它的库内论文参考文献变了（label_src 变），走标注队列重标 builds_on，每次最多 LABEL_CAP 篇，
@@ -23,6 +25,8 @@ log = logging.getLogger(__name__)
 CITE_BATCH = 500           # S2 batch 只取数字时一次最多 500 篇
 CITE_FIELDS = "citationCount,influentialCitationCount"
 YOUNG_MONTHS = 24          # 入库论文只刷新这么新的（老论文的被引只影响排序，不影响收不收）
+NEAR_FRAC = 1 / 3          # 被引到门槛的这个比例才算「接近」，每周刷
+FULL_DAYS = 28             # 全量刷新的间隔
 LABEL_CAP = 1000           # 每次维护最多标多少篇（新收的 + 要重标 builds_on 的），约 $1 封顶
 ALERT_FAILS = 2
 
@@ -63,12 +67,34 @@ def record(kind: str, fn) -> dict:
 
 # ---------- 每周维护 ----------
 
-def targets(today: datetime | None = None) -> list[str]:
-    """要刷新被引的：没入库的 arXiv 论文（tier 为空的是非 arXiv，永远进不来），入库的近两年论文（经典和用户补充的除外）。"""
+def near(r: dict, today: datetime | None = None) -> bool:
+    """落选论文离门槛够不够近（按现在的年龄算档位，门槛和 decide 一致）。"""
+    m = col.age_months(r.get("pub_date") or "", today)
+    need = next(n for cap, _, n in col.TIERS if m <= cap)
+    c, infl = r.get("cites") or 0, r.get("infl") or 0
+    if need is None:
+        return c >= col.RECENT_MIN_CITES * NEAR_FRAC or infl >= max(1, col.RECENT_MIN_INFL * NEAR_FRAC)
+    return c >= need * (col.INDUSTRY_FACTOR if col.industrial(r) else 1) * NEAR_FRAC
+
+
+def full_due(now: datetime | None = None) -> bool:
+    # 加这个区分之前的每周维护都是全量刷的（没有 full 字段）
+    r = db.row("SELECT started FROM paper_runs WHERE kind='weekly' AND status IN ('ok','partial') "
+               "AND COALESCE(json_extract(result,'$.full'),1)=1 ORDER BY id DESC LIMIT 1")
+    return not r or (now or datetime.now()) - datetime.fromisoformat(r["started"]) >= timedelta(days=FULL_DAYS)
+
+
+def targets(today: datetime | None = None, full: bool = False) -> list[str]:
+    """要刷新被引的。full：没入库的 arXiv 论文全部（tier 为空的是非 arXiv，永远进不来）+ 入库的近两年论文（经典和用户补充的除外）；
+    否则只要离门槛够近的落选论文。"""
+    outs = db.rows("SELECT s2id, title, abstract, pub_date, cites, infl FROM paper_items "
+                   "WHERE arxiv!='' AND status!='in' AND COALESCE(tier,'')!=''")
+    if not full:
+        return [r["s2id"] for r in outs if near(r, today)]
     since = ((today or datetime.now()) - timedelta(days=YOUNG_MONTHS * 30.44)).strftime("%Y-%m-%d")
-    return [r["s2id"] for r in db.rows(
-        "SELECT s2id FROM paper_items WHERE arxiv!='' AND ((status!='in' AND COALESCE(tier,'')!='') "
-        "OR (status='in' AND COALESCE(tier,'') NOT IN ('classic','manual') AND pub_date>=?))", [since])]
+    return [r["s2id"] for r in outs] + [r["s2id"] for r in db.rows(
+        "SELECT s2id FROM paper_items WHERE arxiv!='' AND status='in' "
+        "AND COALESCE(tier,'') NOT IN ('classic','manual') AND pub_date>=?", [since])]
 
 
 def refresh_cites(ids: list[str], c, on_step=None) -> int:
@@ -103,12 +129,13 @@ def promote(today: datetime | None = None) -> list[str]:
 
 
 def weekly(on_step=lambda s: None) -> dict:
-    """刷新被引 → 重判门槛 → 新收的补详情、过 Jev → 标注队列（新收的 + 要重标 builds_on 的）。"""
+    """刷新被引（接近门槛的；到期了全量）→ 重判门槛 → 新收的补详情、过 Jev → 标注队列（新收的 + 要重标 builds_on 的）。"""
     stat = {"checked": 0, "changed": 0, "admitted": 0, "labeled": 0, "relabel": 0, "cost": 0.0, "errors": []}
     if not db.row("SELECT 1 FROM paper_items WHERE status='in' LIMIT 1"):
         return stat | {"skipped": "论文库还是空的"}
-    ids = targets()
-    stat["checked"] = len(ids)
+    full = full_due()
+    ids = targets(full=full)
+    stat |= {"checked": len(ids), "full": full}
     with col.client() as c:
         stat["changed"] = refresh_cites(ids, c, on_step)
         on_step("重判门槛")

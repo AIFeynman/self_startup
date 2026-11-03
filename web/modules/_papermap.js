@@ -269,7 +269,7 @@ function maintLine(ctx, mt) {
   const R = (r) => r?.result || {};
   const feed = mt.feed ? `${ago(mt.feed.started)}，新收 ${R(mt.feed).admitted ?? 0} 篇` : '还没跑过（信息推荐刷新后自动跑）';
   const wk = mt.running ? `进行中：${mt.weekly?.step || '准备中'}`
-    : mt.weekly ? `${ago(mt.weekly.started)}，刷新被引 ${fmt(R(mt.weekly).checked ?? 0)} 篇，新收 ${R(mt.weekly).admitted ?? 0} 篇，重标 ${R(mt.weekly).relabel ?? 0} 篇`
+    : mt.weekly ? `${ago(mt.weekly.started)}，刷新被引 ${fmt(R(mt.weekly).checked ?? 0)} 篇${R(mt.weekly).full ? '（每月全量）' : '（接近门槛的）'}，新收 ${R(mt.weekly).admitted ?? 0} 篇，重标 ${R(mt.weekly).relabel ?? 0} 篇`
       : '还没跑过';
   const bad = (k) => (mt[`${k}_alert`] ? '.bad' : '');
   const fail = (r) => (r?.status === 'failed' ? `（失败：${r.step}）` : r?.status === 'partial' ? '（部分出错）' : '');

@@ -376,6 +376,27 @@ def test_weekly_refreshes_cites_promotes_and_relabels_citers(client, monkeypatch
     assert not maint.due() and maint.due(datetime.now() + timedelta(days=8))
 
 
+def test_weekly_only_refreshes_near_threshold_until_full_due(client, monkeypatch, labeled):
+    maint.init()
+    db.execute("DELETE FROM paper_runs")
+    paper("IN", "in library", 2025, 100, pub=months_ago(12))
+    for s2id, cites, title in [("FAR", 5, "far below"), ("CLOSE", 25, "close to sixty"),
+                               ("IND", 12, "Google deployed online A/B test")]:   # 工业界门槛 30，12 ≥ 30/3
+        paper(s2id, title, 2025, cites, pub=months_ago(12))
+        db.execute("UPDATE paper_items SET status='out', tier='young' WHERE s2id=?", [s2id])
+    lab.run()
+    seen = []
+    monkeypatch.setattr(col, "batch", lambda ids, c, fields=col.DETAIL_FIELDS: seen.append(sorted(ids)) or [None] * len(ids))
+    st = maint.record("weekly", maint.weekly)
+    assert st["full"] and seen[0] == ["CLOSE", "FAR", "IN", "IND"]        # 第一次（没全量过）全刷
+    seen.clear()
+    st = maint.record("weekly", maint.weekly)
+    assert not st["full"] and seen[0] == ["CLOSE", "IND"]                 # 之后每周只刷接近门槛的
+    db.execute("UPDATE paper_runs SET started=? WHERE id=(SELECT min(id) FROM paper_runs)",
+               [(datetime.now() - timedelta(days=maint.FULL_DAYS + 1)).isoformat(timespec="seconds")])
+    assert maint.full_due()
+
+
 def test_runs_alert_after_two_failures(client):
     maint.init()
     db.execute("DELETE FROM paper_runs")
