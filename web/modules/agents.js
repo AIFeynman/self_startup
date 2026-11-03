@@ -4,7 +4,7 @@ import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
 import { approvals } from './_approvals.js';
 import { coreMetrics } from './_coremetrics.js';
-import { today } from '../api.js';
+import { h, today } from '../api.js';
 
 const ENGINE = { claude: 'Claude', codex: 'Codex', platform: '平台' };
 const prefs = load();
