@@ -3,6 +3,7 @@
 // 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
 // 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
 import { annotate } from './_annotate.js';
+import { whyNotSection } from './_whynot.js';
 
 const CSS = `
 .kb-graph { position: relative; padding: 0; overflow: hidden; }
@@ -587,6 +588,9 @@ async function judgeTab(body, ctx, focus = '') {
     body.append(ui.section('接下来复查', `现在没有到期的 · 最近一次 ${j.upcoming[0].due}`));
     body.append(h('div.card', {}, j.upcoming.map((c) => jRow(ctx, c, { today: j.today, lead: c.due.slice(5) }))));
   }
+
+  // 论文「为什么不」：命中率 + 最近的（在深读论文页里写）
+  body.append(...await whyNotSection(ctx));
 
   // 问题线：同一问题上的判断按时间排开，看立场怎么变
   if (j.threads.length) {
