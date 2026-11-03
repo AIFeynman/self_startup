@@ -8,7 +8,7 @@ os.environ["SELF_STARTUP_DATA"] = tempfile.mkdtemp(prefix="ss-test-")
 import json as _json  # noqa: E402
 from pathlib import Path as _Path  # noqa: E402
 
-_Path(os.environ["SELF_STARTUP_DATA"], "settings.json").write_text(_json.dumps({"session_dirs": {"claude": [], "codex": []}}))
+_Path(os.environ["SELF_STARTUP_DATA"], "settings.json").write_text(_json.dumps({"session_dirs": {"claude": [], "codex": []}, "notify": {"system": False}}))
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

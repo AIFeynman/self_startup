@@ -8,7 +8,7 @@ import { api, h, md, toast, field, setTz, nowLocal } from './api.js';
 import { initChat, openChat, chatBusy, chatSnapshot } from './chat.js';
 import * as ui from './ui.js';
 
-const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar' };
+const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar', wealth: 'wallet' };
 let meta;
 const page = document.getElementById('page');
 
@@ -33,6 +33,7 @@ async function boot() {
   watchJobs();
   watchApprovals();
   watchUpdates();
+  watchNotifications();
   restoreChat();
 }
 
@@ -109,6 +110,42 @@ function watchApprovals() {
   paint();
   setInterval(paint, 15000);
   document.addEventListener('job-done', paint);
+}
+
+// 通用通知（app/notify.py）：每 10 秒拉一次新通知，弹页内提醒（标题 + 正文 + 可展开的理由 + 查看链接）。
+// Mac 系统通知由后端发；这里只管页内，并广播 notify 事件给打开的板块。
+function watchNotifications() {
+  let last = null;
+  const poll = async () => {
+    if (document.hidden && last !== null) return;
+    const r = await api.get(`/api/notify/since?after=${last ?? -1}`).catch(() => null);
+    if (!r) return;
+    if (last !== null) r.items.forEach(notifyToast);
+    last = r.last;
+  };
+  poll();
+  setInterval(poll, 10000);
+}
+
+function notifyToast(n) {
+  const reasons = n.reasons || [];
+  const t = h('div.toast.notice.notify', {}, [
+    h('div.notify-main', {}, [
+      h('b', {}, n.title),
+      n.body ? h('span', {}, n.body) : null,
+      reasons.length ? h('details', {}, [h('summary', {}, `理由（${reasons.length}）`), h('ul', {}, reasons.map((x) => h('li', {}, x)))]) : null,
+      n.subtitle ? h('span.muted', {}, n.subtitle) : null,
+    ]),
+    n.link ? h('a', { href: n.link, onclick: () => t.remove() }, '查看 →') : null,
+    h('button.icon', { onclick: () => t.remove(), title: '关闭' }, ui.icon('x')),
+  ]);
+  let stack = document.getElementById('notify-stack');
+  if (!stack) { stack = h('div#notify-stack'); document.body.append(stack); }
+  stack.append(t);
+  window.dispatchEvent(new CustomEvent('notify', { detail: n }));
+  let timer = setTimeout(() => t.remove(), 30000);
+  t.addEventListener('mouseenter', () => clearTimeout(timer));
+  t.addEventListener('mouseleave', () => { timer = setTimeout(() => t.remove(), 10000); });
 }
 
 function notice(j) {
