@@ -1,9 +1,10 @@
 // 知识库：两层。概念层是「我看过、想过、判断过」的内容按概念组织成的图谱（像 Obsidian）；
 // 来源层是各板块同步来的 markdown 原文，可检索、可批注。
 // 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
-// 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
+// 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source #kb/papers/<主题> · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
 import { annotate } from './_annotate.js';
 import { whyNotSection } from './_whynot.js';
+import { papersTab } from './_papermap.js';
 
 const CSS = `
 .kb-graph { position: relative; padding: 0; overflow: hidden; }
@@ -122,7 +123,7 @@ export default {
 async function home(el, ctx, tab, arg = '') {
   const { api, h, ui, ask, toast } = ctx;
   const [g, st] = await Promise.all([api.get('/api/kb/graph'), api.get('/api/kb/stats')]);
-  const tabs = [['judge', '判断'], ['graph', '图谱'], ['topics', '主题'], ['stream', '最近思考'], ['source', '来源库']];
+  const tabs = [['judge', '判断'], ['graph', '图谱'], ['topics', '主题'], ['stream', '最近思考'], ['papers', '论文脉络'], ['source', '来源库']];
   const cur = tabs.some(([id]) => id === tab) ? tab : 'judge';
   const tabBar = h('div.tabs', { style: { marginBottom: 0 } }, tabs.map(([id, name]) =>
     h('button' + (cur === id ? '.active' : ''), { onclick: () => { location.hash = id === 'judge' ? '#kb' : '#kb/' + id; } }, name)));
@@ -152,6 +153,7 @@ async function home(el, ctx, tab, arg = '') {
   else if (cur === 'graph') graphTab(body, ctx, g);
   else if (cur === 'topics') topicsTab(body, ctx, g);
   else if (cur === 'stream') streamTab(body, ctx);
+  else if (cur === 'papers') papersTab(body, ctx, arg);
   else sourceTab(body, ctx, st);
 
   function showStatus(s, stale) {

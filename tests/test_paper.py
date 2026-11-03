@@ -144,3 +144,23 @@ def test_build_map_recalls_pulls_ancestor_and_validates_ids(monkeypatch):
     assert "漏了这些 key 论文" in calls[1] and res["cost"] == 0.006                 # 高分的 IGPT 没进线 → 补问一次
     assert "arxiv.org/abs/xDPO" in pmap.render(res)
     assert pmap.build("后训练 ") == res and len(calls) == 2                       # 命中缓存
+
+
+def test_kb_papers_endpoints(client):
+    paper("A", "Proximal policy optimization", 2017, 30000)
+    paper("B", "Direct preference optimization", 2023, 9000)
+    lab.run(call=fake_label())
+    ov = client.get("/api/kb/papers").json()
+    assert ov["total"] == 2 and ov["labeled"] == 2 and ov["maps"] == []
+    assert client.get("/api/kb/papers/map", params={"topic": "后训练"}).status_code == 404
+    assert client.post("/api/kb/papers/map", json={"topic": " "}).status_code == 400
+    res = {"topic": "后训练", "overview": "o", "lines": [{"name": "L", "summary": "s", "nodes": [{"s2id": "B", "role": "改进", "note": "n"},
+                                                                {"s2id": "A", "role": "起点", "note": "n"}]}],
+           "foundations": [], "surveys": [], "open": [], "recalled": 1, "core": 1, "chosen": ["A", "B"], "key": [], "ancestors": [],
+           "cost": 0.004, "created": "2026-11-03T10:00:00"}
+    db.execute("INSERT INTO paper_maps(topic, result, cost, created) VALUES (?,?,?,?)",
+               ["后训练", json.dumps(res, ensure_ascii=False), 0.004, res["created"]])
+    got = client.get("/api/kb/papers/map", params={"topic": "后训练"}).json()
+    assert [n["s2id"] for n in got["lines"][0]["nodes"]] == ["A", "B"]        # 按年份排
+    assert got["chosen"] == 2 and got["papers"]["A"]["year"] == 2017 and got["papers"]["A"]["url"].endswith("xA")
+    assert client.get("/api/kb/papers").json()["maps"][0]["lines"] == 1

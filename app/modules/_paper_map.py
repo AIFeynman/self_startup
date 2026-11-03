@@ -4,7 +4,7 @@
 ② 召回：FTS5 trigram 短语命中（标题 / 一句话 / 标签 / 摘要）+ 方向命中（主方向命中主题首要方向 1.2、其它方向 1.0，副方向 0.5）。
 ③ 子图：召回集合内的库内引用边；被 ≥ ANCESTOR_SHARE 的召回论文引用的库内论文作为「前置基础」拉进来（如 PPO 之于 RLHF）。
 ④ 选点：PageRank（引用方 → 被引方）+ 主题内被引次数 + 年均被引 + 相关度的分位加权（0.3 / 0.3 / 0.3 / 0.1），按子方向分名额（∝ √该方向里关键词命中的篇数）取 NODES 篇，再给近 2 年的论文留 FRONTIER 个位置；
-   分数最高的 KEY 篇 + 每个子方向的第一名必须出现在结果里，漏了补问一次；还漏就按引用边挂到最相关的线上。
+   分数最高的 KEY 篇 + 每个子方向的前 LEAD 名必须出现在结果里，漏了补问一次；还漏就按引用边挂到最相关的线上。
 ⑤ 成线：把选出的论文（含 builds_on 和子图里的引用关系）交给模型分成 3–7 条线，每个节点写「相比前一步解决了什么」；
    只能用给定的论文编号，校验后落库缓存。
 """
@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+
+import httpx
 
 from .. import db
 from . import _paper_collect as col, _paper_label as lab
@@ -51,8 +53,13 @@ def rewrite(topic: str) -> tuple[dict, float]:
     ok = lab.codes()["d"]
     out: dict[str, list[str]] = {"must": [], "should": [], "domains": []}
     cost = 0.0
-    for _ in range(REWRITE_N):
-        text, c = lab.chat(REWRITE.format(doms=doms), topic, max_tokens=1200, json_mode=True)
+    for i in range(REWRITE_N):
+        try:
+            text, c = lab.chat(REWRITE.format(doms=doms), topic, max_tokens=1200, json_mode=True)
+        except httpx.HTTPError:
+            if i == REWRITE_N - 1 and not out["must"]:       # 一次都没成才报错；成了一次就用已有的并集
+                raise
+            continue
         cost += c
         x = json.loads(text)
         out["must"] += [str(t) for t in x.get("must") or [] if str(t).strip()][:10]
@@ -283,3 +290,36 @@ def render(res: dict) -> str:
     out.append(f"<sub>召回 {res['recalled']} 篇 → 子图 {res['core']} 篇 → 选 {len(res['chosen'])} 篇成线；花费 ${res['cost']}</sub>")
     return "\n".join(out)
 
+
+
+# ---------- 知识库「论文脉络」标签页用 ----------
+
+def _init() -> None:
+    db.init([col.SCHEMA])
+
+
+def overview() -> dict:
+    """库里有多少论文（按入库档位）、标注了多少、已经生成过哪些主题的脉络。"""
+    _init()
+    tiers = {r["tier"]: r["n"] for r in db.rows("SELECT tier, count(*) n FROM paper_items WHERE status='in' GROUP BY tier")}
+    labeled = db.row("SELECT count(*) n FROM paper_labels l JOIN paper_items p ON p.s2id=l.s2id WHERE p.status='in'")["n"]
+    maps = db.rows("SELECT json_extract(result,'$.topic') topic, json_array_length(result,'$.lines') lines, "
+                   "json_array_length(result,'$.chosen') chosen, cost, created FROM paper_maps ORDER BY created DESC")
+    return {"total": sum(tiers.values()), "tiers": tiers, "labeled": labeled, "maps": maps}
+
+
+def view(res: dict) -> dict:
+    """脉络 JSON + 里面出现的每篇论文的元信息（标题、链接、年份、被引、类型 / 方向名、一句话）。"""
+    t = lab.taxonomy()
+    kinds = {x["code"]: x["name"] for x in t["kinds"]}
+    doms = {c["code"]: c["name"] for d in t["domains"] for c in d["children"]}
+    ids = list(_shown(res))
+    rows = db.rows(f"SELECT p.s2id, p.arxiv, p.title, p.year, p.cites, p.tier, l.k, l.d, l.s FROM paper_items p "
+                   f"LEFT JOIN paper_labels l ON l.s2id=p.s2id WHERE p.s2id IN ({','.join('?' * len(ids))})", ids) if ids else []
+    papers = {r["s2id"]: {"title": r["title"], "year": r["year"], "cites": r["cites"] or 0, "classic": r["tier"] == "classic",
+                          "url": f"https://arxiv.org/abs/{r['arxiv']}" if r["arxiv"] else f"https://www.semanticscholar.org/paper/{r['s2id']}",
+                          "kind": kinds.get(r["k"] or "", ""), "domain": doms.get(r["d"] or "", ""), "s": r["s"] or ""} for r in rows}
+    yr = lambda n: papers.get(n["s2id"], {}).get("year") or 0
+    lines = [{**ln, "nodes": sorted(ln["nodes"], key=yr)} for ln in res.get("lines") or []]   # 模型给的顺序偶尔不按年份
+    keep = ("topic", "overview", "foundations", "surveys", "open", "recalled", "core", "cost", "created")
+    return {k: res.get(k) for k in keep} | {"lines": lines, "chosen": len(res.get("chosen") or []), "papers": papers}

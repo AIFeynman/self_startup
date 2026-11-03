@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from hashlib import sha1
@@ -88,7 +89,11 @@ def chat(system: str, user: str, max_tokens: int = 16000, json_mode: bool = Fals
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    r = httpx.post(f"{base}/chat/completions", timeout=TIMEOUT, headers={"Authorization": f"Bearer {key}"}, json=body)
+    for i in range(3):                                   # 429 / 5xx 是 DeepSeek 偶发的过载，退避两次再报错
+        r = httpx.post(f"{base}/chat/completions", timeout=TIMEOUT, headers={"Authorization": f"Bearer {key}"}, json=body)
+        if r.status_code != 429 and r.status_code < 500 or i == 2:
+            break
+        time.sleep(3 * (i + 1))
     r.raise_for_status()
     j = r.json()
     u = j.get("usage") or {}

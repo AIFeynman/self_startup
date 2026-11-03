@@ -1,6 +1,8 @@
 """知识库板块：检索 / 阅读 data/kb/ 下自动同步的 markdown 知识树（逻辑在 app/kb.py）。"""
+import json
 import threading
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -8,6 +10,7 @@ from pydantic import BaseModel
 import re
 
 from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
+from . import _paper_map as paper_map
 
 TITLE = "知识库"
 ORDER = 60
@@ -236,3 +239,40 @@ def whynot_recheck(wid: int, layer: str = ""):
         raise HTTPException(404, "not found")
     kb_whynot.start_check(wid, (layer,) if layer in ("paper", "followup") else ("paper", "followup"))
     return {"ok": True}
+
+
+# ---------- 论文脉络（逻辑在 app/modules/_paper_map.py） ----------
+
+@router.get("/papers")
+def papers_overview():
+    return paper_map.overview()
+
+
+@router.get("/papers/map")
+def papers_map(topic: str):
+    paper_map._init()
+    row = paper_map.db.row("SELECT result FROM paper_maps WHERE topic=?", [paper_map.norm(topic)])
+    if not row:
+        raise HTTPException(404, "还没生成过这个主题")
+    return paper_map.view(json.loads(row["result"]))
+
+
+class PaperMapIn(BaseModel):
+    topic: str
+    force: bool = False      # 不用缓存，重新生成
+
+
+@router.post("/papers/map")
+def papers_build(body: PaperMapIn):
+    """约 20 秒、$0.004：改写 → 召回 → 子图选点 → 模型成线。"""
+    topic = body.topic.strip()
+    if not topic:
+        raise HTTPException(400, "主题不能为空")
+    if not kb_graph.has_llm():
+        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
+    if not paper_map.overview()["labeled"]:
+        raise HTTPException(400, "论文库还是空的：先跑采集和标注")
+    try:
+        return paper_map.view(paper_map.build(topic, use_cache=not body.force))
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"模型接口暂时不可用，稍后再试（{e.response.status_code if isinstance(e, httpx.HTTPStatusError) else type(e).__name__}）")
