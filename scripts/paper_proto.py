@@ -153,7 +153,7 @@ def _milestones() -> dict:
     for name, (topic, gold) in GOLD.items():
         res = pmap.build(topic)
         rel = pmap.recall(res["intent"])
-        shown = {n["s2id"] for ln in res["lines"] for n in ln["nodes"]} | set(res["foundations"]) | set(res["surveys"])
+        shown = pmap._shown(res)
         stage = {"cand": [], "in": [], "recall": [], "chosen": [], "shown": []}
         for a in gold:
             r = by_ax.get(a)

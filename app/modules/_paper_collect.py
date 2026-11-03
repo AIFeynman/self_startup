@@ -38,6 +38,7 @@ TIERS = [(6, "recent", None), (24, "young", 60), (60, "mid", 250), (10_000, "old
 RECENT_MIN_CITES, RECENT_MIN_INFL = 15, 3
 JUNK_DROP = 0.5            # Jev 判「水文」概率 ≥ 这个的近期论文不入库
 CLASSIC_REFS, CLASSIC_MIN_CITES = 8, 500
+NEAR, NEAR_INFL_RATIO = 0.8, 0.15   # 被引到门槛 80% 且高影响力引用占比 ≥ 15%（平均约 11%）也收：被引不多但多是实质引用
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_items (
@@ -206,6 +207,9 @@ def decide(r: dict, today: datetime | None = None) -> tuple[str, str, str]:
         return "in", tier, "近 6 个月，有早期信号" + ("（信息推荐热门）" if r.get("hot") else "")
     if (r.get("cites") or 0) >= need:
         return "in", tier, f"{tier}：被引 {r['cites']} ≥ {need}"
+    c, infl = r.get("cites") or 0, r.get("infl") or 0
+    if c >= NEAR * need and infl >= NEAR_INFL_RATIO * c:
+        return "in", tier, f"{tier}：被引 {c} 接近 {need}，高影响力引用占 {infl / c:.0%}"
     return "out", tier, f"{tier}：被引 {r.get('cites') or 0} < {need}"
 
 

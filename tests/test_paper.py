@@ -33,6 +33,8 @@ def paper(s2id, title, year, cites, refs=(), arxiv="x", abstract="", pub=None):
     ("2025-11-01", 59, {}, ("out", "young")),
     ("2025-11-01", 60, {}, ("in", "young")),
     ("2023-01-01", 249, {}, ("out", "mid")),
+    ("2023-01-01", 210, {"infl": 35}, ("in", "mid")),      # 接近门槛且高影响力引用占比高
+    ("2023-01-01", 210, {"infl": 20}, ("out", "mid")),
     ("2018-01-01", 999, {}, ("out", "old")),
     ("2018-01-01", 1000, {}, ("in", "old")),
 ])
@@ -111,7 +113,7 @@ def test_build_map_recalls_pulls_ancestor_and_validates_ids(monkeypatch):
         calls.append(user)
         if len(calls) == 1:
             return json.dumps({"must": ["human preferences", "preference optimization"], "should": [], "domains": ["pref_opt"]}), 0.001
-        ids = {json.loads(l)["t"]: json.loads(l)["id"] for l in user.split("论文：\n")[1].splitlines()}
+        ids = {json.loads(ln)["t"]: json.loads(ln)["id"] for ln in user.split("论文：\n")[1].splitlines() if ln.startswith('{"id"')}
         return json.dumps({"overview": "o", "foundations": [ids["Proximal policy optimization"]], "surveys": [],
                            "lines": [{"name": "RLHF", "summary": "s", "nodes": [
                                {"id": ids["Learning from human preferences"], "role": "起点", "note": "n"},
@@ -122,6 +124,7 @@ def test_build_map_recalls_pulls_ancestor_and_validates_ids(monkeypatch):
     res = pmap.build("后训练")
     assert "MOE" not in res["chosen"] and "PPO" in res["chosen"]
     assert [n["s2id"] for n in res["lines"][0]["nodes"]] == ["RLHF", "DPO"]     # 编造的 p99 被丢掉
-    assert res["foundations"] == ["PPO"] and res["cost"] == 0.003
+    assert res["foundations"] == ["PPO"]
+    assert "漏了这些 key 论文" in calls[2] and res["cost"] == 0.005                 # 高分的 IGPT 没进线 → 补问一次
     assert "arxiv.org/abs/xDPO" in pmap.render(res)
-    assert pmap.build("后训练 ") == res and len(calls) == 2                       # 命中缓存
+    assert pmap.build("后训练 ") == res and len(calls) == 3                       # 命中缓存
