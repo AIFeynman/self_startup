@@ -78,6 +78,11 @@
       {"code": "privacy", "name": "隐私与水印", "eg": ["成员推断", "数据提取", "水印"]},
       {"code": "fairness", "name": "偏见与公平", "eg": ["社会偏见", "公平性"]}
     ]},
+    {"code": "rec", "name": "推荐系统", "children": [
+      {"code": "rec_gen", "name": "生成式推荐", "eg": ["Semantic ID", "生成式检索", "物品 tokenization", "端到端生成式推荐（OneRec/HSTU）"]},
+      {"code": "rec_llm", "name": "LLM 推荐", "eg": ["LLM 作推荐器", "对话式推荐", "推荐 Agent", "LLM 增强特征"]},
+      {"code": "rec_classic", "name": "传统推荐", "eg": ["协同过滤", "CTR 预估", "序列推荐", "图推荐", "工业召回排序"]}
+    ]},
     {"code": "ml", "name": "经典 ML", "children": [
       {"code": "rl", "name": "强化学习（非 LLM）", "eg": ["策略梯度", "Q-learning", "离线 RL", "博弈"]},
       {"code": "cv", "name": "视觉任务", "eg": ["分类", "检测", "分割", "ViT"]},

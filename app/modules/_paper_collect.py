@@ -5,6 +5,7 @@
 - 候选：按主题的检索式走 S2 bulk search（按引用排序，每页 1000），外加近 6 个月新论文一页、信息推荐里的论文。
 - 入库门槛随年龄收紧：≤6 个月看早期信号（引用 / 高影响力引用 / 信息推荐热度）再过 Jev 水文判断；
   6–24 个月引用 ≥ 60；2–5 年 ≥ 250；5 年以上 ≥ 1000。只收 arXiv 论文。
+- 工业界论文（摘要里写了大厂名字 + 线上部署 / A/B / 工业场景）门槛打对折：被引天然比学术热点少，但值得收录。
 - 经典回拉：被库内论文引用 ≥ CLASSIC_REFS 次、总被引 ≥ CLASSIC_MIN_CITES 的参考文献（含非 arXiv，如 PPO 之前的 RL 经典）也入库。
 - 详情（摘要、TLDR、参考文献）只给入库的论文取，S2 batch 100 篇一次。
 没有 SEMANTIC_SCHOLAR_API_KEY（或 S2_API_KEY）时走公共限流池（常 429，靠退避重试），有 key 时每秒 1 次。
@@ -16,6 +17,7 @@ import logging
 import math
 import os
 import random
+import re
 import threading
 import time
 from datetime import datetime
@@ -38,7 +40,13 @@ TIERS = [(6, "recent", None), (24, "young", 60), (60, "mid", 250), (10_000, "old
 RECENT_MIN_CITES, RECENT_MIN_INFL = 15, 3
 JUNK_DROP = 0.5            # Jev 判「水文」概率 ≥ 这个的近期论文不入库
 CLASSIC_REFS, CLASSIC_MIN_CITES = 8, 500
-NEAR, NEAR_INFL_RATIO = 0.8, 0.15   # 被引到门槛 80% 且高影响力引用占比 ≥ 15%（平均约 11%）也收：被引不多但多是实质引用
+NEAR, NEAR_INFL_RATIO = 0.8, 0.15
+INDUSTRY_FACTOR = 0.5
+COMPANY = re.compile(r"\b(google|deepmind|youtube|meta|facebook|instagram|microsoft|bing|amazon|apple|netflix|linkedin|pinterest|"
+                     r"spotify|airbnb|uber|snap|twitter|alibaba|taobao|tmall|alipay|ant group|tencent|wechat|bytedance|douyin|"
+                     r"tiktok|kuaishou|meituan|baidu|jd\.com|huawei|xiaohongshu|rednote|shopee|didi|pinduoduo|ele\.me)\b", re.I)
+DEPLOY = re.compile(r"deploy|online a/b|a/b test|industrial|in production|production (?:system|environment|traffic)|"
+                    r"serv(?:es|ing) (?:hundreds of )?(?:millions|billions)|daily active users|real-world traffic", re.I)   # 被引到门槛 80% 且高影响力引用占比 ≥ 15%（平均约 11%）也收：被引不多但多是实质引用
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_items (
@@ -198,6 +206,7 @@ def decide(r: dict, today: datetime | None = None) -> tuple[str, str, str]:
     for cap, tier, need in TIERS:
         if m <= cap:
             break
+    ind = industrial(r)
     if need is None:
         sig = r.get("hot") or (r.get("cites") or 0) >= RECENT_MIN_CITES or (r.get("infl") or 0) >= RECENT_MIN_INFL
         if not sig:
@@ -207,10 +216,18 @@ def decide(r: dict, today: datetime | None = None) -> tuple[str, str, str]:
         return "in", tier, "近 6 个月，有早期信号" + ("（信息推荐热门）" if r.get("hot") else "")
     if (r.get("cites") or 0) >= need:
         return "in", tier, f"{tier}：被引 {r['cites']} ≥ {need}"
+    if ind and (r.get("cites") or 0) >= need * INDUSTRY_FACTOR:
+        return "in", tier, f"{tier}：工业界论文，被引 {r['cites']} ≥ {int(need * INDUSTRY_FACTOR)}"
     c, infl = r.get("cites") or 0, r.get("infl") or 0
     if c >= NEAR * need and infl >= NEAR_INFL_RATIO * c:
         return "in", tier, f"{tier}：被引 {c} 接近 {need}，高影响力引用占 {infl / c:.0%}"
     return "out", tier, f"{tier}：被引 {r.get('cites') or 0} < {need}"
+
+
+def industrial(r: dict) -> bool:
+    """摘要 / 标题里有大厂名字且写了线上部署、A/B、工业场景。没取过详情（没摘要）的只看标题。"""
+    text = f"{r.get('title') or ''} {r.get('abstract') or ''}"
+    return bool(COMPANY.search(text) and DEPLOY.search(text)) or "industrial" in (r.get("title") or "").lower()
 
 
 def admit_all(today: datetime | None = None) -> dict:
@@ -238,9 +255,18 @@ def mark_hot() -> int:
     return n
 
 
-def fetch_details(c: httpx.Client, on_page=None) -> int:
-    """给入库但还没取详情的论文取摘要、TLDR、参考文献。"""
-    todo = [r["s2id"] for r in db.rows("SELECT s2id FROM paper_items WHERE status='in' AND detail_at IS NULL")]
+def near_industry() -> list[str]:
+    """被引够工业界门槛、但还没取详情（看不到摘要、判不了是不是工业界）的落选 arXiv 论文。"""
+    need = {t: n for _, t, n in TIERS if n}
+    return [r["s2id"] for r in db.rows("SELECT s2id, tier, cites FROM paper_items WHERE status='out' AND arxiv!='' "
+                                       "AND detail_at IS NULL") if r["tier"] in need
+            and r["cites"] >= need[r["tier"]] * INDUSTRY_FACTOR]
+
+
+def fetch_details(c: httpx.Client, on_page=None, ids: list[str] | None = None) -> int:
+    """给入库但还没取详情的论文（或传入的 ids）取摘要、TLDR、参考文献。"""
+    todo = ids if ids is not None else [
+        r["s2id"] for r in db.rows("SELECT s2id FROM paper_items WHERE status='in' AND detail_at IS NULL")]
     for i in range(0, len(todo), DETAIL_BATCH):
         for p in batch(todo[i:i + DETAIL_BATCH], c):
             upsert(p, "")

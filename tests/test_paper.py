@@ -191,3 +191,12 @@ def test_kb_papers_read_reuses_and_creates(client, monkeypatch):
     monkeypatch.setattr(kbmod, "PAPER_READ_MAX", 0)
     db.execute("DELETE FROM learn_items WHERE id=?", [it["id"]])
     assert client.post("/api/kb/papers/read", json={"s2ids": ["A"]}).status_code == 400
+
+
+def test_decide_halves_threshold_for_industry_papers():
+    base = {"arxiv": "1", "pub_date": "2023-06-01", "cites": 150, "infl": 0, "title": "Generative retrieval for recsys"}
+    assert col.decide(base, TODAY)[0] == "out"
+    ind = base | {"abstract": "Deployed at Kuaishou, online A/B tests show +1.2% watch time."}
+    st, _, why = col.decide(ind, TODAY)
+    assert st == "in" and "工业界" in why
+    assert col.decide(base | {"abstract": "We thank Google for compute."}, TODAY)[0] == "out"

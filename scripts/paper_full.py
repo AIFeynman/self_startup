@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import time
 from datetime import datetime
@@ -64,6 +65,9 @@ QUERIES = {
     "safety_align": '"ai safety" | "harmlessness" | "safety alignment" | ("refusal" + "language models") | "harmful content"',
     "privacy": '"membership inference" | "training data extraction" | watermarking | ("differential privacy" + "deep learning") | memorization',
     "fairness": '"social bias" | fairness | "gender bias" | ("stereotypes" + "language models") | debiasing',
+    "rec_gen": '"generative recommendation" | "generative recommender" | "semantic ids" | "generative retrieval" | ("item tokenization" + recommendation) | "sequential transducers"',
+    "rec_llm": '("large language models" + recommendation) | ("llm" + recommender) | "conversational recommendation" | ("agent" + recommendation)',
+    "rec_classic": '"recommender systems" | "collaborative filtering" | "click-through rate prediction" | "ctr prediction" | "sequential recommendation" | ("ranking" + "industrial" + recommendation)',
     "rl": '"reinforcement learning" | "policy gradient" | "q-learning" | "offline reinforcement learning" | "multi-agent reinforcement learning"',
     "cv": '"image classification" | "object detection" | "semantic segmentation" | "vision transformer" | "convolutional neural network"',
     "nlp_classic": '"named entity recognition" | "neural machine translation" | BERT | "sequence labeling" | "text classification" | "sentiment analysis"',
@@ -75,9 +79,9 @@ QUERIES = {
 def slices(today: datetime | None = None) -> list[tuple[str, str, int, int]]:
     """(名字, S2 year 参数, minCitationCount, 页数)：按引用排序时每个年龄段各取一截，避免老论文把新论文挤掉。
     门槛见 col.TIERS（young ≥60 / mid ≥250 / old ≥1000），按自然年切会有重叠，入库与否由 decide 按发表日期判。"""
-    y = (today or datetime.now()).year
-    return [("old", f"-{y - 5}", 1000, 3), ("mid", f"{y - 5}-{y - 2}", 250, 3),
-            ("young", f"{y - 2}-{y}", 60, 3), ("recent", f"{y - 1}-", 0, 1)]
+    y, f = (today or datetime.now()).year, col.INDUSTRY_FACTOR     # 检索按工业界门槛（对折）取，入库再由 decide 分
+    return [("old", f"-{y - 5}", int(1000 * f), 3), ("mid", f"{y - 5}-{y - 2}", int(250 * f), 3),
+            ("young", f"{y - 2}-{y}", int(60 * f), 3), ("recent", f"{y - 1}-", 0, 1)]
 
 
 OUT = db.DATA_DIR / "paper_full.json"
@@ -116,6 +120,8 @@ def collect(only: list[str] | None = None) -> None:
         _save("collect_done", done)
         logging.info("%s：%d 条（取满：%s）S2 %s", code, n, full or "-", col.usage)
     col.mark_hot()
+    near = col.near_industry()                            # 先取摘要才判得出工业界论文
+    col.fetch_details(c, on_page=lambda i, n: logging.info("工业界候选详情 %d/%d", i, n), ids=near)
     logging.info("门槛：%s", col.admit_all())
     col.fetch_details(c, on_page=lambda i, n: logging.info("详情 %d/%d", i, n))
     logging.info("经典回拉 %d 篇", len(col.pull_classics(c)))
@@ -148,7 +154,20 @@ def label(step: int = 200) -> None:
             sys.exit(1)
 
 
-STEPS = {"collect": collect, "judge": judge, "label": label}
+REC = re.compile(r"recommend|click-through|\bctr\b|collaborative filtering", re.I)
+
+
+def relabel_rec() -> None:
+    """分类体系加了「推荐系统」后，把以前标在别的方向（多是 other）的推荐论文重标一遍。"""
+    corpus = lab._corpus()
+    rows = [r for r in db.rows("SELECT p.* FROM paper_items p JOIN paper_labels l ON l.s2id=p.s2id "
+                               "WHERE p.status='in' AND l.d NOT LIKE 'rec_%'") if REC.search(f"{r['title']} {r['abstract']}")]
+    st = lab.run(items=[(r, lab.refs_of(r, corpus)) for r in rows])
+    _save("relabel_rec", {"todo": len(rows), "labeled": st["labeled"], "errors": st["errors"][-5:]})
+    logging.info("推荐论文重标 %d/%d %s", st["labeled"], len(rows), st["errors"][-2:] or "")
+
+
+STEPS = {"collect": collect, "judge": judge, "label": label, "relabel_rec": relabel_rec}
 
 
 def main() -> None:
@@ -156,7 +175,7 @@ def main() -> None:
     db.init([col.SCHEMA])
     args = sys.argv[1:]
     if args[0] == "collect":
-        collect(args[1:] or None)
+        collect([a for a in args[1:] if a != "all"] or (list(QUERIES) if "all" in args else None))
     else:
         for step in (list(STEPS) if args[0] == "all" else args):
             STEPS[step]()
