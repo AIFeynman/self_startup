@@ -166,13 +166,14 @@ def research(symbol: str) -> dict[str, Any]:
 class LiveFeed:
     """yfinance 的 Yahoo WebSocket 实时报价，只存在内存里（定时刷新的报价仍是记录）。断线指数退避重连。"""
 
-    def __init__(self, symbols: list[str]):
+    def __init__(self, symbols: list[str], proxy: str = ""):
         try:
             import yfinance as yf
         except ImportError:
             yf = None
         self._yf = yf
         self.symbols = sorted(set(symbols))
+        self.proxy = proxy
         self._quotes: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -212,6 +213,9 @@ class LiveFeed:
         while not self._stop.is_set():
             try:
                 self._socket = self._yf.WebSocket(verbose=False)
+                if self.proxy:   # 平台进程可能带着 Claude Code 会话注入的代理，连不上 Yahoo；配了 wealth.proxy 就自己先连上
+                    from websockets.sync.client import connect
+                    self._socket._ws = connect(self._socket.url, proxy=self.proxy, open_timeout=15)
                 self._socket.subscribe(self.symbols)
                 self.connected, self.last_error, backoff = True, "", 2.0
                 self._socket.listen(self.handle)  # 阻塞到连接断开

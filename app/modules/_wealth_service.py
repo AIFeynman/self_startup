@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from .. import db
+from .. import db, settings
 from . import _wealth_market as market
 from . import _wealth_sell_backtest as sell_backtest
 from . import _wealth_sell_plan as sell_plan
@@ -83,7 +83,7 @@ LIVE: market.LiveFeed | None = None   # 板块启动时打开（wealth.on_startu
 def start_live() -> None:
     global LIVE
     if LIVE is None:
-        LIVE = market.LiveFeed(list(ASSETS))
+        LIVE = market.LiveFeed(list(ASSETS), proxy=settings.get("wealth.proxy", "") or "")
         LIVE.start()
 
 

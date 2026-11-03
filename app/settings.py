@@ -59,8 +59,9 @@ DEFAULTS: dict = {
     "oss": {"label_engine": "deepseek"},
     # 论文脉络的标注 / 脉络生成用哪个模型：haiku = 本机 Claude Code 登录（model_tiers.light）；deepseek = 官方 API
     "paper": {"llm_engine": "haiku", "feed_ingest": True, "maintain_days": 7},
-    # 理财：信号变化 / 每日汇总提醒；target = 一年收益目标；refresh_minutes = 行情和新闻刷新间隔
-    "wealth": {"alerts": True, "target": 0.10, "summary_time": "16:30", "refresh_minutes": 60},
+    # 理财：信号变化 / 每日汇总提醒；target = 一年收益目标；refresh_minutes = 行情和新闻刷新间隔；
+    # proxy = 实时报价 WebSocket 走的代理（如 "http://127.0.0.1:12000"），空 = 按进程环境变量
+    "wealth": {"alerts": True, "target": 0.10, "summary_time": "16:30", "refresh_minutes": 60, "proxy": ""},
     # 通知：所有板块都写进通知记录、页面右下角弹出；system = 同时发 macOS 系统通知
     "notify": {"system": True},
     # 学习习惯：每天自动加一个「读前沿论文」学习块（规划页打开今天时加；在信息推荐的论文上写一句话判断即完成）
