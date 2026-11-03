@@ -231,10 +231,14 @@ def industrial(r: dict) -> bool:
 
 
 def admit_all(today: datetime | None = None) -> dict:
-    """按门槛重新判全部候选。经典回拉的和用户补充的（tier=manual）不动。"""
+    """按门槛重新判全部候选。经典回拉的和用户补充的（tier=manual）不动。
+    已入库的只会因为 Jev 判水文被踢出去：论文变老门槛变高（半年内 → 1–2 年要被引 60）不踢，免得脉络里的论文突然消失。"""
     n = {"in": 0, "out": 0}
     for r in db.rows("SELECT * FROM paper_items WHERE COALESCE(tier,'') NOT IN ('classic','manual')"):
         st, tier, why = decide(r, today)
+        if r["status"] == "in" and st == "out" and not why.startswith("Jev"):
+            n["in"] += 1
+            continue
         if (st, tier, why) != (r["status"], r["tier"], r["why"]):
             db.execute("UPDATE paper_items SET status=?, tier=?, why=? WHERE id=?", [st, tier, why, r["id"]])
         n[st] += 1

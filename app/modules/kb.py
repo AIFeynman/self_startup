@@ -11,7 +11,7 @@ from pydantic import BaseModel
 import re
 
 from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
-from . import _paper_add as paper_add, _paper_label as paper_label, _paper_map as paper_map
+from . import _paper_add as paper_add, _paper_label as paper_label, _paper_maintain as paper_maintain, _paper_map as paper_map
 
 TITLE = "知识库"
 ORDER = 60
@@ -364,6 +364,14 @@ def papers_topic_get(aid: int, full: bool = False):
     if not a:
         raise HTTPException(404, "没有这个补充记录")
     return paper_add.adds_view(a, full)
+
+
+@router.post("/papers/maintain")
+def papers_maintain():
+    """立即跑一次每周维护（后台，几分钟）：刷新被引 → 重判门槛 → 标注新收的和要重标 builds_on 的。"""
+    if not paper_maintain.start(force=True):
+        raise HTTPException(409, "维护已经在跑了")
+    return {"started": True}
 
 
 @router.get("/papers/adds")

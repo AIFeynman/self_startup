@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter
 from datetime import datetime
@@ -19,6 +20,8 @@ import httpx
 
 from .. import db
 from . import _paper_collect as col, _paper_label as lab
+
+log = logging.getLogger(__name__)
 
 NODES, FRONTIER, ANCESTOR_SHARE, ANCESTOR_MAX = 80, 12, 0.08, 8
 OTHER = "_other"
@@ -289,7 +292,7 @@ def build(topic: str, use_cache: bool = True) -> dict:
         res = _attach(res, [s for s in g["key"] if s not in _shown(res)], g)
     res = res | {
         "topic": topic, "intent": intent, "recalled": len(rel), "core": g["core"], "chosen": g["chosen"], "key": sorted(g["key"]),
-        "ancestors": g["ancestors"], "cost": round(c1 + c2, 4), "created": db.now()}
+        "ancestors": g["ancestors"], "cost": round(c1 + c2, 4), "created": db.now(), "pool": sorted(rel)}
     db.execute("INSERT OR REPLACE INTO paper_maps(topic,result,cost,created) VALUES (?,?,?,?)",
                [key, json.dumps(res, ensure_ascii=False), res["cost"], res["created"]])
     return res
@@ -326,14 +329,43 @@ def _init() -> None:
     db.init([col.SCHEMA])
 
 
+_fresh: dict[tuple, int] = {}
+
+
+def new_since(key: str, res: dict, stamp: tuple) -> int:
+    """脉络生成后，这个主题的召回里多了几篇（新入库的，或重新标注后归到这个主题的）。生成时的召回集存在 pool 里；
+    老版本没存 pool 的，用现在的召回补上当基线（记 0）。按 (主题, 生成时间, 标注数, 最近标注时间) 缓存。"""
+    ck = (key, res.get("created"), *stamp)
+    if ck not in _fresh:
+        rel = set(recall(res["intent"]))
+        if "pool" not in res:
+            db.execute("UPDATE paper_maps SET result=? WHERE topic=?", [json.dumps(res | {"pool": sorted(rel)}, ensure_ascii=False), key])
+            res["pool"] = sorted(rel)
+        _fresh[ck] = len(rel - set(res["pool"]))
+    return _fresh[ck]
+
+
+def _new(key: str, res: dict, lr: dict | None = None) -> int:
+    lr = lr or db.row("SELECT count(*) n, max(labeled_at) at FROM paper_labels l JOIN paper_items p ON p.s2id=l.s2id WHERE p.status='in'")
+    try:
+        return new_since(key, res, (lr["n"], lr["at"])) if res.get("intent") else 0
+    except Exception:  # noqa: BLE001  提示数算不出来不影响页面
+        log.exception("脉络新增数计算失败：%s", key)
+        return 0
+
+
 def overview() -> dict:
-    """库里有多少论文（按入库档位）、标注了多少、已经生成过哪些主题的脉络。"""
+    """库里有多少论文（按入库档位）、标注了多少、已经生成过哪些主题的脉络（各自生成后新增了几篇）、维护状态。"""
+    from . import _paper_maintain
     _init()
     tiers = {r["tier"]: r["n"] for r in db.rows("SELECT tier, count(*) n FROM paper_items WHERE status='in' GROUP BY tier")}
-    labeled = db.row("SELECT count(*) n FROM paper_labels l JOIN paper_items p ON p.s2id=l.s2id WHERE p.status='in'")["n"]
-    maps = db.rows("SELECT json_extract(result,'$.topic') topic, json_array_length(result,'$.lines') lines, "
-                   "json_array_length(result,'$.chosen') chosen, cost, created FROM paper_maps ORDER BY created DESC")
-    return {"total": sum(tiers.values()), "tiers": tiers, "labeled": labeled, "maps": maps}
+    lr = db.row("SELECT count(*) n, max(labeled_at) at FROM paper_labels l JOIN paper_items p ON p.s2id=l.s2id WHERE p.status='in'")
+    maps = []
+    for r in db.rows("SELECT topic, result, cost, created FROM paper_maps ORDER BY created DESC"):
+        res = json.loads(r["result"])
+        maps.append({"topic": res.get("topic"), "lines": len(res.get("lines") or []), "chosen": len(res.get("chosen") or []),
+                     "cost": r["cost"], "created": r["created"], "new": _new(r["topic"], res, lr)})
+    return {"total": sum(tiers.values()), "tiers": tiers, "labeled": lr["n"], "maps": maps, "maintain": _paper_maintain.status()}
 
 
 def view(res: dict) -> dict:
@@ -353,7 +385,7 @@ def view(res: dict) -> dict:
     lines = [{**ln, "nodes": sorted(ln["nodes"], key=yr)} for ln in res.get("lines") or []]   # 模型给的顺序偶尔不按年份
     keep = ("topic", "overview", "foundations", "surveys", "open", "recalled", "core", "cost", "created")
     return {k: res.get(k) for k in keep} | {"lines": lines, "chosen": len(res.get("chosen") or []), "papers": papers,
-                                         "thin": (res.get("recalled") or 0) < THIN_RECALL}
+                                         "thin": (res.get("recalled") or 0) < THIN_RECALL, "new": _new(norm(res.get("topic") or ""), res)}
 
 
 def paper_url(r: dict) -> str:

@@ -63,6 +63,10 @@ const CSS = `
 .pm-add .muted { font-size: 12.5px; margin-top: 6px; }
 .pm-add ol { margin: 8px 0 4px; padding-left: 22px; font-size: 13px; max-height: 320px; overflow: auto; } .pm-add li { margin: 2px 0; }
 .pm-add .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+.pm-new { color: var(--accent); font-size: 12px; display: block; margin-top: 2px; }
+.pm-mt { width: 100%; font-size: 12px; color: var(--muted); display: flex; gap: 4px 12px; flex-wrap: wrap; align-items: center; }
+.pm-mt .bad { color: var(--err); }
+.pm-mt button { font-size: 12px; padding: 1px 8px; }
 .pm-thin { border: 1px dashed var(--line-2); border-radius: var(--radius-sm); padding: 8px 12px; margin: 0 0 12px; font-size: 13px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .pm-open { margin: 4px 0 0; padding-left: 20px; } .pm-open li { margin: 4px 0; }
 @media (max-width: 640px) { .pm-lane, .pm-axis { grid-template-columns: 84px 1fr; min-width: 0; } .pm-lane > a { font-size: 11.5px; } .pm-nodes { margin-left: 8px; } .pm-node .y { position: static; width: auto; text-align: left; } }
@@ -92,7 +96,7 @@ export async function papersTab(body, ctx, topic = '') {
     : '论文库还是空的：先跑采集和标注（scripts/paper_proto collect / judge / label）。');
   const out = h('div');
   const adder = addPanel(ctx, (t) => go(t, false));
-  body.append(h('div.card.pm-ask', {}, [input, btn, note]), adder.el, out);
+  body.append(h('div.card.pm-ask', {}, [input, btn, note, ov.total ? maintLine(ctx, ov.maintain) : null]), adder.el, out);
 
   if (topic) {
     try { show(await api.get('/api/kb/papers/map?topic=' + enc(topic))); } catch { go(topic, false); }
@@ -102,7 +106,8 @@ export async function papersTab(body, ctx, topic = '') {
     out.replaceChildren(
       ui.section('已梳理的主题', `${ov.maps.length} 个`),
       ov.maps.length ? h('div.pm-maps', {}, ov.maps.map((m) => h('a', { href: pLink(m.topic) }, [
-        h('b', {}, m.topic), h('small', {}, `${m.lines} 条研究线 · ${m.chosen} 篇候选 · ${ago(m.created)}`)])))
+        h('b', {}, m.topic), h('small', {}, `${m.lines} 条研究线 · ${m.chosen} 篇候选 · ${ago(m.created)}`),
+        m.new ? h('span.pm-new', {}, `自生成后相关论文多了 ${m.new} 篇（新入库或重新标注），可重新生成`) : null])))
         : ui.empty('还没有梳理过的主题', '在上面输入一个主题试试'),
     );
   }
@@ -241,6 +246,7 @@ export async function papersTab(body, ctx, topic = '') {
         h('span', {}, `召回 ${fmt(m.recalled)} 篇 → 子图 ${fmt(m.core)} 篇 → 选 ${m.chosen} 篇成 ${m.lines.length} 条线`),
         h('span', {}, `生成于 ${ago(m.created)} · $${m.cost}`),
         h('span.grow'),
+        m.new ? h('span.pm-new', {}, `自生成后相关论文多了 ${m.new} 篇（新入库或重新标注）`) : null,
         h('button.outline', { onclick: () => go(m.topic, true) }, '重新生成'),
       ]),
       m.thin ? h('div.pm-thin', {}, [h('span', {}, `库里和「${m.topic}」相关的论文只召回到 ${m.recalled} 篇，脉络可能不全。`),
@@ -255,6 +261,27 @@ export async function papersTab(body, ctx, topic = '') {
       m.open.length ? h('div.card', { style: { padding: '12px 16px' } }, h('ul.pm-open', {}, m.open.map((o) => h('li', {}, o)))) : null,
     );
   }
+}
+
+// 维护状态：每日热门入库 / 每周维护（刷新被引、重判门槛、补标注）各自最近一次；同一种连续失败两次标红
+function maintLine(ctx, mt) {
+  const { api, h, toast } = ctx;
+  const R = (r) => r?.result || {};
+  const feed = mt.feed ? `${ago(mt.feed.started)}，新收 ${R(mt.feed).admitted ?? 0} 篇` : '还没跑过（信息推荐刷新后自动跑）';
+  const wk = mt.running ? `进行中：${mt.weekly?.step || '准备中'}`
+    : mt.weekly ? `${ago(mt.weekly.started)}，刷新被引 ${fmt(R(mt.weekly).checked ?? 0)} 篇，新收 ${R(mt.weekly).admitted ?? 0} 篇，重标 ${R(mt.weekly).relabel ?? 0} 篇`
+      : '还没跑过';
+  const bad = (k) => (mt[`${k}_alert`] ? '.bad' : '');
+  const fail = (r) => (r?.status === 'failed' ? `（失败：${r.step}）` : r?.status === 'partial' ? '（部分出错）' : '');
+  const btn = mt.running ? null : h('button.outline', { title: '刷新被引、重判门槛、标注新收和要重标的论文，约几分钟', onclick: async () => {
+    btn.disabled = true;
+    try { await api.post('/api/kb/papers/maintain', {}); toast('已开始维护，几分钟后刷新看结果'); } catch (e) { toast('启动失败：' + e.message, true); btn.disabled = false; }
+  } }, '立即维护');
+  return h('div.pm-mt', {}, [
+    h('span' + bad('feed'), { title: mt.feed?.step || '' }, `每日热门入库：${feed}${fail(mt.feed)}`),
+    h('span' + bad('weekly'), {}, `每周维护：${wk}${mt.running ? '' : fail(mt.weekly)}`),
+    btn,
+  ]);
 }
 
 // 补充论文：补一篇具体论文（直接入库并标注），或补一个方向（先预览「将新增 N 篇」，确认后后台入库、标注、重新生成脉络）
