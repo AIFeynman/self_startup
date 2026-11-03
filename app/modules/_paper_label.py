@@ -1,4 +1,7 @@
-"""论文脉络库的标注（设计稿 §4）：DeepSeek 一次标 25 篇，Jev 只判近 6 个月论文是不是水文。
+"""论文脉络库的标注（设计稿 §4）：模型一次标 25 篇，Jev 只判近 6 个月论文是不是水文。
+
+- 模型看 settings 的 paper.llm_engine：默认 haiku = 本机 Claude Code 登录（engines.claude.bin + model_tiers.light），
+  去掉 ANTHROPIC_BASE_URL 等网关变量，返回的 modelUsage 不是 firstParty 就报错，不退回别的网关；deepseek = 官方 API。
 
 - 输入：标题、年份、发表处、摘要（没有摘要用 S2 的 TLDR），加上它的库内参考文献（按被引取前 15 篇，编号 r0..）。
 - 输出（JSON Lines）：类型 k、主方向 d、副方向 d2、problem / method / bench / base 标签、中文一句话 s、
@@ -11,6 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -19,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from .. import db
+from .. import db, settings
 from . import _paper_collect as col
 from ._feed_judge import API as JEV_API, MODEL as JEV_MODEL
 from ._oss_label import DEEPSEEK_MODEL, DEEPSEEK_PRICE
@@ -27,7 +32,9 @@ from ._oss_label import DEEPSEEK_MODEL, DEEPSEEK_PRICE
 log = logging.getLogger(__name__)
 
 TAXONOMY_PATH = Path(__file__).with_name("paper_taxonomy.json")
-BATCH, PARALLEL, REFS_SHOWN = 25, 8, 15
+BATCH, REFS_SHOWN = 25, 15
+PARALLEL = {"deepseek": 8, "haiku": 4}
+GATEWAY_ENV = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENROUTER_API_KEY")
 JEV_BATCH = 20
 TIMEOUT = 600
 
@@ -79,7 +86,42 @@ def tax_text() -> str:
 
 # ---------- 模型调用 ----------
 
+def engine() -> str:
+    return str(settings.get("paper.llm_engine", "haiku") or "haiku")
+
+
 def chat(system: str, user: str, max_tokens: int = 16000, json_mode: bool = False) -> tuple[str, float]:
+    """→ (内容, 美元)。按 paper.llm_engine 走本机 Claude Code（默认）或 DeepSeek。"""
+    return (_deepseek if engine() == "deepseek" else _claude)(system, user, max_tokens, json_mode)
+
+
+def _claude(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple[str, float]:
+    """本机 Claude Code 登录跑 light 档模型（Haiku）；美元是 CLI 报的等价价，订阅不按次付费。"""
+    model = str((settings.get("model_tiers", {}) or {}).get("light") or "claude-haiku-5-5")
+    cmd = [(settings.get("engines.claude", {}) or {}).get("bin", "claude"), "-p", "--model", model,
+           "--output-format", "json", "--tools", "", "--system-prompt", system]
+    env = {k: v for k, v in os.environ.items() if k not in GATEWAY_ENV}
+    for i in range(2):                                   # 偶发的空输出 / 非零退出重试一次，仍失败就报错
+        p = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=TIMEOUT, env=env)
+        try:
+            j = json.loads(p.stdout)
+            break
+        except ValueError:
+            if i == 1:
+                raise RuntimeError(f"Claude Code 调用失败：{(p.stdout + p.stderr)[-300:] or '空输出'}") from None
+            time.sleep(5)
+    bad = {m: u.get("provider") for m, u in (j.get("modelUsage") or {}).items() if u.get("provider") != "firstParty"}
+    if bad or not j.get("modelUsage"):
+        raise RuntimeError(f"Claude 调用没有走本机登录（provider={bad or '缺失'}），已停止")
+    if j.get("is_error"):
+        raise RuntimeError(f"Claude Code 返回错误：{str(j.get('result'))[:300]}")
+    text = j.get("result") or ""
+    if json_mode:                                        # CLI 没有 JSON 模式，去掉可能的代码块
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    return text, float(j.get("total_cost_usd") or 0)
+
+
+def _deepseek(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple[str, float]:
     """DeepSeek flash（关思考）→ (内容, 美元)。"""
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
@@ -231,7 +273,7 @@ def run(limit: int = 0, items: list | None = None, persist: bool = True, call=ch
     rows = items if items is not None else todo(limit)
     chunks = [rows[i:i + BATCH] for i in range(0, len(rows), BATCH)]
     stat = {"labeled": 0, "todo": len(rows), "cost": 0.0, "errors": [], "labels": {}}
-    with ThreadPoolExecutor(PARALLEL) as ex:
+    with ThreadPoolExecutor(PARALLEL.get(engine(), 4)) as ex:
         for chunk, (got, cost, errs) in zip(chunks, ex.map(lambda c: label_batch(c, call), chunks)):
             stat["labeled"] += save(chunk, got) if persist else len(got)
             if not persist:

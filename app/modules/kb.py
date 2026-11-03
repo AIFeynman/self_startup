@@ -1,5 +1,6 @@
 """知识库板块：检索 / 阅读 data/kb/ 下自动同步的 markdown 知识树（逻辑在 app/kb.py）。"""
 import json
+import subprocess
 import threading
 
 import httpx
@@ -10,7 +11,7 @@ from pydantic import BaseModel
 import re
 
 from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
-from . import _paper_map as paper_map
+from . import _paper_label as paper_label, _paper_map as paper_map
 
 TITLE = "知识库"
 ORDER = 60
@@ -301,7 +302,7 @@ def papers_build(body: PaperMapIn):
     topic = body.topic.strip()
     if not topic:
         raise HTTPException(400, "主题不能为空")
-    if not kb_graph.has_llm():
+    if paper_label.engine() == "deepseek" and not kb_graph.has_llm():
         raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
     if not paper_map.overview()["labeled"]:
         raise HTTPException(400, "论文库还是空的：先跑采集和标注")
@@ -309,3 +310,5 @@ def papers_build(body: PaperMapIn):
         return paper_map.view(paper_map.build(topic, use_cache=not body.force))
     except httpx.HTTPError as e:
         raise HTTPException(502, f"模型接口暂时不可用，稍后再试（{e.response.status_code if isinstance(e, httpx.HTTPStatusError) else type(e).__name__}）")
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        raise HTTPException(502, f"模型调用失败：{str(e)[:200]}")

@@ -57,6 +57,8 @@ DEFAULTS: dict = {
     "model_tiers": {"light": "claude-haiku-5-5", "standard": "claude-sonnet-5-5"},
     # 开源雷达批量标注引擎：deepseek（默认，DeepSeek v4 flash API，全库约 1 小时 / $6）或 haiku（订阅 CLI，不另付费，约 6-9 小时）
     "oss": {"label_engine": "deepseek"},
+    # 论文脉络的标注 / 脉络生成用哪个模型：haiku = 本机 Claude Code 登录（model_tiers.light）；deepseek = 官方 API
+    "paper": {"llm_engine": "haiku"},
     # 学习习惯：每天自动加一个「读前沿论文」学习块（规划页打开今天时加；在信息推荐的论文上写一句话判断即完成）
     "habits": {"paper_task": True, "paper_minutes": 30, "paper_per_day": 2},
     # 复盘时分析的代码库 / 文档目录
