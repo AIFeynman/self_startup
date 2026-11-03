@@ -220,7 +220,8 @@ CFG_DEFAULTS = {
     "growth": True,            # 每日增长 Case
     "growth_collect_hours": 12,  # 增长素材多久采一次（X 名单每次每个账号约 $0.001）
     "growth_score_per_round": 120,  # 每轮最多给几条素材打分（20 条一批）
-    "growth_repeat_days": 90,  # 同一家公司多少天内不重复出 Case
+    "growth_repeat_days": 90,
+    "growth_daily_max": 5, "growth_extra_min": 13, "growth_extra_days": 7,  # 同一家公司多少天内不重复出 Case
     "growth_x_accounts": gr.X_ACCOUNTS,
 }
 _lock = threading.Lock()
@@ -1203,7 +1204,7 @@ def request_growth_case(item_id: str, auto: bool = False) -> dict:
 
 
 def growth_daily(force_collect: bool = False, cards: bool = True) -> dict:
-    """每轮都会被调：素材到点才采（默认 12 小时一次）→ 打分 → 今天还没有自动 Case 就挑 1 条写卡。"""
+    """每轮都会被调：素材到点才采（默认 12 小时一次）→ 打分 → 每天保底 1 张；近 7 天有总分 ≥13 的新素材就加写，一天最多 5 张。"""
     res = {}
     last = _state("growth_collect_at") or ""
     due = (datetime.now() - timedelta(hours=float(cfg("growth_collect_hours")))).isoformat(timespec="seconds")
@@ -1211,10 +1212,20 @@ def growth_daily(force_collect: bool = False, cards: bool = True) -> dict:
         res["collect"] = growth_collect()
         _set_state("growth_collect_at", db.now())
     res.update(growth_score())
-    if cards and not db.row("SELECT 1 FROM intel_growth_case WHERE day=? AND auto=1 AND status!='failed'", [db.today()]):
-        it = gr.pick(growth_pool(), _growth_used(), db.today())
-        res["picked"] = request_growth_case(it["id"], auto=True)["id"] if it else None
-        if not it:
+    if cards:
+        res["picked"] = []
+        n = db.row("SELECT count(*) AS n FROM intel_growth_case WHERE day=? AND auto=1 AND status!='failed'", [db.today()])["n"]
+        while n < int(cfg("growth_daily_max")):
+            pool = growth_pool()
+            if n:  # 第 2 张起只收「优秀」的新素材：近 N 天发布、总分达标；存档再好也不挤占
+                since = (datetime.now() - timedelta(days=float(cfg("growth_extra_days")))).strftime("%Y-%m-%d")
+                pool = [it for it in pool if (it.get("date") or "") >= since and it["total"] >= int(cfg("growth_extra_min"))]
+            it = gr.pick(pool, _growth_used(), db.today())
+            if not it:
+                break
+            res["picked"].append(request_growth_case(it["id"], auto=True)["id"])
+            n += 1
+        if not n:
             res["picked_reason"] = "候选池里没有合格素材（或主角公司近期都出过卡）"
     _set_state("growth_last", {**res, "at": db.now()})
     return res

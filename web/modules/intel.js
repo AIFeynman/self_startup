@@ -537,7 +537,7 @@ async function renderGrowth(el, ctx) {
     toast(r.started ? '已在后台采集 + 打分，今天还没有 Case 的话会选一条写卡' : '已经在跑了'); run.disabled = true;
   } }, [ui.icon('refresh'), ' 立即采集']);
   const c = d.counts || {};
-  el.append(ui.pageHead('产品雷达 · 增长 Case', '每天挑 1 个 AI / 订阅 / SaaS / App 的真实增长案例，拆成「怎么找到用户 → 怎么触达 → 怎么留住 → 我能怎么用」',
+  el.append(ui.pageHead('产品雷达 · 增长 Case', '每天 1 个（新素材特别好的日子最多 5 个）AI / 订阅 / SaaS / App 的真实增长案例，拆成「怎么找到用户 → 怎么触达 → 怎么留住 → 我能怎么用」',
     [run]), tabs(h, '#intel/growth'));
   el.append(ui.stats([{ k: 'Case 卡', v: d.cases.length }, { k: '已打分', v: c.scored || 0 }, { k: '合格候选', v: d.pool.length }, { k: '待打分', v: c.new || 0 }]));
   if (d.last?.picked_reason) el.append(h('div.card', { style: { borderColor: 'var(--warn)', marginTop: '8px' } }, `上一轮（${(d.last.at || '').slice(0, 16)}）没选出：${d.last.picked_reason}`));

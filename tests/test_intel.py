@@ -664,14 +664,15 @@ def growth_db(client, monkeypatch):
 def test_growth_daily_and_done(growth_db):
     res = intel.growth_daily()
     assert res["collect"]["new"] == 3 and res["scored"] == 3
-    c = db.row("SELECT * FROM intel_growth_case WHERE id=?", [res["picked"]])
+    assert len(res["picked"]) == 1  # 保底 Cal AI；Outrank 虽是今天的新素材，总分 10 < 13，不加写
+    c = db.row("SELECT * FROM intel_growth_case WHERE id=?", [res["picked"][0]])
     assert c["company"] == "Cal AI" and c["auto"] == 1 and c["status"] == "queued"
     job = db.row("SELECT * FROM jobs WHERE id=?", [c["job_id"]])
     assert job["ref"] == f"intel:growth:{c['id']}" and "Cal AI" in job["prompt"]
     assert jobs.describe(job)[1] == f"#intel/g/{c['id']}"
     # 同一天再跑：不重采（12 小时内）、不再出第二张自动卡
     res2 = intel.growth_daily()
-    assert "collect" not in res2 and "picked" not in res2
+    assert "collect" not in res2 and res2["picked"] == []
     # 写卡失败 → failed；重写 = 新一行，旧行保留
     intel.on_job_done({**job, "status": "failed", "output": ""})
     assert db.row("SELECT status FROM intel_growth_case WHERE id=?", [c["id"]])["status"] == "failed"
@@ -688,3 +689,30 @@ def test_growth_daily_and_done(growth_db):
     p = growth_db.post("/api/intel/growth/pick", json={"item_id": "twitter:1"}).json()
     assert db.row("SELECT auto FROM intel_growth_case WHERE id=?", [p["id"]])["auto"] == 0
     assert "只当线索" in db.row("SELECT prompt FROM jobs WHERE id=?", [p["job_id"]])["prompt"]
+
+
+def test_growth_daily_extra_cards(client, monkeypatch):
+    """保底 1 张（存档里最好的也行）；之后只加写近 7 天、总分 ≥13 的新素材，同公司只算一次，一天最多 5 张。"""
+    for t in ("intel_growth_item", "intel_growth_case", "intel_state"):
+        db.execute(f"DELETE FROM {t}")
+    intel._set_state("growth_collect_at", db.now())  # 不触网
+    monkeypatch.setattr(intel, "growth_score", lambda limit=0: {"scored": 0, "errors": []})
+
+    def add(id_, company, date, **sc):
+        s = {"case": 3, "numbers": 3, "actions": 3, "fit": 3, "firsthand": 3, **sc}
+        db.insert("intel_growth_item", {"id": id_, "source": "t", "tier": "A", "title": id_, "summary": "", "url": "https://ex.com",
+                                        "date": date, "company": company, "scores": ev.dumps(s), "total": gr.total(s), "status": "scored",
+                                        "found_at": db.now()})
+    add("archive", "Old Co", OLD)                                # 存档 15 分：只能当保底
+    add("archive2", "Old Co 2", OLD)
+    add("fresh13", "Fresh A", D1, numbers=1)                      # 13 分，近 7 天 → 加写
+    add("fresh13b", "fresh a", TODAY, numbers=1)                  # 同公司 → 不再加
+    add("fresh12", "Fresh B", TODAY, numbers=0)                   # 12 分 → 不加
+    for i in range(6):
+        add(f"hot{i}", f"Hot {i}", TODAY)
+    res = intel.growth_daily()
+    assert len(res["picked"]) == 5
+    picked = [r["item_id"] for r in db.rows("SELECT item_id FROM intel_growth_case ORDER BY id")]
+    assert picked[0] in {f"hot{i}" for i in range(6)}  # 保底按总排序：新的 15 分优先于存档
+    assert "archive2" not in picked and "fresh12" not in picked and "fresh13b" not in picked
+    assert intel.growth_daily()["picked"] == []  # 当天满 5 张不再加
