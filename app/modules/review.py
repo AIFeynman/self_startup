@@ -36,12 +36,14 @@ CREATE TABLE IF NOT EXISTS review_days (
 CREATE TABLE IF NOT EXISTS review_notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     date        TEXT NOT NULL,
-    kind        TEXT DEFAULT 'lesson',         -- problem / lesson / insight / idea
+    kind        TEXT DEFAULT 'lesson',         -- problem / lesson / insight / idea；用户的便签还有 spark / feeling 和自定义类型
     title       TEXT DEFAULT '',
     content     TEXT DEFAULT '',
     tags        TEXT DEFAULT '',               -- 逗号分隔
     created_at  TEXT,
-    updated_at  TEXT
+    updated_at  TEXT,
+    author      TEXT DEFAULT 'system',         -- system：Agent / 系统记的；me：用户自己写的（便签）
+    sources     TEXT DEFAULT '[]'              -- 引用的文章，见 notes.py
 );
 CREATE INDEX IF NOT EXISTS idx_review_notes_date ON review_notes(date);
 CREATE TABLE IF NOT EXISTS review_agent_stats (
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS review_agent_stats (
 """
 router = APIRouter()
 
-NOTE_KINDS = ("problem", "lesson", "insight", "idea")
+NOTE_KINDS = ("problem", "lesson", "insight", "idea")  # 系统记录用这几种
+KIND_LABEL = {"spark": "灵感", "feeling": "感想", "idea": "想法", "problem": "问题", "lesson": "经验", "insight": "洞察"}  # 便签的内置类型
 STATUSES = ("todo", "doing", "done", "partial", "dropped")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -214,7 +217,7 @@ def day_data(date: str) -> dict:
         "tasks": _tree(work), "learning": _tree(learning), "learning_extra": learning_extra(date),
         "stats": {"work": _stats(work), "learning": _stats(learning)},
         "record": get_record(date),
-        "notes": list_notes(date=date),
+        "notes": list_notes(date=date, author="system"),
         "efficiency": {"headline": eff["summary"].get("headline", ""), "scanned_at": eff.get("scanned_at"),
                        "summary": {k: v for k, v in eff["summary"].items() if k != "by_project"}} if eff else None,
         "jobs": db.rows("SELECT id, ref, status, created_at, finished_at FROM jobs WHERE module='review' AND ref IN (?,?,?) "
@@ -555,10 +558,13 @@ class NoteIn(BaseModel):
     title: str | None = None
     content: str | None = None
     tags: str | None = None
+    author: str | None = None
 
 
-def list_notes(date: str = "", q: str = "", kind: str = "", start: str = "", end: str = "", limit: int = 200) -> list[dict]:
+def list_notes(date: str = "", q: str = "", kind: str = "", start: str = "", end: str = "", limit: int = 200, author: str = "") -> list[dict]:
     sql, args = "SELECT * FROM review_notes WHERE 1=1", []
+    if author:
+        sql, args = sql + " AND author=?", args + [author]
     if date:
         sql, args = sql + " AND date=?", args + [date]
     if start:
@@ -574,8 +580,8 @@ def list_notes(date: str = "", q: str = "", kind: str = "", start: str = "", end
 
 
 @router.get("/notes")
-def api_notes(date: str = "", q: str = "", kind: str = "", start: str = "", end: str = "", limit: int = 200):
-    return list_notes(date, q, kind, start, end, limit)
+def api_notes(date: str = "", q: str = "", kind: str = "", start: str = "", end: str = "", limit: int = 200, author: str = ""):
+    return list_notes(date, q, kind, start, end, limit, author)
 
 
 @router.post("/notes")
@@ -584,7 +590,10 @@ def api_add_note(body: NoteIn):
     if not (d.get("title") or d.get("content")):
         raise HTTPException(400, "title or content required")
     d["date"] = _day(d.get("date"))
-    if d.get("kind") not in NOTE_KINDS:
+    d["author"] = "me" if d.get("author") == "me" else "system"
+    if d["author"] == "me":
+        d["kind"] = normalize_kind(d.get("kind"))
+    elif d.get("kind") not in NOTE_KINDS:
         d["kind"] = "lesson"
     d["created_at"] = d["updated_at"] = db.now()
     nid = db.insert("review_notes", d)
@@ -592,17 +601,28 @@ def api_add_note(body: NoteIn):
 
 
 _KIND_PREFIX = {"问题": "problem", "坑": "problem", "经验": "lesson", "教训": "lesson", "洞察": "insight",
-                "发现": "insight", "想法": "idea", "点子": "idea", "灵感": "idea", "感想": "idea", "idea": "idea", "problem": "problem",
+                "发现": "insight", "想法": "idea", "点子": "idea", "灵感": "spark", "感想": "feeling", "idea": "idea", "problem": "problem",
                 "lesson": "lesson", "insight": "insight"}
 
 
-def parse_quick_note(text: str, default_kind: str = "lesson") -> dict:
-    """一句话快记：「问题：xxx #标签」→ {kind, title, content, tags}。首行为标题，其余为内容；没写前缀时用 default_kind。"""
+def normalize_kind(kind: str | None) -> str:
+    """便签的类型：内置类型存 key（写中文名也认），其他都是用户自定义的，原样存名字；没选归灵感。"""
+    kind = (kind or "").strip()[:12]
+    if kind in KIND_LABEL:
+        return kind
+    return next((k for k, v in KIND_LABEL.items() if v == kind), kind or "spark")
+
+
+def parse_quick_note(text: str, default_kind: str = "spark", custom_kinds: list[str] | tuple = ()) -> dict:
+    """一句话快记：「问题：xxx #标签」→ {kind, title, content, tags}。首行为标题，其余为内容；没写前缀时用 default_kind。
+    custom_kinds：用户自定义过的类型，也能当前缀用。"""
     text = (text or "").strip()
     kind = default_kind
-    m = re.match(r"([^\s:：]{1,7})\s*[:：]\s*", text)
+    m = re.match(r"([^\s:：]{1,12})\s*[:：]\s*", text)
     if m and m.group(1).lower() in _KIND_PREFIX:
         kind, text = _KIND_PREFIX[m.group(1).lower()], text[m.end():]
+    elif m and m.group(1) in custom_kinds:
+        kind, text = m.group(1), text[m.end():]
     tags = []
     for t in re.findall(r"(?:^|\s)#([^\s#,，]+)", text):
         if t not in tags:
@@ -616,12 +636,14 @@ def parse_quick_note(text: str, default_kind: str = "lesson") -> dict:
 class QuickIn(BaseModel):
     text: str
     date: str | None = None
-    default_kind: str = "lesson"
+    default_kind: str = "spark"
 
 
 @router.post("/notes/quick")
 def api_quick_note(body: QuickIn):
-    return api_add_note(NoteIn(date=body.date, **parse_quick_note(body.text, body.default_kind)))
+    """用户在页面上自己写的一句话，进便签。"""
+    from . import notes
+    return notes.add(body.text, body.default_kind, date=body.date)
 
 
 @router.patch("/notes/{nid}")
@@ -630,6 +652,8 @@ def api_patch_note(nid: int, body: NoteIn):
         raise HTTPException(404)
     d = {k: v for k, v in body.model_dump().items() if v is not None}
     d["updated_at"] = db.now()
+    if d.get("author") not in (None, "me", "system"):
+        raise HTTPException(400, "author 只能是 me / system")
     db.update("review_notes", nid, d)
     return db.row("SELECT * FROM review_notes WHERE id=?", [nid])
 
@@ -637,6 +661,7 @@ def api_patch_note(nid: int, body: NoteIn):
 @router.delete("/notes/{nid}")
 def api_del_note(nid: int):
     db.execute("DELETE FROM review_notes WHERE id=?", [nid])
+    db.execute("DELETE FROM note_links WHERE a=? OR b=?", [nid, nid])
     return {"ok": True}
 
 

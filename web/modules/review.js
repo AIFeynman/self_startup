@@ -92,7 +92,8 @@ table.rv { border-collapse: collapse; width: 100%; font-size: 12px; } table.rv t
 .rv-status { font-size: 12px; color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
 `;
 const STATUS = { todo: '待办', doing: '进行中', done: '完成', partial: '部分', dropped: '放弃' };
-const NOTE_KIND = { problem: '问题', lesson: '经验', insight: '洞察', idea: '想法' };
+const NOTE_KIND = { problem: '问题', lesson: '经验', insight: '洞察', idea: '想法', spark: '灵感', feeling: '感想' };
+const SYS_KINDS = ['problem', 'lesson', 'insight', 'idea']; // 系统记录用的类型；灵感、感想只在便签里
 const NOTE_CLS = { problem: 'err', lesson: 'ok', insight: '', idea: 'warn' };
 const REC_FIELD = { summary: '总结', wins: '收获', problems: '问题', next_actions: '下一步' };
 const MSG_KIND = { new_task: '新任务/追加', correct: '纠正/转向', approve: '确认/继续', interrupt: '中断', answer: '回答提问', check: '询问进度' };
@@ -139,15 +140,15 @@ export default {
 
     // ---------- 大输入框 ----------
     const HINTS = {
-      note: '前缀「问题: 经验: 洞察: 想法/灵感/感想:」定类型 · #标签 · Enter 即存 · 任何页面 ⌘K 随手记',
+      note: '贴到「便签」页 · 前缀「问题: 经验: 灵感: 感想:」定类型 · #标签 · Enter 即存 · 任何页面 ⌘K 随手记',
       record: '前缀「总结: 收获: 问题: 明天:」选栏目，默认追加到总结',
       ask: '带上这一天的事项、复盘和效率数据问复盘 Agent',
     };
     const comp = ui.composer({
-      placeholder: '记一条经验，比如：问题：需求没写验收标准导致返工 #流程',
+      placeholder: '记一条，会贴到便签，比如：问题：需求没写验收标准导致返工 #流程',
       autofocus: true, hint: HINTS.note,
       modes: [
-        { id: 'note', label: '记一条', placeholder: '记一条经验，比如：问题：需求没写验收标准导致返工 #流程' },
+        { id: 'note', label: '记一条', placeholder: '记一条，会贴到便签，比如：问题：需求没写验收标准导致返工 #流程' },
         { id: 'record', label: '写复盘', placeholder: '一句一句写今天的复盘，比如：收获：集成测试脚本跑通了' },
         { id: 'ask', label: '问 Agent', placeholder: '比如：今天哪件事拖得最久，为什么？' },
       ],
@@ -160,7 +161,7 @@ export default {
             if (state.tab !== 'day') go(null, 'day');
           } else {
             const n = await api.post('/api/review/notes/quick', { text, date: state.date });
-            toast(`已记一条「${NOTE_KIND[n.kind] || n.kind}」${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
+            toast(`已贴到便签「${NOTE_KIND[n.kind] || n.kind}」${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
           }
           show();
         } catch (e) { toast(e.message, true); return false; }
@@ -365,6 +366,7 @@ export default {
       return h('div.card.rv-note', {}, [
         h('div.head', {}, [h('span.tag.' + (NOTE_CLS[n.kind] || ''), {}, NOTE_KIND[n.kind] || n.kind),
           n.date !== state.date ? h('a.muted', { href: `#review/${n.date}/day` }, dayLabel(n.date)) : null,
+          h('button.sm.ghost', { title: '这条是你自己写的：移到便签', style: { marginLeft: 'auto' }, onclick: async () => { await api.patch(`/api/review/notes/${n.id}`, { author: 'me' }); toast('已移到便签'); after(); } }, '这是我写的'),
           h('button.icon.del', { title: '删除', onclick: async () => { if (confirm('删除这条记录？')) { await api.del(`/api/review/notes/${n.id}`); after(); } } }, ui.icon('trash'))]),
         n.title ? h('div.ttl', {}, n.title) : null,
         n.content ? h('div.ct.clamp3', { title: n.content }, n.content) : null,
@@ -402,7 +404,7 @@ export default {
       if (rec.ai_analysis) nodes.push(h('details.card.flat', {}, [h('summary', {}, 'AI 检查完整分析'), md(rec.ai_analysis)]));
       nodes.push(ui.section('问题与经验', d.notes.length ? `${d.notes.length} 条` : ''),
         d.notes.length ? h('div.rv-notes', {}, d.notes.map((n) => noteCard(n, show)))
-          : ui.empty('还没有记录', '在上方「记一条」里写一句，Enter 就存好了'));
+          : ui.empty('还没有记录', 'Agent 和系统复盘记下的会出现在这里；你自己写的在「便签」'));
       body.replaceChildren(...nodes);
     }
 
@@ -443,11 +445,11 @@ export default {
       const list = h('div.rv-notes');
       const count = h('span');
       const load = async () => {
-        const ns = await api.get(`/api/review/notes?q=${encodeURIComponent(q.value)}&kind=${state.noteKind}`);
+        const ns = await api.get(`/api/review/notes?author=system&q=${encodeURIComponent(q.value)}&kind=${state.noteKind}`);
         count.textContent = `${ns.length} 条`;
-        list.replaceChildren(...(ns.length ? ns.map((n) => noteCard(n, load)) : [ui.empty('没有记录', '在上方「记一条」里写一句')]));
+        list.replaceChildren(...(ns.length ? ns.map((n) => noteCard(n, load)) : [ui.empty('没有记录', 'Agent 和系统复盘记下的会出现在这里；你自己写的在「便签」')]));
       };
-      const kindChips = [['', '全部'], ...Object.entries(NOTE_KIND)].map(([k, v]) => h('button.chip' + (state.noteKind === k ? '.on' : ''), {
+      const kindChips = [['', '全部'], ...SYS_KINDS.map((k) => [k, NOTE_KIND[k]])].map(([k, v]) => h('button.chip' + (state.noteKind === k ? '.on' : ''), {
         onclick: (e) => { state.noteKind = k; kindChips.forEach((b) => b.classList.toggle('on', b === e.currentTarget)); load(); } }, v));
       q.addEventListener('input', () => { clearTimeout(q._t); q._t = setTimeout(load, 250); });
       body.replaceChildren(ui.section('问题与经验', count), h('div.rv-filter', {}, [q, ...kindChips]), list);

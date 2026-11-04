@@ -145,12 +145,21 @@ def _gist(text: str, n: int = 2) -> str:
 
 # ---------- 各类数据 → 文档 ----------
 
+def _note_sources(n: dict) -> str:
+    try:
+        src = json.loads(n.get("sources") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    return "".join(("\n\n来源：" if i == 0 else "\n来源：") + s["title"] + (f"（{s['link']}）" if s.get("link") else "")
+                   + (f"\n> {s['quote']}" if s.get("quote") else "") for i, s in enumerate(src))
+
+
 def _notes() -> list[dict]:
     if not _has("review_notes"):
         return []
-    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法"}
+    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想"}
     return [_doc("note", n["id"], n["title"] or _first_lines(n["content"], 1)[:40],
-                 f"类型：{kinds.get(n['kind'], n['kind'])} · 日期：{n['date']}\n\n{n['content']}",
+                 f"类型：{kinds.get(n['kind'], n['kind'])} · 日期：{n['date']}{' · 我写的便签' if n.get('author') == 'me' else ''}\n\n{n['content']}{_note_sources(n)}",
                  date=n["date"], updated=n.get("updated_at") or "", tags=_tags(n["tags"]) + [kinds.get(n["kind"], n["kind"])],
                  status=n["kind"], summary=_first_lines(n["content"]) or n["title"],
                  path=f"notes/{n['date']}-{n['id']}-{_slug(n['title'] or n['content'][:20])}.md")

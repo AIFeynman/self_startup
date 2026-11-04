@@ -9,6 +9,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   injectStyle();
   const rail = h('div.an-rail');
   const wrap = h('div.an-wrap' + (compact ? '.compact' : ''), {}, [h('div.an-body', {}, body), rail]);
+  wrap._src = { doc, title, link }; // ⌘K 快记时带上出处
   let threads = [];
   let showResolved = false;
   let composer = null; // 正在写的新批注 {quote, prefix, suffix, ask}
@@ -128,14 +129,17 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   function newCard() {
     const c = composer;
     const ta = h('textarea', { rows: 3, placeholder: c.ask ? '问 Claude 什么？留空 = 解释这段' : '写评论…（Enter 发送，Shift+Enter 换行）' });
+    const kind = c.ask ? null : noteKindSelect(ctx);
     const send = async (ask) => {
       const text = ta.value.trim();
       if (!ask && !text) { ta.focus(); return toast('先写点评论', true); }
       try {
-        await api.post('/api/annotations', { doc, title, link, quote: c.quote, prefix: c.prefix, suffix: c.suffix, text, ask, source });
+        const note_kind = !ask && kind ? kind.remember() : '';
+        await api.post('/api/annotations', { doc, title, link, quote: c.quote, prefix: c.prefix, suffix: c.suffix, text, ask, source, note_kind });
         composer = null;
         window.getSelection()?.removeAllRanges();
         load();
+        if (note_kind) toast('评论已贴到便签');
       } catch (e) { toast(e.message, true); }
     };
     ta.onkeydown = (e) => {
@@ -145,6 +149,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     return h('div.an-card.an-new', {}, [
       c.quote ? h('div.an-quote', {}, c.quote) : h('div.an-quote.all', {}, '针对全文'),
       ta,
+      kind ? h('div.an-to-note', {}, ['同时贴到便签', kind.el]) : null,
       h('div.an-acts', {}, [
         h('button.sm.primary', { onclick: () => send(true) }, [ui.icon('spark'), '问 Claude']),
         h('button.sm.outline', { onclick: () => send(false) }, [ui.icon('chat'), '评论']),
@@ -160,9 +165,18 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     const send = async (ask) => {
       const text = ta.value.trim();
       if (!text && !ask) return;
-      try { await api.post(`/api/annotations/${t.id}/msgs`, { text, ask, source }); load(); } catch (e) { toast(e.message, true); }
+      try {
+        const note_kind = !ask ? kind.remember() : '';
+        await api.post(`/api/annotations/${t.id}/msgs`, { text, ask, source, note_kind });
+        load();
+        if (note_kind && text) toast('评论已贴到便签');
+      } catch (e) { toast(e.message, true); }
     };
     ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing && ta.value.trim()) send(true); };
+    // 写了字才出现：只记评论时同时贴到便签；回车是追问 Claude，不进便签
+    const kind = noteKindSelect(ctx);
+    const toNote = h('div.an-to-note', { hidden: true, title: '点右边的评论按钮才会贴；回车追问 Claude 不进便签' }, ['只记评论时贴到便签', kind.el]);
+    ta.oninput = () => { toNote.hidden = !ta.value.trim(); };
     const setStatus = async (status) => { await api.patch(`/api/annotations/${t.id}`, { status }); load(); };
     const del = async () => { if (!confirm('删除这条批注和它的讨论？')) return; await api.del(`/api/annotations/${t.id}`); load(); };
     const msgs = t.msgs.map((m) => m.role === 'user'
@@ -181,6 +195,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
         h('button.sm.ghost', { title: '只记评论，不问 Claude', disabled: pending, onclick: () => send(false) }, ui.icon('chat')),
         h('button.sm.ghost', { title: t.status === 'resolved' ? '重新打开' : '标为已解决', onclick: () => setStatus(t.status === 'resolved' ? 'open' : 'resolved') }, ui.icon(t.status === 'resolved' ? 'refresh' : 'check')),
         h('button.sm.ghost', { title: '删除', onclick: del }, ui.icon('trash'))]),
+      toNote,
     ]);
     el.onmouseenter = () => body.querySelectorAll(`mark.an-hl[data-aid="${t.id}"]`).forEach((m) => m.classList.add('on'));
     el.onmouseleave = () => body.querySelectorAll('mark.an-hl.on').forEach((m) => m.classList.remove('on'));
@@ -284,12 +299,54 @@ function wrapRange(root, start, end, decorate) {
   }
 }
 
+// 评论时选的便签类型：内置 + 自己用过的类型 +「不进便签」，记住上次的选择（一开始是灵感）
+const NOTE_KIND_KEY = 'an-note-kind';
+let noteKinds = null;
+function noteKindSelect({ api, h }) {
+  const remembered = () => { try { return localStorage.getItem(NOTE_KIND_KEY) ?? 'spark'; } catch { return 'spark'; } };
+  const sel = h('select.an-kind', { 'aria-label': '贴到便签的类型' }, h('option', { value: '' }, '不进便签'));
+  const box = h('span', {}, sel);
+  const addOption = (value, label) => sel.insertBefore(h('option', { value }, label), sel.lastChild);
+  sel.append(h('option', { value: '__new' }, '＋新类型…'));
+  noteKinds ||= api.get('/api/notes/kinds').catch(() => { noteKinds = null; return []; });
+  noteKinds.then((kinds) => {
+    kinds.forEach((k) => addOption(k.key, k.label));
+    const want = remembered();
+    if (want && !kinds.some((k) => k.key === want)) addOption(want, want);
+    sel.value = want;
+  });
+  sel.onchange = () => {
+    if (sel.value !== '__new') return;
+    const input = h('input.an-kind', { maxlength: 12, placeholder: '类型名', 'aria-label': '新类型名称' });
+    const done = () => {
+      const name = input.value.trim();
+      if (name) { addOption(name, name); sel.value = name; } else sel.value = remembered();
+      box.replaceChildren(sel);
+    };
+    input.onblur = done;
+    input.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); input.blur(); } };
+    box.replaceChildren(input);
+    input.focus();
+  };
+  // 发送时调用：把这次的选择记下来，返回类型
+  const remember = () => {
+    const v = sel.value === '__new' ? '' : sel.value;
+    try { localStorage.setItem(NOTE_KIND_KEY, v); } catch { /* ignore */ }
+    noteKinds = null; // 可能多了新类型
+    return v;
+  };
+  return { el: box, remember };
+}
+
 function injectStyle() {
   if (document.getElementById('an-style')) return;
   const s = document.createElement('style');
   s.id = 'an-style';
   s.textContent = `
   .an-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 300px); gap: 18px; align-items: start; }
+  .an-to-note { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; font-size: 12px; color: var(--muted); }
+  .an-to-note[hidden] { display: none; }
+  .an-kind { width: auto; min-width: 0; max-width: 120px; padding: 1px 4px; font-size: 12px; border-radius: 6px; }
   .an-wrap.compact, .an-wrap.compact.has-threads { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .an-wrap.compact:not(.has-threads) .an-rail { display: none; }
   @media (max-width: 1100px) { .an-wrap { grid-template-columns: minmax(0, 1fr); } }
