@@ -67,6 +67,31 @@ const chartFrame = (width, height, pad, inner, label) => `<svg viewBox="0 0 ${wi
   <line class="wl-cross" x1="0" x2="0" y1="${pad.top}" y2="${height - pad.bottom}" visibility="hidden"/>
   <rect class="wl-hit" x="${pad.left}" y="${pad.top}" width="${width - pad.left - pad.right}" height="${height - pad.top - pad.bottom}"/></svg><div class="wl-tip" hidden></div>`;
 
+// ================================================================ 对话
+const ASK = {
+  target: { title: '理财 · 目标', tips: () => ['现在这几个标的该加还是拿着，为什么？', `回撤压到 ${+(tp.drawdown * 100).toFixed(1)}% 以内，这个配比靠谱吗？`, '估值表和均线打架时看哪个？', '这个方案的挂单怎么理解？'] },
+  sell: { title: '理财 · 减持', tips: () => ['美团现在该卖多少股，为什么？', '目标均价定多少比较现实？', '换 QQQ 划算吗？', '这几档挂单的成交概率怎么看？'] },
+};
+let viewSent = '', viewPost = null;
+
+// 目标页的设置大多只存在浏览器里，报给后端，对话才知道用户正在看哪组数
+function syncView(ctx, page) {
+  const body = page === 'sell'
+    ? { now_shares: sp.now, compare_days: sp.compare, qqq_return: sp.qqq == null ? null : sp.qqq / 100, stock_return: sp.stock == null ? null : sp.stock / 100 }
+    : { target: tp.target, delay: tp.delay, drawdown: tp.drawdown, shape: tp.shape, mode: tp.mode, region: tp.region, basket: tp.basket };
+  const key = page + JSON.stringify(body);
+  if (key === viewSent) return;
+  viewSent = key;
+  viewPost = ctx.api.post(`/api/wealth/view/${page}`, body).catch(() => { viewSent = ''; });
+}
+
+function askBar(ctx, page) {
+  const { title, tips } = ASK[page];
+  const send = async (text) => { await viewPost; ctx.openChat({ module: 'wealth', ref: `wealth:${page}`, title, send: text }); };
+  const box = ctx.ui.composer({ placeholder: '问问这一页：为什么是这个结论、这个数怎么来的…', hint: '', onSubmit: send });
+  return ctx.h('div.wl-ask', {}, [box, ctx.ui.chips(tips().map((t) => ({ label: t, onClick: () => send(t) })), { left: true })]);
+}
+
 // ================================================================ 目标
 const tpPlan = (d) => (tp.mode === 'safe' && d.safe ? d.safe : d.allocation);
 const tpName = (d, s) => d.assets.find((a) => a.symbol === s)?.name || s;
@@ -87,6 +112,7 @@ async function loadTarget(box, ctx) {
 function renderTarget(box, ctx) {
   const d = tp.data;
   if (!d.safe) tp.mode = 'aggressive';
+  syncView(ctx, 'target');
   const al = d.allocation, plan = tpPlan(d), s = plan.stats, funding = al.funding, hist = plan.history;
   const delay = d.delay || { months: 0, held_days: 252, options: [0, 1, 2, 3] }, waiting = delay.months > 0;
   const span = waiting ? `持有 ${delay.held_days} 个交易日` : '一年';
@@ -148,6 +174,7 @@ async function loadRegion(el, ctx) {
 }
 
 function renderRegion(el, ctx) {
+  syncView(ctx, 'target');
   const d = tp.regionData, pct = Math.round(d.overseas * 100), part = (v) => `${+(v * 100).toFixed(1)}`;
   const members = Object.entries(d.members).map(([s, w]) => `${esc(d.names[s] || s)} ${part(w)}`).join(' · ');
   const share = !d.overseas ? '每 100 元全部放内地，按下表分' : !d.mainland ? `每 100 元全部放海外：${members}` : `每 100 元：海外 ${part(d.overseas)}（${members}），内地 ${part(d.mainland)} 按下表分`;
@@ -428,6 +455,7 @@ function saveSell(ctx, changes) {
 }
 
 function renderSell(box, ctx) {
+  syncView(ctx, 'sell');
   const d = sp.data, plan = d.plan, quote = d.quote, sm = d.summary;
   const hl = d.position.unlimited ? `${horizonName(plan.horizon_days)}（不设期限）` : horizonName(plan.horizon_days);
   const refresh = d.refresh || {};
@@ -774,6 +802,15 @@ const CSS = `
 .wl-controls { display: flex; flex-direction: column; gap: 12px; }
 .wl-ctl-row { display: flex; gap: 18px; flex-wrap: wrap; }
 .wl-ctl { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wl-ask { margin: 0 0 16px; }
+.wl-ask .composer { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 5px 6px 5px 14px; box-shadow: none; }
+.wl-ask .composer textarea { flex: 1; min-width: 0; min-height: 24px; font-size: 14px; }
+.wl-ask .composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-ask .composer .bar { margin: 0; padding: 0; flex: none; }
+.wl-ask .composer .hint { display: none; }
+.wl-ask .composer .send { width: 30px; height: 30px; }
+.wl-ask .chips { margin: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.wl-ask .chip { flex: none; padding: 3px 10px; font-size: 12px; }
 .wl-ctl .tabs { margin: 0; }
 .wl-seg button { padding: 4px 12px; font-size: 13px; }
 .wl-region-line { margin: 10px 0 6px; }
@@ -897,7 +934,7 @@ export default {
     const sub = `统计估算，不构成投资建议${live ? ` · 实时行情${live.connected ? '已连接' : '未连接'}` : ''}${status?.refresh?.last_completed_at ? ` · 上次刷新 ${local(status.refresh.last_completed_at)}` : ''}`;
     const tabs = h('div.tabs', {}, TABS.map(([id, label]) => h('button' + (id === view ? '.active' : ''), { onclick: () => { location.hash = `#wealth/${id}`; } }, label)));
     const go = () => (view === 'sell' ? loadSell(body, ctx) : view === 'alerts' ? loadAlerts(body, ctx) : loadTarget(body, ctx));
-    el.replaceChildren(h('div.wl-page', {}, [h('style', {}, CSS), ui.pageHead('理财', sub, [refreshBtn]), tabs, body]));
+    el.replaceChildren(h('div.wl-page', {}, [h('style', {}, CSS), ui.pageHead('理财', sub, [refreshBtn]), tabs, ASK[view] ? askBar(ctx, view) : null, body]));
     if (view === 'target' && tp.data) renderTarget(body, ctx);
     if (view === 'sell' && sp.data) renderSell(body, ctx);
     go();
@@ -906,5 +943,7 @@ export default {
     window.addEventListener('notify', onNotify);
     const cleanup = () => { if (!document.body.contains(body)) { window.removeEventListener('notify', onNotify); window.removeEventListener('hashchange', cleanup); } };
     window.addEventListener('hashchange', cleanup);
+    // 右侧对话跟着页签走：目标、减持各有各的对话和数据
+    if (ASK[view]) await ctx.openChat({ module: 'wealth', ref: `wealth:${view}`, title: ASK[view].title, expand: false });
   },
 };

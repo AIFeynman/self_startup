@@ -230,6 +230,7 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-2);
   .brand, .nav-sec, .new-chat, #engine-status { display: none; } .nav-foot { margin: 0; border: none; padding: 0; }
   .page-wrap { padding: 18px 16px 60px; } .page-head h1 { font-size: 24px; } .hero h1 { font-size: 26px; }
   .chat { position: fixed; inset: 0; width: 100%; z-index: 50; } .chat.collapsed { width: 0; } .chat-resize, .chat-wide { display: none; }
+  .chat-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .chat-head select { max-width: 92px; flex: none; } .chat-head .icon { flex: none; }
 }
 .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .clamp3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }

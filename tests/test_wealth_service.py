@@ -209,3 +209,43 @@ def test_wealth_routes(client):
     assert client.get("/api/wealth/region-mix?overseas=2").status_code == 400
     assert client.get("/api/wealth/region-mix?basket=nope").status_code == 400
     assert "wealth" in json.dumps(client.get("/api/meta").json(), ensure_ascii=False)
+    assert client.post("/api/wealth/view/nope", json={}).status_code == 400
+    assert client.post("/api/wealth/view/target", json={"target": "abc"}).status_code == 400
+
+
+def test_chat_context_uses_page_view(client, monkeypatch):
+    from app.modules import wealth
+    seen = {}
+    plan = {"target": 0.15, "assets": [{"symbol": "QQQ", "name": "纳指100 ETF", "currency": "USD", "price": 685.28, "action_label": "持有 / 定投", "probability": 0.49,
+                                        "p10": -0.19, "p50": 0.1, "p90": 0.48, "val_timing": {"index": "纳指", "metric": "PE", "zone_label": "合理",
+                                                                                               "decision": {"label": "可少量买", "reason": "估值合理", "plan": "分批买线 486.10"}, "ma": {"text": "现价偏低"}}},
+                                       {"symbol": "BOND.CN", "name": "纯债基金", "price": 1.1, "val_timing": None}],
+            "allocation": {"weights": {"QQQ": 0.1}, "stats": {"probability": 0.56}, "orders": []},
+            "safe": {"weights": {"BOND.CN": 0.9, "QQQ": 0}, "stats": {"probability": 0.16, "stress_drawdown": -0.03},
+                     "orders": [{"symbol": "BOND.CN", "weight": 0.9, "amount": 1000, "currency": "CNY"}]}}
+    monkeypatch.setattr(wealth.svc, "target", lambda *a: seen.update(args=a) or plan)
+    monkeypatch.setattr(wealth.svc, "region_mix", lambda *a: seen.update(region=a) or {"overseas": 0.3, "mainland": 0.7, "basket": "qqq", "baskets": {"qqq": "只买 QQQ"}, "start": "2019-01-18", "years": 7.75,
+                                                                                       "rows": [{"dividend": 1.0, "annual": 0.14, "max_drawdown": -0.13, "worst_year": -0.05, "worst_3y": 0.19}]})
+    assert client.post("/api/wealth/view/target", json={"target": 0.15, "delay": 2, "drawdown": 0.03, "shape": "wide", "mode": "safe", "region": 30, "basket": "qqq", "junk": 1}).status_code == 200
+    text = wealth.agent_context("wealth:target")
+    assert seen == {"args": (0.15, "wide", 2, 0.03), "region": (0.3, "qqq")}
+    for part in ("目标页", "回撤上限 3%", "可少量买", "分批买线 486.10", "纯债基金 90%", "压力回撤 -3.0%", "只买 QQQ", "只回答和计算", "不替用户下单"):
+        assert part in text, part
+    assert "junk" not in wealth._views["target"]
+
+
+def test_chat_context_sell_page(positions):
+    from app.modules import wealth
+    text = wealth.agent_context("wealth:sell")
+    for part in ("减持页", "美团", "挂单阶梯", "换 QQQ 对比", "不替用户下单"):
+        assert part in text, part
+    assert len(text) < 12000
+
+
+def test_chat_context_survives_plan_errors(client, monkeypatch):
+    from app.modules import wealth
+    def boom(*_a):
+        raise wealth.svc.Busy("正在回测")
+    monkeypatch.setattr(wealth.svc, "target", boom)
+    assert "暂时算不出来：正在回测" in wealth.agent_context("wealth:target")
+    assert "用户正在看" not in wealth.agent_context("")      # 侧边栏的新对话没有绑定页面

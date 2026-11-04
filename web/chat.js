@@ -15,6 +15,7 @@ const TIPS = {
   agents: ['哪些会话在等我？', '总结各 Agent 进展', '卡住的怎么处理？'],
   talk: ['我有个想法想理一理：', '帮我想想这件事该不该做：', '我卡在一个问题上：'],
   kb: ['我之前关于 Agent 评测记过什么？', '汇总我这周的问题与经验', '我调研过哪些产品？'],
+  wealth: ['现在这几个标的该加还是拿着，为什么？', '美团现在该卖多少股？', '这两个价位是怎么算出来的：'],
 };
 
 const state = { module: '', ref: '', title: '', sessionId: null, busy: false, stopping: false, turn: null };
