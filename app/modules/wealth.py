@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import db, notify, settings
 from . import _wealth_alerts as alerts
+from . import _wealth_chat as chat
 from . import _wealth_service as svc
 from ._wealth_service import SCHEMA  # noqa: F401 —— main 按模块的 SCHEMA 建表
 
@@ -28,6 +29,7 @@ EXIT_SYMBOL = "3690.HK"
 TICK_SECONDS = 300
 
 router = APIRouter()
+_views: dict[str, dict[str, Any]] = {}  # 页面 → 用户当前的设置，对话时用
 _check_lock = threading.Lock()
 
 
@@ -78,6 +80,13 @@ def post_trade(body: dict):
 @router.delete("/trades/{trade_id}")
 def remove_trade(trade_id: int):
     return _call(svc.delete_trade, trade_id)
+
+
+@router.post("/view/{page}")
+def post_view(page: str, body: dict):
+    """页面上的设置（目标、回撤上限……大多只存在浏览器里）报给后端，对话时按用户正在看的数回答。只放内存，不落盘。"""
+    _views[page] = _call(chat.clean_view, page, body)
+    return {"ok": True}
 
 
 @router.post("/refresh")
@@ -215,7 +224,33 @@ def on_startup() -> None:
     threading.Thread(target=_loop, daemon=True, name="wealth-loop").start()
 
 
+def _page_context(page: str) -> str:
+    view = _views.get(page) or {}
+    if page == "sell":
+        return chat.sell_context(svc.sell(EXIT_SYMBOL, now_shares=view.get("now_shares"), compare_days=view.get("compare_days"),
+                                          qqq_return=view.get("qqq_return"), stock_return=view.get("stock_return")), view)
+    plan = svc.target(view.get("target"), view.get("shape"), view.get("delay"), view.get("drawdown"))
+    try:
+        overseas = view.get("region")
+        region = svc.region_mix(None if overseas is None else overseas / 100, view.get("basket"))
+    except Exception:  # noqa: BLE001 —— 配比对比只是补充，缺了不影响回答
+        log.exception("理财对话：长期配比对比取不到")
+        region = None
+    return chat.target_context(plan, view, region)
+
+
 def agent_context(ref: str) -> str:
+    page = chat.page_of(ref)
+    if not page:
+        return f"{chat.RULES}\n\n{_signal_context()}"
+    try:
+        return f"{chat.RULES}\n\n{_page_context(page)}"
+    except Exception as exc:  # noqa: BLE001 —— 算不出来也要能聊：退回信号摘要，并告诉 Agent 原因
+        log.exception("理财对话：页面数据取不到")
+        return f"{chat.RULES}\n\n（当前页面的计划暂时算不出来：{exc}）\n\n{_signal_context()}"
+
+
+def _signal_context() -> str:
     state = alerts.load(svc.DATA)["state"] or {}
     lines = [f"{a['name']}：{a['label']}，一年达标概率 {a['probability']:.0%}。{a['reason']}" for a in (state.get("assets") or {}).values()]
     e = state.get("exit")
