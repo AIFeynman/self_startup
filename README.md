@@ -67,7 +67,7 @@ data/kb/
 
 录音由 ffmpeg 转成 16k wav，再用本机 whisper.cpp 转文字，音频不出本机，转完即删。需要 `whisper-cli`、`ffmpeg` 和模型文件（`brew install whisper-cpp ffmpeg`）；模型路径和术语提示在设置 `voice.model` / `voice.prompt` 里改，默认读 `~/project/robomaster/whisper.cpp/models/ggml-large-v3-q5_0.bin`。
 
-说话途中用常驻的 `whisper-server` 边录边转（点麦克风时自动启动，闲置 10 分钟退出，平台退出它也退出；只监听 127.0.0.1），另外需要 `say` 朗读，声音在设置 `voice.tts_voice` 里改。朗读放在页面里播，让浏览器的回声消除起作用；还能听到自己声音时，转出来的文字和刚念的句子对比，一样就当回声丢掉。讨论是只读的，下一轮的 Claude Code 进程会提前起好（只留一个，5 分钟没用上就停），首句回复能快 2 秒左右。
+说话途中用常驻的 `whisper-server` 边录边转（点麦克风时自动启动，闲置 10 分钟退出，平台退出它也退出；只监听 127.0.0.1）。朗读用本机 Kokoro（sherpa-onnx，文字不出本机），语音通话开始时加载，约占 400MB 内存，闲置 10 分钟释放；模型下载 [kokoro-multi-lang-v1_1](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2) 解压到 `voice.tts_model`（默认 `~/project/test_feynman/models/kokoro-multi-lang-v1_1`），声音编号和语速在 `voice.tts_sid`（3–57 女声、58–102 男声）/ `voice.tts_speed` 里改。没有模型或合成失败时退回 macOS `say`（声音在 `voice.tts_voice`）。朗读放在页面里播，让浏览器的回声消除起作用；还能听到自己声音时，转出来的文字和刚念的句子对比，一样就当回声丢掉。讨论是只读的，下一轮的 Claude Code 进程会提前起好（只留一个，5 分钟没用上就停），首句回复能快 2 秒左右。
 
 长录音在停顿处切成不超过 28 秒的段，逐段独立转写，避免 whisper 陷入重复后编造后文；静音、持续噪音和转出来的字幕腔套话会被丢掉。真实链路计时：`python scripts/voice_bench.py <样例目录> [--chat]`，`--chat` 会写对话记录，只在预览实例上跑。
 

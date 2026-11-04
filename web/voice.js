@@ -21,7 +21,7 @@ export const voiceBusy = () => !!current;
 export const inCall = () => !!current?.call;
 
 // ---------- 朗读：按句排队，放在页面里播（浏览器的回声消除才消得掉），本机合成失败退回系统语音 ----------
-let queue = [], cur = null, paused = false, lastEnd = 0;
+let queue = [], cur = null, synthing = null, paused = false, lastEnd = 0;
 let recent = [];    // 最近念过的句子，用来认出麦克风听到的是自己的声音
 let spokenTurn = false;
 
@@ -35,9 +35,22 @@ function playJob(job) {
   if (!spokenTurn) { spokenTurn = true; performance.mark('tts-first-play'); }
   job.el.play().catch(() => advance(job));
 }
+// 按顺序一次合成一句，只提前备两句：第一句不被后面的句子抢，打断后也不用等一长串合成完
+function synthNext() {
+  if (synthing) return;
+  const job = [cur, ...queue].filter(Boolean).slice(0, 3).find((j) => !j.started);
+  if (!job) return;
+  job.started = true; synthing = job;
+  job.abort = new AbortController();
+  fetch('/api/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: job.text }), signal: job.abort.signal })
+    .then((r) => (r.ok ? r.blob() : null)).catch(() => null)
+    .then((blob) => { job.resolve(blob); if (synthing === job) { synthing = null; synthNext(); } });
+}
 async function pump() {
+  synthNext();
   if (cur || paused || !queue.length) return;
   const job = cur = queue.shift();
+  synthNext();
   recent = [...recent.slice(-2), job.text];
   const blob = await job.blob;
   if (cur !== job) return;
@@ -55,9 +68,9 @@ async function pump() {
 }
 export const tts = {
   say(text) {
-    const blob = fetch('/api/voice/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
-      .then((r) => (r.ok ? r.blob() : null)).catch(() => null);
-    queue.push({ text, blob }); // 边生成边合成，轮到时已经好了
+    const job = { text };
+    job.blob = new Promise((resolve) => { job.resolve = resolve; });
+    queue.push(job); // 边生成边合成，轮到时已经好了
     pump();
   },
   pause() {
@@ -71,6 +84,7 @@ export const tts = {
     if (cur?.el) playJob(cur); else pump();
   },
   stop() {
+    synthing?.abort.abort(); synthing = null;
     queue = []; paused = false;
     const job = cur; cur = null;
     if (job) lastEnd = performance.now();
@@ -83,16 +97,16 @@ export const tts = {
   audible: () => !!cur || queue.length > 0 || performance.now() - lastEnd < ECHO_TAIL_S * 1000,
 };
 
-// 回复的文字流 → 一句句念。逗号处也切，长句不用等到句号才开口
+// 回复的文字流 → 一句句念。逗号处也切，长句不用等到句号才开口；第一段切得更短，合成时间短，开口更快
 export function sentenceFeed(say) {
-  let buf = '', inCode = false;
+  let buf = '', inCode = false, spoke = false;
   const clean = (t) => t.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|]/g, '').trim();
   const emit = (t) => {
     const fences = (t.match(/```/g) || []).length;
     const skip = inCode || fences > 0;
     if (fences % 2) inCode = !inCode;
     const text = clean(t);
-    if (!skip && /[\p{L}\p{N}]/u.test(text)) say(text);
+    if (!skip && /[\p{L}\p{N}]/u.test(text)) { spoke = true; say(text); }
   };
   return {
     feed(delta) {
@@ -100,7 +114,7 @@ export function sentenceFeed(say) {
       for (;;) {
         const m = buf.match(/^[\s\S]*?(?:[。！？；!?;\n]+|[，,](?=[\s\S]))/);
         if (!m) return;
-        if (/[，,]$/.test(m[0]) && m[0].length < 30) {
+        if (/[，,]$/.test(m[0]) && m[0].length < (spoke ? 30 : 4)) {
           const hard = buf.match(/^[\s\S]*?[。！？；!?;\n]+/);
           if (!hard) return;
           buf = buf.slice(hard[0].length); emit(hard[0]);

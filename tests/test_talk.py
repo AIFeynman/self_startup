@@ -175,6 +175,33 @@ def test_speak_returns_audio_and_rejects_empty(client, monkeypatch):
     assert client.post("/api/voice/speak", json={"text": "  "}).status_code == 400
 
 
+def test_synthesize_writes_playable_wav_and_falls_back_to_say(monkeypatch):
+    import io, types, wave
+    from app import voice
+
+    class Fake:
+        def generate(self, text, sid, speed):
+            return types.SimpleNamespace(samples=[0.0, 0.5, -1.0, 2.0], sample_rate=24000)
+    monkeypatch.setattr(voice, "_load_kokoro", lambda: Fake())
+    with wave.open(io.BytesIO(voice.synthesize("你好")), "rb") as w:
+        assert (w.getframerate(), w.getnframes(), w.getnchannels()) == (24000, 4, 1)
+
+    def broken():
+        raise FileNotFoundError("没有模型")
+    monkeypatch.setattr(voice, "_load_kokoro", broken)
+    monkeypatch.setattr(voice, "_say", lambda text: b"say:" + text.encode())
+    assert voice.synthesize("你好") == "say:你好".encode()
+
+
+def test_speak_prepare_never_blocks_the_call_when_model_is_missing(client, monkeypatch):
+    from app import voice
+
+    def broken():
+        raise FileNotFoundError("没有模型")
+    monkeypatch.setattr(voice, "_load_kokoro", broken)
+    assert client.post("/api/voice/speak/prepare").json()["ok"]
+
+
 def test_stop_kills_running_reply_and_next_turn_is_told(client, monkeypatch):
     from app import agent, chat, db
     stopped = []

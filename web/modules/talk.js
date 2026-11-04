@@ -11,7 +11,7 @@ export default {
       placeholder: '说出你在想的事，或者打字…',
       hint: '点麦克风开始通话：说完停一下自动发送，回复会念出来，开口就能打断',
       voiceAutoSend: true,
-      onVoiceCall: (on) => { calling = on; called = false; if (on) fetch('/api/chat/warm/talk', { method: 'POST' }).catch(() => {}); },
+      onVoiceCall: (on) => { calling = on; called = false; if (on) { fetch('/api/chat/warm/talk', { method: 'POST' }).catch(() => {}); fetch('/api/voice/speak/prepare', { method: 'POST' }).catch(() => {}); } },
       onSubmit: (t) => { start(t); },
     });
     const draftWrap = h('div');

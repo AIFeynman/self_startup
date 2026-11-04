@@ -1,4 +1,4 @@
-"""语音：本机转文字（whisper.cpp）和本机合成（macOS say）。音频不出本机，处理完即删，只返回结果。
+"""语音：本机转文字（whisper.cpp）和本机合成（Kokoro，用不了时退回 macOS say）。音频不出本机，处理完即删，只返回结果。
 /transcribe 转一整段录音；/live 转说话途中的一段，模型常驻所以约半秒一次，边说边出字靠它。"""
 from __future__ import annotations
 
@@ -45,6 +45,10 @@ _WATCH_PARENT = 'ppid=$1; shift; "$@" & c=$!; while kill -0 "$ppid" 2>/dev/null 
 _server: subprocess.Popen | None = None
 _server_url, _server_used = "", 0.0
 _server_lock = threading.Lock()
+_TTS_THREADS = 4
+_tts = None             # Kokoro，约占 400MB 内存，闲置和 whisper 一样退出
+_tts_used = 0.0
+_tts_lock = threading.Lock()
 
 
 def _levels(pcm: array.array) -> list[float]:
@@ -257,7 +261,59 @@ class SpeakIn(BaseModel):
     text: str
 
 
-def synthesize(text: str) -> bytes:
+def _load_kokoro():
+    """持锁调用。模型放在平台进程里，第一次朗读时加载，闲置退出，不是单独的服务。"""
+    global _tts
+    if _tts is not None:
+        return _tts
+    import sherpa_onnx
+    d = Path(settings.get("voice", {}).get("tts_model", "")).expanduser()
+    if not (d / "model.onnx").is_file():  # 配置不对时 sherpa 会直接退出进程，先查
+        raise FileNotFoundError(f"没有 Kokoro 模型：{d}")
+    tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(
+        model=sherpa_onnx.OfflineTtsModelConfig(
+            kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                model=str(d / "model.onnx"), voices=str(d / "voices.bin"), tokens=str(d / "tokens.txt"),
+                data_dir=str(d / "espeak-ng-data"), dict_dir=str(d / "dict"),
+                lexicon=f"{d / 'lexicon-us-en.txt'},{d / 'lexicon-zh.txt'}"),
+            num_threads=_TTS_THREADS),
+        rule_fsts=f"{d / 'phone-zh.fst'},{d / 'date-zh.fst'},{d / 'number-zh.fst'}",
+        max_num_sentences=1))
+    tts.generate("好。", sid=3)  # 第一次推理要慢不少，别让第一句来等
+    _tts = tts
+    threading.Thread(target=_unload_when_idle, daemon=True).start()
+    return _tts
+
+
+def _unload_when_idle() -> None:
+    global _tts
+    while True:
+        time.sleep(30)
+        with _tts_lock:
+            if time.time() - _tts_used > _SERVER_IDLE_S:
+                _tts = None
+                return
+
+
+def _kokoro(text: str) -> bytes:
+    global _tts_used
+    voice = settings.get("voice", {})
+    with _tts_lock:  # 模型一次合成一句
+        _tts_used = time.time()
+        audio = _load_kokoro().generate(text, sid=int(voice.get("tts_sid", 3)), speed=float(voice.get("tts_speed", 1.0)))
+    if not len(audio.samples):
+        raise RuntimeError("合成结果是空的")
+    pcm = array.array("h", (max(-32768, min(32767, int(x * 32767))) for x in audio.samples))
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(audio.sample_rate)
+        w.writeframes(pcm.tobytes())
+    return out.getvalue()
+
+
+def _say(text: str) -> bytes:
     binary = shutil.which("say")
     if not binary:
         raise HTTPException(503, "本机没有 say，用不了本机朗读")
@@ -271,6 +327,27 @@ def synthesize(text: str) -> bytes:
         if r.returncode != 0:
             raise HTTPException(500, f"say 失败：{r.stderr.strip()[-200:]}")
         return out.read_bytes()
+
+
+def synthesize(text: str) -> bytes:
+    try:
+        return _kokoro(text)
+    except Exception as e:  # 没下模型、没装依赖、模型读坏：朗读不能因此没声音
+        log.warning("Kokoro 朗读失败，退回 say：%s", e)
+        return _say(text)
+
+
+@router.post("/speak/prepare")
+def api_speak_prepare():
+    """语音通话开始时先把模型加载好，第一句不用等。"""
+    global _tts_used
+    try:
+        with _tts_lock:
+            _tts_used = time.time()
+            _load_kokoro()
+    except Exception as e:
+        log.warning("Kokoro 加载失败，朗读会退回 say：%s", e)
+    return {"ok": True}
 
 
 @router.post("/speak")
