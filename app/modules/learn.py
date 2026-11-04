@@ -551,7 +551,8 @@ def _takeaway_spec() -> str:
     tasks = db.rows("SELECT DISTINCT title FROM tasks WHERE title NOT LIKE '深读：%' ORDER BY date DESC, id DESC LIMIT 10")
     try:
         from .. import kb_graph
-        sigs = sorted((s for s in kb_graph.signals() if s["kind"] == "judgment" and s["mine"]), key=lambda s: s["date"], reverse=True)[:15]
+        sigs = [s for s in kb_graph.signals() if s["kind"] == "judgment" and s["mine"] and not re.match(r"[A-D]\. ", s["mine"])]  # 选择题选项不是用户的观点
+        sigs = sorted(sigs, key=lambda s: s["date"], reverse=True)[:15]
     except Exception:  # noqa: BLE001  判断只是给写作参考，取不到不影响深读
         sigs = []
     return TAKEAWAY_SPEC.format(api=agent.API_BASE,
