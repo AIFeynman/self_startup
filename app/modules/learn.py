@@ -414,13 +414,15 @@ QUICK_GITHUB = """任务：GitHub 项目速读（目标 5 分钟内完成，不�
 ## 最值得看的部分
 3–5 个文件或章节，每个说明为什么值得看、带着什么问题去看。
 ## 与我已有知识的联系
-## 可迁移结论
-2–4 条。
+最多 2 条，要求见下。
+## 可迁移结论 / 对我的启发
+1–2 条，要求见下。
 ## 最小上手实验
 代码项目写 3–8 步命令和预期观察；文档项目写一个读完后可以动手做的小练习。只写步骤，不要实际运行。
 ## 追问清单
 3 个最值得继续追问、可以直接复制到对话里的问题（练习题另写在 qa.json）。
 
+{takeaway}
 {figs}
 {qa}
 完成后，最终回复末尾附一个 ```json 代码块：
@@ -439,6 +441,23 @@ FIGS = """关键图（默认必做，不是可选项）：原文里承载论证�
 - 嵌入：在笔记正文里讲到它的位置插入 `![图1：图的标题](figs/fig1.png)`（必须是相对路径），紧接一行 `> 图1 说明：…`，写清图在比较什么、
   坐标 / 图例怎么读、关键数字、它支撑了作者哪个论点。HTML 产物里用 `<figure><img src="figs/fig1.png"><figcaption>…</figcaption></figure>`。
 - 实在下载不了（防爬、要登录）：嵌入原图的远程 URL，并在图注里写明「未能下载，显示原站图片」；连 URL 都拿不到时文字描述图的内容并注明。
+"""
+
+
+TAKEAWAY_SPEC = """联系与启发（这两节最要紧，宁少勿凑，写不到上限就少写）：
+- 动笔前按本文的核心概念查一两次知识库，不要只看「最近读过」那份列表：`curl -s '{api}/api/kb/search?q=关键词'`（关键词至少 3 个字）。
+- 用户最近在做的事：
+{doing}
+- 用户自己写过的判断（笔记、划线、感想、作答）：
+{mine}
+
+「与我已有知识的联系」：最多 2 条，最重要的在前。只写会改变用户认识的联系：这篇确认、推翻或补上了用户已有的哪个具体认识。
+每条 2–4 句，写成完整的话：用户原来知道或认为什么（写内容名称，不写「条目12」这种编号）→ 这篇带来什么不同 → 所以哪个判断或做法要改。
+优先接用户自己写过的判断，可短引原话。「同一主题」「是它的一个例子」「可以对照着看」都不算联系。没有够格的，就只写一句「暂无实质联系」。
+
+「可迁移结论 / 对我的启发」：1–2 条，最重要的在前。每条先一句粗体结论（离开这篇也成立），再 2–3 句：依据是什么、用到用户手头哪件具体的事、
+下一步具体做什么不同、什么情况下不成立。读完要能说出「我接下来会改什么」。放之四海皆准的道理（要重视评测、先做简单版）和笼统建议不要写。
+这篇确实没有新启发，就直说「这篇没有改变我的做法」并写明原因，不要编。
 """
 
 
@@ -472,16 +491,14 @@ ARTICLE = """任务：文章深读（博客 / X 长文 / gist / 讨论帖 / 官�
 正好 3 条 `- `：作者的核心主张 / 最有说服力的论据或例子 / 最值得怀疑或最容易误读的地方
 ## 作者在说什么
 按原文顺序把论证主线讲清楚：问题 → 主张 → 论据 → 结论。关键处附原文短引用。
-## 论据可信吗
-哪些是数据 / 实验 / 一手经验，哪些只是观点；作者的立场和利益相关；与主流看法的分歧。
 ## 与我已有知识的联系
+最多 2 条，要求见下。
 ## 可迁移结论 / 对我的启发
-2–4 条，注明适用边界。
+1–2 条，要求见下。
 ## 追问清单
 3 个最值得继续追问、可以直接复制到对话里的问题（练习题另写在 qa.json）。
-## 我的笔记
-（留空，给用户写）
 
+{takeaway}
 {figs}
 {qa}
 只写 note.md、qa.json 和 figs/ 下的图片，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
@@ -515,20 +532,31 @@ VIDEO = """任务：视频深度解读（YouTube / B 站等），重点是旁白
 画面里的演示、图表、代码只凭旁白无法确知的，写明「需看画面」。
 ## 值得手动看的片段
 3–6 段，每段：`[起始](链接)–结束时间` + 为什么值得看（演示操作、图表、关键论证、精彩问答）+ 带着什么问题去看。
-## 论据可信吗
-哪些是实验 / 数据 / 一手经验，哪些只是观点；讲者的立场和利益相关；与主流看法的分歧。
 ## 与我已有知识的联系
+最多 2 条，要求见下。
 ## 可迁移结论 / 对我的启发
-2–4 条，注明适用边界。
+1–2 条，要求见下。
 ## 追问清单
 3 个最值得继续追问、可以直接复制到对话里的问题（练习题另写在 qa.json）。
-## 我的笔记
-（留空，给用户写）
 
+{takeaway}
 {qa}
 只写 note.md、qa.json，以及取文字稿命令生成的 transcript.md、video.json、字幕文件，不要改其它文件。完成后，最终回复末尾附一个 ```json 代码块：
 {{"title": "视频标题（频道）", "tldr": ["第1行", "第2行", "第3行"], "output": "note.md"}}
 """
+
+
+def _takeaway_spec() -> str:
+    """联系与启发的要求，带上用户手头的事和自己写过的判断：只给读过的列表，容易写成「同一主题」式的罗列。"""
+    tasks = db.rows("SELECT DISTINCT title FROM tasks WHERE title NOT LIKE '深读：%' ORDER BY date DESC, id DESC LIMIT 10")
+    try:
+        from .. import kb_graph
+        sigs = sorted((s for s in kb_graph.signals() if s["kind"] == "judgment" and s["mine"]), key=lambda s: s["date"], reverse=True)[:15]
+    except Exception:  # noqa: BLE001  判断只是给写作参考，取不到不影响深读
+        sigs = []
+    return TAKEAWAY_SPEC.format(api=agent.API_BASE,
+                                doing="\n".join(f"  - {t['title']}" for t in tasks) or "  （暂无）",
+                                mine="\n".join(f"  - 《{s['title'][:40]}》：{s['mine'][:150]}" for s in sigs) or "  （暂无）")
 
 
 def _feed_hint(url: str) -> str:
@@ -553,15 +581,15 @@ def item_prompt(it: dict, out: Path) -> str:
         return VIDEO.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
                             feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]),
                             fetch=f"{sys.executable} {Path(_video.__file__).resolve()} '{it['url']}' {out}",
-                            qa=QA_SPEC.format(out=out))
+                            takeaway=_takeaway_spec(), qa=QA_SPEC.format(out=out))
     if kind == "article":
         return ARTICLE.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
                               feed=_feed_hint(it["url"]), out=out, known=_known_knowledge(it["id"]),
-                              figs=FIGS.format(out=out), qa=QA_SPEC.format(out=out))
+                              figs=FIGS.format(out=out), takeaway=_takeaway_spec(), qa=QA_SPEC.format(out=out))
     if kind == "github" and (it.get("depth") or "quick") == "quick":
         return QUICK_GITHUB.format(url=it["url"], focus=("用户关注点：" + it["focus"]) if it["focus"] else "",
                                    out=out, known=_known_knowledge(it["id"]), figs=FIGS.format(out=out),
-                                   qa=QA_SPEC.format(out=out))
+                                   takeaway=_takeaway_spec(), qa=QA_SPEC.format(out=out))
     skill = settings.get("learn.paper_skill" if kind == "paper" else "learn.github_skill")
     main = "note.md" if kind == "paper" else "index.html"
     obsidian = "允许按 paper-library 格式同时归档到其 config.json 指定的 Obsidian 库。" \
@@ -585,6 +613,7 @@ def item_prompt(it: dict, out: Path) -> str:
 
 6. {FIGS.format(out=out)}
 7. {QA_SPEC.format(out=out)}
+8. {_takeaway_spec()}
 {'若仓库主要是文档 / 书籍 / 教程（大部分是 .md）而非代码，不要硬套代码架构讲解：改为「阅读指南」式 HTML，包括全书结构、每章一句话、概念关系图、推荐阅读顺序和最值得读的章节，不写实验脚本。' if kind == 'github' else ''}
 
 ---- 本平台增补 ----
@@ -665,10 +694,10 @@ def patch_item(iid: int, body: ItemPatch):
 
 @router.get("/items/{iid}/reads")
 def item_reads(iid: int):
-    """条目对话里的追问与感想、对应的当天事项。"""
+    """「我的笔记」里的记录：条目对话里的追问与感想、正文上的划线，以及对应的当天事项。"""
     _item(iid)
     t = _reads.task_of(iid)
-    return {"lines": _reads.user_lines(iid), "task": {"id": t["id"], "date": t["date"], "status": t["status"]} if t else None}
+    return {"lines": _reads.user_lines(iid), "annots": _reads.annot_lines(iid), "task": {"id": t["id"], "date": t["date"], "status": t["status"]} if t else None}
 
 
 # ---------- 追问清单：逐题作答 + Agent 点评 ----------
@@ -2890,7 +2919,7 @@ def agent_context(ref: str) -> str:
         return (f"正在追问条目 {it['id']}（{it['kind']}）：{it['title'] or it['url']}\n来源：{it['url']}\n"
                 f"状态：{it['status']}；产物：{it['output_path'] or '无'}（目录 {out}，可用 Read 读取全文）\n{dd_line}"
                 f"TL;DR：{it['summary']}\n我的笔记：{it['my_notes'] or '无'}；评分：{it['rating']}/5\n"
-                f"用户在这里说的话会作为「追问与感想」进复盘和知识库；他写下感想时，帮他把感想说准、和文档里的论据对上，不要只附和。\n"
+                f"用户在这里说的话会记进这篇的「我的笔记」，也进复盘和知识库；他写下感想时，帮他把感想说准、和文档里的论据对上，不要只附和。\n"
                 f"更新笔记：curl -s -X PATCH {api}/items/{it['id']} -H 'Content-Type: application/json' -d '{{\"my_notes\":\"...\"}}'\n\n"
                 f"### 产物摘录\n{body or '（HTML 产物，请直接读取文件）'}\n\n"
                 + (("### 用户在追问清单里的作答\n" + "\n".join(

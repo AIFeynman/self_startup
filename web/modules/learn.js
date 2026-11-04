@@ -707,7 +707,7 @@ async function renderItem(el, ctx, iid) {
     if (tldrBox && !(hasNote && /TL;?DR/i.test(text.slice(0, 3000)))) reader.append(tldrBox);
     if (hasNote) {
       // 追问清单那一节不在正文里列，改成下面的逐题作答区
-      const note = text.replace(/^---[\s\S]*?---\s*/, '').replace(QA_SECTION, '');
+      const note = text.replace(/^---[\s\S]*?---\s*/, '').replace(QA_SECTION, '').replace(DROPPED_SECTION, '').replace(EMPTY_NOTES_SECTION, '');
       reader.append(h('div.card', {}, annotate(ctx, localImgs(md(note), `/api/learn/items/${it.id}/out/`), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
       // 论文：「为什么不 XX」——写下替代方案和猜测，后台查论文自己 + 后续论文怎么回答
       if (it.kind === 'paper') reader.append(...whyNotPanel(ctx, it));
@@ -717,29 +717,27 @@ async function renderItem(el, ctx, iid) {
     else if (isHtml) reader.append(h('div.card', {}, ui.empty('这是一份 HTML 教程', '点上方「打开 HTML 教程」在新标签页阅读')));
   }
 
-  // 追问与感想：条目对话里自己说过的话（进复盘和知识库），点开接着聊
+  // 我的笔记：自己写的 + 对话里的感想 / 追问 + 正文上的划线（都进复盘和知识库），外加评分
   const rd = await api.get(`/api/learn/items/${it.id}/reads`).catch(() => null);
-  if (rd) {
-    const lines = rd.lines || [];
-    const nThought = lines.filter((x) => x.kind === 'thought').length;
-    reader.append(ui.section('追问与感想', [lines.length ? `感想 ${nThought} · 追问 ${lines.length - nThought}` : '',
-      rd.task ? h('a.muted', { href: `#plan`, style: { marginLeft: '10px' } }, `${rd.task.date} 深读事项 · ${rd.task.status === 'done' ? '已完成' : '进行中'}`) : null]),
-    h('div.card.ln-reads', {}, lines.length ? [
-      ...lines.map((x) => h('div.ln-rd', {}, [h('span.muted', {}, x.at.slice(5, 16).replace('T', ' ')),
-        h('span.tag' + (x.kind === 'thought' ? '.ok' : '.gray'), {}, x.kind === 'thought' ? '感想' : '追问'), h('span', {}, x.text)])),
-      h('div.row', { style: { marginTop: '10px' } }, [h('span.grow'), h('button.sm', { onclick: chat }, [ui.icon('chat'), '接着聊'])]),
-    ] : [h('div.row', {}, [h('span.muted', {}, '读的时候想到什么、哪里不认同，就在对话里写下来：会记成感想，进复盘和知识库。'), h('span.grow'),
-      h('button.sm.primary', { onclick: chat }, [ui.icon('chat'), '写感想 / 追问'])])]));
-  }
-
-  // 我的笔记 / 评分
+  const asked = (rd?.lines || []).filter((x) => x.kind !== 'thought').length;
+  const thought = (rd?.lines || []).length - asked;
+  const annots = rd?.annots || [];
+  const records = [...(rd?.lines || []), ...annots.map((x) => ({ ...x, kind: 'annot' }))].sort((a, b) => a.at.localeCompare(b.at));
+  const RECORD_TAG = { thought: ['.ok', '感想'], ask: ['.gray', '追问'], annot: ['.gray', '划线'] };
   let rating = it.rating || 0;
-  const notes = h('textarea', { rows: 4, value: it.my_notes || '', placeholder: '我的笔记 / 认识（⌘+Enter 保存）' });
+  const notes = h('textarea', { rows: 4, value: it.my_notes || '', placeholder: '写点认识或疑问（⌘+Enter 保存）。选中正文可以直接划线记录，在对话里说的感想和追问也会记到这里。' });
   const saved = h('span.ln-saved');
   const saveNotes = async () => { await api.patch(`/api/learn/items/${it.id}`, { my_notes: notes.value, rating }); saved.textContent = '已保存 ✓'; setTimeout(() => { saved.textContent = ''; }, 2000); };
   notes.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveNotes(); } });
-  reader.append(ui.section('我的笔记'), h('div.card', {}, [notes,
+  reader.append(ui.section('我的笔记', [[annots.length && `划线 ${annots.length}`, thought && `感想 ${thought}`, asked && `追问 ${asked}`].filter(Boolean).join(' · '),
+    rd?.task ? h('a.muted', { href: `#plan`, style: { marginLeft: '10px' } }, `${rd.task.date} 深读事项 · ${rd.task.status === 'done' ? '已完成' : '进行中'}`) : null]),
+  h('div.card.ln-reads', {}, [
+    ...records.map((x) => h('div.ln-rd', {}, [h('span.muted', {}, x.at.slice(5, 16).replace('T', ' ')),
+      h('span.tag' + RECORD_TAG[x.kind][0], {}, RECORD_TAG[x.kind][1]),
+      h('span', {}, [x.quote ? h('span.muted', {}, `「${x.quote.length > 60 ? x.quote.slice(0, 60) + '…' : x.quote}」`) : null, x.text])])),
+    h('div', { style: { marginTop: records.length ? '10px' : '0' } }, notes),
     h('div.row', { style: { marginTop: '10px' } }, [h('span.muted', {}, '评分'), stars(h, ui, rating, (v) => { rating = v; saveNotes(); }), h('span.grow'), saved,
+      h('button', { onclick: chat }, [ui.icon('chat'), records.length ? '接着聊' : '去对话里聊']),
       h('button.primary', { onclick: saveNotes }, [ui.icon('check'), '保存'])])]));
 }
 
@@ -851,6 +849,9 @@ function localImgs(el, base) {
 }
 
 const QA_SECTION = /^#{2,4}\s*追问清单[^\n]*\n[\s\S]*?(?=^#{1,4}\s|(?![\s\S]))/m;
+// 旧笔记里已经不要的小节：「论据可信吗」，以及模板留空的「我的笔记」（笔记都记在页面底部）
+const DROPPED_SECTION = /^#{2,4}\s*论据可信吗[^\n]*\n[\s\S]*?(?=^#{1,4}\s|(?![\s\S]))/m;
+const EMPTY_NOTES_SECTION = /^#{2,4}\s*我的笔记[^\n]*\n(?:\s|（留空[^\n]*)*(?=^#{1,4}\s|(?![\s\S]))/m;
 
 // 练习题（qa.json）：选择题点一下当场判对错并给解析，开放题 1–2 道交给 Agent 点评；老笔记没有练习题时可以让 Agent 出一套
 function qaSection(ctx, it, qa) {
