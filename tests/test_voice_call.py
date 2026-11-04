@@ -127,7 +127,7 @@ def test_session_goes_up_with_tools_and_mic_is_forwarded(env):
         ws.in_.put_nowait({"type": "websocket.receive", "bytes": b"\x01\x02"})
         await until(lambda: env.of("input_audio_buffer.append"))
     _call(body)
-    assert {t["function"]["name"] for t in env.of("session.update")[0]["session"]["tools"]} >= {"ask_claude", "web_search"}
+    assert {t["function"]["name"] for t in env.of("session.update")[0]["session"]["tools"]} >= {"think_deep", "web_search"}
     assert base64.b64decode(env.of("input_audio_buffer.append")[0]["audio"]) == b"\x01\x02"
     assert env.closed and chat.active == 0
 
@@ -170,25 +170,25 @@ def test_barge_in_after_generation_finished_still_stops_playback(env):
     assert _rows(call.sid)[0][1].endswith(chat.INTERRUPTED)
 
 
-def test_ask_claude_result_is_spoken_when_safe_and_full_stays_local(env):
+def test_think_deep_result_is_spoken_when_safe_and_full_stays_local(env):
     async def body(ws, call):
         env.feed("response.created")
-        env.feed("response.function_call_arguments.done", call_id="c1", name="ask_claude", arguments='{"objective":"上周定了啥"}')
+        env.feed("response.function_call_arguments.done", call_id="c1", name="think_deep", arguments='{"objective":"上周定了啥"}')
         await until(lambda: env.of("conversation.item.create"))
         env.feed("response.done", response={"status": "completed"})
         await until(lambda: env.of("response.create"))  # 先接一句
         env.feed("response.created")
         env.feed("response.done", response={"status": "completed"})
-        await until(lambda: any("慢思考结果" in t for t in env.said()))
+        await until(lambda: any(voice_rt.ANSWER_MARK in t for t in env.said()))
         await until(lambda: ws.told("slow"))
         env.feed("response.created")
         env.feed("response.done", response={"status": "completed"})
-        await until(lambda: any("慢思考提纲" in t for t in env.said()))  # 提纲悄悄记下，不触发说话
+        await until(lambda: any(voice_rt.NOTES_MARK in t for t in env.said()))  # 提纲悄悄记下，不触发说话
     ws, call = _call(body)
     output = [e["item"] for e in env.of("conversation.item.create") if e["item"]["type"] == "function_call_output"][0]
     assert json.loads(output["output"]) == {"status": "accepted"} and output["call_id"] == "c1"
     said = env.said()
-    assert "【慢思考提纲】先做中转，理由是最影响体验" in said and any("你上周定的是先做中转。" in t and "慢思考结果" in t for t in said)
+    assert f"{voice_rt.NOTES_MARK}先做中转，理由是最影响体验" in said and any("你上周定的是先做中转。" in t and voice_rt.ANSWER_MARK in t for t in said)
     assert env.of("response.create")
     # 完整回答只给本机：不上云，进记录，显示在屏幕上
     assert "secret.md" not in json.dumps(env.sent, ensure_ascii=False)
@@ -227,7 +227,7 @@ def test_claimed_forward_without_tool_call_is_forwarded(env, monkeypatch, transc
 
 
 def test_tool_name_spoken_aloud_counts_as_forward(env, monkeypatch):
-    # 实测 Flash 偶尔把「[调用 ask_claude]」当话说出来，工具其实没调
+    # 实测 Flash 偶尔把「[调用 think_deep]」当话说出来，工具其实没调
     asked = []
 
     def run(prompt, **kw):
@@ -237,8 +237,82 @@ def test_tool_name_spoken_aloud_counts_as_forward(env, monkeypatch):
     monkeypatch.setattr(agent, "run_stream", run)
 
     async def body(ws, call):
-        _say_without_tool("[调用 ask_claude]")(env)
+        _say_without_tool("[调用 think_deep]")(env)
         await until(lambda: asked)
+    _call(body)
+
+
+def _say_leak(env, text):
+    env.feed("conversation.item.input_audio_transcription.completed", transcript="算了")
+    env.feed("response.created")
+    env.feed("response.audio_transcript.delta", delta=text)
+    env.feed("response.audio.delta", delta=audio())
+
+
+def test_internal_words_are_muted_and_said_again(env):
+    async def body(ws, call):
+        _say_leak(env, "[正在处理]")
+        await until(lambda: ws.told("clear"))
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: env.of("response.create"))
+        assert not ws.audio and any("用户没听到" in t for t in env.said())
+        env.feed("response.created")  # 重说的不再拦，不能一直没声音
+        env.feed("response.audio_transcript.delta", delta="[好的]")
+        env.feed("response.audio.delta", delta=audio())
+        await until(lambda: ws.audio)
+        env.feed("response.done", response={"status": "completed"})
+        await asyncio.sleep(0.05)
+        assert len(env.of("response.create")) == 1
+    ws, call = _call(body)
+    assert all("正在处理" not in c for _, c in _rows(call.sid))
+
+
+def test_muted_reply_with_tool_call_still_runs_the_tool(env, monkeypatch):
+    asked = []
+
+    def run(prompt, **kw):
+        asked.append(prompt)
+        kw["on_proc"](object())
+        yield {"type": "done", "text": ANSWER}
+    monkeypatch.setattr(agent, "run_stream", run)
+
+    async def body(ws, call):
+        _say_leak(env, "我让后台分析一下。")
+        await until(lambda: ws.told("clear"))
+        assert not ws.audio and not env.of("response.cancel")
+        env.feed("response.function_call_arguments.done", name="think_deep", call_id="c1", arguments=json.dumps({"objective": "选哪个"}))
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: asked)
+        assert not any("用户没听到" in t for t in env.said())
+    _call(body)
+
+
+def test_muted_claim_without_tool_is_forwarded(env, monkeypatch):
+    asked = []
+
+    def run(prompt, **kw):
+        asked.append(prompt)
+        kw["on_proc"](object())
+        yield {"type": "done", "text": ANSWER}
+    monkeypatch.setattr(agent, "run_stream", run)
+
+    async def body(ws, call):
+        _say_leak(env, "[")  # 文字是一段段到的，先拦住，再看整句
+        await until(lambda: ws.told("clear"))
+        env.feed("response.audio_transcript.delta", delta="调用 think_deep]")
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: asked)
+    _call(body)
+
+
+def test_answer_with_internal_words_is_not_muted(env):
+    async def body(ws, call):
+        await call._respond()
+        env.feed("response.created")
+        env.feed("response.audio_transcript.delta", delta="这类任务放后台，再转交给同事。")
+        env.feed("response.audio.delta", delta=audio())
+        await until(lambda: ws.audio)
+        assert not ws.told("clear")
     _call(body)
 
 
@@ -265,9 +339,9 @@ def test_result_waits_while_user_is_talking(env):
         call.thinker.ask("上周定了啥")
         await until(lambda: ws.told("slow"))
         await asyncio.sleep(0.1)
-        assert not any("慢思考结果" in t for t in env.said())
+        assert not any(voice_rt.ANSWER_MARK in t for t in env.said())
         env.feed("input_audio_buffer.speech_stopped")
-        await until(lambda: any("慢思考结果" in t for t in env.said()))
+        await until(lambda: any(voice_rt.ANSWER_MARK in t for t in env.said()))
     _call(body)
 
 
@@ -414,3 +488,42 @@ def test_web_search_trims_and_survives_errors(monkeypatch):
     assert "error" in voice_rt.web_search("杭州天气")
     monkeypatch.delenv("DEEPSEEK_API_KEY")
     assert "error" in voice_rt.web_search("杭州天气")
+
+
+# ---------- 只走本机登录 ----------
+def test_claude_child_drops_gateway_env(monkeypatch):
+    for k in agent.GATEWAY_ENV:
+        monkeypatch.setenv(k, "x")
+    assert not set(agent.GATEWAY_ENV) & set(agent._child_env("claude"))
+    assert set(agent.GATEWAY_ENV) <= set(agent._child_env("codex"))
+
+
+def test_non_first_party_stops_without_fallback(monkeypatch, tmp_path):
+    fake = tmp_path / "fake-claude"
+    fake.write_text("""#!/bin/sh
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"网关答的"}]}}'
+echo '{"type":"result","result":"网关答的","session_id":"s","modelUsage":{"m":{"provider":"openrouter"}}}'
+""")
+    fake.chmod(0o755)
+    monkeypatch.setattr(agent, "_claude_cmd", lambda *a, **k: [str(fake)])
+    monkeypatch.setattr(agent, "_codex_cmd", lambda *a, **k: pytest.fail("不该回退到别的引擎"))
+    monkeypatch.setattr(agent, "available", lambda e: True)
+    evs = list(agent.run_stream("问", engine="claude"))
+    assert any(e.get("gateway") and "本机登录" in e["text"] for e in evs)
+    assert not any(e["type"] == "done" for e in evs)
+
+
+def test_first_party_passes(monkeypatch, tmp_path):
+    fake = tmp_path / "fake-claude"
+    fake.write_text("""#!/bin/sh
+echo '{"type":"result","result":"好","session_id":"s","modelUsage":{"m":{"provider":"firstParty"}}}'
+""")
+    fake.chmod(0o755)
+    monkeypatch.setattr(agent, "_claude_cmd", lambda *a, **k: [str(fake)])
+    monkeypatch.setattr(agent, "available", lambda e: True)
+    assert agent.run_once("问", engine="claude")["text"] == "好"
+
+
+def test_internal_words_cover_naming_the_model_but_not_talking_about_it():
+    assert voice_call.INTERNAL_WORDS.search("这个问题我让 Claude 结合资料想想。")
+    assert not voice_call.INTERNAL_WORDS.search("Claude Code 和 Codex 各自适合做什么，我想一下。")

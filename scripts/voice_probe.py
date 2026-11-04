@@ -221,7 +221,7 @@ async def run_case(model: str, case: dict, pcm: bytes, url: str | None = None) -
             "spoke_before_tool": first_audio_before_tool and bool(calls),
             "order": order, "calls": calls, "route": route,
             "route_ok": route_ok(case["expect"], route) and route != "failed",
-            "invented": invented(case, calls, reply),
+            "invented": invented(case, calls, reply), "leaked": bool(voice_rt.LEAK.search(reply)),
             "heard": heard, "heard_sim": round(similarity(heard, case["text"]), 3),
             "terms_kept": keep_rate(case.get("terms", []), heard),
             "objective_kept": keep_rate(case.get("keep", []), " ".join(c["arguments"] for c in calls)),
@@ -241,7 +241,7 @@ async def run_spoken(model: str, item: dict, url: str | None = None) -> dict:
     conn, _ = await connect(model, url)
     try:
         t0 = time.monotonic()
-        await conn.inject(f"【慢思考结果】{item['text']}")
+        await conn.inject(f"{voice_rt.ANSWER_MARK}{item['text']}")
         await conn.send({"type": "response.create", "response": {"modalities": ["audio", "text"]}})
         await conn.wait("response.done", after=t0, timeout=SETTLE_S)
         audio = conn.of("response.audio.delta")
@@ -260,7 +260,7 @@ async def run_barge(model: str, pcm_cut: bytes, url: str | None = None) -> dict:
     conn, _ = await connect(model, url)
     silence = None
     try:
-        await conn.inject("【慢思考结果】我建议分三步。第一步先把中转做好，第二步接上工具，第三步跑评测。每一步都要有验收线，做完再进下一步。")
+        await conn.inject(f"{voice_rt.ANSWER_MARK}我建议分三步。第一步先把中转做好，第二步接上工具，第三步跑评测。每一步都要有验收线，做完再进下一步。")
         t0 = time.monotonic()
         await conn.send({"type": "response.create", "response": {"modalities": ["audio", "text"]}})
         first = await conn.wait("response.audio.delta", after=t0, timeout=SETTLE_S)
@@ -375,7 +375,7 @@ def summarize(rows: list[dict], spoken: list[dict], barge: list[dict]) -> dict:
             "tool_p50": percentile([r["tool_s"] for r in tool if r["tool_s"] is not None], 50),
             "spoke_before_tool": sum(r["spoke_before_tool"] for r in tool), "tool_cases": len(tool),
             "route_acc": round(sum(r["route_ok"] for r in rs) / len(rs), 3) if rs else None,
-            "route_by_kind": by_kind, "invented": [r["id"] for r in rs if r["invented"]],
+            "route_by_kind": by_kind, "invented": [r["id"] for r in rs if r["invented"]], "leaked": [r["id"] for r in rs if r.get("leaked")],
             "heard_sim_mean": round(statistics.mean(r["heard_sim"] for r in rs), 3) if rs else None,
             "terms_kept_mean": round(statistics.mean(r["terms_kept"] for r in rs if r["kind"] in ("术语", "常识")), 3) if any(r["kind"] in ("术语", "常识") for r in rs) else None,
             "objective_kept_mean": round(statistics.mean(r["objective_kept"] for r in rs if r["calls"]), 3) if tool else None,
@@ -433,7 +433,7 @@ async def run_voices(model: str, voices: list[str], out: Path, url: str | None =
         conn, _ = await connect(model, url, voice=v)
         try:
             t0 = time.monotonic()
-            await conn.inject(f"【慢思考结果】{line}")
+            await conn.inject(f"{voice_rt.ANSWER_MARK}{line}")
             await conn.send({"type": "response.create", "response": {"modalities": ["audio", "text"]}})
             await conn.wait("response.done", after=t0, timeout=SETTLE_S)
             save_wav(out / f"{v}.wav", bytes(conn.audio))

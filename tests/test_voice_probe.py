@@ -3,6 +3,7 @@ import asyncio
 import base64
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -26,10 +27,10 @@ def test_scoring():
     tail = int(probe.RATE * 0.3)
     assert abs(probe.trailing_silence_s(b"\x10\x20" * probe.RATE + bytes(tail * 2)) - 0.3) < 0.05
     assert probe.percentile([], 95) is None
-    assert probe.route_of([{"name": "ask_claude"}], True) == "ask_claude"
+    assert probe.route_of([{"name": "think_deep"}], True) == "think_deep"
     assert probe.route_of([], True) == "fast"
     assert probe.route_of([], False) == "silent"
-    assert probe.route_ok("any", "silent") and not probe.route_ok("fast", "ask_claude")
+    assert probe.route_ok("any", "silent") and not probe.route_ok("fast", "think_deep")
 
 
 def test_endpoint_accepts_bare_id_or_console_url(monkeypatch):
@@ -48,7 +49,7 @@ def test_tools_always_declare_required():
 def test_invented_only_counts_unforwarded_data_questions():
     case = {"must_not_invent": True}
     assert probe.invented(case, [], "你上周的复盘里说了三个问题")
-    assert not probe.invented(case, [{"name": "ask_claude"}], "你上周的复盘我想一下")
+    assert not probe.invented(case, [{"name": "think_deep"}], "你上周的复盘我想一下")
     assert not probe.invented(case, [], "这个我得想一下")
     assert not probe.invented({}, [], "你上周说过")
 
@@ -93,7 +94,7 @@ class FakeBailian:
             else:
                 self.items.append(item["content"][0]["text"])
         elif t == "response.create":
-            said = self.items[-1].removeprefix("【慢思考结果】") if self.items else "好的，我想一下。"
+            said = self.items[-1].removeprefix(probe.voice_rt.ANSWER_MARK) if self.items else "好的，我想一下。"
             self.task = asyncio.create_task(self.respond(said, long="三步" in said))
         elif t == "response.cancel":
             if self.task:
@@ -120,7 +121,7 @@ class FakeBailian:
                 return
             if self.mode == "tool":
                 await self.emit("response.output_item.added", item={"id": "c1", "type": "function_call"})
-                await self.emit("response.function_call_arguments.done", call_id="call-1", name="ask_claude",
+                await self.emit("response.function_call_arguments.done", call_id="call-1", name="think_deep",
                                 arguments='{"objective":"这周先推哪件事"}')
                 await self.emit("response.done", response={"id": "r0", "status": "completed"})
             else:
@@ -151,14 +152,17 @@ def test_direct_reply_measures_latency():
     assert r["heard_sim"] == 1.0 and r["reply"] == "你好。"
     assert fake.items == ["【你刚说过】先做中转"]
     assert fake.sessions[0]["tools"] == probe.voice_rt.TOOLS  # 真跑时要带上工具和提示词
-    assert "慢思考" in fake.sessions[0]["instructions"]
+    assert "think_deep" in fake.sessions[0]["instructions"]
+    # 它看到什么就可能念什么：提示词和工具说明里不能有内部说法
+    seen = fake.sessions[0]["instructions"] + json.dumps(probe.voice_rt.TOOLS, ensure_ascii=False)
+    assert not re.search("慢思考|快思考|转给|转交|交出去|交给|后台|调用|Claude", seen, re.I)
 
 
 def test_tool_call_answers_accepted_then_replies():
     fake = FakeBailian("tool")
-    case = {"id": "x", "kind": "建议", "text": "帮我想想这周先推哪件事", "expect": "ask_claude", "keep": ["这周"]}
+    case = {"id": "x", "kind": "建议", "text": "帮我想想这周先推哪件事", "expect": "think_deep", "keep": ["这周"]}
     r = asyncio.run(_with_server(fake, lambda u: probe.run_case("m", case, PCM, u)))
-    assert r["route"] == "ask_claude" and r["route_ok"] and r["tool_s"] is not None
+    assert r["route"] == "think_deep" and r["route_ok"] and r["tool_s"] is not None
     assert fake.outputs[0]["call_id"] == "call-1" and r["objective_kept"] == 1.0
     assert not r["spoke_before_tool"]  # 这个假服务是先调工具再说话
     assert r["first_audio_s"] is not None  # 第二轮接上的话
@@ -208,7 +212,7 @@ def test_run_all_writes_summary_for_both_models(tmp_path, monkeypatch):
     audio = tmp_path / "audio"
     audio.mkdir()
     cases = {
-        "cases": [{"id": "a", "kind": "建议", "text": "帮我想想这周先推哪件事", "expect": "ask_claude"},
+        "cases": [{"id": "a", "kind": "建议", "text": "帮我想想这周先推哪件事", "expect": "think_deep"},
                   {"id": "b", "kind": "术语", "text": "帮我想想这周先推哪件事", "expect": "any", "terms": ["这周"]}],
         "spoken": [{"id": "s", "text": "你在第二章。", "keep": ["第二章"]}],
     }

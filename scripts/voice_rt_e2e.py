@@ -17,7 +17,7 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-from voice_probe import trailing_silence_s  # noqa: E402
+from voice_probe import trailing_silence_s, voice_rt  # noqa: E402
 
 FRAME = 1024
 RATE = 16000
@@ -35,7 +35,7 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
     pcm = pcm_of(audio_dir / f"{case['id']}.wav")
     silence = bytes(FRAME * 2)
     tail = trailing_silence_s(pcm)  # 录音末尾自带的静音也算用户说完之后
-    needs_slow = case["expect"] == "ask_claude"
+    needs_slow = case["expect"] == "think_deep"
     async with websockets.connect(url, max_size=None, proxy=None) as ws:
         t_end, first_audio, replies, heard, slow, doing, audio_s = None, None, [], "", None, set(), 0.0
         fallback, searching = None, False
@@ -104,7 +104,7 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
 
 
 def route_ok(row: dict) -> bool:
-    want = {"ask_claude": "think", "web_search": "search"}.get(row["expect"])
+    want = {"think_deep": "think", "web_search": "search"}.get(row["expect"])
     return want in row["did"] if want else row["expect"] != "fast" or not row["did"]
 
 
@@ -143,6 +143,8 @@ async def main() -> int:
     firsts = sorted(r["first_audio_s"] for r in rows if r.get("first_audio_s"))
     print(json.dumps({"cases": len(rows), "route_ok": sum(r["route_ok"] for r in rows),
                       "first_audio_p50": firsts[len(firsts) // 2] if firsts else None,
+                      # 只看接话那句：想好的答案是用户的内容，可能本来就讲到「后台」「调用」
+                      "leaked": [r["id"] for r in rows if voice_rt.LEAK.search((r.get("replies") or [""])[0])],
                       "slow_s": [r.get("slow_s") for r in rows if r.get("slow_s")]}, ensure_ascii=False))
     return 0
 

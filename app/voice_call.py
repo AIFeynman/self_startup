@@ -1,7 +1,7 @@
 """快慢思考语音通话的中转：浏览器 ↔ 这里 ↔ 百炼实时模型。密钥只在服务端。
 
 上行二进制帧是 16k PCM，下行二进制帧是 24k PCM，其余都是 JSON 控制消息。
-工具在这里执行：ask_claude 等交给本机慢思考（voice_think），web_search 走 DeepSeek。
+工具在这里执行：think_deep 等交给本机慢思考（voice_think），web_search 走 DeepSeek。
 """
 from __future__ import annotations
 
@@ -29,7 +29,9 @@ RESPONSE_WAIT_S = 5  # 要了回应这么久还没开始（比如百炼报错）
 IDLE_S = 600  # 这么久没人说话就挂断，免得一直计费
 TICK_S = 0.1
 # 模型偶尔嘴上说转交却没调工具（2026-11-04 实测），用户就白等了：听到这些话而没调用，替它转
-CLAIMS_FORWARD = re.compile(r"ask_claude|第一反应|这边(?:看不到|没)|转给|转交|慢思考|后台|稍等|想一下|想想|帮你(?:理|想|捋)|我[^。！？]{0,6}(?:查|搜|翻|找|看看|看一下)")
+CLAIMS_FORWARD = re.compile(r"think_deep|第一反应|这边(?:看不到|没)|转给|转交|慢思考|后台|稍等|想一下|想想|帮你(?:理|想|捋)|我[^。！？]{0,6}(?:查|搜|翻|找|看看|看一下)")
+# 提示词压不到零：工具名、方括号占位、「让后台想」还会冒出来。文字比音频早到（2026-11-04 实测约 15 毫秒，且一句话整句先到），先拦不增加延迟
+INTERNAL_WORDS = re.compile(r"慢思考|快思考|转给|转交|交出去|交给|让(?:后台|搭档)|让\s*Claude|Claude\s*帮|think_deep|update_thinking|get_thinking_status|cancel_thinking|web_search|^\s*[\[【]")
 
 
 class _End(Exception):
@@ -56,6 +58,7 @@ class Call:
         self.searching = 0
         self.asked_at = 0.0
         self.spoke_this_response = self.tool_called = self.from_user = self.forward_waiting = False
+        self.muted, self.muted_text, self.retrying, self.guarded = False, "", False, False
         self.last_user = ""
         now = time.monotonic()
         self.play_until = self.audio_started = 0.0
@@ -109,7 +112,7 @@ class Call:
             args = {}
         t = self.thinker
         log.info("语音工具 %s", name)
-        if name == "ask_claude":
+        if name == "think_deep":
             out, follow = {"status": t.ask(str(args.get("objective", "")))}, not self.spoke_this_response
         elif name == "update_thinking":
             out, follow = {"status": t.update(str(args.get("info", "")))}, not self.spoke_this_response
@@ -140,7 +143,7 @@ class Call:
         self.forward_waiting = False
         log.warning("模型说了转交但没调用工具，补转")
         status = self.thinker.ask(self.last_user)
-        await self._inject(f"【系统】这个问题已经转给慢思考（{status}），结果之后会送来。")
+        await self._inject(f"【系统】这个问题开始想了（{status}），想好的答案之后会送来。")
 
     def _on_slow(self, kind: str, text: str) -> None:
         if kind in ("spoken", "brief"):
@@ -185,6 +188,21 @@ class Call:
         # 百炼没有截断接口，云端记的是整句：告诉它用户其实听到哪
         await self._inject(f"【系统】刚才那句用户只听到「{part[-60:]}」就打断了，后面的没听到。" if part else "【系统】刚才那句用户没听到就打断了。")
 
+    async def _mute(self) -> None:
+        """这句不让用户听到。不取消回应：工具调用可能还在后面，取消了问题就没人想了。"""
+        self.muted, self.muted_text, self.dropping = True, self.reply, True
+        self.reply = ""
+        self.play_until = time.monotonic()
+        await self.tell(type="clear")  # 前面的句子可能已经发出去了
+
+    async def _after_mute(self) -> None:
+        """没调工具就重说一次；重说的不再拦，宁可漏一句也不能一直没声音。"""
+        if CLAIMS_FORWARD.search(self.muted_text):
+            await self._forward_claimed()
+        # 「等一下」这类话模型也可能回方括号：不能逼它开口，否则会没话找话
+        await self._inject("【系统】刚才那句用户没听到。用户在等你回应就重新说，只说给用户听的话；用户让你等、或者不是在跟你说话，就什么都不说，也不要用工具。")
+        self.retrying, self.want_response = True, True
+
     async def _on_event(self, ev: dict) -> None:
         t, now = ev.get("type"), time.monotonic()
         if t == "response.audio.delta":
@@ -202,25 +220,40 @@ class Call:
             self.play_until = max(now, self.play_until) + len(pcm) / 2 / OUT_RATE
             await self.ws.send_bytes(pcm)
         elif t == "response.created":
-            self.from_user = not self.asked_at  # 我们要的回应（念结果、报进度）不算回答用户
+            self.from_user = not self.asked_at or self.retrying  # 我们要的回应（念结果、报进度）不算回答用户
+            self.guarded, self.retrying = not self.asked_at, False
+            self.muted = False
             self.response_active, self.want_response, self.spoke_this_response, self.asked_at = True, False, False, 0.0
             self.tool_called = False
             self.dropping = self.reply_done = False
             if self.reply:  # 上一句还没放完就来了新回应
                 self._flush_reply()
         elif t == "response.audio_transcript.delta":
-            if not self.dropping:
+            if self.muted:  # 判断要不要补转得看整句，一拦住就只有个「[」
+                self.muted_text += ev.get("delta", "")
+            elif not self.dropping:
                 self.reply += ev.get("delta", "")
+                if self.guarded and INTERNAL_WORDS.search(self.reply):
+                    await self._mute()
         elif t == "response.audio_transcript.done":
-            if not self.dropping:
+            if self.muted:
+                self.muted_text = ev.get("transcript") or self.muted_text
+            elif not self.dropping:
                 self.reply = ev.get("transcript") or self.reply
-                await self.tell(type="reply", text=self.reply)
+                if self.guarded and INTERNAL_WORDS.search(self.reply):
+                    await self._mute()
+                else:
+                    await self.tell(type="reply", text=self.reply)
         elif t == "response.done":
             self.response_active, self.reply_done = False, True
             resp = ev.get("response") or {}
             if resp.get("status") == "failed":
                 log.warning("百炼回应失败：%s", resp.get("status_details"))
                 await self.tell(type="error", message="这一句没答上来，再说一次")
+            elif self.muted:
+                log.warning("拦下内部说法：%s", self.muted_text[:80])
+                if not self.tool_called and resp.get("status") == "completed":
+                    await self._after_mute()
             elif self.from_user and not self.tool_called and not self.dropping and CLAIMS_FORWARD.search(self.reply):
                 await self._forward_claimed()
         elif t == "response.function_call_arguments.done":
@@ -273,16 +306,16 @@ class Call:
         if not self._safe(now):
             return
         while self.outbox and self.outbox[0][0] == "brief":
-            await self._inject(f"【慢思考提纲】{self.outbox.popleft()[1]}")
+            await self._inject(f"{voice_rt.NOTES_MARK}{self.outbox.popleft()[1]}")
         if self.outbox:
             kind, text = self.outbox.popleft()
-            await self._inject(f"【慢思考结果】（直接念下面这段，一字不改）{text}" if kind == "spoken"
-                               else "【系统】慢思考这次没有结果。告诉用户没想出来，可以换个问法，不要自己回答这个问题。")
+            await self._inject(f"{voice_rt.ANSWER_MARK}（直接念下面这段，一字不改）{text}" if kind == "spoken"
+                               else "【系统】这个问题这次没想出结果。告诉用户没想出来，可以换个问法，不要自己回答这个问题。")
             await self._respond()
             return
         doing = self.thinker.due_cue(CUE_AT)
         if doing:
-            await self._inject(f"【进度】慢思考{doing}。用一句很短的话转告用户，不要说别的。")
+            await self._inject(f"【进度】你正{doing}。用一句很短的话告诉用户，不要说别的。")
             await self._respond()
 
     # ---------- 三个循环 ----------

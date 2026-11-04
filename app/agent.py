@@ -133,6 +133,9 @@ def _parse_claude(obj: dict) -> list[dict]:
         if delta.get("type") == "text_delta" and delta.get("text"):
             out.append({"type": "delta", "text": delta["text"]})
     elif t == "result":
+        bad = {m: u.get("provider") for m, u in (obj.get("modelUsage") or {}).items() if u.get("provider") != "firstParty"}
+        if bad:  # 这一轮不算数，也不回退别的引擎，让人知道
+            return [{"type": "error", "text": f"Claude 调用没有走本机登录（provider={bad}），已停止", "fatal": True, "gateway": True}]
         if obj.get("is_error"):
             out.append({"type": "error", "text": str(obj.get("result") or obj.get("subtype"))})
         out.append({"type": "result", "text": obj.get("result") or "", "session": obj.get("session_id", "")})
@@ -158,6 +161,7 @@ def _parse_codex(obj: dict) -> list[dict]:
     return []
 
 
+GATEWAY_ENV = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENROUTER_API_KEY")  # Claude 只走本机登录
 _PROXY_KEYS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
 
 
@@ -188,7 +192,8 @@ def _proxy_up(url: str) -> bool:
 
 def _child_env(engine: str = "") -> dict:
     # 子进程不继承数据目录，避免 Agent 在项目里跑测试/服务时写进真实数据库
-    env = {k: v for k, v in clean_env().items() if k != "SELF_STARTUP_DATA"}
+    drop = ("SELF_STARTUP_DATA", *GATEWAY_ENV) if engine == "claude" else ("SELF_STARTUP_DATA",)
+    env = {k: v for k, v in clean_env().items() if k not in drop}
     # engines.<engine>.proxy：给该引擎单独指定代理（如 http://127.0.0.1:12001）；代理没开时直连，不让任务卡在重连
     proxy = settings.get(f"engines.{engine}.proxy", "") if engine else ""
     if proxy and _proxy_up(proxy):
@@ -313,6 +318,8 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
                 final = ev["text"]
                 continue
             yield ev
+            if ev.get("gateway"):
+                return
     proc.wait()
     if proc.returncode != 0 and not texts:
         err = (proc.stderr.read() if proc.stderr else "")[-1500:]
@@ -361,14 +368,14 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
             ready = _take_warm(cmd, prompt) if readonly and eng == "claude" and default_cwd and not attempt else None
             for ev in _run(eng, cmd, cwd, on_proc, ready):
                 # fatal = 进程退出且没产出任何文本，重跑不会重复已做的工作
-                if ev.get("fatal") and attempt < TRANSIENT_RETRIES and _transient(ev["text"]):
+                if ev.get("fatal") and not ev.get("gateway") and attempt < TRANSIENT_RETRIES and _transient(ev["text"]):
                     retry = True
                     yield {"type": "error", "text": ev["text"] + f"；{RETRY_DELAY_S} 秒后重试 {eng}（第 {attempt + 1} 次）"}
                     break
                 if ev["type"] == "done" and ev.get("errored") and i + 1 < len(order):
                     failed = True
                     break
-                if ev.get("fatal") and i + 1 < len(order):
+                if ev.get("fatal") and not ev.get("gateway") and i + 1 < len(order):
                     failed = True
                     yield {"type": "error", "text": ev["text"] + "；回退到备选引擎"}
                     break

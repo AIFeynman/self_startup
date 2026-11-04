@@ -15,7 +15,7 @@ from . import agent
 log = logging.getLogger(__name__)
 
 SLOW_FORMAT = """## 现在是语音通话
-用户的话来自语音转写，可能有错字；另一半「快思考」负责接话，你的结论由它念给用户听。严格按这个格式输出：
+用户的话来自语音转写，可能有错字；另一半「快思考」负责接话，你的结论由它念给用户听，在用户听来只有一个人，念的话里不要提快思考、慢思考。严格按这个格式输出：
 <spoken>念给用户听的话，最多三句，口语，先说结论。数字和名字要写全。不用列表、路径、链接、代码。如果快思考刚才说的有错，先纠正；说得对就只说新内容。</spoken>
 <brief>给快思考的提纲，几个短句，用户追问时它靠这个接话。只写结论和理由，不要抄用户的记录、知识库原文和代码。</brief>
 然后写完整回答，可以用 markdown，会显示在屏幕上，不会念出来。"""
@@ -154,7 +154,7 @@ class Thinker:
             run.close()
         if task.cancelled:
             return
-        final = final or text
+        final = "" if failed else final or text  # 出错就不算数，哪怕已经写了一半
         if final and not sent_spoken:
             m = _SPOKEN.search(final)
             spoken = m.group(1).strip() if m else fallback_spoken(final)
