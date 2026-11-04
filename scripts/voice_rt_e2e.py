@@ -38,7 +38,7 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
     needs_slow = case["expect"] == "ask_claude"
     async with websockets.connect(url, max_size=None, proxy=None) as ws:
         t_end, first_audio, replies, heard, slow, doing, audio_s = None, None, [], "", None, set(), 0.0
-        fallback = None
+        fallback, searching = None, False
 
         async def send():
             nonlocal t_end
@@ -56,7 +56,7 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
         try:
             while True:
                 now = time.monotonic()
-                done_fast = last_activity and now - last_activity > 3 and not needs_slow
+                done_fast = last_activity and now - last_activity > 3 and not needs_slow and not searching
                 if now > deadline or done_fast or (needs_slow and slow is not None and last_activity and now - last_activity > 3):
                     break
                 try:
@@ -84,8 +84,12 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
                     slow = m["text"]
                     row["slow_s"] = round(now - t_end + tail, 2)
                     deadline, last_activity = now + 15, now  # 念结果的声音还在后面
-                elif m["type"] == "status" and (m.get("thinking") or m.get("searching")):
-                    doing.add("search" if m.get("searching") else "think")
+                elif m["type"] == "status":
+                    if searching and not m.get("searching"):
+                        last_activity = now  # 搜完还要念
+                    searching = bool(m.get("searching"))
+                    if m.get("thinking") or searching:
+                        doing.add("search" if searching else "think")
                     if m.get("thinking") and needs_slow:
                         deadline = max(deadline, now + slow_wait)
                 elif m["type"] == "fallback":

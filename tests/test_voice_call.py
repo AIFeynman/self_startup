@@ -221,10 +221,25 @@ def test_claimed_forward_without_tool_call_is_forwarded(env, monkeypatch, transc
 
     async def body(ws, call):
         _say_without_tool("这个我想一下。", transcript_first)(env)
-        await until(lambda: ws.told("slow"))
+        await until(lambda: any("你上周定的是先做中转" in t for t in env.said()))  # 念结果等下一拍，不能只等 slow
     ws, call = _call(body)
     assert "我纠结先做哪个" in asked[0]
-    assert any("你上周定的是先做中转" in t for t in env.said())
+
+
+def test_tool_name_spoken_aloud_counts_as_forward(env, monkeypatch):
+    # 实测 Flash 偶尔把「[调用 ask_claude]」当话说出来，工具其实没调
+    asked = []
+
+    def run(prompt, **kw):
+        asked.append(prompt)
+        kw["on_proc"](object())
+        yield {"type": "done", "text": ANSWER}
+    monkeypatch.setattr(agent, "run_stream", run)
+
+    async def body(ws, call):
+        _say_without_tool("[调用 ask_claude]")(env)
+        await until(lambda: asked)
+    _call(body)
 
 
 def test_plain_reply_or_our_own_response_is_not_forwarded(env):
