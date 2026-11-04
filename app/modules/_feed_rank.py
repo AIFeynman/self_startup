@@ -1,7 +1,7 @@
 """信息推荐的排序：纯函数、确定性，方便单测。
 
 score = 热度(同源近 30 天内的百分位) + 新鲜度(按类型的半衰期衰减) + 兴趣词命中 + 反馈亲和(赞/踩过的相似词与来源)
-        + 关注名单 / 多源印证加分 + learn_evolve 评分先验 + 本条自身反馈
+        + 关注名单 / 多源印证 / 机构代码和博客一起发布加分 + learn_evolve 评分先验 + 本条自身反馈
 每条返回 why 字符串，解释分数从哪来。
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
-     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "x_article": 0.4, "trending": 0.8,
+     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "trending": 0.8,
      "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
 OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
@@ -37,6 +37,10 @@ VELOCITY_MIN_PER_DAY, VELOCITY_MAX_AGE_DAYS = 500, 7
 # 重要官方更新（官方博客 / 重点机构新仓库里的实质内容）：发布 PIN_DAYS 天内，分最高的 PICKS_OFFICIAL 条进今日精选，
 # 其余紧接在精选之后，合计最多 PIN_MAX 条，不受来源配额限制
 PIN_DAYS, PIN_MAX, PICKS_OFFICIAL = 3, 8, 2
+# 同一机构的官方博客和新仓库属于同一次发布（代码 + 博客）：比单发一篇博客 / 一个仓库更重要。两者发布时间最多差 RELEASE_DAYS 天
+# （仓库常常先建、过几天才公开）；靠博客提到仓库名配对时，名字要够特别（skills、hope 这种普通词不算）
+RELEASE_DAYS = 14
+_DISTINCT_REPO_NAME = re.compile(r"[a-z][A-Z]|\d|[-_]")
 # 新增标识：第一次收进来不到 NEW_HOURS 小时的标「新」；在榜 STALE_DAYS 天以上的标「在榜 N 天」，一眼分出长期霸榜的
 NEW_HOURS, STALE_DAYS = 24, 3
 FIRST_SEEN_LEGACY = "2026-10-31T00:00:00+00:00"   # 上线前收的条目再被抓到时补这个时间，在榜天数从上线算起（是下限）
@@ -196,7 +200,7 @@ def _leave_one_out(aff: dict, it: dict) -> dict:
 
 
 def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, interests: list[str],
-               aff: dict | None = None, fb: dict | None = None) -> tuple[float, list[str]]:
+               aff: dict | None = None, fb: dict | None = None, release: datetime | None = None) -> tuple[float, list[str]]:
     # why 的顺序 = 读者判断「值不值得看」的顺序：硬信号（官方 / 长文 / 关注 / 多源）→ 热度 → 新鲜 → 兴趣 → 偏好
     lead: list[str] = []
     why: list[str] = []
@@ -209,7 +213,9 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
         pl += f"（建 {max(1, round(age_h / 24))} 天）"     # 仓库的星是累计的：配上天数才看得出涨得快不快
     if pl:
         why.append(pl)
-    fresh = 0.5 ** (age_h / max(half_life_h * TYPE_HALF_LIFE.get(it.get("type", ""), 1.0), 1))
+    # 同一次发布的仓库按博客发布的时间算新鲜度：仓库的创建时间常常早于公开
+    fresh_h = min(age_h, max(0.0, (now - release).total_seconds() / 3600)) if release else age_h
+    fresh = 0.5 ** (fresh_h / max(half_life_h * TYPE_HALF_LIFE.get(it.get("type", ""), 1.0), 1))
     s += W["fresh"] * fresh
     if age_h < 24:
         why.append("24 小时内")
@@ -223,6 +229,9 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     if org:
         s += W["official"]
         lead.append(f"{org} 官方")
+    if release:
+        s += W["release"]
+        lead.append("代码和博客一起发布")
     if ex.get("trending") and age_h < 48:  # 上榜那天的标记，过两天不再加分（日期就是上榜日）
         s += W["trending"]
         lead.append("GitHub 今日 Trending" + (f" +{ex['stars_gained']}★" if ex.get("stars_gained") else ""))
@@ -298,6 +307,7 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
     feedback = feedback or {}
     aff = build_affinity(examples) if examples else None
     pops = pop_index(items, now)
+    releases = release_pairs(items, now)
 
     scored = []
     for it in items:
@@ -309,19 +319,21 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
         if low_value(it) and not fb.get("saved"):
             continue    # Reddit / 视频搜索里 Jev 判为没干货的（梗、求助、吐槽）
         pn = pop_norm(pops, it)
+        rel_t, rel_key = releases.get(it["id"], (None, ""))
         s, why = score_item(it, pop_norm=pn, now=now, half_life_h=half_life_h, interests=list(interests),
-                            aff=aff, fb=fb)
-        pin = important_official(it, now)
+                            aff=aff, fb=fb, release=rel_t)
+        pin = important_official(it, now) or bool(rel_t and (now - rel_t).total_seconds() <= PIN_DAYS * 86400)
         if pin:
             why.insert(1, "重要更新")    # 紧跟在「X 官方」后面
         new, days = seen_age(it, now)
         scored.append({**it, "score": round(s, 3), "pop_norm": round(pn, 3), "why": " · ".join(why), "feedback": fb,
-                       "pinned": pin, "new": new, "seen_days": days})
+                       "pinned": pin, "release": rel_key, "new": new, "seen_days": days})
     scored.sort(key=lambda x: (-x["score"], x["id"]))
 
     out, seen_url, seen_title = [], {}, {}
     by_tok: dict[str, list[dict]] = {}
-    for it in scored:
+    # 重要官方更新先占位：同一件事的推文 / 转载并到官方这条上（链接是一手来源），不让官方条目连同置顶一起被并掉
+    for it in sorted(scored, key=lambda x: not x["pinned"]):
         u, t = norm_url(it.get("url", "")), norm_title(it.get("title", ""))
         dup = seen_url.get(u) if u else None
         dup = dup or (seen_title.get(t) if len(t) >= 12 else None)
@@ -329,6 +341,7 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
         dup = dup or _same_event(it, ev, by_tok, now)
         if dup:
             dup["also"].append(SOURCE_LABEL.get(it["source"], it["source"]))
+            dup["score"] = max(dup["score"], it["score"])
             continue
         it["also"] = []
         it["_ev"] = ev
@@ -398,6 +411,39 @@ def official_org(it: dict) -> str:
         return ""
     host = urlsplit(it.get("url") or "").netloc.lower().removeprefix("www.")
     return next((org for d, org in OFFICIAL_BLOGS.items() if host == d or host.endswith("." + d)), "")
+
+
+def release_pairs(items: list[dict], now: datetime) -> dict[str, tuple[datetime, str]]:
+    """找出同一机构「代码 + 博客」的同一次发布：{条目 id: (博客发布时间, 仓库 id)}，博客和仓库各占一项。
+    配对依据：博客正文提到仓库（github 链接或足够特别的仓库名），或有一条推文同时链接了两者。"""
+    official = [(it, org) for it in items if (org := official_org(it))]
+    repos = [(it, org) for it, org in official if it.get("source") == "github"]
+    blogs = [(it, org) for it, org in official if it.get("source") == "blog"]
+    if not repos or not blogs:
+        return {}
+    link_sets = [{norm_url(u) for u in links} for it in items if (links := (it.get("extra") or {}).get("links"))]
+    out: dict[str, tuple[datetime, str]] = {}
+    for repo, repo_org in repos:
+        repo_t = item_time(repo, now)
+        for blog, blog_org in blogs:
+            blog_t = item_time(blog, now)
+            if blog_org != repo_org or not repo_t or not blog_t or abs(repo_t - blog_t) > timedelta(days=RELEASE_DAYS):
+                continue
+            ends = {norm_url(repo.get("url", "")), norm_url(blog.get("url", ""))}
+            if _mentions_repo(blog, repo["id"].split(":", 1)[1]) or any(ends <= links for links in link_sets):
+                out[blog["id"]] = (blog_t, repo["id"])
+                if repo["id"] not in out or blog_t > out[repo["id"]][0]:
+                    out[repo["id"]] = (blog_t, repo["id"])
+    return out
+
+
+def _mentions_repo(blog: dict, full_name: str) -> bool:
+    text = f"{blog.get('title', '')} {blog.get('summary', '')}"
+    if f"github.com/{full_name}".lower() in text.lower():
+        return True
+    name = full_name.split("/", 1)[1]
+    return bool(_DISTINCT_REPO_NAME.search(name)) and bool(
+        re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", text, re.I))
 
 
 def needs_value(it: dict) -> bool:
@@ -547,6 +593,14 @@ def diversify(items: list[dict], top: int = 30, max_share: float = TYPE_SHARE,
     重要官方更新（rank 标的 pinned）优先：前 PICKS_OFFICIAL 条进精选，其余紧接在精选后，合计至多 PIN_MAX 条。"""
     nt, ns = Counter(), Counter()
     pins = [x for x in items if x.get("pinned")][:PIN_MAX]
+    # 同一次发布的博客和仓库只占一个精选名额，另一条紧跟在精选之后
+    seen_release: set[str] = set()
+    firsts, repeats = [], []
+    for x in pins:
+        (repeats if x.get("release") in seen_release else firsts).append(x)
+        if x.get("release"):
+            seen_release.add(x["release"])
+    pins = firsts + repeats
     pin_ids = {x["id"] for x in pins}
     pinned, pinned_rest = pins[:PICKS_OFFICIAL], pins[PICKS_OFFICIAL:]
     for x in pins:

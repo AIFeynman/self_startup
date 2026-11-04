@@ -729,3 +729,58 @@ def test_benchmark_tag_does_not_change_score():
     a, _ = rk.score_item(_it(1, "GPQA results for the new model"), **kw)
     b, _ = rk.score_item(_it(2, "Results for the new model"), **kw)
     assert a == b
+
+
+def _blog(id_, title, summary="", hours=30, url="https://www.anthropic.com/research/x"):
+    return _it(id_, title, source="blog", hours=hours, pop=0, summary=summary, url=url)
+
+
+def _org_repo(name, hours=100, org="anthropics", pop=300):
+    return _it(f"github:{org}/{name}", f"{name}: a thing", source="github", hours=hours, pop=pop,
+               url=f"https://github.com/{org}/{name}", extra={"watch_org": org})
+
+
+def test_release_pair_boosts_and_pins_both_code_and_blog():
+    blog = _blog("blog:a", "Progress on provers", "A system we call FlashProve.")
+    repo = _org_repo("FlashProve")
+    alone_repo, alone_blog = _org_repo("OtherTool"), _blog("blog:b", "Unrelated note", url="https://www.anthropic.com/news/y")
+    out = {x["id"]: x for x in rk.rank([blog, repo, alone_repo, alone_blog], now=NOW)}
+    assert out["github:anthropics/FlashProve"]["pinned"] and out["blog:a"]["pinned"]
+    assert "代码和博客一起发布" in out["blog:a"]["why"] and "代码和博客一起发布" in out["github:anthropics/FlashProve"]["why"]
+    assert not out["github:anthropics/OtherTool"]["pinned"]    # 单发的老仓库不置顶
+    assert out["github:anthropics/FlashProve"]["score"] > out["github:anthropics/OtherTool"]["score"] + rk.W["release"]
+    assert out["blog:a"]["score"] > out["blog:b"]["score"]
+
+
+def test_release_pair_ignores_common_word_names_and_other_orgs():
+    common = rk.release_pairs([_blog("blog:a", "We hope this helps"), _org_repo("hope")], NOW)
+    other_org = rk.release_pairs([_blog("blog:a", "About FlashProve"), _org_repo("FlashProve", org="openai")], NOW)
+    too_old = rk.release_pairs([_blog("blog:a", "About FlashProve"), _org_repo("FlashProve", hours=24 * 30)], NOW)
+    assert common == {} and other_org == {} and too_old == {}
+
+
+def test_release_pair_via_tweet_linking_both_or_github_url():
+    blog, repo = _blog("blog:a", "Quiet post"), _org_repo("hope")
+    tweet = _it("twitter:1", "Look", source="twitter",
+                extra={"links": ["https://www.anthropic.com/research/x", "https://github.com/anthropics/hope"]})
+    assert set(rk.release_pairs([blog, repo, tweet], NOW)) == {"blog:a", "github:anthropics/hope"}
+    linked = _blog("blog:a", "Quiet post", "Code: https://github.com/anthropics/hope")
+    assert set(rk.release_pairs([linked, repo], NOW)) == {"blog:a", "github:anthropics/hope"}
+
+
+def test_pinned_official_blog_survives_same_event_dedupe():
+    blog = _blog("blog:a", "Progress on provable inference for language models")
+    tweet = _it("twitter:1", "@AnthropicAI：New research: progress on provable inference for language models",
+                source="twitter", pop=5000, hours=2)
+    only_tweet_score = rk.rank([tweet], now=NOW)[0]["score"]
+    out = rk.rank([blog, tweet], now=NOW)
+    assert [x["id"] for x in out] == ["blog:a"] and out[0]["pinned"] and out[0]["also"] == ["X"]
+    assert out[0]["score"] >= only_tweet_score    # 官方条目拿走被并条目的分，不会因此掉名次
+
+
+def test_diversify_gives_one_release_one_official_pick():
+    def pin(id_, source, release=""):
+        return {"id": id_, "type": "blog" if source == "blog" else "repo", "source": source, "pinned": True, "release": release}
+    items = [pin("blog:a", "blog", "r"), pin("github:a", "github", "r"), pin("blog:b", "blog")]
+    out = [x["id"] for x in rk.diversify(items)]
+    assert out[:2] == ["blog:a", "blog:b"] and "github:a" in out[2:]
