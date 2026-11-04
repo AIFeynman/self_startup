@@ -883,6 +883,13 @@ def runs(date: str = "", task_id: int = 0):
     return out
 
 
+@router.get("/submitted")
+def submitted():
+    """规划页「我提交的任务」：调研、深读、学习计划、读书的进展，不分日期。"""
+    from . import _submitted
+    return _submitted.collect()
+
+
 # ---------------------------------------------------------------- 日视图 / 顺延 / 排程
 def _tree(ts: list[dict]) -> list[dict]:
     ch = _children_map(ts)

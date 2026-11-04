@@ -2,6 +2,7 @@
 // 输入：一个大 composer，每行一个顶层事项，支持轻量行内语法（见 parseLine）。
 import { today, nowLocal, toMs } from '../api.js';
 import { approvals } from './_approvals.js';
+import { submitted } from './_submitted.js';
 
 const CSS = `
 .pl-head { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
@@ -322,7 +323,7 @@ export default {
       state.runs = d.runs; state.data = d;
       head.replaceChildren(pageHead(d));
       body.replaceChildren(...(d.draft ? [draftCard(d.draft)] : []), approvals(ctx, { fallback: () => parsedNeeds(d), onChange: load }),
-        ...liveCard(d), ...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
+        ...liveCard(d), submitted(ctx), ...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
         items(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
         timeline(d));
       for (const j of d.jobs) watch(j.id, 'AI 拆解');
