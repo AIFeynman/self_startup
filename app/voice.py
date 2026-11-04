@@ -300,7 +300,7 @@ def _kokoro(text: str) -> bytes:
     voice = settings.get("voice", {})
     with _tts_lock:  # 模型一次合成一句
         _tts_used = time.time()
-        audio = _load_kokoro().generate(text, sid=int(voice.get("tts_sid", 3)), speed=float(voice.get("tts_speed", 1.0)))
+        audio = _load_kokoro().generate(text, sid=int(voice.get("tts_sid", 3)), speed=float(voice.get("tts_speed", 1.3)))
     if not len(audio.samples):
         raise RuntimeError("合成结果是空的")
     pcm = array.array("h", (max(-32768, min(32767, int(x * 32767))) for x in audio.samples))
