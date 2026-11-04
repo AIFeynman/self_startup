@@ -4,8 +4,10 @@
 - 判断（judgment）：系统记的复盘经验、学习作答（含点评）、测试薄弱点、深读时的感想与追问；
 - 材料（material）：我发起的调研、我选的深读（论文 / 项目 / 文章 / 书）、学习计划、点赞收藏或点开过的信息。
 产品雷达等纯自动抓取、我没互动过的内容不进图谱（仍可在来源库里搜到）。
-我手写的记录只留本地：便签、文档评论、深读笔记、步骤反馈、论文一句话判断、产品体验不进 signals()，
-不发给任何大模型（来源库和搜索照常能读到）。我要 Agent 回应 / 点评的内容（作答、对话、判断台账）照常走。
+
+我手写的记录只留本地（local）：便签、文档评论、深读笔记、步骤反馈、论文一句话判断、产品体验不再发给任何大模型。
+以前抽取过的结果留在图谱和判断台账里（靠 kb_sig_cache 里的旧行），之后不再更新；没抽取过的不进图谱，来源库和搜索照常能读到。
+我要 Agent 回应 / 点评的内容（作答、对话、判断台账）照常走。
 
 流程：signals() 收集信号 → DeepSeek 按批给每条信号抽 1–4 个概念（判断另浓缩一句 claim）→ 全部概念名合并同义词、
 归类 → 应用我在页面上做的改名 / 合并 / 删除（kb_concept_edit，只追加，重建不覆盖）→ 输出 concepts/<概念>.md
@@ -38,8 +40,8 @@ CREATE TABLE IF NOT EXISTS kb_concept_edit (
 """
 
 SUB_NAMES = {
-    "note": "复盘经验", "answer": "学习作答", "quiz": "测试反馈",
-    "thought": "感想", "ask": "追问",
+    "note": "复盘经验", "annotation": "批注", "answer": "学习作答", "quiz": "测试反馈", "feedback": "步骤反馈",
+    "thought": "感想", "ask": "追问", "verdict": "论文判断", "product": "产品体验", "mynote": "深读笔记",
     "research": "调研", "paper": "论文深读", "repo": "项目解读", "article": "文章深读", "plan": "学习计划",
     "book": "读书", "hn": "HN 讨论", "feed": "看过的信息", "mine": "我记的判断", "revise": "复查时的新看法",
 }
@@ -77,9 +79,10 @@ def _j(s, default):
 
 # ---------- 收集个人信号 ----------
 
-def _sig(sid, kind, sub, title, *, mine="", context="", date="", doc="", link="", url="") -> dict:
+def _sig(sid, kind, sub, title, *, mine="", context="", date="", doc="", link="", url="", local=False) -> dict:
     return {"sid": sid, "kind": kind, "sub": sub, "title": title or "", "mine": (mine or "").strip(),
-            "context": (context or "").strip(), "date": (date or "")[:10], "doc": doc, "link": link, "url": url}
+            "context": (context or "").strip(), "date": (date or "")[:10], "doc": doc, "link": link, "url": url,
+            **({"local": True} if local else {})}
 
 
 def _item_doc(it: dict) -> str:
@@ -87,9 +90,14 @@ def _item_doc(it: dict) -> str:
 
 
 def signals() -> list[dict]:
+    """能发给大模型的信号。"""
+    return [s for s in _all_signals() if not s.get("local")]
+
+
+def _all_signals() -> list[dict]:
     out: list[dict] = []
     from . import kb_judge
-    for fn in (_s_notes, _s_learn, _s_items, _s_feed, _s_materials, kb_judge.signals):
+    for fn in (_s_notes, _s_annotations, _s_learn, _s_items, _s_feed, _s_products, _s_materials, kb_judge.signals):
         try:
             out += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它
@@ -103,12 +111,28 @@ def _s_notes() -> list[dict]:
     kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想"}
     return [_sig(f"note:{n['id']}", "judgment", "note", n["title"] or _clip(n["content"], 30),
                  mine=f"【{kinds.get(n['kind'], n['kind'])}】{n['title']}\n{n['content']}", date=n["date"],
-                 doc=f"note:{n['id']}", link=f"#review/{n['date']}")
-            for n in db.rows("SELECT * FROM review_notes WHERE author IS NOT 'me' ORDER BY id")]
+                 doc=f"note:{n['id']}", link=f"#review/{n['date']}", local=n.get("author") == "me")
+            for n in db.rows("SELECT * FROM review_notes ORDER BY id")]
+
+
+def _s_annotations() -> list[dict]:
+    if not _has("annotations"):
+        return []
+    from .kb import _slug
+    out = []
+    for a in db.rows("SELECT * FROM annotations ORDER BY id"):
+        mine = [m["content"].strip() for m in db.rows(
+            "SELECT content FROM annotation_msgs WHERE annotation_id=? AND role='user' AND status!='pending' ORDER BY id", [a["id"]])]
+        if not mine:
+            continue
+        out.append(_sig(f"ann:{a['id']}", "judgment", "annotation", a["title"] or a["doc"], mine="\n".join(mine),
+                        context=a["quote"] or "（针对全文）", date=a["created_at"], doc=f"annotation:{_slug(a['doc'], 30)}",
+                        link=a["link"] or "", local=True))
+    return out
 
 
 def _s_learn() -> list[dict]:
-    """学习计划里的作答（含点评）、章末测试。check / check_review 记的是同一题，留带点评的那条。"""
+    """学习计划里的作答（含点评）、章末测试、步骤反馈。check / check_review 记的是同一题，留带点评的那条。"""
     if not _has("learn_events"):
         return []
     steps = {s["id"]: s for s in db.rows("SELECT id, plan_id, title, feedback, understanding, done_at FROM learn_steps")} \
@@ -144,17 +168,25 @@ def _s_learn() -> list[dict]:
         if key not in best or e["kind"].endswith("review"):
             best[key] = s
     out += best.values()
+    for s in steps.values():
+        if (s.get("feedback") or "").strip():
+            out.append(_sig(f"stepfb:{s['id']}", "judgment", "feedback", s["title"], mine=s["feedback"],
+                            context=f"理解度 {s['understanding']}/5" if s.get("understanding") else "", date=s.get("done_at") or "",
+                            doc=f"plan:{s['plan_id']}", link=f"#learn/plan/{s['plan_id']}/step/{s['id']}", local=True))
     return out
 
 
 def _s_items() -> list[dict]:
-    """深读对话里的感想 / 追问。追问清单作答已在 learn_events 里，不重复取。"""
+    """深读条目里我的笔记、对话里的感想 / 追问。追问清单作答已在 learn_events 里，不重复取。"""
     if not _has("learn_items"):
         return []
     from .modules import _reads
     out = []
     for it in db.rows("SELECT * FROM learn_items ORDER BY id"):
         doc, link = _item_doc(it), f"#learn/item/{it['id']}"
+        if (it.get("my_notes") or "").strip():
+            out.append(_sig(f"mynote:{it['id']}", "judgment", "mynote", it["title"], mine=it["my_notes"],
+                            date=it.get("updated_at") or it["created_at"], doc=doc, link=link, local=True))
         try:
             lines = _reads.user_lines(it["id"])
         except Exception:  # noqa: BLE001
@@ -166,14 +198,18 @@ def _s_items() -> list[dict]:
 
 
 def _s_feed() -> list[dict]:
-    """赞 / 收藏 / 点开过 = 看过的材料。"""
+    """论文一句话判断 = 判断；赞 / 收藏 / 点开过 = 看过的材料。"""
     if not _has("feed_feedback"):
         return []
     cols = {r["name"] for r in db.rows("PRAGMA table_info(feed_feedback)")}
     out = []
-    for r in db.rows("SELECT i.*, f.vote, f.saved, f.hidden" + (", f.clicks" if "clicks" in cols else "") + " FROM feed_feedback f JOIN feed_items i ON i.id=f.item_id"):
+    for r in db.rows("SELECT i.*, f.vote, f.saved, f.hidden" + (", f.verdict, f.verdict_at" if "verdict" in cols else "")
+                     + (", f.clicks" if "clicks" in cols else "") + " FROM feed_feedback f JOIN feed_items i ON i.id=f.item_id"):
         if r["hidden"] or r["vote"] == -1:
             continue
+        if (r.get("verdict") or "").strip():
+            out.append(_sig(f"verdict:{r['id']}", "judgment", "verdict", r["title"], mine=r["verdict"], context=_clip(r["summary"], 200),
+                            date=r.get("verdict_at") or r["date"], doc=f"papernote:{(r.get('verdict_at') or '')[:10]}", url=r["url"], local=True))
         if r["vote"] == 1 or r["saved"] or r.get("clicks"):
             oid = r["id"].split(":", 1)[-1]
             hn = r["source"] == "hn" and (r["vote"] == 1 or r["saved"]) and "\"hn\"" in (r.get("extra") or "")
@@ -181,6 +217,17 @@ def _s_feed() -> list[dict]:
                             date=r["date"], doc=f"feed:hn-{oid}" if hn else ("feed:saved" if r["vote"] == 1 or r["saved"] else ""),
                             url=r["url"]))
     return out
+
+
+def _s_products() -> list[dict]:
+    if not _has("products"):
+        return []
+    return [_sig(f"product:{p['id']}", "judgment", "product", p["name"],
+                 mine="\n".join(x for x in [p.get("experience"), f"优点：{p['pros']}" if p.get("pros") else "",
+                                            f"缺点：{p['cons']}" if p.get("cons") else ""] if x),
+                 context=f"评分 {p['rating']}/5" if p.get("rating") else "", date=p.get("used_at") or p["created_at"],
+                 doc=f"product:{p['id']}", url=p.get("url") or "", local=True)
+            for p in db.rows("SELECT * FROM products ORDER BY id")]
 
 
 def _s_materials() -> list[dict]:
@@ -379,15 +426,16 @@ def _resolve(name: str, ren: dict[str, str]) -> str:
 def model(sigs: list[dict] | None = None) -> dict:
     """{concepts: {name: {...}}, sigs: {sid: sig+claim+concepts}, stale: n}。只读缓存，不调 LLM。"""
     _init()
-    sigs = signals() if sigs is None else sigs
     cache = {r["sid"]: r for r in db.rows("SELECT * FROM kb_sig_cache")}
+    # 手写记录以前抽取过的留在图谱里，没抽取过的不进
+    sigs = [s for s in _all_signals() if not s.get("local") or s["sid"] in cache] if sigs is None else sigs
     raw_counts: dict[str, int] = {}
     stale = 0
     for s in sigs:
         c = cache.get(s["sid"])
         s["raw"] = _j(c["concepts"], []) if c else []
         s["claim"] = c["claim"] if c else ""
-        if not c or c["hash"] != _sig_hash(s):
+        if not s.get("local") and (not c or c["hash"] != _sig_hash(s)):
             stale += 1
         for n in s["raw"]:
             raw_counts[n] = raw_counts.get(n, 0) + 1
@@ -449,8 +497,9 @@ def edges(m: dict) -> list[dict]:
     return [{"a": a, "b": b, "w": v} for (a, b), v in w.items()]
 
 
-def _summary_payload(c: dict, m: dict) -> dict:
-    js = [m["sigs"][x] for x in c["judgments"]]
+def _summary_payload(c: dict, m: dict, outbound: bool = False) -> dict:
+    """outbound=True 是真正发给大模型的版本，不含手写记录；缓存 hash 用完整版，已有的「我的理解」不因此失效。"""
+    js = [m["sigs"][x] for x in c["judgments"] if not (outbound and m["sigs"][x].get("local"))]
     js.sort(key=lambda s: s["date"])
     return {"concept": c["name"], "judgments": [
         {"n": i + 1, "type": SUB_NAMES.get(s["sub"], s["sub"]), "date": s["date"], "source": _clip(s["title"], 60),
@@ -485,7 +534,7 @@ def refresh(force: bool = False) -> dict:
         # 判断先抽，材料后抽：概念名以我自己的话为准
         todo.sort(key=lambda s: s["kind"] != "judgment")
         n = _extract(todo, known) if todo else 0
-        live = {s["sid"] for s in sigs}
+        live = {s["sid"] for s in _all_signals()}
         for r in db.rows("SELECT sid FROM kb_sig_cache"):
             if r["sid"] not in live:
                 db.execute("DELETE FROM kb_sig_cache WHERE sid=?", [r["sid"]])
@@ -509,8 +558,14 @@ def refresh(force: bool = False) -> dict:
             p = _summary_payload(c, m)
             if _cache_get(f"summary:{c['name']}", _h(p)) is not None:
                 continue
+            send = _summary_payload(c, m, outbound=True)
+            if not send["judgments"]:  # 全是手写记录：不调模型，留着旧的
+                old = db.row("SELECT data FROM kb_llm_cache WHERE key=?", [f"summary:{c['name']}"])
+                if old:
+                    _cache_put(f"summary:{c['name']}", _h(p), _j(old["data"], {}))
+                continue
             try:
-                res = llm_json(SUMMARY_SYSTEM, p, max_tokens=1500)
+                res = llm_json(SUMMARY_SYSTEM, send, max_tokens=1500)
                 _cache_put(f"summary:{c['name']}", _h(p), {"points": res.get("points") or [], "open": res.get("open") or []})
                 wrote += 1
             except Exception:  # noqa: BLE001
