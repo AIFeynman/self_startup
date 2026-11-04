@@ -138,7 +138,7 @@ def classify(sigs: list[dict]) -> int:
     """给还没归类 / 内容变了的判断归类并写 Agent 评价。"""
     _init()
     cache = {r["sid"]: r["hash"] for r in db.rows("SELECT sid, hash FROM kb_claim_cache")}
-    todo = [s for s in sigs if s["kind"] == "judgment" and cache.get(s["sid"]) != _cls_hash(s)]
+    todo = [s for s in sigs if s["kind"] == "judgment" and not s.get("local") and cache.get(s["sid"]) != _cls_hash(s)]
     manual = {f"my:{r['id']}": r for r in db.rows("SELECT * FROM kb_judgments")}
     done = 0
     for i in range(0, len(todo), 15):
@@ -190,8 +190,12 @@ def build_threads(m: dict) -> None:
     if r and r["hash"] == h:
         return
     prev = [{"question": t["question"]} for t in (_j(r["data"], {}) if r else {}).get("threads", [])]
-    res = llm_json(THREAD_SYSTEM, {"previous": prev, "items": items}, max_tokens=8000)
-    valid, used, out = {i["sid"] for i in items}, set(), []
+    # 手写记录只参与 hash，不发出去：旧的问题线不失效，新的也不含原文
+    send = [i for i in items if not m["sigs"][i["sid"]].get("local")]
+    if len(send) < 2:
+        return
+    res = llm_json(THREAD_SYSTEM, {"previous": prev, "items": send}, max_tokens=8000)
+    valid, used, out = {i["sid"] for i in send}, set(), []
     for t in res.get("threads") or []:
         if not isinstance(t, dict) or not t.get("question"):
             continue
@@ -244,10 +248,13 @@ def recheck(sid: str, m: dict | None = None, *, force: bool = False) -> dict | N
         hit = kb_graph._cache_get(key, h)
         if hit is not None:
             return hit
-    res = llm_json(RECHECK_SYSTEM, p, max_tokens=1500)
+    if s.get("local") and not force:   # 手写记录不自动发；我手动要参考结论才走
+        return None
+    send = {**p, "evidence": [e for e in p["evidence"] if not m["sigs"][e["sid"]].get("local")]}
+    res = llm_json(RECHECK_SYSTEM, send, max_tokens=1500)
     out = {"suggest": res.get("suggest") if res.get("suggest") in ("仍成立", "需修正", "被推翻", "证据不足") else "证据不足",
            "why": _clip(res.get("why") or "", 240), "ask": _clip(res.get("ask") or "", 120),
-           "cites": [x for x in res.get("cites") or [] if x in m["sigs"]], "n_evidence": len(p["evidence"]), "at": db.now()}
+           "cites": [x for x in res.get("cites") or [] if x in m["sigs"]], "n_evidence": len(send["evidence"]), "at": db.now()}
     kb_graph._cache_put(key, h, out)
     return out
 
@@ -281,6 +288,8 @@ def refresh_llm(m: dict, status: dict | None = None) -> str:
     for card in ledger(m)["cards"]:
         if rc >= MAX_RECHECK:
             break
+        if m["sigs"].get(card["sid"], {}).get("local"):
+            continue
         if card["due"] and card["due"] <= soon and not (card["agent"] and not card["agent"].get("stale")):
             try:
                 recheck(card["sid"], m)
@@ -290,7 +299,7 @@ def refresh_llm(m: dict, status: dict | None = None) -> str:
     st["msg"] = "到期预测派联网核验…"
     try:
         from . import kb_verify
-        vmsg = kb_verify.auto(ledger(m)["cards"])
+        vmsg = kb_verify.auto([c for c in ledger(m)["cards"] if not m["sigs"].get(c["sid"], {}).get("local")])
     except Exception:  # noqa: BLE001
         log.exception("kb_verify auto")
         vmsg = ""

@@ -1,3 +1,5 @@
+import json
+
 from app import db, kb, kb_graph
 from app.modules import feed, learn
 
@@ -98,3 +100,52 @@ def test_my_notes_and_comments_stay_local(client, monkeypatch):
     assert "本地笔记原文" not in learn._known_knowledge(item + 1)
     kb.sync(refresh_graph=False)
     assert client.get("/api/kb/search", params={"q": "本地便签原文"}).json()   # 本地搜索还能找到
+
+
+def test_old_results_of_my_notes_stay_but_never_resent(client, monkeypatch):
+    """手写记录以前抽取过的留在图谱，「我的理解」和问题线不失效；之后刷新不再外发原文，新写的不进图谱。"""
+    sent = []
+
+    def spy(system, payload, max_tokens=6000):
+        sent.append(json.dumps(payload, ensure_ascii=False))
+        items = payload.get("items") or []
+        if "judgments" in payload:
+            return {"points": ["新理解"], "open": []}
+        if "threads" in system or "问题线" in system:
+            return {"threads": []}
+        return {"items": [{"sid": x["sid"], "concepts": ["别的概念"], "claim": "一句话", "type": "观点"} for x in items if "sid" in x]}
+
+    monkeypatch.setattr(kb_graph, "llm_json", spy)
+    monkeypatch.setattr(kb_graph, "has_llm", lambda: True)
+    kb_graph._init()
+    old = db.insert("review_notes", {"date": db.today(), "kind": "idea", "title": "", "content": "旧便签原文一", "author": "me",
+                                     "created_at": db.now(), "updated_at": db.now()})
+    old2 = db.insert("review_notes", {"date": db.today(), "kind": "idea", "title": "", "content": "旧便签原文二", "author": "me",
+                                      "created_at": db.now(), "updated_at": db.now()})
+    for sid in (f"note:{old}", f"note:{old2}"):
+        db.execute("INSERT INTO kb_sig_cache(sid, hash, concepts, claim, at) VALUES (?,?,?,?,?)", [sid, "旧", '["留存概念"]', "旧结论", db.now()])
+    m = kb_graph.model()
+    c = m["concepts"]["留存概念"]
+    assert {f"note:{old}", f"note:{old2}"} <= set(c["judgments"]) and m["sigs"][f"note:{old}"]["claim"] == "旧结论"
+    key = "summary:留存概念"
+    kb_graph._cache_put(key, kb_graph._h(kb_graph._summary_payload(c, m)), {"points": ["旧理解"], "open": []})
+
+    assert kb_graph.refresh(force=True)["state"] == "idle"
+    assert db.row("SELECT 1 FROM kb_sig_cache WHERE sid=?", [f"note:{old}"])
+    m = kb_graph.model()
+    assert kb_graph.summary_of("留存概念", m["concepts"]["留存概念"], m)["points"] == ["旧理解"]
+    assert not any(s["sid"] == f"note:{old}" for s in kb_graph.signals())
+
+    # 全是手写记录的概念多了一份材料：没有可发的判断，不调模型也不丢旧理解
+    db.insert("review_notes", {"date": db.today(), "kind": "idea", "title": "", "content": "新便签原文", "author": "me",
+                               "created_at": db.now(), "updated_at": db.now()})
+    assert kb_graph.refresh()["state"] == "idle"
+    text = "\n".join(sent)
+    for mark in ("旧便签原文一", "旧便签原文二", "新便签原文"):
+        assert mark not in text
+    assert not any("新便签原文" in s["mine"] for s in kb_graph.model()["sigs"].values())
+
+    # 删掉的来源，旧结果跟着清
+    db.execute("DELETE FROM review_notes WHERE id=?", [old])
+    kb_graph.refresh()
+    assert not db.row("SELECT 1 FROM kb_sig_cache WHERE sid=?", [f"note:{old}"])

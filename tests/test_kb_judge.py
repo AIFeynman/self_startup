@@ -45,8 +45,8 @@ def _setup(monkeypatch):
     monkeypatch.setattr(kb_graph, "llm_json", _fake_llm)
     monkeypatch.setattr(kb_graph, "has_llm", lambda: True)
     # 全量跑时别的测试会在共用库里留下学习作答等信号，这里只看本文件写入的复盘和判断
-    sigs = kb_graph.signals
-    monkeypatch.setattr(kb_graph, "signals", lambda: [s for s in sigs() if s["sid"].split(":")[0] in ("note", "my", "rev")])
+    sigs = kb_graph._all_signals
+    monkeypatch.setattr(kb_graph, "_all_signals", lambda: [s for s in sigs() if s["sid"].split(":")[0] in ("note", "my", "rev")])
     for i, t in enumerate(["甲概念要先做", "甲概念和乙概念要一起看", "乙概念明年会不行", "这里只是复述甲概念", "乙概念到底靠不靠谱？"]):
         db.insert("review_notes", {"date": f"2026-02-0{i + 1}", "kind": "insight", "title": t, "content": t, "tags": ""})
     r = kb_graph.refresh()
@@ -134,7 +134,7 @@ def test_schedule_rules():
 def test_sources_cited_and_searchable(monkeypatch):
     """记判断可以引用看过的材料 / 自己指定源 / 不给源；引用的材料进 Agent 归类的上下文，复查时排在证据最前。"""
     monkeypatch.setattr(kb_graph, "llm_json", _fake_llm)
-    monkeypatch.setattr(kb_graph, "signals", lambda: [kb_graph._sig("item:7", "material", "paper", "Mamba 论文深读", context="状态空间模型",
+    monkeypatch.setattr(kb_graph, "_all_signals", lambda: [kb_graph._sig("item:7", "material", "paper", "Mamba 论文深读", context="状态空间模型",
                                                                     date="2026-10-01", link="#learn/item/7", url="https://arxiv.org/abs/2312.00752")]
                         + kb_judge.signals())
     hits = kb_judge.materials("mamba")
