@@ -107,3 +107,28 @@ def test_order_and_counts(client):
     ranks = [order.index(x["state"]) for x in d["items"]]
     assert ranks == sorted(ranks)
     assert sum(d["counts"].values()) == len(d["items"])
+
+
+def test_close_and_reopen(client):
+    rid = _research("知道了", [("claude", "done", None), ("grokbot", "timeout", None)])
+    link, key = f"#research/r/{rid}", f"research:{rid}"
+    x, before = _find(client, link)
+    assert x["key"] == key and not x["closed"]
+
+    assert client.post(f"/api/plan/submitted/{key}/close").status_code == 200
+    client.post(f"/api/plan/submitted/{key}/close")  # 重复关闭不报错
+    x, d = _find(client, link)
+    assert x["closed"] and x["state"] == "needs"
+    assert d["counts"]["needs"] == before["counts"]["needs"] - 1 and d["counts"]["closed"] == before["counts"]["closed"] + 1
+    assert db.row("SELECT status FROM research_results WHERE research_id=? AND engine='grokbot'", [rid])["status"] == "timeout"  # 不动板块数据
+
+    # 关闭后重试又跑起来：照常显示，不计入已关闭
+    db.execute("UPDATE research_results SET status='running', job_id=? WHERE research_id=? AND engine='grokbot'", [_new_job(), rid])
+    x, _ = _find(client, link)
+    assert x["state"] == "running" and not x["closed"]
+    db.execute("UPDATE research_results SET status='timeout' WHERE research_id=? AND engine='grokbot'", [rid])
+    assert _find(client, link)[0]["closed"]
+
+    assert client.post(f"/api/plan/submitted/{key}/reopen").status_code == 200
+    x, d = _find(client, link)
+    assert not x["closed"] and d["counts"]["closed"] == before["counts"]["closed"]

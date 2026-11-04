@@ -26,6 +26,9 @@ from .. import db, jobs, settings, tasks
 TITLE = "规划"
 ORDER = 5
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS plan_submitted_closed (  -- 「我提交的任务」里关掉不看的，key 如 research:5
+    key TEXT PRIMARY KEY, closed_at TEXT
+);
 CREATE TABLE IF NOT EXISTS plan_runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id     INTEGER NOT NULL,
@@ -888,6 +891,20 @@ def submitted():
     """规划页「我提交的任务」：调研、深读、学习计划、读书的进展，不分日期。"""
     from . import _submitted
     return _submitted.collect()
+
+
+@router.post("/submitted/{key}/close")
+def submitted_close(key: str):
+    from . import _submitted
+    _submitted.set_closed(key, True)
+    return {"ok": True}
+
+
+@router.post("/submitted/{key}/reopen")
+def submitted_reopen(key: str):
+    from . import _submitted
+    _submitted.set_closed(key, False)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- 日视图 / 顺延 / 排程

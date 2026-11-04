@@ -1,6 +1,6 @@
 // 我提交的任务（规划页）：调研、深读、学习计划、读书提交过哪些、各到哪一步，点一行进到各自的页面。不分日期。
 // 用法：import { submitted } from './_submitted.js'; el.append(submitted(ctx))
-const TABS = [['needs', '等你处理'], ['running', '进行中'], ['ready', '可以看了'], ['done', '已看完'], ['all', '全部']];
+const TABS = [['needs', '等你处理'], ['running', '进行中'], ['ready', '可以看了'], ['done', '已看完'], ['all', '全部'], ['closed', '已关闭']];
 const TAG = { needs: 'warn', running: 'ok', ready: 'line', done: 'gray' };
 const STATE = { needs: '等你处理', running: '进行中', ready: '可以看了', done: '已看完' };
 const PAGE = 8;
@@ -11,7 +11,7 @@ let last = null;
 let tab = '';
 
 export function submitted(ctx) {
-  const { api, h } = ctx;
+  const { api, h, toast } = ctx;
   injectStyle();
   const box = h('div.card.flat.sb-card');
   let shown = PAGE;
@@ -25,14 +25,25 @@ export function submitted(ctx) {
     ]),
     x.pct != null ? h('span.sb-pct', { title: `${x.pct}%` }, h('i', { style: { width: `${x.pct}%` } })) : null,
     h('span.tag.line.sb-type', {}, x.label),
-    tab === 'all' ? h('span.tag.sb-state.' + TAG[x.state], {}, STATE[x.state]) : null,
+    tab === 'all' || tab === 'closed' ? h('span.tag.sb-state.' + TAG[x.state], {}, STATE[x.state]) : null,
     h('span.sb-at', { title: `提交于 ${x.created_at.replace('T', ' ')}` }, x.created_at.slice(5, 10)),
+    x.state === 'running' ? null : h('button.ghost.sm.sb-close', {
+      title: x.closed ? '放回列表' : '关闭：不再显示，可在「已关闭」里恢复',
+      onclick: (e) => { e.preventDefault(); e.stopPropagation(); setClosed(x); },
+    }, x.closed ? '恢复' : '关闭'),
   ]);
 
+  const setClosed = async (x) => {
+    try {
+      await api.post(`/api/plan/submitted/${encodeURIComponent(x.key)}/${x.closed ? 'reopen' : 'close'}`, {});
+      await refresh();
+    } catch (e) { toast(e.message, true); }
+  };
+
   const render = (d) => {
-    const n = (k) => (k === 'all' ? d.items.length : d.counts[k]);
+    const n = (k) => (k === 'all' ? d.items.length - d.counts.closed : d.counts[k]);
     if (!tab || !n(tab)) tab = TABS.find(([k]) => n(k))?.[0] || 'all';
-    const list = d.items.filter((x) => tab === 'all' || x.state === tab);
+    const list = d.items.filter((x) => (tab === 'closed' ? x.closed : !x.closed && (tab === 'all' || x.state === tab)));
     box.replaceChildren(
       h('div.sb-top', {}, [h('b.sb-h', {}, '我提交的任务'), h('span.muted', {}, '调研、深读、学习计划、读书，点一行进入')]),
       h('div.tabs.sb-tabs', {}, TABS.filter(([k]) => k === 'all' || n(k)).map(([k, name]) => h('button' + (tab === k ? '.active' : ''),
@@ -43,11 +54,15 @@ export function submitted(ctx) {
     );
   };
 
+  const refresh = async () => {
+    last = await api.get('/api/plan/submitted');
+    render(last);
+  };
+
   const load = async () => {
     if (polled && !box.isConnected) return; // 已离开页面或主体已重绘，别再轮询
     try {
-      last = await api.get('/api/plan/submitted');
-      render(last);
+      await refresh();
     } catch (e) {
       if (!last) box.replaceChildren(h('div.muted', {}, '读取失败：' + e.message));
     }
@@ -88,6 +103,9 @@ function injectStyle() {
   .sb-pct i { display: block; height: 100%; background: var(--ok); }
   .sb-type, .sb-state { flex: none; }
   .sb-at { flex: none; font: 12px var(--mono); color: var(--muted); }
+  .sb-close { flex: none; padding: 1px 8px; font-size: 12px; opacity: 0; }
+  .sb-row:hover .sb-close, .sb-close:focus-visible { opacity: 1; }
+  @media (hover: none) { .sb-close { opacity: 1; } }
   .sb-more { margin-top: 4px; }
   .sb-none { font-size: 13px; padding: 6px 0; }
   @media (max-width: 720px) { .sb-pct, .sb-type { display: none; } }

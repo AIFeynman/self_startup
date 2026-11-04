@@ -5,6 +5,8 @@
     调研有引擎超时，状态一直是 running；全部引擎完成但没综合，也算 done —— 这里按各引擎结果判断
 
 state：running 进行中 / needs 等你处理 / ready 可以看了（生成好没读、计划在学）/ done 已看完
+
+关闭只记在 plan_submitted_closed，不动板块自己的数据。关闭后又跑起来的（比如重试）照常显示，跑完回到已关闭。
 """
 from __future__ import annotations
 
@@ -47,8 +49,8 @@ class _Jobs:
         return f"已 {len(steps)} 步 · 正在：{_clip(steps[-1], 50)}" if steps else "启动中"
 
 
-def _item(type_: str, label: str, title: str, state: str, detail: str, link: str, created: str, pct: int | None = None) -> dict:
-    return {"key": f"{type_}:{link}", "type": type_, "label": label, "title": title, "state": state, "detail": detail,
+def _item(type_: str, id_: int, label: str, title: str, state: str, detail: str, link: str, created: str, pct: int | None = None) -> dict:
+    return {"key": f"{type_}:{id_}", "type": type_, "label": label, "title": title, "state": state, "detail": detail,
             "link": link, "created_at": created or "", "pct": pct}
 
 
@@ -92,7 +94,7 @@ def _research(js: _Jobs) -> list[dict]:
             state, detail = "done", "已综合" if r["synthesis"] else have
             if stopped or n_done < len(res):
                 detail += f" · {len(res) - n_done} 个引擎失败"
-        out.append(_item("research", "调研", r["topic"], state, detail, f"#research/r/{r['id']}", r["created_at"]))
+        out.append(_item("research", r["id"], "调研", r["topic"], state, detail, f"#research/r/{r['id']}", r["created_at"]))
     return out
 
 
@@ -124,7 +126,7 @@ def _deep_reads(js: _Jobs) -> list[dict]:
             state, detail = "done", "已读"
         else:
             state, detail = "ready", "笔记已生成，待读"
-        out.append(_item("read", f"深读·{kind}", title, state, detail, link, it["created_at"]))
+        out.append(_item("read", it["id"], f"深读·{kind}", title, state, detail, link, it["created_at"]))
     return out
 
 
@@ -150,7 +152,7 @@ def _plans(js: _Jobs) -> list[dict]:
             state, detail = "done", f"学完 {d}/{n} 步"
         else:
             state, detail = "ready", f"学到 {d}/{n} 步" if d else f"还没开始，共 {n} 步"
-        out.append(_item("plan", "学习计划", p["topic"], state, detail, link, p["created_at"], pct))
+        out.append(_item("plan", p["id"], "学习计划", p["topic"], state, detail, link, p["created_at"], pct))
     return out
 
 
@@ -170,16 +172,26 @@ def _books(js: _Jobs) -> list[dict]:
             state, detail, pct = "running", f"生成全书导读 · {js.brief(j)}", None
         else:
             state, detail = "ready", f"读到第 {at}/{n} 篇" if at > 1 else f"共 {n} 篇，从头开始"
-        out.append(_item("book", "读书", b["title"] or b["url"], state, detail, link, b["created_at"], pct))
+        out.append(_item("book", b["id"], "读书", b["title"] or b["url"], state, detail, link, b["created_at"], pct))
     return out
 
 
 def collect() -> dict:
-    """全部提交过的任务，按 等你处理 → 进行中 → 可以看了 → 已看完，同组新提交的在前。"""
+    """全部提交过的任务，按 等你处理 → 进行中 → 可以看了 → 已看完，同组新提交的在前。已关闭的带 closed，不计入各组。"""
     js = _Jobs()
+    closed = {r["key"] for r in db.rows("SELECT key FROM plan_submitted_closed")}
     items = [*_research(js), *_deep_reads(js), *_plans(js), *_books(js)]
+    for x in items:
+        x["closed"] = x["key"] in closed and x["state"] != "running"
     items.sort(key=lambda x: x["created_at"], reverse=True)
     items.sort(key=lambda x: ORDER.index(x["state"]))
-    counts = {s: sum(x["state"] == s for x in items) for s in ORDER}
+    counts = {s: sum(x["state"] == s and not x["closed"] for x in items) for s in ORDER}
+    counts["closed"] = sum(x["closed"] for x in items)
     return {"items": items, "counts": counts}
 
+
+def set_closed(key: str, closed: bool) -> None:
+    if closed:
+        db.execute("INSERT OR IGNORE INTO plan_submitted_closed(key,closed_at) VALUES(?,?)", [key, db.now()])
+    else:
+        db.execute("DELETE FROM plan_submitted_closed WHERE key=?", [key])
