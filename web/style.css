@@ -207,6 +207,11 @@ body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { 
 .dots::after { content: '…'; animation: dots 1.2s steps(4) infinite; display: inline-block; width: 1em; overflow: hidden; vertical-align: bottom; }
 @keyframes dots { 0% { width: 0; } 100% { width: 1em; } }
 
+.quick-note { position: fixed; inset: 0; z-index: 90; display: flex; justify-content: center; align-items: flex-start; padding: 18vh 16px 16px; background: rgba(40, 30, 20, .35); }
+.quick-note-box { width: min(560px, 100%); background: var(--panel); border: 1.5px solid var(--accent); border-radius: 18px; padding: 14px 16px 10px; box-shadow: var(--shadow); }
+.quick-note-box textarea { width: 100%; border: none; box-shadow: none; padding: 2px; font-size: 15px; resize: none; background: transparent; }
+.quick-note-box textarea:focus { box-shadow: none; }
+.quick-note-hint { margin-top: 6px; font-size: 12px; color: var(--muted); }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--dark); color: var(--bg); padding: 9px 18px; border-radius: 999px; z-index: 99; box-shadow: var(--shadow); }
 .toast.err { background: var(--err); color: #fff; }
 .toast.notice { left: auto; right: 24px; transform: none; display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px)); border-radius: 14px; padding: 10px 12px 10px 16px; }

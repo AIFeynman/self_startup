@@ -592,14 +592,14 @@ def api_add_note(body: NoteIn):
 
 
 _KIND_PREFIX = {"问题": "problem", "坑": "problem", "经验": "lesson", "教训": "lesson", "洞察": "insight",
-                "发现": "insight", "想法": "idea", "点子": "idea", "idea": "idea", "problem": "problem",
+                "发现": "insight", "想法": "idea", "点子": "idea", "灵感": "idea", "感想": "idea", "idea": "idea", "problem": "problem",
                 "lesson": "lesson", "insight": "insight"}
 
 
-def parse_quick_note(text: str) -> dict:
-    """一句话快记：「问题：xxx #标签」→ {kind, title, content, tags}。首行为标题，其余为内容。"""
+def parse_quick_note(text: str, default_kind: str = "lesson") -> dict:
+    """一句话快记：「问题：xxx #标签」→ {kind, title, content, tags}。首行为标题，其余为内容；没写前缀时用 default_kind。"""
     text = (text or "").strip()
-    kind = "lesson"
+    kind = default_kind
     m = re.match(r"([^\s:：]{1,7})\s*[:：]\s*", text)
     if m and m.group(1).lower() in _KIND_PREFIX:
         kind, text = _KIND_PREFIX[m.group(1).lower()], text[m.end():]
@@ -616,11 +616,12 @@ def parse_quick_note(text: str) -> dict:
 class QuickIn(BaseModel):
     text: str
     date: str | None = None
+    default_kind: str = "lesson"
 
 
 @router.post("/notes/quick")
 def api_quick_note(body: QuickIn):
-    return api_add_note(NoteIn(date=body.date, **parse_quick_note(body.text)))
+    return api_add_note(NoteIn(date=body.date, **parse_quick_note(body.text, body.default_kind)))
 
 
 @router.patch("/notes/{nid}")

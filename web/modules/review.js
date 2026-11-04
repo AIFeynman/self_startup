@@ -102,6 +102,7 @@ const WEEK = '日一二三四五六';
 const dayLabel = (s) => { const d = new Date(s + 'T12:00:00'); return `${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]}`; };
 const hours = (min) => ((min || 0) / 60).toFixed(1) + 'h';
 let onAgentDone;
+let onQuickNote;
 
 export default {
   async render(el, ctx) {
@@ -120,6 +121,9 @@ export default {
     if (onAgentDone) document.removeEventListener('agent-done', onAgentDone);
     onAgentDone = () => el.isConnected && (state.tab === 'day' || state.tab === 'notes') && show();
     document.addEventListener('agent-done', onAgentDone);
+    if (onQuickNote) document.removeEventListener('quick-note', onQuickNote);
+    onQuickNote = () => el.isConnected && !el.querySelector('.composer textarea')?.value.trim() && show();
+    document.addEventListener('quick-note', onQuickNote);
 
     // ---------- 顶部：日期 + 问候 + 状态 ----------
     const shift = (n) => { const d = new Date(state.date + 'T12:00:00'); d.setDate(d.getDate() + n); go(d.toLocaleDateString('sv-SE')); };
@@ -135,7 +139,7 @@ export default {
 
     // ---------- 大输入框 ----------
     const HINTS = {
-      note: '前缀「问题: 经验: 洞察: 想法:」定类型 · #标签 · Enter 即存',
+      note: '前缀「问题: 经验: 洞察: 想法/灵感/感想:」定类型 · #标签 · Enter 即存 · 任何页面 ⌘K 随手记',
       record: '前缀「总结: 收获: 问题: 明天:」选栏目，默认追加到总结',
       ask: '带上这一天的事项、复盘和效率数据问复盘 Agent',
     };
