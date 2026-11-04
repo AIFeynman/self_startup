@@ -277,11 +277,10 @@ def _ref_text(name: str) -> str:
 
 
 def _known_knowledge(exclude_id: int = 0, limit: int = 20, exclude_plan: int = 0) -> str:
-    items = db.rows("SELECT id,kind,title,url,summary,my_notes FROM learn_items WHERE status='done' AND id!=? "
+    items = db.rows("SELECT id,kind,title,url,summary FROM learn_items WHERE status='done' AND id!=? "
                     "ORDER BY id DESC LIMIT ?", [exclude_id, limit])
     plans = db.rows("SELECT id,topic,goal FROM learn_plans WHERE id!=? ORDER BY id DESC LIMIT 10", [exclude_plan])
-    lines = [f"- [条目{i['id']} {i['kind']}] {i['title'] or i['url']}：{(i['summary'] or '').replace(chr(10), ' ')[:200]}"
-             + (f"；我的笔记：{i['my_notes'][:150]}" if i["my_notes"] else "") for i in items]
+    lines = [f"- [条目{i['id']} {i['kind']}] {i['title'] or i['url']}：{(i['summary'] or '').replace(chr(10), ' ')[:200]}" for i in items]
     lines += [f"- [计划{p['id']}] 主题：{p['topic']}（目标：{p['goal'][:80]}）" for p in plans]
     return "\n".join(lines) or "（暂无）"
 

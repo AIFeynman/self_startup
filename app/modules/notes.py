@@ -1,6 +1,6 @@
 """便签：用户自己写的灵感、感想、想法（和系统记的「问题与经验」分开），按时间线贴在墙上，可以自定义类型、互相连线、引用来源文章。
 
-数据还在 review_notes 表（author='me'），这样知识库、搜索照常能读到；sources 是引用的文章 JSON：
+数据还在 review_notes 表（author='me'），这样知识库、搜索照常能读到，但不进概念抽取（不发给大模型）；sources 是引用的文章 JSON：
 [{doc, title, link, type, quote}]，doc 和批注用的是同一套材料标识；note_links 是便签之间的关系。
 """
 from __future__ import annotations
