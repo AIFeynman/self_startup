@@ -1,6 +1,6 @@
 // 共享 UI 组件：图标、大输入框、快捷 chip、页头、统计块、空状态。
 // 板块页面：import { icon, composer, chips, pageHead, section, stats, empty, progress } from '../ui.js'
-import { h, nowLocal } from './api.js';
+import { api, h, nowLocal, toast } from './api.js';
 import { micButton } from './voice.js';
 
 const P = {
@@ -154,4 +154,41 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   const ta = document.querySelector('#page .composer textarea');
   if (ta) { e.preventDefault(); ta.focus(); }
+});
+
+// 全局：任何页面按 ⌘K / Ctrl+K 弹出快记，灵感不用离开当前页。Enter 存（默认归「想法」），Esc 关闭，没存的草稿留着
+let quickDraft = '';
+let closeQuick = null;
+function openQuick() {
+  const ta = h('textarea', { rows: 3, value: quickDraft, placeholder: '突然想到什么，写下来…（问题: 经验: 洞察: 可换类型，#标签）' });
+  let busy = false;
+  const close = () => { quickDraft = ta.value; ov.remove(); closeQuick = null; };
+  const save = async () => {
+    const text = ta.value.trim();
+    if (!text || busy) return;
+    busy = true;
+    try {
+      const n = await api.post('/api/review/notes/quick', { text, default_kind: 'idea' });
+      ta.value = '';
+      close();
+      toast(`已记下${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
+      document.dispatchEvent(new Event('quick-note'));
+    } catch (e) { toast(e.message, true); } finally { busy = false; } // 没存上时文字留在框里
+  };
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); save(); }
+    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+  });
+  const ov = h('div.quick-note', { onclick: (e) => { if (e.target === ov) close(); } }, h('div.quick-note-box', {}, [
+    ta, h('div.quick-note-hint', {}, 'Enter 保存 · Shift+Enter 换行 · Esc 关闭'),
+  ]));
+  closeQuick = close;
+  document.body.append(ov);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  if (closeQuick) closeQuick(); else openQuick();
 });

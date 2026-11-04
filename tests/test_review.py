@@ -195,6 +195,10 @@ def test_parse_quick_note():
     n = parse_quick_note("先写测试再改代码\n细节在这里")
     assert n["kind"] == "lesson" and n["title"] == "先写测试再改代码" and n["content"] == "细节在这里"
     assert parse_quick_note("想法: 做个周报 #idea")["kind"] == "idea"
+    assert parse_quick_note("灵感：笔记反向出题")["kind"] == "idea"
+    assert parse_quick_note("感想：这篇写得真清楚") == {"kind": "idea", "title": "这篇写得真清楚", "content": "", "tags": ""}
+    assert parse_quick_note("没写前缀", "idea")["kind"] == "idea"
+    assert parse_quick_note("问题：前缀优先于默认", "idea")["kind"] == "problem"
     assert parse_quick_note("C#语言很好")["tags"] == ""
     assert parse_record_line("明天：先修 bug") == ("next_actions", "先修 bug")
     assert parse_record_line("今天还行") == ("summary", "今天还行")
@@ -204,6 +208,8 @@ def test_quick_capture_api(client):
     d = "2001-01-02"
     n = client.post("/api/review/notes/quick", json={"text": "洞察：并行更快 #agent", "date": d}).json()
     assert n["kind"] == "insight" and n["tags"] == "agent" and n["date"] == d
+    assert client.post("/api/review/notes/quick", json={"text": "突然想到", "date": d, "default_kind": "idea"}).json()["kind"] == "idea"
+    assert client.post("/api/review/notes/quick", json={"text": "没写前缀", "date": d}).json()["kind"] == "lesson"
     client.post(f"/api/review/day/{d}/append", json={"text": "问题：等太久"})
     r = client.post(f"/api/review/day/{d}/append", json={"text": "又一条", "field": "problems"}).json()
     assert [e["text"] for e in r["record"]["entries"]] == ["等太久", "又一条"]
