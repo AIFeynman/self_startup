@@ -13,6 +13,9 @@ from . import agent, db, jobs, kb, modules
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 active = 0  # 正在进行的对话轮数；自动重启会等它归零
+INTERRUPTED = "（说到这里被打断）"
+_procs: dict[int, object] = {}  # 正在回复的会话 → CLI 进程，打断时用
+_stopping: set[int] = set()
 
 
 class ChatIn(BaseModel):
@@ -67,6 +70,39 @@ def delete_session(sid: int):
     return {"ok": True}
 
 
+def _with_interruption(sid: int, message: str) -> str:
+    """上一轮被打断时，CLI 会话里未必留下了那半句话和用户的问题，这一轮告诉它。只给 Agent 看，不进对话记录。"""
+    last = db.rows("SELECT role,content FROM chat_messages WHERE session_id=? AND role IN ('user','assistant') ORDER BY id DESC LIMIT 3", [sid])
+    if len(last) < 3 or last[1]["role"] != "assistant" or not last[1]["content"].endswith(INTERRUPTED):
+        return message
+    said = last[1]["content"].removesuffix(INTERRUPTED)
+    return f"（上一轮我说的是「{last[2]['content']}」，你答到「{said[-200:]}」时被我打断了，下面是我接着说的）\n{message}"
+
+
+def _prepare_next(module: str, ref: str, session: str) -> None:
+    ctx, dirs = _context(module, ref)
+    agent.warm_up(system=agent.build_system(module, ctx), session=session, add_dirs=dirs, model=agent.module_model(module))
+
+
+@router.post("/warm/{module}")
+def warm(module: str, session_id: int = 0):
+    """语音通话开始时先起好 CLI，第一句也接得快。只有只读板块才有。"""
+    if getattr(modules.get(module), "CHAT_READONLY", False):
+        sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [session_id]) if session_id else None
+        if not sess or (sess["engine"] in ("", "claude")):
+            _prepare_next(module, sess["ref"] if sess else "", sess["engine_session"] if sess else "")
+    return {"ok": True}
+
+
+@router.post("/stop/{sid}")
+def stop_reply(sid: int):
+    """打断正在生成的回复：停掉 CLI，已生成的部分照常存下，会话还能续聊。"""
+    _stopping.add(sid)
+    if sid in _procs:
+        agent.stop(_procs[sid])
+    return {"ok": True}
+
+
 @router.post("/{module}")
 def chat(module: str, body: ChatIn):
     sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [body.session_id]) if body.session_id else None
@@ -75,6 +111,8 @@ def chat(module: str, body: ChatIn):
                                           "title": body.message[:40], "created_at": db.now(), "updated_at": db.now()})
         sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [sid])
     sid = sess["id"]
+    _stopping.discard(sid)
+    prompt = _with_interruption(sid, body.message)
     db.insert("chat_messages", {"session_id": sid, "role": "user", "content": body.message, "created_at": db.now()})
     mod = modules.get(module)
     if mod and hasattr(mod, "on_chat"):  # 板块按用户的话更新自己的记录（如深读条目的追问 / 感想推进当天事项）
@@ -100,10 +138,28 @@ def chat(module: str, body: ChatIn):
         last_job = (db.row("SELECT max(id) AS m FROM jobs") or {}).get("m") or 0
         yield _sse({"type": "meta", "session_id": sid})
         final, eng_session, used = "", sess["engine_session"], engine
-        for ev in agent.run_stream(body.message, engine=engine, system=system,
-                                   session=sess["engine_session"], add_dirs=dirs,
-                                   model=agent.module_model(module, engine),
-                                   readonly=getattr(mod, "CHAT_READONLY", False)):
+        said, live = [], ""
+
+        def on_proc(proc):
+            _procs[sid] = proc
+            if sid in _stopping:  # 打断时进程还没起来
+                agent.stop(proc)
+
+        run = agent.run_stream(prompt, engine=engine, system=system,
+                               session=sess["engine_session"], add_dirs=dirs,
+                               model=agent.module_model(module, engine),
+                               readonly=getattr(mod, "CHAT_READONLY", False), on_proc=on_proc)
+        for ev in run:
+            if sid in _stopping:  # 不往下读：进程被杀后的报错不是真错，也不该回退到备选引擎
+                run.close()
+                final = "\n\n".join([*said, live]).strip() + INTERRUPTED
+                yield _sse({"type": "done", "text": final, "engine": used})
+                break
+            if ev["type"] == "delta":
+                live += ev["text"]
+            elif ev["type"] == "text":
+                said.append(ev["text"])
+                live = ""
             if ev["type"] == "session":
                 eng_session = ev["id"]
             elif ev["type"] == "done":
@@ -111,9 +167,13 @@ def chat(module: str, body: ChatIn):
             elif ev["type"] == "tool":
                 db.insert("chat_messages", {"session_id": sid, "role": "tool", "content": ev["text"], "created_at": db.now()})
             yield _sse(ev)
+        _procs.pop(sid, None)
+        _stopping.discard(sid)
         db.insert("chat_messages", {"session_id": sid, "role": "assistant" if final else "error",
                                     "content": final or "（无回复，见上方错误）", "created_at": db.now()})
         db.update("chat_sessions", sid, {"engine": used, "engine_session": eng_session, "updated_at": db.now()})
+        if getattr(mod, "CHAT_READONLY", False) and used == "claude" and eng_session:
+            _prepare_next(module, sess["ref"] or body.ref, eng_session)
         linked = link_jobs(sid, last_job)
         yield _sse({"type": "end", "jobs": linked})
 

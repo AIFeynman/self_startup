@@ -12,16 +12,20 @@ Claude 启动失败或报错时自动回退到 Codex（仅新会话）；启动�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Iterator
 
 from . import settings
 from .db import DATA_DIR, ROOT
+
+log = logging.getLogger(__name__)
 
 API_BASE = os.environ.get("SELF_STARTUP_API") or f"http://127.0.0.1:{os.environ.get('PORT', '8780')}"
 
@@ -82,8 +86,8 @@ def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], mod
         cmd += ["--append-system-prompt", system]
     if model or cfg.get("model"):
         cmd += ["--model", model or cfg["model"]]
-    if readonly:  # 只读板块工具只留这几个（子 Agent、Bash 都不给，curl 能调写接口）；回复要快，边生成边出字
-        cmd += ["--tools", ",".join(READONLY_TOOLS), "--allowedTools", *READONLY_TOOLS, "--include-partial-messages"]
+    if readonly:  # 只读板块工具只留这几个（子 Agent、Bash 都不给，curl 能调写接口）；回复要快，边生成边出字，也不加载用不上的 MCP
+        cmd += ["--tools", ",".join(READONLY_TOOLS), "--allowedTools", *READONLY_TOOLS, "--include-partial-messages", "--strict-mcp-config"]
     else:
         if cfg.get("permission_mode"):
             cmd += ["--permission-mode", cfg["permission_mode"]]
@@ -193,12 +197,77 @@ def _child_env(engine: str = "") -> dict:
     return env
 
 
-def _run(engine: str, cmd: list[str], cwd: str, on_proc=None) -> Iterator[dict]:
+# ---------- 预热：讨论要接得快，下一轮的 CLI 先起好等在 stdin 上（启动占了首字延迟的一大半）----------
+WARM_IDLE_S = 300
+_warm_lock = threading.Lock()
+_warm: dict = {}  # 只留一个：{"key": 命令, "proc": 进程}
+
+
+def _workspace() -> str:
+    ws = DATA_DIR / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    return str(ws)
+
+
+def _waiting_cmd(cmd: list[str]) -> list[str]:
+    """同一条命令去掉 -p 后面的问题，改成从 stdin 读。命令里有会话、系统提示、模型，完全相同才算同一轮能用。"""
+    return [*cmd[:2], *cmd[3:], "--input-format", "stream-json"]
+
+
+def _drop_warm() -> None:
+    with _warm_lock:
+        proc = _warm.pop("proc", None)
+        _warm.clear()
+    if proc:
+        stop(proc)
+
+
+def warm_up(*, system: str = "", session: str = "", add_dirs: list[str] | None = None, model: str = "") -> None:
+    """只读会话用：提前起好下一轮的 CLI。没用上的 WARM_IDLE_S 后停掉；平台退出时 stdin 断开，它也自己退出。"""
+    if not available("claude"):
+        return
+    add_dirs = [d for d in (add_dirs or []) if d and Path(d).expanduser().exists()]
+    cmd = _waiting_cmd(_claude_cmd("", system, session, add_dirs, model, True))
+    if _warm.get("key") == cmd and _warm["proc"].poll() is None:
+        return
+    _drop_warm()
+    try:
+        proc = subprocess.Popen(cmd, cwd=_workspace(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, bufsize=1, env=_child_env("claude"), start_new_session=True)
+    except OSError as e:
+        log.warning("预热失败：%s", e)
+        return
+    with _warm_lock:
+        _warm.update(key=cmd, proc=proc)
+    timer = threading.Timer(WARM_IDLE_S, lambda: _warm.get("proc") is proc and _drop_warm())
+    timer.daemon = True
+    timer.start()
+
+
+def _take_warm(cmd: list[str], prompt: str):
+    """命令对得上就把问题交给等着的进程；写完关 stdin，它答完这一轮就退出，读法和普通进程一样。"""
+    with _warm_lock:
+        if _warm.get("key") != _waiting_cmd(cmd):
+            return None
+        proc = _warm.pop("proc")
+        _warm.clear()
+    try:
+        if proc.poll() is not None:
+            return None
+        proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}, ensure_ascii=False) + "\n")
+        proc.stdin.close()
+    except OSError:
+        stop(proc)
+        return None
+    return proc
+
+
+def _run(engine: str, cmd: list[str], cwd: str, on_proc=None, proc=None) -> Iterator[dict]:
     parse = _parse_claude if engine == "claude" else _parse_codex
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, bufsize=1,
-                                env=_child_env(engine), start_new_session=True)  # 自成进程组，停的时候连它起的子进程一起停
+        proc = proc or subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, bufsize=1,
+                                        env=_child_env(engine), start_new_session=True)  # 自成进程组，停的时候连它起的子进程一起停
     except FileNotFoundError as e:
         yield {"type": "error", "text": f"{engine} 未安装: {e}", "fatal": True}
         return
@@ -275,10 +344,8 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
     readonly：Agent 只能读，不能改文件、不能跑命令（语音讨论用，听错一句不会动到数据）。"""
     engine = engine or settings.get("engines.default", "claude")
     # 默认不在项目目录里跑（acceptEdits 下可写文件），放到 data/workspace
-    if not cwd:
-        ws = DATA_DIR / "workspace"
-        ws.mkdir(parents=True, exist_ok=True)
-        cwd = str(ws)
+    default_cwd = not cwd
+    cwd = cwd or _workspace()
     add_dirs = [d for d in (add_dirs or []) if d and Path(d).expanduser().exists()]
     order = [engine]
     if fallback and not session:
@@ -291,7 +358,8 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
             else _codex_cmd(prompt, system, session, add_dirs, cwd, readonly)
         for attempt in range(TRANSIENT_RETRIES + 1):
             failed = retry = False
-            for ev in _run(eng, cmd, cwd, on_proc):
+            ready = _take_warm(cmd, prompt) if readonly and eng == "claude" and default_cwd and not attempt else None
+            for ev in _run(eng, cmd, cwd, on_proc, ready):
                 # fatal = 进程退出且没产出任何文本，重跑不会重复已做的工作
                 if ev.get("fatal") and attempt < TRANSIENT_RETRIES and _transient(ev["text"]):
                     retry = True

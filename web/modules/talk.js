@@ -3,12 +3,15 @@ const OPENERS = ['我有个想法想理一理：', '帮我想想这件事该不�
 
 export default {
   async render(el, { api, h, md, ui, toast, openChat, refresh }) {
-    const start = (text) => openChat({ module: 'talk', title: '讨论', fresh: true, send: text });
+    // 一次通话里说的每句都接着同一个对话
+    let calling = false, called = false;
+    const start = (text) => { openChat({ module: 'talk', title: '讨论', fresh: !called, send: text }); called = calling; };
     const open = (id) => openChat({ module: 'talk', title: '讨论', sessionId: id });
     const box = ui.composer({
       placeholder: '说出你在想的事，或者打字…',
-      hint: '点麦克风开始说，再点一下结束，说完自动发送',
+      hint: '点麦克风开始通话：说完停一下自动发送，回复会念出来，开口就能打断',
       voiceAutoSend: true,
+      onVoiceCall: (on) => { calling = on; called = false; if (on) fetch('/api/chat/warm/talk', { method: 'POST' }).catch(() => {}); },
       onSubmit: (t) => { start(t); },
     });
     const draftWrap = h('div');

@@ -1,12 +1,16 @@
-"""语音转文字：浏览器录的音频 → ffmpeg 转 16k wav → 本机 whisper.cpp。音频不出本机，转完即删，只返回文字。"""
+"""语音：本机转文字（whisper.cpp）和本机合成（macOS say）。音频不出本机，处理完即删，只返回结果。
+/transcribe 转一整段录音；/live 转说话途中的一段，模型常驻所以约半秒一次，边说边出字靠它。"""
 from __future__ import annotations
 
 import array
+import io
 import json
 import logging
 import math
+import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -14,10 +18,12 @@ import time
 import wave
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+import httpx
+from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import settings
+from . import agent, settings
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/voice", tags=["voice"])
@@ -32,6 +38,13 @@ _CHUNK_MIN, _CHUNK_MAX = 500, 933  # 长录音切段：15–28 秒之间找最�
 # whisper 对短促杂音爱编的训练集字幕腔：整段很短又命中才丢，正常说话提到这些词不受影响
 _HALLUCINATION = re.compile(r"明镜|点点栏目|不吝点赞|字幕[由by]|谢谢观看|请订阅")
 _lock = threading.Lock()  # 模型吃显存，一次转一段
+_SERVER_IDLE_S = 600    # 这么久没人说话就退出常驻的模型，下次用再起
+_SERVER_START_S = 30
+# 平台退出（包括被强杀）后几秒内跟着退，不留下占显存的孤儿进程
+_WATCH_PARENT = 'ppid=$1; shift; "$@" & c=$!; while kill -0 "$ppid" 2>/dev/null && kill -0 "$c" 2>/dev/null; do sleep 5; done; kill "$c" 2>/dev/null'
+_server: subprocess.Popen | None = None
+_server_url, _server_used = "", 0.0
+_server_lock = threading.Lock()
 
 
 def _levels(pcm: array.array) -> list[float]:
@@ -150,3 +163,119 @@ async def api_transcribe(request: Request):
     if len(audio) > MAX_BYTES:
         raise HTTPException(413, "录音太大")
     return await run_in_threadpool(transcribe, audio)
+
+
+# ---------- 边说边转：平台的子进程，第一次用时起，闲置退出，不是单独的服务 ----------
+def _reap_when_idle(proc: subprocess.Popen) -> None:
+    while proc.poll() is None:
+        time.sleep(30)
+        if time.time() - _server_used > _SERVER_IDLE_S:
+            agent.stop(proc)
+
+
+def _ensure_server() -> str:
+    """返回常驻 whisper-server 的地址，没起就起，只听本机。"""
+    global _server, _server_url, _server_used
+    with _server_lock:
+        _server_used = time.time()
+        if _server and _server.poll() is None:
+            return _server_url
+        cfg = settings.get("voice", {})
+        binary, model = shutil.which(cfg.get("server_bin", "whisper-server")), Path(cfg.get("model", "")).expanduser()
+        if not binary:
+            raise HTTPException(503, "本机没有 whisper-server，语音输入用不了")
+        if not model.is_file():
+            raise HTTPException(503, f"找不到语音模型 {model}，在设置 voice.model 里改路径")
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        cmd = [binary, "-m", str(model), "-l", cfg.get("language", "zh"), "--host", "127.0.0.1", "--port", str(port)]
+        proc = subprocess.Popen(["sh", "-c", _WATCH_PARENT, "sh", str(os.getpid()), *cmd], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        url = f"http://127.0.0.1:{port}"
+        deadline = time.time() + _SERVER_START_S
+        while time.time() < deadline and proc.poll() is None:
+            try:
+                httpx.get(url, timeout=1, trust_env=False)
+                _server, _server_url = proc, url
+                threading.Thread(target=_reap_when_idle, args=(proc,), daemon=True).start()
+                return url
+            except httpx.HTTPError:
+                time.sleep(0.1)
+        agent.stop(proc)
+        raise HTTPException(503, "whisper-server 没能启动")
+
+
+def _parse_server(result: dict) -> tuple[str, float]:
+    """whisper-server verbose_json 的结果 → (文字, 平均置信度)。"""
+    probs = [w.get("probability", 0) for s in result.get("segments") or [] for w in s.get("words") or []]
+    return (result.get("text") or "").strip(), sum(probs) / len(probs) if probs else 0.0
+
+
+def transcribe_live(audio: bytes) -> dict:
+    """转说话途中的一段（16k 单声道 wav）。有没有人说话浏览器已判断过，这里只拦住几乎没声音的。"""
+    started = time.time()
+    try:
+        with wave.open(io.BytesIO(audio)) as w:
+            pcm = array.array("h", w.readframes(w.getnframes()))
+    except (wave.Error, EOFError) as e:
+        raise HTTPException(400, "不是 wav") from e
+    if not _voiced(_levels(pcm), _MIN_RMS):
+        return {"text": "", "ms": int((time.time() - started) * 1000)}
+    url = _ensure_server()
+    cfg = settings.get("voice", {})
+    try:
+        r = httpx.post(f"{url}/inference", files={"file": ("a.wav", audio, "audio/wav")}, timeout=TIMEOUT_S, trust_env=False,
+                       data={"response_format": "verbose_json", "prompt": cfg.get("prompt", "")})
+        r.raise_for_status()
+        text = _keep(_parse_server(r.json()))
+    except (httpx.HTTPError, ValueError) as e:  # 常驻进程出问题：这次退回一次性的 whisper-cli，慢但能用
+        log.warning("whisper-server 转写失败，改用 whisper-cli：%s", e)
+        return transcribe(audio)
+    return {"text": _clean(text), "ms": int((time.time() - started) * 1000)}
+
+
+@router.post("/prepare")
+def api_prepare():
+    """点麦克风时先把模型加载好，第一句不用等。"""
+    _ensure_server()
+    return {"ok": True}
+
+
+@router.post("/live")
+async def api_live(request: Request):
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(400, "没收到录音")
+    if len(audio) > MAX_BYTES:
+        raise HTTPException(413, "录音太大")
+    return await run_in_threadpool(transcribe_live, audio)
+
+
+# ---------- 朗读：放在页面里播，浏览器的回声消除才消得掉，才能边放边听 ----------
+class SpeakIn(BaseModel):
+    text: str
+
+
+def synthesize(text: str) -> bytes:
+    binary = shutil.which("say")
+    if not binary:
+        raise HTTPException(503, "本机没有 say，用不了本机朗读")
+    with tempfile.TemporaryDirectory(prefix="ss-voice-") as tmp:
+        out = Path(tmp, "out.wav")
+        try:
+            r = subprocess.run([binary, "-v", settings.get("voice", {}).get("tts_voice", "Tingting"), "-o", str(out), "--data-format=LEI16@22050"],
+                               input=text, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired as e:
+            raise HTTPException(504, "合成超时") from e
+        if r.returncode != 0:
+            raise HTTPException(500, f"say 失败：{r.stderr.strip()[-200:]}")
+        return out.read_bytes()
+
+
+@router.post("/speak")
+def api_speak(body: SpeakIn):
+    text = body.text.strip()[:500]
+    if not text:
+        raise HTTPException(400, "没有文字")
+    return Response(synthesize(text), media_type="audio/wav")

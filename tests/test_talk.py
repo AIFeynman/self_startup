@@ -156,3 +156,63 @@ def test_organize_bad_json_is_an_error(client, monkeypatch):
     db.insert("chat_messages", {"session_id": sid, "role": "user", "content": "x", "created_at": db.now()})
     monkeypatch.setattr(agent, "run_once", lambda p, **k: {"text": "不是 JSON", "session": "", "engine": "claude", "log": ""})
     assert client.post("/api/talk/organize", json={"session_id": sid}).status_code == 502
+
+
+def test_live_skips_silence_without_starting_server(client, monkeypatch, tmp_path):
+    from app import voice
+    monkeypatch.setattr(voice, "_ensure_server", lambda: pytest.fail("静音不该启动转写"))
+    _wav(tmp_path / "s.wav", [0] * 16000)
+    r = client.post("/api/voice/live", content=(tmp_path / "s.wav").read_bytes())
+    assert r.status_code == 200 and r.json()["text"] == ""
+    assert client.post("/api/voice/live", content=b"not wav").status_code == 400
+
+
+def test_speak_returns_audio_and_rejects_empty(client, monkeypatch):
+    from app import voice
+    monkeypatch.setattr(voice, "synthesize", lambda text: b"RIFF" + text.encode())
+    r = client.post("/api/voice/speak", json={"text": " 你好 "})
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content == "RIFF你好".encode()
+    assert client.post("/api/voice/speak", json={"text": "  "}).status_code == 400
+
+
+def test_stop_kills_running_reply_and_next_turn_is_told(client, monkeypatch):
+    from app import agent, chat, db
+    stopped = []
+    monkeypatch.setattr(agent, "stop", stopped.append)
+    chat._procs[7] = "proc"
+    assert client.post("/api/chat/stop/7").json()["ok"]
+    assert stopped == ["proc"] and 7 in chat._stopping
+    chat._procs.clear(); chat._stopping.clear()
+
+    sid = db.insert("chat_sessions", {"module": "talk", "ref": "", "engine": "", "title": "t", "created_at": db.now(), "updated_at": db.now()})
+    for role, content in (("user", "第一句"), ("assistant", "答到一半" + chat.INTERRUPTED), ("user", "接着说")):
+        db.insert("chat_messages", {"session_id": sid, "role": role, "content": content, "created_at": db.now()})
+    told = chat._with_interruption(sid, "接着说")
+    assert "第一句" in told and "答到一半" in told and told.endswith("接着说")
+
+
+def test_warm_process_only_serves_the_same_command(monkeypatch):
+    import io
+
+    from app import agent
+
+    class Fake:
+        pid, killed = 0, False
+        def __init__(self): self.stdin = _Keep()
+        def poll(self): return None
+        def terminate(self): self.killed = True
+
+    class _Keep(io.StringIO):
+        def close(self): self.sent = self.getvalue()
+
+    monkeypatch.setattr(agent, "available", lambda e: True)
+    monkeypatch.setattr(agent.subprocess, "Popen", lambda *a, **k: Fake())
+    monkeypatch.setattr(agent, "_warm", {})
+    agent.warm_up(system="s", session="a", model="m")
+    other = agent._claude_cmd("问题", "s", "b", [], "m", True)  # 别的会话不能用
+    assert agent._take_warm(other, "问题") is None and agent._warm
+    same = agent._claude_cmd("问题", "s", "a", [], "m", True)
+    proc = agent._take_warm(same, "问题")
+    assert json.loads(proc.stdin.sent)["message"]["content"] == "问题"
+    assert "问题" not in agent._warm and not agent._warm  # 只用一次
+    assert agent._take_warm(same, "问题") is None

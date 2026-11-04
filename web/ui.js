@@ -58,7 +58,7 @@ export function icon(name, cls = '') {
 /**
  * 大输入框。Enter 发送，Shift+Enter 换行；/ 键在页面任意处聚焦第一个 composer。
  * opts: { placeholder, hint, onSubmit(text, mode) => Promise|void, modes: [{id,label}], mode, value, rows, autofocus, compact,
- *         voiceAutoSend: 说完直接发送（默认填进输入框，改完再发） }
+ *         voiceAutoSend: 语音通话，每句说完直接发送（默认是听写，文字留在输入框里改）；onVoiceCall(on): 通话开始 / 结束 }
  * 返回元素，el.setValue(text) / el.focus() / el.mode 可用。
  */
 export function composer(opts = {}) {
@@ -71,13 +71,23 @@ export function composer(opts = {}) {
       if (m.placeholder) ta.placeholder = m.placeholder; ta.focus(); },
   }, m.label));
   const hint = h('span.hint', {}, opts.hint ?? '');
-  // 说的话接在已有文字后面；转写时提示写在 hint 里，结束后恢复
+  // 说的话接在已有文字后面，边说边更新；提示写在 hint 里，结束后恢复
+  let prefix = null;
+  const heard = (t) => {
+    if (prefix === null) prefix = ta.value.trim() ? ta.value.trimEnd() + ' ' : '';
+    return prefix + t;
+  };
   const mic = micButton({
     icon,
+    call: opts.voiceAutoSend,
+    onCall: opts.onVoiceCall,
     onHint: (t) => { hint.textContent = t || (opts.hint ?? ''); },
-    onText: (t) => {
-      el.setValue((ta.value.trim() ? ta.value.trimEnd() + ' ' : '') + t);
-      if (opts.voiceAutoSend) submit();
+    onLive: (t) => el.setValue(heard(t)),
+    onFinal: (t) => {
+      const full = heard(t);
+      prefix = null;
+      if (t && opts.voiceAutoSend) { el.setValue(''); opts.onSubmit?.(full.trim(), mode); } // 通话里上一轮还没结束也要能发
+      else el.setValue(full);
     },
   });
   const el = h('div.composer', {}, [ta, h('div.bar', {}, [modeBtns.length ? h('div.modes', {}, modeBtns) : null, hint, mic, send])]);

@@ -65,6 +65,8 @@ DEFAULTS: dict = {
     # 语音输入：本机 whisper.cpp 转写，音频不出本机。prompt 帮模型认对中英混说的术语，常说的词可以加进去
     "voice": {
         "bin": "whisper-cli",
+        "server_bin": "whisper-server",
+        "tts_voice": "Tingting",
         "model": str(Path.home() / "project/robomaster/whisper.cpp/models/ggml-large-v3-q5_0.bin"),
         "language": "zh",
         "prompt": "以下是中文讨论，夹杂英文术语：Agent、Claude Code、Codex、GitHub、MCP、prompt、context、benchmark。",

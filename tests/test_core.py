@@ -169,7 +169,7 @@ def _fake_runs(monkeypatch, script):
     from app import agent
     calls = []
 
-    def fake_run(eng, cmd, cwd, on_proc=None):
+    def fake_run(eng, cmd, cwd, on_proc=None, proc=None):
         calls.append(eng)
         yield from script[len(calls) - 1]
 

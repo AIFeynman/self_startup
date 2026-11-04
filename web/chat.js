@@ -3,6 +3,7 @@
 //   send: 直接发送这条消息；prefill: 只填入输入框；fresh: 开新对话；sessionId: 打开指定会话。
 import { api, h, md } from './api.js';
 import { icon, composer, chips } from './ui.js';
+import { inCall, sentenceFeed, tts } from './voice.js';
 
 const TIPS = {
   review: ['今天的事项完成得怎么样？', '我今天盯 Agent 花了多少时间？哪里可以省？', '记一条经验：'],
@@ -16,29 +17,28 @@ const TIPS = {
   kb: ['我之前关于 Agent 评测记过什么？', '汇总我这周的问题与经验', '我调研过哪些产品？'],
 };
 
-const state = { module: '', ref: '', title: '', sessionId: null, busy: false };
+const state = { module: '', ref: '', title: '', sessionId: null, busy: false, stopping: false, turn: null };
 let root, box, log, sessSel, engineSel;
 
-// ---------- 朗读回复（只有讨论板块有开关，默认关，记在本机）----------
-const speakable = () => 'speechSynthesis' in window && state.module === 'talk';
+// ---------- 朗读回复：讨论板块可开，通话时总是念；开口就打断（见 voice.js）----------
+const speakable = () => state.module === 'talk';
 const speakOn = () => { try { return localStorage.getItem('talk-speak') === '1'; } catch { return false; } };
-const plain = (t) => t.replace(/```[\s\S]*?```/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|]/g, '');
-function speak(text) {
-  if (!speakable() || !speakOn()) return;
-  const u = new SpeechSynthesisUtterance(plain(text));
-  u.lang = 'zh-CN';
-  speechSynthesis.speak(u);
-}
+const speaking = () => speakable() && (speakOn() || inCall());
 const speakBtn = () => {
   const b = h('button.icon.speak' + (speakOn() ? '.on' : ''), { title: '朗读回复（开 / 关）', onclick: () => {
     const on = !speakOn();
     try { localStorage.setItem('talk-speak', on ? '1' : '0'); } catch { /* 无痕模式 */ }
     b.classList.toggle('on', on);
-    if (!on) speechSynthesis.cancel();
+    if (!on) tts.stop();
   } }, icon('volume'));
   return b;
 };
-document.addEventListener('voice-start', () => { if ('speechSynthesis' in window) speechSynthesis.cancel(); }); // 开口就停止朗读
+const stopServer = () => { if (state.sessionId) fetch(`/api/chat/stop/${state.sessionId}`, { method: 'POST' }).catch(() => {}); };
+document.addEventListener('voice-interrupt', () => {
+  if (!state.busy || state.stopping) return;
+  state.stopping = true;
+  stopServer();
+});
 
 export function initChat(el) {
   root = el;
@@ -157,8 +157,14 @@ function openReader(content) {
 
 async function submit(text) {
   text = (text || '').trim();
-  if (!text || state.busy) return false;
-  state.busy = true;
+  if (!text || (state.busy && !state.stopping)) return false;
+  while (state.busy) await state.turn; // 被打断的上一轮很快收尾，等它存好再发这一句
+  let endTurn;
+  state.turn = new Promise((resolve) => { endTurn = resolve; });
+  state.busy = true; state.stopping = false;
+  tts.newTurn();
+  performance.mark('chat-submit');
+  const voice = sentenceFeed((t) => { if (speaking() && !state.stopping) tts.say(t); });
   root.classList.remove('collapsed');
   if (log.querySelector('.chat-tips')) log.innerHTML = '';
   log.append(bubble('user', text));
@@ -183,12 +189,12 @@ async function submit(text) {
         const line = buf.slice(0, i); buf = buf.slice(i + 2);
         if (!line.startsWith('data: ')) continue;
         const ev = JSON.parse(line.slice(6));
-        if (ev.type === 'meta') state.sessionId = ev.session_id;
+        if (ev.type === 'meta') { state.sessionId = ev.session_id; if (state.stopping) stopServer(); }
         else if (ev.type === 'end' && ev.jobs?.length) linked = ev.jobs;
         else if (ev.type === 'tool') log.insertBefore(bubble('tool', ev.text), pending);
         else if (ev.type === 'error' || ev.type === 'engine') log.insertBefore(bubble('error', ev.text), pending);
-        else if (ev.type === 'delta') { live += ev.text; pending.classList.remove('pending'); body.replaceChildren(md([...texts, live].join('\n\n'))); }
-        else if (ev.type === 'text') { live = ''; texts.push(ev.text); speak(ev.text); pending.classList.remove('pending'); body.replaceChildren(md(texts.join('\n\n'))); }
+        else if (ev.type === 'delta') { if (!live) performance.mark('reply-delta'); live += ev.text; voice.feed(ev.text); pending.classList.remove('pending'); body.replaceChildren(md([...texts, live].join('\n\n'))); }
+        else if (ev.type === 'text') { if (!live) voice.feed(ev.text); voice.flush(); live = ''; texts.push(ev.text); pending.classList.remove('pending'); body.replaceChildren(md(texts.join('\n\n'))); }
         else if (ev.type === 'done' && ev.text) { pending.classList.remove('pending'); body.replaceChildren(md(ev.text)); }
         log.scrollTop = log.scrollHeight;
       }
@@ -203,6 +209,7 @@ async function submit(text) {
   } catch (e) {
     body.replaceChildren('出错：' + e.message);
   } finally {
-    state.busy = false;
+    state.busy = false; state.stopping = false;
+    endTurn();
   }
 }
