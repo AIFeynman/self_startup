@@ -96,6 +96,7 @@ class NewIn(BaseModel):
     text: str = ""
     ask: bool = False        # 要 Claude 回答
     source: str = ""         # 材料全文（markdown），第一次提问时作为上下文
+    note_kind: str = ""      # 评论同时贴到便签，这是便签类型；空 = 不贴
 
 
 @router.post("")
@@ -108,6 +109,7 @@ def create(body: NewIn):
     aid = db.insert("annotations", {"doc": body.doc, "title": body.title[:200], "link": body.link, "quote": body.quote[:2000],
                                     "prefix": body.prefix[-200:], "suffix": body.suffix[:200], "created_at": now, "updated_at": now})
     _post(aid, body.text, body.ask, body.source)
+    _to_note(aid, body.text, body.ask, body.note_kind)
     return _thread(aid)
 
 
@@ -115,6 +117,7 @@ class MsgIn(BaseModel):
     text: str = ""
     ask: bool = False
     source: str = ""
+    note_kind: str = ""
 
 
 @router.post("/{aid}/msgs")
@@ -125,6 +128,7 @@ def reply(aid: int, body: MsgIn):
     if any(m["status"] == "pending" for m in a["msgs"]):
         raise HTTPException(400, "Claude 还在回答上一个问题")
     _post(aid, body.text, body.ask, body.source)
+    _to_note(aid, body.text, body.ask, body.note_kind)
     return _thread(aid)
 
 
@@ -149,6 +153,13 @@ def delete(aid: int):
     db.execute("DELETE FROM annotations WHERE id=?", [aid])
     kb.schedule_sync()
     return {"ok": True}
+
+
+def _to_note(aid: int, text: str, ask: bool, kind: str) -> None:
+    """人写的评论贴到便签；问 Claude 的问题不算。"""
+    if kind.strip() and text.strip() and not ask:
+        from .modules import notes
+        notes.from_comment(db.row("SELECT * FROM annotations WHERE id=?", [aid]), text.strip(), kind)
 
 
 def _post(aid: int, text: str, ask: bool, source: str) -> None:

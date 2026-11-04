@@ -156,11 +156,61 @@ document.addEventListener('keydown', (e) => {
   if (ta) { e.preventDefault(); ta.focus(); }
 });
 
-// 全局：任何页面按 ⌘K / Ctrl+K 弹出快记，灵感不用离开当前页。Enter 存（默认归「想法」），Esc 关闭，没存的草稿留着
+// 便签的类型选择（便签页和 ⌘K 共用）：kinds 来自 /api/notes/kinds；颜色按内置顺序，自定义类型按名字散列
+export function kindColor(key, kinds = []) {
+  const i = kinds.filter((k) => k.builtin).findIndex((k) => k.key === key);
+  return i >= 0 ? i % 6 : [...String(key)].reduce((a, c) => a + c.codePointAt(0), 0) % 6;
+}
+export function kindChips(kinds, current, onPick) {
+  const box = h('div.kind-chips');
+  let adding = false;
+  const paint = () => {
+    const list = kinds.some((k) => k.key === current) ? kinds : [...kinds, { key: current, label: current }];
+    box.replaceChildren(...list.map((k) => h('button.kind-chip' + (k.key === current ? '.on' : ''), { type: 'button', onclick: () => onPick(k.key) },
+      [h(`i.kc${kindColor(k.key, kinds)}`), k.label])),
+    adding ? addInput() : h('button.kind-chip.add', { type: 'button', onclick: () => { adding = true; paint(); box.querySelector('input').focus(); } }, '+ 自己加类型'));
+  };
+  const addInput = () => h('input.kind-input', { maxlength: 12, placeholder: '类型名，回车', 'aria-label': '新类型名称',
+    onblur: () => { adding = false; paint(); },
+    onkeydown: (e) => {
+      e.stopPropagation();
+      if (e.isComposing) return;
+      if (e.key === 'Escape') { e.target.blur(); }
+      if (e.key === 'Enter') { e.preventDefault(); const name = e.target.value.trim(); adding = false; if (name) onPick(name); else paint(); }
+    } });
+  paint();
+  return box;
+}
+
+// ⌘K 时用户正在读的文章：选中的文字所在的正文优先（选中的话算引文），否则是当前页的正文
+function readingSource() {
+  const sel = window.getSelection();
+  const node = sel && !sel.isCollapsed ? sel.anchorNode : null;
+  const body = (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.('.an-body');
+  const wrap = body?.parentElement || document.querySelector('#page .an-wrap:not(.compact)') || document.querySelector('#page .an-wrap');
+  if (!wrap?._src) return null;
+  return { ...wrap._src, quote: body ? sel.toString().trim().slice(0, 2000) : '' };
+}
+
+// 全局：任何页面按 ⌘K / Ctrl+K 弹出快记，灵感不用离开当前页，进「便签」。Enter 存，Esc 关闭，没存的草稿留着
 let quickDraft = '';
 let closeQuick = null;
+const BUILTIN_KINDS = [['spark', '灵感'], ['feeling', '感想'], ['idea', '想法'], ['problem', '问题'], ['lesson', '经验'], ['insight', '洞察']]
+  .map(([key, label]) => ({ key, label, builtin: true }));
 function openQuick() {
-  const ta = h('textarea', { rows: 3, value: quickDraft, placeholder: '突然想到什么，写下来…（问题: 经验: 洞察: 可换类型，#标签）' });
+  let source = readingSource(); // 要在输入框拿走焦点之前取，不然选区没了
+  let kind = (() => { try { return localStorage.getItem('note-kind') || 'spark'; } catch { return 'spark'; } })();
+  let kinds = BUILTIN_KINDS;
+  const ta = h('textarea', { rows: 3, value: quickDraft, placeholder: '突然想到什么，写下来…（#标签；写「问题:」这样的前缀也能换类型）' });
+  const chipBox = h('div', { style: { marginTop: '8px' } });
+  const srcBox = h('div');
+  const paintKinds = () => chipBox.replaceChildren(kindChips(kinds, kind, (k) => { kind = k; paintKinds(); ta.focus(); }));
+  const paintSrc = () => srcBox.replaceChildren(...(source ? [h('div.quick-note-src', {}, [
+    h('span', {}, `出处：${source.title}${source.quote ? `「${source.quote.length > 40 ? source.quote.slice(0, 40) + '…' : source.quote}」` : ''}`),
+    h('button', { type: 'button', onclick: () => { source = null; paintSrc(); ta.focus(); } }, '不带出处'),
+  ])] : []));
+  paintKinds(); paintSrc();
+  api.get('/api/notes/kinds').then((r) => { kinds = r; paintKinds(); }).catch(() => {});
   let busy = false;
   const close = () => { quickDraft = ta.value; ov.remove(); closeQuick = null; };
   const save = async () => {
@@ -168,10 +218,11 @@ function openQuick() {
     if (!text || busy) return;
     busy = true;
     try {
-      const n = await api.post('/api/review/notes/quick', { text, default_kind: 'idea' });
+      const n = await api.post('/api/notes', { text, kind, sources: source ? [source] : [] });
+      try { localStorage.setItem('note-kind', kind); } catch { /* ignore */ }
       ta.value = '';
       close();
-      toast(`已记下${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
+      toast(`已贴到便签${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
       document.dispatchEvent(new Event('quick-note'));
     } catch (e) { toast(e.message, true); } finally { busy = false; } // 没存上时文字留在框里
   };
@@ -180,7 +231,7 @@ function openQuick() {
     if (e.key === 'Escape') { e.stopPropagation(); close(); }
   });
   const ov = h('div.quick-note', { onclick: (e) => { if (e.target === ov) close(); } }, h('div.quick-note-box', {}, [
-    ta, h('div.quick-note-hint', {}, 'Enter 保存 · Shift+Enter 换行 · Esc 关闭'),
+    ta, chipBox, srcBox, h('div.quick-note-hint', {}, 'Enter 保存 · Shift+Enter 换行 · Esc 关闭'),
   ]));
   closeQuick = close;
   document.body.append(ov);
