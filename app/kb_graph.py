@@ -1,10 +1,11 @@
 """知识图谱：把「我看过、想过、判断过」的内容按概念组织起来（像 Obsidian 的双链笔记）。
 
 和 kb.py 的关系：kb.py 把各板块原样镜像成「来源」文件；这里只挑出带个人信号的内容——
-- 判断（judgment）：复盘经验、划线批注里我的评论与追问、学习作答（含点评）、测试薄弱点、步骤反馈、
-  深读时的感想与追问、论文一句话判断、产品体验；
+- 判断（judgment）：系统记的复盘经验、学习作答（含点评）、测试薄弱点、深读时的感想与追问；
 - 材料（material）：我发起的调研、我选的深读（论文 / 项目 / 文章 / 书）、学习计划、点赞收藏或点开过的信息。
 产品雷达等纯自动抓取、我没互动过的内容不进图谱（仍可在来源库里搜到）。
+我手写的记录只留本地：便签、文档评论、深读笔记、步骤反馈、论文一句话判断、产品体验不进 signals()，
+不发给任何大模型（来源库和搜索照常能读到）。我要 Agent 回应 / 点评的内容（作答、对话、判断台账）照常走。
 
 流程：signals() 收集信号 → DeepSeek 按批给每条信号抽 1–4 个概念（判断另浓缩一句 claim）→ 全部概念名合并同义词、
 归类 → 应用我在页面上做的改名 / 合并 / 删除（kb_concept_edit，只追加，重建不覆盖）→ 输出 concepts/<概念>.md
@@ -37,8 +38,8 @@ CREATE TABLE IF NOT EXISTS kb_concept_edit (
 """
 
 SUB_NAMES = {
-    "note": "复盘经验", "annotation": "批注", "answer": "学习作答", "quiz": "测试反馈", "feedback": "步骤反馈",
-    "thought": "感想", "ask": "追问", "verdict": "论文判断", "product": "产品体验", "mynote": "深读笔记",
+    "note": "复盘经验", "answer": "学习作答", "quiz": "测试反馈",
+    "thought": "感想", "ask": "追问",
     "research": "调研", "paper": "论文深读", "repo": "项目解读", "article": "文章深读", "plan": "学习计划",
     "book": "读书", "hn": "HN 讨论", "feed": "看过的信息", "mine": "我记的判断", "revise": "复查时的新看法",
 }
@@ -88,7 +89,7 @@ def _item_doc(it: dict) -> str:
 def signals() -> list[dict]:
     out: list[dict] = []
     from . import kb_judge
-    for fn in (_s_notes, _s_annotations, _s_learn, _s_items, _s_feed, _s_products, _s_materials, kb_judge.signals):
+    for fn in (_s_notes, _s_learn, _s_items, _s_feed, _s_materials, kb_judge.signals):
         try:
             out += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它
@@ -103,27 +104,11 @@ def _s_notes() -> list[dict]:
     return [_sig(f"note:{n['id']}", "judgment", "note", n["title"] or _clip(n["content"], 30),
                  mine=f"【{kinds.get(n['kind'], n['kind'])}】{n['title']}\n{n['content']}", date=n["date"],
                  doc=f"note:{n['id']}", link=f"#review/{n['date']}")
-            for n in db.rows("SELECT * FROM review_notes ORDER BY id")]
-
-
-def _s_annotations() -> list[dict]:
-    if not _has("annotations"):
-        return []
-    from .kb import _slug
-    out = []
-    for a in db.rows("SELECT * FROM annotations ORDER BY id"):
-        mine = [m["content"].strip() for m in db.rows(
-            "SELECT content FROM annotation_msgs WHERE annotation_id=? AND role='user' AND status!='pending' ORDER BY id", [a["id"]])]
-        if not mine:
-            continue
-        out.append(_sig(f"ann:{a['id']}", "judgment", "annotation", a["title"] or a["doc"], mine="\n".join(mine),
-                        context=a["quote"] or "（针对全文）", date=a["created_at"], doc=f"annotation:{_slug(a['doc'], 30)}",
-                        link=a["link"] or ""))
-    return out
+            for n in db.rows("SELECT * FROM review_notes WHERE author IS NOT 'me' ORDER BY id")]
 
 
 def _s_learn() -> list[dict]:
-    """学习计划里的作答（含点评）、章末测试、步骤反馈。check / check_review 记的是同一题，留带点评的那条。"""
+    """学习计划里的作答（含点评）、章末测试。check / check_review 记的是同一题，留带点评的那条。"""
     if not _has("learn_events"):
         return []
     steps = {s["id"]: s for s in db.rows("SELECT id, plan_id, title, feedback, understanding, done_at FROM learn_steps")} \
@@ -159,25 +144,17 @@ def _s_learn() -> list[dict]:
         if key not in best or e["kind"].endswith("review"):
             best[key] = s
     out += best.values()
-    for s in steps.values():
-        if (s.get("feedback") or "").strip():
-            out.append(_sig(f"stepfb:{s['id']}", "judgment", "feedback", s["title"], mine=s["feedback"],
-                            context=f"理解度 {s['understanding']}/5" if s.get("understanding") else "", date=s.get("done_at") or "",
-                            doc=f"plan:{s['plan_id']}", link=f"#learn/plan/{s['plan_id']}/step/{s['id']}"))
     return out
 
 
 def _s_items() -> list[dict]:
-    """深读条目里我的笔记、对话里的感想 / 追问。追问清单作答已在 learn_events 里，不重复取。"""
+    """深读对话里的感想 / 追问。追问清单作答已在 learn_events 里，不重复取。"""
     if not _has("learn_items"):
         return []
     from .modules import _reads
     out = []
     for it in db.rows("SELECT * FROM learn_items ORDER BY id"):
         doc, link = _item_doc(it), f"#learn/item/{it['id']}"
-        if (it.get("my_notes") or "").strip():
-            out.append(_sig(f"mynote:{it['id']}", "judgment", "mynote", it["title"], mine=it["my_notes"],
-                            date=it.get("updated_at") or it["created_at"], doc=doc, link=link))
         try:
             lines = _reads.user_lines(it["id"])
         except Exception:  # noqa: BLE001
@@ -189,36 +166,21 @@ def _s_items() -> list[dict]:
 
 
 def _s_feed() -> list[dict]:
-    """论文一句话判断 = 判断；赞 / 收藏 / 点开过 = 看过的材料。"""
+    """赞 / 收藏 / 点开过 = 看过的材料。"""
     if not _has("feed_feedback"):
         return []
     cols = {r["name"] for r in db.rows("PRAGMA table_info(feed_feedback)")}
     out = []
-    for r in db.rows("SELECT i.*, f.vote, f.saved, f.hidden" + (", f.verdict, f.verdict_at" if "verdict" in cols else "")
-                     + (", f.clicks" if "clicks" in cols else "") + " FROM feed_feedback f JOIN feed_items i ON i.id=f.item_id"):
+    for r in db.rows("SELECT i.*, f.vote, f.saved, f.hidden" + (", f.clicks" if "clicks" in cols else "") + " FROM feed_feedback f JOIN feed_items i ON i.id=f.item_id"):
         if r["hidden"] or r["vote"] == -1:
             continue
-        if (r.get("verdict") or "").strip():
-            out.append(_sig(f"verdict:{r['id']}", "judgment", "verdict", r["title"], mine=r["verdict"], context=_clip(r["summary"], 200),
-                            date=r.get("verdict_at") or r["date"], doc=f"papernote:{(r.get('verdict_at') or '')[:10]}", url=r["url"]))
-        elif r["vote"] == 1 or r["saved"] or r.get("clicks"):
+        if r["vote"] == 1 or r["saved"] or r.get("clicks"):
             oid = r["id"].split(":", 1)[-1]
             hn = r["source"] == "hn" and (r["vote"] == 1 or r["saved"]) and "\"hn\"" in (r.get("extra") or "")
             out.append(_sig(f"feed:{r['id']}", "material", "hn" if hn else "feed", r["title"], context=_clip(r["summary"], 240),
                             date=r["date"], doc=f"feed:hn-{oid}" if hn else ("feed:saved" if r["vote"] == 1 or r["saved"] else ""),
                             url=r["url"]))
     return out
-
-
-def _s_products() -> list[dict]:
-    if not _has("products"):
-        return []
-    return [_sig(f"product:{p['id']}", "judgment", "product", p["name"],
-                 mine="\n".join(x for x in [p.get("experience"), f"优点：{p['pros']}" if p.get("pros") else "",
-                                            f"缺点：{p['cons']}" if p.get("cons") else ""] if x),
-                 context=f"评分 {p['rating']}/5" if p.get("rating") else "", date=p.get("used_at") or p["created_at"],
-                 doc=f"product:{p['id']}", url=p.get("url") or "")
-            for p in db.rows("SELECT * FROM products ORDER BY id")]
 
 
 def _s_materials() -> list[dict]:

@@ -111,7 +111,7 @@ def test_annotation_marks_read_and_counts_paper(client, fake_submit):
 
 
 def test_note_spec_takeaways_and_sections(client, fake_submit):
-    """联系与启发收紧到最多 2 条 / 1–2 条，并带上手头的事和自己的判断；「论据可信吗」和留空的「我的笔记」不再生成。"""
+    """联系与启发收紧到最多 2 条 / 1–2 条，并带上手头的事和自己的作答，手写笔记只留本地不进提示词；「论据可信吗」和留空的「我的笔记」不再生成。"""
     db.insert("tasks", {"date": db.today(), "title": "给知识库加检索", "created_at": db.now(), "updated_at": db.now()})
     done = client.post("/api/learn/items", json={"url": "https://x.com/a/status/1", "reuse": True}).json()
     client.patch(f"/api/learn/items/{done['id']}", json={"my_notes": "向量检索在这里不划算"})
@@ -121,7 +121,7 @@ def test_note_spec_takeaways_and_sections(client, fake_submit):
         client.post("/api/learn/items", json={"url": url, "reuse": True})
         p = fake_submit[-1]["prompt"]
         assert "论据可信吗" not in p and "最多 2 条" in p and "1–2 条" in p and "2–4 条" not in p.split("练习题")[0].split("关键图")[0]
-        assert "给知识库加检索" in p and "向量检索在这里不划算" in p and "/api/kb/search" in p
+        assert "给知识库加检索" in p and "向量检索在这里不划算" not in p and "/api/kb/search" in p
         assert "我认为门槛在评测" in p and "选择题选项" not in p
         assert "留空，给用户写" not in p and "`## 我的笔记`" not in p
 
