@@ -102,7 +102,8 @@ def chat(module: str, body: ChatIn):
         final, eng_session, used = "", sess["engine_session"], engine
         for ev in agent.run_stream(body.message, engine=engine, system=system,
                                    session=sess["engine_session"], add_dirs=dirs,
-                                   model=agent.module_model(module, engine)):
+                                   model=agent.module_model(module, engine),
+                                   readonly=getattr(mod, "CHAT_READONLY", False)):
             if ev["type"] == "session":
                 eng_session = ev["id"]
             elif ev["type"] == "done":

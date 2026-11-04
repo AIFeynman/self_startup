@@ -3,6 +3,7 @@
 run_stream() 产出统一事件：
     {"type": "session", "id": "..."}      引擎侧会话 id（用于续聊）
     {"type": "text", "text": "..."}       助手文本（整段）
+    {"type": "delta", "text": "..."}      还在生成的片段（只读板块才有），随后的 text 是这一段的完整内容
     {"type": "tool", "text": "..."}       工具调用摘要
     {"type": "error", "text": "..."}
     {"type": "done", "text": 最终文本, "engine": "claude|codex"}
@@ -38,6 +39,9 @@ PLATFORM_GUIDE = f"""
 """.strip()
 
 
+READONLY_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+
+
 def _skill_text(module: str) -> str:
     p = ROOT / "skills" / module / "SKILL.md"
     return p.read_text("utf-8") if p.exists() else ""
@@ -69,7 +73,7 @@ def tier_model(tier: str, engine: str = "claude") -> str:
     return str((settings.get("model_tiers", {}) or {}).get(tier) or "")
 
 
-def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], model: str = "") -> list[str]:
+def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], model: str = "", readonly: bool = False) -> list[str]:
     cfg = settings.get("engines.claude", {})
     cmd = [cfg.get("bin", "claude"), "-p", prompt, "--output-format", "stream-json", "--verbose"]
     if session:
@@ -78,25 +82,30 @@ def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], mod
         cmd += ["--append-system-prompt", system]
     if model or cfg.get("model"):
         cmd += ["--model", model or cfg["model"]]
-    if cfg.get("permission_mode"):
-        cmd += ["--permission-mode", cfg["permission_mode"]]
-    if cfg.get("allowed_tools"):
-        cmd += ["--allowedTools", *cfg["allowed_tools"]]
+    if readonly:  # 只读板块工具只留这几个（子 Agent、Bash 都不给，curl 能调写接口）；回复要快，边生成边出字
+        cmd += ["--tools", ",".join(READONLY_TOOLS), "--allowedTools", *READONLY_TOOLS, "--include-partial-messages"]
+    else:
+        if cfg.get("permission_mode"):
+            cmd += ["--permission-mode", cfg["permission_mode"]]
+        if cfg.get("allowed_tools"):
+            cmd += ["--allowedTools", *cfg["allowed_tools"]]
     for d in add_dirs:
         cmd += ["--add-dir", d]
     return cmd
 
 
-def _codex_cmd(prompt: str, system: str, session: str, add_dirs: list[str], cwd: str) -> list[str]:
+def _codex_cmd(prompt: str, system: str, session: str, add_dirs: list[str], cwd: str, readonly: bool = False) -> list[str]:
     cfg = settings.get("engines.codex", {})
     common = ["--json", "--skip-git-repo-check",
               "-c", "sandbox_workspace_write.network_access=true"]
     if cfg.get("model"):
         common += ["-m", cfg["model"]]
+    if readonly:
+        common += ["-c", 'sandbox_mode="read-only"']
     if session:
         return [cfg.get("bin", "codex"), "exec", "resume", *common, session, prompt]
     full = f"{system}\n\n---\n\n{prompt}" if system else prompt
-    cmd = [cfg.get("bin", "codex"), "exec", *common, "-s", cfg.get("sandbox", "workspace-write"), "-C", cwd]
+    cmd = [cfg.get("bin", "codex"), "exec", *common, "-s", "read-only" if readonly else cfg.get("sandbox", "workspace-write"), "-C", cwd]
     for d in add_dirs:
         cmd += ["--add-dir", d]
     return cmd + [full]
@@ -115,6 +124,10 @@ def _parse_claude(obj: dict) -> list[dict]:
                 inp = block.get("input", {})
                 brief = inp.get("command") or inp.get("file_path") or inp.get("pattern") or inp.get("url") or inp.get("query") or ""
                 out.append({"type": "tool", "text": f"{block.get('name')}: {str(brief)[:200]}"})
+    elif t == "stream_event":
+        delta = obj.get("event", {}).get("delta", {})
+        if delta.get("type") == "text_delta" and delta.get("text"):
+            out.append({"type": "delta", "text": delta["text"]})
     elif t == "result":
         if obj.get("is_error"):
             out.append({"type": "error", "text": str(obj.get("result") or obj.get("subtype"))})
@@ -256,9 +269,10 @@ def _transient(text: str) -> bool:
 
 def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str = "",
                cwd: str | None = None, add_dirs: list[str] | None = None,
-               fallback: bool = True, on_proc=None, model: str = "") -> Iterator[dict]:
+               fallback: bool = True, on_proc=None, model: str = "", readonly: bool = False) -> Iterator[dict]:
     """on_proc(proc)：每启动一个 CLI 子进程回调一次（后台任务用它来暂停）。
-    model：只覆盖 Claude 的模型（板块级设置，见 module_model）；回退到 Codex 时用 Codex 自己的模型。"""
+    model：只覆盖 Claude 的模型（板块级设置，见 module_model）；回退到 Codex 时用 Codex 自己的模型。
+    readonly：Agent 只能读，不能改文件、不能跑命令（语音讨论用，听错一句不会动到数据）。"""
     engine = engine or settings.get("engines.default", "claude")
     # 默认不在项目目录里跑（acceptEdits 下可写文件），放到 data/workspace
     if not cwd:
@@ -273,8 +287,8 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
         if not available(eng):
             yield {"type": "error", "text": f"{eng} 不可用，尝试备选" if i + 1 < len(order) else f"{eng} 不可用"}
             continue
-        cmd = _claude_cmd(prompt, system, session, add_dirs, model) if eng == "claude" \
-            else _codex_cmd(prompt, system, session, add_dirs, cwd)
+        cmd = _claude_cmd(prompt, system, session, add_dirs, model, readonly) if eng == "claude" \
+            else _codex_cmd(prompt, system, session, add_dirs, cwd, readonly)
         for attempt in range(TRANSIENT_RETRIES + 1):
             failed = retry = False
             for ev in _run(eng, cmd, cwd, on_proc):

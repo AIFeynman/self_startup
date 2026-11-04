@@ -12,11 +12,33 @@ const TIPS = {
   research: ['调研一下：', '对比一下最近的 AI 编程工具', '把最近的调研结论汇总一下'],
   learn: ['给我做一个学习计划：', '深读这篇论文：', '根据我的反馈调整学习计划'],
   agents: ['哪些会话在等我？', '总结各 Agent 进展', '卡住的怎么处理？'],
+  talk: ['我有个想法想理一理：', '帮我想想这件事该不该做：', '我卡在一个问题上：'],
   kb: ['我之前关于 Agent 评测记过什么？', '汇总我这周的问题与经验', '我调研过哪些产品？'],
 };
 
 const state = { module: '', ref: '', title: '', sessionId: null, busy: false };
 let root, box, log, sessSel, engineSel;
+
+// ---------- 朗读回复（只有讨论板块有开关，默认关，记在本机）----------
+const speakable = () => 'speechSynthesis' in window && state.module === 'talk';
+const speakOn = () => { try { return localStorage.getItem('talk-speak') === '1'; } catch { return false; } };
+const plain = (t) => t.replace(/```[\s\S]*?```/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>|]/g, '');
+function speak(text) {
+  if (!speakable() || !speakOn()) return;
+  const u = new SpeechSynthesisUtterance(plain(text));
+  u.lang = 'zh-CN';
+  speechSynthesis.speak(u);
+}
+const speakBtn = () => {
+  const b = h('button.icon.speak' + (speakOn() ? '.on' : ''), { title: '朗读回复（开 / 关）', onclick: () => {
+    const on = !speakOn();
+    try { localStorage.setItem('talk-speak', on ? '1' : '0'); } catch { /* 无痕模式 */ }
+    b.classList.toggle('on', on);
+    if (!on) speechSynthesis.cancel();
+  } }, icon('volume'));
+  return b;
+};
+document.addEventListener('voice-start', () => { if ('speechSynthesis' in window) speechSynthesis.cancel(); }); // 开口就停止朗读
 
 export function initChat(el) {
   root = el;
@@ -56,11 +78,12 @@ function render(sessions) {
     [h('option', { value: '' }, '＋ 新对话'), ...sessions.map((s) => h('option', { value: s.id, selected: s.id === state.sessionId }, (s.title || '对话').slice(0, 18)))]);
   engineSel = h('select', { title: '引擎' }, [h('option', { value: '' }, '默认引擎'), h('option', { value: 'claude' }, 'Claude Code'), h('option', { value: 'codex' }, 'Codex')]);
   log = h('div.chat-log');
-  box = composer({ placeholder: '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', onSubmit: (t) => submit(t) });
+  const talk = state.module === 'talk';
+  box = composer({ placeholder: talk ? '接着说…' : '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', voiceAutoSend: talk, onSubmit: (t) => submit(t) });
   const wideBtn = h('button.icon.chat-wide', { title: '加宽 / 还原（也可以拖左边缘调宽度）', onclick: () => toggleWide(wideBtn) }, icon('expand'));
   root.append(
     h('div.chat-resize', { title: '拖动调整宽度，双击还原', onmousedown: startResize, ondblclick: () => setWidth(420) }),
-    h('div.chat-head', {}, [h('b', {}, `${state.title} · Agent`), sessSel, engineSel, wideBtn,
+    h('div.chat-head', {}, [h('b', {}, `${state.title} · Agent`), sessSel, engineSel, speakable() ? speakBtn() : null, wideBtn,
       h('button.icon', { title: '收起', onclick: closeChat }, icon('x'))]),
     log, box);
 }
@@ -94,7 +117,7 @@ try { const w = +localStorage.getItem('chat-w'); if (w) setWidth(w, false); } ca
 
 function tips() {
   return h('div.chat-tips', {}, [
-    h('div', {}, '我能看到这个板块的当前数据和你的本地知识库，可以直接帮你查、改、记。'),
+    h('div', {}, state.module === 'talk' ? '我能看到今天的事项和你的本地知识库。这里只讨论，不会改动任何数据。' : '我能看到这个板块的当前数据和你的本地知识库，可以直接帮你查、改、记。'),
     chips((TIPS[state.module] || []).map((t) => ({ label: t, onClick: () => (t.endsWith('：') ? box.setValue(t) : submit(t)) })), { left: true }),
   ]);
 }
@@ -150,7 +173,7 @@ async function submit(text) {
     });
     const reader = r.body.getReader();
     const dec = new TextDecoder();
-    let buf = ''; const texts = []; let linked = [];
+    let buf = '', live = ''; const texts = []; let linked = [];
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -164,7 +187,8 @@ async function submit(text) {
         else if (ev.type === 'end' && ev.jobs?.length) linked = ev.jobs;
         else if (ev.type === 'tool') log.insertBefore(bubble('tool', ev.text), pending);
         else if (ev.type === 'error' || ev.type === 'engine') log.insertBefore(bubble('error', ev.text), pending);
-        else if (ev.type === 'text') { texts.push(ev.text); pending.classList.remove('pending'); body.replaceChildren(md(texts.join('\n\n'))); }
+        else if (ev.type === 'delta') { live += ev.text; pending.classList.remove('pending'); body.replaceChildren(md([...texts, live].join('\n\n'))); }
+        else if (ev.type === 'text') { live = ''; texts.push(ev.text); speak(ev.text); pending.classList.remove('pending'); body.replaceChildren(md(texts.join('\n\n'))); }
         else if (ev.type === 'done' && ev.text) { pending.classList.remove('pending'); body.replaceChildren(md(ev.text)); }
         log.scrollTop = log.scrollHeight;
       }

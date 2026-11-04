@@ -139,6 +139,12 @@ details > summary { cursor: pointer; color: var(--muted); }
 .composer .hint { flex: 1; font-size: 12px; color: var(--muted); }
 .composer .send { width: 40px; height: 40px; padding: 0; justify-content: center; border-radius: 50%; background: var(--dark); color: var(--bg); border: none; }
 .composer .send svg { stroke-width: 2.2; }
+.composer .mic { width: 40px; height: 40px; padding: 0; justify-content: center; border-radius: 50%; border-color: var(--line); color: var(--muted); }
+.composer .mic:hover { color: var(--accent); border-color: var(--accent); }
+.composer .mic.rec { background: var(--accent); border-color: var(--accent); color: var(--bg); animation: mic-pulse 1.4s ease-in-out infinite; }
+.composer .mic.wait { opacity: .5; }
+@keyframes mic-pulse { 50% { box-shadow: 0 0 0 7px var(--accent-ring); } }
+@media (prefers-reduced-motion: reduce) { .composer .mic.rec { animation: none; } }
 .composer .send:disabled { opacity: .35; }
 .composer .modes { display: flex; gap: 4px; }
 .composer .modes button { padding: 2px 10px; font-size: 12px; border-color: var(--line); color: var(--muted); }
@@ -194,7 +200,8 @@ body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { 
 .chat-tips .chips { justify-content: flex-start; margin-top: 10px; }
 .chat-tips .chip { padding: 5px 12px; font-size: 13px; }
 .chat .composer { margin: 10px 12px 12px; padding: 10px 12px 8px; border-radius: 14px; box-shadow: 0 0 0 4px var(--accent-ring); }
-.chat .composer .send { width: 34px; height: 34px; }
+.chat .composer .send, .chat .composer .mic { width: 34px; height: 34px; }
+.chat-head .speak.on { color: var(--accent); }
 .chat .composer textarea { max-height: 160px; min-height: 24px; height: auto; font-size: 14px; }
 .chat .composer { flex: none; }
 .dots::after { content: '…'; animation: dots 1.2s steps(4) infinite; display: inline-block; width: 1em; overflow: hidden; vertical-align: bottom; }
@@ -236,3 +243,13 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .update-bar.on { transform: translate(-50%, 0); }
 .update-bar svg.i { width: 15px; height: 15px; color: var(--accent); } .update-bar a { color: var(--accent); }
 .nav-badge { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--warn); color: #fff; font: 600 11px/18px var(--font); text-align: center; }
+
+/* ---------- 讨论 ---------- */
+.talk-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.talk-row:first-child { border-top: none; }
+.talk-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.talk-draft { display: flex; flex-direction: column; gap: 10px; }
+.talk-draft textarea { min-height: 200px; }
+.talk-draft label { display: flex; align-items: center; gap: 8px; }
+.talk-draft label input[type=text] { flex: 1; }
+.talk-draft .acts { display: flex; align-items: center; gap: 10px; }

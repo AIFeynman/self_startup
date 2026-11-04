@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks
+from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks, voice
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -24,6 +24,7 @@ app.include_router(annotations.router)
 app.include_router(jobs.router)
 app.include_router(tasks.router)
 app.include_router(notify.router)
+app.include_router(voice.router)
 for name, m in mods.items():
     if hasattr(m, "router"):
         app.include_router(m.router, prefix=f"/api/{name}", tags=[name])
@@ -45,7 +46,7 @@ async def _kb_sync_after_write(request: Request, call_next):
     resp = await call_next(request)
     if request.url.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-cache"  # 本地开发：前端改动立即生效
-    if request.method != "GET" and request.url.path.startswith("/api/") and not request.url.path.startswith(("/api/chat", "/api/kb")):
+    if request.method != "GET" and request.url.path.startswith("/api/") and not request.url.path.startswith(("/api/chat", "/api/kb", "/api/voice")):
         kb.schedule_sync()
     return resp
 

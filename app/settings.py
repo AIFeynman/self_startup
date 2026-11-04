@@ -52,7 +52,7 @@ DEFAULTS: dict = {
         "muse": {"mode": "auto", "url": "https://muse.ai", "app": "Muse"},
     },
     # 按板块指定 Claude 模型（后台任务和对话都生效；空 / 不写 = 用 engines.claude.model）
-    "module_models": {"learn": "claude-sonnet-5-5"},
+    "module_models": {"learn": "claude-sonnet-5-5", "talk": "claude-sonnet-5-5"},
     # 按任务难度分档（比板块设置优先）：light = 抽取、翻译、整理、初判；standard = 精讲、出题、调整计划。哪类任务用哪档见 learn.task_tiers
     "model_tiers": {"light": "claude-haiku-5-5", "standard": "claude-sonnet-5-5"},
     # 开源雷达批量标注引擎：deepseek（默认，DeepSeek v4 flash API，全库约 1 小时 / $6）或 haiku（订阅 CLI，不另付费，约 6-9 小时）
@@ -62,6 +62,13 @@ DEFAULTS: dict = {
     # 理财：信号变化 / 每日汇总提醒；target = 一年收益目标；refresh_minutes = 行情和新闻刷新间隔；
     # proxy = 实时报价 WebSocket 走的代理（如 "http://127.0.0.1:12000"），空 = 按进程环境变量
     "wealth": {"alerts": True, "target": 0.10, "summary_time": "16:30", "refresh_minutes": 60, "proxy": ""},
+    # 语音输入：本机 whisper.cpp 转写，音频不出本机。prompt 帮模型认对中英混说的术语，常说的词可以加进去
+    "voice": {
+        "bin": "whisper-cli",
+        "model": str(Path.home() / "project/robomaster/whisper.cpp/models/ggml-large-v3-q5_0.bin"),
+        "language": "zh",
+        "prompt": "以下是中文讨论，夹杂英文术语：Agent、Claude Code、Codex、GitHub、MCP、prompt、context、benchmark。",
+    },
     # 通知：所有板块都写进通知记录、页面右下角弹出；system = 同时发 macOS 系统通知
     "notify": {"system": True},
     # 学习习惯：每天自动加一个「读前沿论文」学习块（规划页打开今天时加；在信息推荐的论文上写一句话判断即完成）

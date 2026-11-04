@@ -1,6 +1,7 @@
 // 共享 UI 组件：图标、大输入框、快捷 chip、页头、统计块、空状态。
 // 板块页面：import { icon, composer, chips, pageHead, section, stats, empty, progress } from '../ui.js'
 import { h, nowLocal } from './api.js';
+import { micButton } from './voice.js';
 
 const P = {
   home: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z',
@@ -37,6 +38,8 @@ const P = {
   box: 'M3 7l9-4 9 4-9 4z M3 7v10l9 4 9-4V7 M12 11v10',
   trash: 'M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13',
   edit: 'M4 20h4L19 9l-4-4L4 16z M14 6l4 4',
+  mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5 11a7 7 0 0 0 14 0 M12 18v3',
+  volume: 'M4 9v6h4l5 4V5L8 9z M16.5 9a4 4 0 0 1 0 6 M19 6.5a8 8 0 0 1 0 11',
 };
 
 export function icon(name, cls = '') {
@@ -54,7 +57,8 @@ export function icon(name, cls = '') {
 
 /**
  * 大输入框。Enter 发送，Shift+Enter 换行；/ 键在页面任意处聚焦第一个 composer。
- * opts: { placeholder, hint, onSubmit(text, mode) => Promise|void, modes: [{id,label}], mode, value, rows, autofocus, compact }
+ * opts: { placeholder, hint, onSubmit(text, mode) => Promise|void, modes: [{id,label}], mode, value, rows, autofocus, compact,
+ *         voiceAutoSend: 说完直接发送（默认填进输入框，改完再发） }
  * 返回元素，el.setValue(text) / el.focus() / el.mode 可用。
  */
 export function composer(opts = {}) {
@@ -67,7 +71,16 @@ export function composer(opts = {}) {
       if (m.placeholder) ta.placeholder = m.placeholder; ta.focus(); },
   }, m.label));
   const hint = h('span.hint', {}, opts.hint ?? '');
-  const el = h('div.composer', {}, [ta, h('div.bar', {}, [modeBtns.length ? h('div.modes', {}, modeBtns) : null, hint, send])]);
+  // 说的话接在已有文字后面；转写时提示写在 hint 里，结束后恢复
+  const mic = micButton({
+    icon,
+    onHint: (t) => { hint.textContent = t || (opts.hint ?? ''); },
+    onText: (t) => {
+      el.setValue((ta.value.trim() ? ta.value.trimEnd() + ' ' : '') + t);
+      if (opts.voiceAutoSend) submit();
+    },
+  });
+  const el = h('div.composer', {}, [ta, h('div.bar', {}, [modeBtns.length ? h('div.modes', {}, modeBtns) : null, hint, mic, send])]);
   el.mode = mode;
   // 空的或还不可见（如收起的对话面板，宽度 0 时 scrollHeight 会很大）时不撑高
   const grow = () => { ta.style.height = 'auto'; if (ta.value && ta.offsetWidth) ta.style.height = Math.min(ta.scrollHeight, 240) + 'px'; send.disabled = !ta.value.trim(); };

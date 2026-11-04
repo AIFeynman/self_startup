@@ -7,8 +7,9 @@
 import { api, h, md, toast, field, setTz, nowLocal } from './api.js';
 import { initChat, openChat, chatBusy, chatSnapshot } from './chat.js';
 import * as ui from './ui.js';
+import { voiceBusy } from './voice.js';
 
-const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar', wealth: 'wallet' };
+const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar', wealth: 'wallet', talk: 'mic' };
 let meta;
 const page = document.getElementById('page');
 
@@ -45,7 +46,7 @@ function watchUpdates() {
   const bar = h('div.update-bar');
   document.body.append(bar);
   const typing = () => [...document.querySelectorAll('textarea, input[type=text], input:not([type])')]
-    .some((e) => e.value && e.value.trim() && !e.closest('.chat-head')) || chatBusy();
+    .some((e) => e.value && e.value.trim() && !e.closest('.chat-head')) || chatBusy() || voiceBusy();
   const reload = () => {
     try { sessionStorage.setItem('chat-restore', JSON.stringify(chatSnapshot())); } catch { /* 无痕模式 */ }
     location.reload();
