@@ -1,0 +1,62 @@
+{
+  "cases": [
+    {"id": "chat-1", "kind": "寒暄", "text": "喂，你听得到吗？", "expect": "fast"},
+    {"id": "chat-2", "kind": "寒暄", "text": "今天真是有点累。", "expect": "fast"},
+    {"id": "chat-3", "kind": "寒暄", "text": "谢谢，这样就差不多了。", "expect": "fast"},
+    {"id": "chat-4", "kind": "寒暄", "text": "你好，我们开始吧。", "expect": "fast"},
+    {"id": "chat-5", "kind": "寒暄", "text": "好的，你说得对，我记一下。", "expect": "fast"},
+
+    {"id": "ctl-1", "kind": "控制", "text": "刚才那句再说一遍。", "expect": "fast", "context": ["【你刚说过】先把实时接入做稳，问答放到后面。"]},
+    {"id": "ctl-2", "kind": "控制", "text": "你说慢一点，我没跟上。", "expect": "fast", "context": ["【你刚说过】第一步做中转，第二步接工具，第三步跑评测。"]},
+    {"id": "ctl-3", "kind": "控制", "text": "好了吗？", "expect": "get_thinking_status", "context": ["【后台状态】慢思考正在想：这周先推哪件事。"]},
+    {"id": "ctl-4", "kind": "控制", "text": "想得怎么样了？", "expect": "get_thinking_status", "context": ["【后台状态】慢思考正在想：这周先推哪件事。"]},
+    {"id": "ctl-5", "kind": "控制", "text": "算了，别想了。", "expect": "cancel_thinking", "context": ["【后台状态】慢思考正在想：这周先推哪件事。"]},
+    {"id": "ctl-6", "kind": "控制", "text": "不用查了，这个先放一放。", "expect": "cancel_thinking", "context": ["【后台状态】慢思考正在想：语音评测怎么做。"]},
+    {"id": "ctl-7", "kind": "控制", "text": "对了，周四我要出差，这个你也考虑一下。", "expect": "update_thinking", "context": ["【后台状态】慢思考正在想：这周先推哪件事。"]},
+    {"id": "ctl-8", "kind": "控制", "text": "今天外面下雨了，好烦。", "expect": "fast", "context": ["【后台状态】慢思考正在想：这周先推哪件事。"]},
+
+    {"id": "fact-1", "kind": "常识", "text": "TTS 是什么的缩写？", "expect": "fast", "terms": ["TTS"]},
+    {"id": "fact-2", "kind": "常识", "text": "一分钟有多少秒？", "expect": "fast"},
+    {"id": "fact-3", "kind": "常识", "text": "HTTP 是什么意思？", "expect": "fast", "terms": ["HTTP"]},
+    {"id": "fact-4", "kind": "常识", "text": "法国的首都是哪里？", "expect": "fast"},
+    {"id": "fact-5", "kind": "常识", "text": "二的十次方是多少？", "expect": "fast"},
+
+    {"id": "mine-1", "kind": "资料", "text": "我之前有没有记过关于强化学习的笔记？", "expect": "ask_claude", "must_not_invent": true},
+    {"id": "mine-2", "kind": "资料", "text": "上周的复盘里我说了什么问题？", "expect": "ask_claude", "must_not_invent": true},
+    {"id": "mine-3", "kind": "资料", "text": "我今天的计划里还有哪些事没做？", "expect": "ask_claude", "must_not_invent": true},
+    {"id": "mine-4", "kind": "资料", "text": "你看一下知识库里关于语音模型的调研，结论是什么？", "expect": "ask_claude", "must_not_invent": true},
+    {"id": "mine-5", "kind": "资料", "text": "我学到第几章了？", "expect": "ask_claude", "must_not_invent": true},
+    {"id": "mine-6", "kind": "资料", "text": "我们代码里语音转写的超时设的是多少？", "expect": "ask_claude", "must_not_invent": true},
+    {"id": "mine-7", "kind": "资料", "text": "我上次说想读的那篇论文叫什么来着？", "expect": "ask_claude", "must_not_invent": true},
+    {"id": "mine-8", "kind": "资料", "text": "这个月的新模型有哪些值得关注？", "expect": "ask_claude"},
+
+    {"id": "adv-1", "kind": "建议", "text": "语音这块，我在纠结先做实时接入还是先做知识库问答。", "expect": "ask_claude"},
+    {"id": "adv-2", "kind": "建议", "text": "帮我想想这周先推哪件事。", "expect": "ask_claude"},
+    {"id": "adv-3", "kind": "建议", "text": "我想换工作，但又怕现在的项目没做完，你觉得怎么办？", "expect": "ask_claude"},
+    {"id": "adv-4", "kind": "建议", "text": "帮我理一下思路，我感觉学习计划太散了。", "expect": "ask_claude"},
+    {"id": "adv-5", "kind": "建议", "text": "这两个方案哪个更好，一个便宜但是慢，一个贵但是快。", "expect": "ask_claude"},
+    {"id": "adv-6", "kind": "建议", "text": "你评价一下，我每天只学一个小时够不够？", "expect": "ask_claude"},
+    {"id": "adv-7", "kind": "建议", "text": "不要给我列清单，就告诉我今天最该做的一件事。", "expect": "ask_claude", "keep": ["不要", "清单"]},
+    {"id": "adv-8", "kind": "建议", "text": "预算不超过两千，不考虑云服务，语音模型应该怎么选？", "expect": "ask_claude", "keep": ["两千", "云服务"]},
+
+    {"id": "term-1", "kind": "术语", "text": "Claude Code 和 Codex 各自适合做什么？", "expect": "ask_claude", "terms": ["Claude Code", "Codex"]},
+    {"id": "term-2", "kind": "术语", "text": "WebSocket 和 WebRTC 哪个延迟低？", "expect": "any", "terms": ["WebSocket", "WebRTC"]},
+    {"id": "term-3", "kind": "术语", "text": "RAG 的召回率要怎么评估？", "expect": "any", "terms": ["RAG"]},
+    {"id": "term-4", "kind": "术语", "text": "帮我比较一下 Kokoro 和 Whisper 分别在链路里做什么。", "expect": "any", "terms": ["Kokoro", "Whisper"]},
+
+    {"id": "noise-1", "kind": "噪声", "text": "嗯。", "expect": "silent"},
+    {"id": "noise-2", "kind": "噪声", "text": "帮我想想这周先推哪件事。", "expect": "ask_claude", "mix": "noise"},
+    {"id": "noise-3", "kind": "噪声", "text": "你晚上想吃什么，要不要点外卖？", "expect": "silent", "mix": "faint"}
+  ],
+  "spoken": [
+    {"id": "say-1", "text": "我建议先做实时接入。现在说完要等五六秒，这个不解决，问答你也不想多用。", "keep": ["实时接入", "五六秒"]},
+    {"id": "say-2", "text": "周四前先把演示收尾，因为出差路上不方便调试。", "keep": ["周四", "演示", "出差"]},
+    {"id": "say-3", "text": "上周的复盘里你提了三个问题，最主要的是评测集只跑了十二条。", "keep": ["三个", "十二条|12条", "评测集"]},
+    {"id": "say-4", "text": "Flash 一通十分钟大约四毛钱，Plus 大约两块七，差了七倍左右。", "keep": ["Flash", "Plus", "四毛", "两块七|2块7", "七倍|7倍"]},
+    {"id": "say-5", "text": "刚才我说得不够准。两者差别主要看网络，建议测了再定。", "keep": ["不够准", "网络", "测了再定"]},
+    {"id": "say-6", "text": "知识库里没有找到相关记录，所以这个结论只是我的推断。", "keep": ["没有找到", "推断"]},
+    {"id": "say-7", "text": "Sonnet 的首字延迟是一点五到四点二秒，打断静音是零点二五秒。", "keep": ["Sonnet", "一点五|1.5", "四点二|4.2", "零点二五|0.25"]},
+    {"id": "say-8", "text": "你在第二章第三节，还差四个练习。", "keep": ["第二章", "第三节", "四个"]}
+  ],
+  "voice_line": "我建议先做实时接入。现在说完要等五六秒，这个不解决，问答你也不想多用。"
+}
