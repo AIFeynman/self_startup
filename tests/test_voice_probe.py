@@ -23,11 +23,26 @@ def test_scoring():
     assert probe.keep_rate(["周四", "演示"], "周四前收尾") == 0.5
     assert probe.keep_rate([], "随便") == 1.0
     assert probe.percentile([3.0, 1.0, 2.0], 50) == 2.0
+    tail = int(probe.RATE * 0.3)
+    assert abs(probe.trailing_silence_s(b"\x10\x20" * probe.RATE + bytes(tail * 2)) - 0.3) < 0.05
     assert probe.percentile([], 95) is None
     assert probe.route_of([{"name": "ask_claude"}], True) == "ask_claude"
     assert probe.route_of([], True) == "fast"
     assert probe.route_of([], False) == "silent"
     assert probe.route_ok("any", "silent") and not probe.route_ok("fast", "ask_claude")
+
+
+def test_endpoint_accepts_bare_id_or_console_url(monkeypatch):
+    want = "wss://ws-abc.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=m"
+    for value in ("ws-abc", "https://ws-abc.cn-beijing.maas.aliyuncs.com/api/v1"):
+        monkeypatch.setenv("DASHSCOPE_WORKSPACE_ID", value)
+        assert probe.voice_rt.endpoint("m") == want
+
+
+def test_tools_always_declare_required():
+    # Flash 遇到缺 required 的无参工具，整轮回应会内部报错（2026-11-04 实测）
+    for t in probe.voice_rt.TOOLS:
+        assert isinstance(t["function"]["parameters"]["required"], list), t["function"]["name"]
 
 
 def test_invented_only_counts_unforwarded_data_questions():
@@ -45,11 +60,11 @@ def test_cases_are_complete():
     tools = {t["function"]["name"] for t in probe.voice_rt.TOOLS}
     for c in data["cases"]:
         assert c["expect"] in tools | {"fast", "silent", "any"}, c["id"]
-    assert {c["kind"] for c in data["cases"]} == {"寒暄", "控制", "常识", "资料", "建议", "术语", "噪声"}
+    assert {c["kind"] for c in data["cases"]} == {"寒暄", "控制", "常识", "资料", "建议", "术语", "噪声", "搜索"}
 
 
 class FakeBailian:
-    """mode: direct 直接答 / tool 先说一句再调工具 / silent 不回应。说话算法：有声音之后来一帧全零就算说完。"""
+    """mode: direct 直接答 / tool 先说一句再调工具 / silent 不回应 / failed 回应内部失败。说话算法：有声音之后来一帧全零就算说完。"""
 
     def __init__(self, mode="direct"):
         self.mode, self.sessions, self.outputs = mode, [], []
@@ -99,6 +114,9 @@ class FakeBailian:
             await self.emit("input_audio_buffer.speech_started")
             await self.emit("conversation.item.input_audio_transcription.completed", item_id="u1", transcript="帮我想想这周先推哪件事")
             if self.mode == "silent":
+                return
+            if self.mode == "failed":
+                await self.emit("response.done", response={"id": "r0", "status": "failed", "status_details": {"type": "failed"}})
                 return
             if self.mode == "tool":
                 await self.emit("response.output_item.added", item={"id": "c1", "type": "function_call"})
@@ -153,6 +171,12 @@ def test_silent_when_model_does_not_respond(monkeypatch):
         return await probe.run_case("m", case, PCM, u)
     r = asyncio.run(_with_server(FakeBailian("silent"), go))
     assert r["route"] == "silent" and r["route_ok"] and r["first_audio_s"] is None
+
+
+def test_failed_response_is_an_error_not_silence():
+    case = {"id": "x", "kind": "噪声", "text": "嗯", "expect": "silent"}
+    r = asyncio.run(_with_server(FakeBailian("failed"), lambda u: probe.run_case("m", case, PCM, u)))
+    assert r["route"] == "failed" and not r["route_ok"] and r["errors"]
 
 
 def test_spoken_fidelity():

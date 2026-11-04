@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks, voice
+from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks, voice, voice_call
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -25,6 +25,7 @@ app.include_router(jobs.router)
 app.include_router(tasks.router)
 app.include_router(notify.router)
 app.include_router(voice.router)
+app.include_router(voice_call.router)
 for name, m in mods.items():
     if hasattr(m, "router"):
         app.include_router(m.router, prefix=f"/api/{name}", tags=[name])

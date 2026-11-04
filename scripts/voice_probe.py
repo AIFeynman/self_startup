@@ -16,6 +16,7 @@ import difflib
 import json
 import re
 import statistics
+import subprocess
 import sys
 import time
 import wave
@@ -33,6 +34,7 @@ RATE = 16000
 SETTLE_S = 15.0  # 说完这么久还没动静，就算没有回应
 LISTEN_S = 1.5  # 打断测试里，用户听了多久才开口
 SPEAKERS = [3, 5, 58, 60]  # 轮流用几个声音，别只对一个声音调通
+SESSION: dict = {}  # 命令行指定的会话配置，比如断句方式
 
 
 def norm(s: str) -> str:
@@ -56,6 +58,18 @@ def percentile(xs: list[float], p: float) -> float | None:
         return None
     xs = sorted(xs)
     return xs[min(len(xs) - 1, round(p / 100 * (len(xs) - 1)))]
+
+
+def trailing_silence_s(pcm: bytes) -> float:
+    """录音末尾的静音有多长。「说完到开口」要从真正说完算起，不能从音频发完算起。"""
+    import numpy as np
+    x = np.abs(np.frombuffer(pcm, dtype=np.int16).astype(np.float32))
+    if not len(x) or not x.max():
+        return 0.0
+    n = int(RATE * 0.02)
+    frames = x[:len(x) // n * n].reshape(-1, n).mean(axis=1)
+    loud = np.nonzero(frames > x.max() * 0.1)[0]
+    return float(len(frames) - 1 - loud[-1]) * 0.02 if len(loud) else 0.0
 
 
 def route_of(calls: list[dict], spoke: bool) -> str:
@@ -121,6 +135,13 @@ class Conn:
                          "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
 
 
+def errors_of(conn: Conn) -> list:
+    """error 事件可能晚于 response.done 才到，所以失败的回应也要单独算，不能记成模型没说话。"""
+    failed = [e["response"].get("status_details") or "failed" for e in conn.of("response.done")
+              if e.get("response", {}).get("status") == "failed"]
+    return [e.get("error") for e in conn.of("error")] + failed
+
+
 async def stream_audio(conn: Conn, pcm: bytes) -> float:
     """按真实语速发音频，返回说完的时刻。"""
     n = int(RATE * FRAME_S) * 2
@@ -146,7 +167,7 @@ async def connect(model: str, url: str | None, **cfg):
                                   proxy=None, max_size=None)
     conn = Conn(ws)
     t0 = time.monotonic()
-    await conn.send({"type": "session.update", "session": voice_rt.session_config(**cfg)})
+    await conn.send({"type": "session.update", "session": voice_rt.session_config(**{**SESSION, **cfg})})
     got = await conn.wait("session.updated", "error", timeout=8)
     if not got or got["type"] != "session.updated":
         await ws.close()
@@ -168,9 +189,10 @@ async def run_case(model: str, case: dict, pcm: bytes, url: str | None = None) -
     try:
         for c in case.get("context", []):
             await conn.inject(c)
-        end = await stream_audio(conn, pcm)
+        sent = await stream_audio(conn, pcm)
+        end = sent - trailing_silence_s(pcm)  # 真正说完的时刻
         silence = asyncio.create_task(keep_silence(conn))
-        first_done = await conn.wait("response.done", after=end - len(pcm) / 2 / RATE, timeout=SETTLE_S)
+        first_done = await conn.wait("response.done", after=sent - len(pcm) / 2 / RATE, timeout=SETTLE_S)
         t_audio = conn.of("response.audio.delta")
         calls = [{"name": e.get("name"), "call_id": e.get("call_id"), "arguments": e.get("arguments", "")}
                  for e in conn.of("response.function_call_arguments.done")]
@@ -181,24 +203,30 @@ async def run_case(model: str, case: dict, pcm: bytes, url: str | None = None) -
             mark = time.monotonic()
             await _finish_tools(conn, calls)
             await conn.wait("response.done", after=mark, timeout=SETTLE_S)
+        await conn.wait("conversation.item.input_audio_transcription.completed",
+                        "conversation.item.input_audio_transcription.failed", timeout=3)  # 转写比回应晚到
         t_audio = conn.of("response.audio.delta")
         reply = " ".join(e.get("transcript", "") for e in conn.of("response.audio_transcript.done"))
         heard = " ".join(e.get("transcript", "") for e in conn.of("conversation.item.input_audio_transcription.completed"))
         started = conn.of("input_audio_buffer.speech_started")
+        stopped = conn.of("input_audio_buffer.speech_stopped")
+        errors = errors_of(conn)
+        route = "failed" if errors and not calls and not t_audio else route_of(calls, bool(t_audio))
         return {
             "id": case["id"], "kind": case["kind"], "model": model, "text": case["text"], "expect": case["expect"],
             "setup_s": round(setup_s, 3),
             "first_audio_s": round(t_audio[0]["_t"] - end, 3) if t_audio else None,
+            "stop_s": round(stopped[0]["_t"] - end, 3) if stopped else None,
             "tool_s": round(tool_at[0]["_t"] - end, 3) if tool_at else None,
             "spoke_before_tool": first_audio_before_tool and bool(calls),
-            "order": order, "calls": calls, "route": route_of(calls, bool(t_audio)),
-            "route_ok": route_ok(case["expect"], route_of(calls, bool(t_audio))),
+            "order": order, "calls": calls, "route": route,
+            "route_ok": route_ok(case["expect"], route) and route != "failed",
             "invented": invented(case, calls, reply),
             "heard": heard, "heard_sim": round(similarity(heard, case["text"]), 3),
             "terms_kept": keep_rate(case.get("terms", []), heard),
             "objective_kept": keep_rate(case.get("keep", []), " ".join(c["arguments"] for c in calls)),
             "reply": reply, "speech_started": bool(started),
-            "errors": [e.get("error") for e in conn.of("error")],
+            "errors": errors,
             "closed": bool(conn.of("_closed")),
         }
     finally:
@@ -221,7 +249,7 @@ async def run_spoken(model: str, item: dict, url: str | None = None) -> dict:
         return {"id": item["id"], "model": model, "text": item["text"], "said": said,
                 "first_audio_s": round(audio[0]["_t"] - t0, 3) if audio else None,
                 "similarity": round(similarity(said, item["text"]), 3), "keep": keep_rate(item.get("keep", []), said),
-                "errors": [e.get("error") for e in conn.of("error")]}
+                "errors": errors_of(conn)}
     finally:
         conn._reader.cancel()
         await conn.ws.close()
@@ -262,7 +290,7 @@ async def run_barge(model: str, pcm_cut: bytes, url: str | None = None) -> dict:
                 "cancel_done_s": round(done["_t"] - cancel_at, 3) if done and done["type"] == "response.done" else None,
                 "status": (done or {}).get("response", {}).get("status"),
                 "audio_after_done": len(late), "listened_s": LISTEN_S, "received_s": round(received_bytes / 2 / 24000, 2),
-                "kept_item": kept, "errors": [e.get("error") for e in conn.of("error")]}
+                "kept_item": kept, "errors": errors_of(conn)}
     finally:
         if silence:
             silence.cancel()
@@ -306,8 +334,13 @@ def generate(audio: Path) -> int:
         path = audio / f"{c['id']}.wav"
         if path.exists():
             continue
-        out = tts.generate(c["text"], sid=SPEAKERS[i % len(SPEAKERS)], speed=1.0)
-        x = _resample(np.asarray(out.samples, dtype=np.float32), out.sample_rate)
+        if c.get("tts") == "say":  # Kokoro 中文音色会吞掉句首的部分英文词，这些样例用系统语音
+            subprocess.run(["say", "-v", "Tingting", "-o", str(path), "--file-format=WAVE", "--data-format=LEI16@16000", c["text"]], check=True)
+            with wave.open(str(path)) as w:
+                x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+        else:
+            out = tts.generate(c["text"], sid=SPEAKERS[i % len(SPEAKERS)], speed=1.0)
+            x = _resample(np.asarray(out.samples, dtype=np.float32), out.sample_rate)
         pad = np.zeros(int(RATE * 0.3))
         x = np.concatenate([pad, x, pad])
         if c.get("mix") == "noise":  # 约 15 dB 信噪比的白噪声
@@ -334,9 +367,11 @@ def summarize(rows: list[dict], spoken: list[dict], barge: list[dict]) -> dict:
             k[1] += 1
         out[model] = {
             "cases": len(rs), "failed": sum(1 for r in rows if r["model"] == model and r.get("failed")),
+            "response_errors": [r["id"] for r in rs if r["errors"]],
             "first_audio_p50": percentile(lat, 50), "first_audio_p95": percentile(lat, 95),
             "first_audio_direct_p50": percentile([r["first_audio_s"] for r in rs if not r["calls"] and r["first_audio_s"] is not None], 50),
             "first_audio_tool_p50": percentile([r["first_audio_s"] for r in tool if r["first_audio_s"] is not None], 50),
+            "stop_p50": percentile([r["stop_s"] for r in rs if r["stop_s"] is not None], 50),
             "tool_p50": percentile([r["tool_s"] for r in tool if r["tool_s"] is not None], 50),
             "spoke_before_tool": sum(r["spoke_before_tool"] for r in tool), "tool_cases": len(tool),
             "route_acc": round(sum(r["route_ok"] for r in rs) / len(rs), 3) if rs else None,
@@ -402,7 +437,7 @@ async def run_voices(model: str, voices: list[str], out: Path, url: str | None =
             await conn.send({"type": "response.create", "response": {"modalities": ["audio", "text"]}})
             await conn.wait("response.done", after=t0, timeout=SETTLE_S)
             save_wav(out / f"{v}.wav", bytes(conn.audio))
-            print(v, round(len(conn.audio) / 2 / 24000, 1), "秒", [e.get("error") for e in conn.of("error")], flush=True)
+            print(v, round(len(conn.audio) / 2 / 24000, 1), "秒", errors_of(conn), flush=True)
         finally:
             conn._reader.cancel()
             await conn.ws.close()
@@ -415,10 +450,14 @@ def main() -> int:
     ap.add_argument("--model", nargs="+", default=["flash"])
     ap.add_argument("--audio", type=Path, default=OUT / "audio")
     ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--turn", help="断句方式：smart_turn_v2、smart_turn，或 server_vad:静音毫秒")
     ap.add_argument("--url", help="连到假服务做自测，不走百炼")
     ap.add_argument("--env", type=Path, default=settings.ENV_PATH, help="密钥文件；在 worktree 里跑时指向主目录的 .env")
     a = ap.parse_args()
     settings.load_env(a.env)
+    if a.turn:
+        kind, _, ms = a.turn.partition(":")
+        SESSION["turn_detection"] = {"type": kind, **({"silence_duration_ms": int(ms)} if ms else {})}
     if a.cmd == "gen":
         print("新生成", generate(a.audio), "条，在", a.audio)
         return 0
