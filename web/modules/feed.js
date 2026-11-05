@@ -70,7 +70,7 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-acts .fd-deep { border-color: var(--accent); color: var(--accent); background: transparent; padding: 5px 16px; }
 .fd-acts .fd-deep:hover { background: var(--accent-soft); }
 .fd-acts .fd-more { opacity: 0; transition: opacity .12s; }
-.fd-row:hover .fd-more, .fd-item:hover .fd-more, .fd-sel .fd-more { opacity: 1; }
+.fd-row:hover .fd-more, .fd-item:hover .fd-more, .fd-sel .fd-more, .fd-acts .fd-more.on { opacity: 1; }
 .fd-sel { box-shadow: 0 0 0 2px var(--accent-ring); border-color: var(--accent) !important; }
 .fd-bar { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin: 26px 0 10px; }
 .fd-bar .tabs { margin: 0; flex: 1; min-width: 0; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: none; }
@@ -544,7 +544,7 @@ export default {
       const { x } = entry;
       const f = x.feedback || {};
       return h('div.fd-acts', {}, [
-        h('button.icon.fd-more', { title: '踩（不想看到类似的）', onclick: () => fb(entry, { vote: f.vote < 0 ? 0 : -1 }) }, f.vote < 0 ? '👎' : h('span', { style: { opacity: 0.55 } }, '👎')),
+        h('button.icon.fd-more' + (f.vote < 0 ? '.on' : ''), { title: '踩（不想看到类似的）', onclick: () => fb(entry, { vote: f.vote < 0 ? 0 : -1 }) }, f.vote < 0 ? '👎' : h('span', { style: { opacity: 0.55 } }, '👎')),
         h('button.icon.fd-more', { title: f.hidden ? '取消隐藏 (x)' : '隐藏 (x)', onclick: () => fb(entry, { hidden: !f.hidden }) }, ui.icon(f.hidden ? 'refresh' : 'x')),
         h('button' + (f.vote > 0 ? '.on' : ''), { title: '赞 (l)', onclick: () => fb(entry, { vote: f.vote > 0 ? 0 : 1 }) }, '👍'),
         h('button' + (f.saved ? '.on' : ''), { title: '收藏 (s)', onclick: () => fb(entry, { saved: !f.saved }) }, f.saved ? '★' : '☆'),
@@ -702,6 +702,7 @@ export default {
           return;
         }
         mount(entry);
+        if ('vote' in patch) toast({ 1: '已赞，下次加载列表时这条和相似内容排前；再点取消', '-1': '已踩，下次加载列表时这条和相似内容排后；再点取消', 0: '已取消' }[r.vote]);
       } catch (e) { toast('操作失败：' + e.message, true); }
     }
     // 深读 = 深度学习里的一个条目：Agent 写成本地文档（可划线评论、追问），追问对话绑在条目上，关掉再开能续上；同一链接已读过就直接打开
