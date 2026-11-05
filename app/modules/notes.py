@@ -8,11 +8,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db
+from .. import db, kb
 from . import review
 
 log = logging.getLogger(__name__)
@@ -191,7 +192,7 @@ def api_unlink(lid: int):
 
 def source_type(doc: str) -> str:
     return {"research": "调研", "research_doc": "调研", "learn": "深读", "kb": "知识库",
-            "paper": "论文", "feed": "信息流"}.get((doc or "").split(":", 1)[0], "链接")
+            "paper": "论文", "feed": "信息流", "intel": "产品雷达", "chat": "Agent 对话"}.get((doc or "").split(":", 1)[0], "链接")
 
 
 def _search(table: str, cols: str, where: str, q: str, limit: int) -> list[dict]:
@@ -201,9 +202,23 @@ def _search(table: str, cols: str, where: str, q: str, limit: int) -> list[dict]
                    [f"%{q}%"] * where.count("?") + [limit])
 
 
+def _intel_sources(q: str, limit: int) -> list[dict]:
+    """产品雷达：公司（名字优先，其次生意拆解卡正文）、变化事件、增长 Case。"""
+    named = _search("intel_company", "id, slug, name", "name LIKE ? OR slug LIKE ? OR aliases LIKE ?", q, limit)
+    mention = _search("intel_company", "id, slug, name", "id IN (SELECT company_id FROM intel_profile WHERE content LIKE ?)", q, limit)
+    names = {r["id"] for r in named}
+    out = [{"doc": f"intel:company:{r['slug']}", "title": r["name"], "link": f"#intel/c/{r['slug']}", "type": "产品雷达"}
+           for r in named + [m for m in mention if m["id"] not in names]][:limit]
+    for r in _search("intel_event", "id, title", "title LIKE ? OR summary LIKE ?", q, limit):
+        out.append({"doc": f"intel:event:{r['id']}", "title": r["title"], "link": f"#intel/e/{r['id']}", "type": "产品雷达"})
+    for r in _search("intel_growth_case", "id, company", "company LIKE ? OR content LIKE ?", q, limit):
+        out.append({"doc": f"intel:growth:{r['id']}", "title": f"{r['company'] or '?'} · 增长 Case", "link": f"#intel/g/{r['id']}", "type": "产品雷达"})
+    return out
+
+
 @router.get("/sources")
 def sources(q: str = "", limit: int = 5):
-    """找能引用的文章：深读、调研、论文、信息流；贴的是链接就先看平台里有没有这篇。没写关键词时只列最近的深读和调研。"""
+    """找能引用的文章：深读、调研、产品雷达、论文、信息流、知识库；贴的是链接就先看平台里有没有这篇。没写关键词时只列最近的深读和调研。"""
     q = q.strip()
     url = bool(re.match(r"https?://", q))
     out = []
@@ -215,6 +230,8 @@ def sources(q: str = "", limit: int = 5):
             out.append({"doc": f"research_doc:{r['id']}", "title": r["title"], "link": f"#research/docs/{r['id']}", "type": "调研"})
         for r in _search("research", "id, topic", "topic LIKE ?", q, limit):
             out.append({"doc": f"research:{r['id']}:synth", "title": r["topic"], "link": f"#research/r/{r['id']}", "type": "调研"})
+    if q and not url:
+        out += _intel_sources(q, limit)
     if q:
         for r in _search("feed_items", "id, title, url", f"{col} LIKE ?", q, limit):
             out.append({"doc": f"feed:{r['id']}", "title": r["title"], "link": r["url"], "type": "信息流"})
@@ -222,6 +239,9 @@ def sources(q: str = "", limit: int = 5):
             for r in _search("paper_items", "id, s2id, arxiv, title", "title LIKE ? AND status!='out'", q, limit):
                 link = f"https://arxiv.org/abs/{r['arxiv']}" if r.get("arxiv") else f"https://www.semanticscholar.org/paper/{r['s2id']}"
                 out.append({"doc": f"paper:{r['s2id']}", "title": r["title"], "link": link, "type": "论文"})
+            for r in kb.search(q, limit=limit):  # 正文也搜，别的板块里见过的一句话能找回来；便签自己不算文章，要关联走连线
+                if not r["path"].startswith("notes/"):
+                    out.append({"doc": f"kb:{r['path']}", "title": r["title"] or r["path"], "link": f"#kb/doc/{quote(r['path'], safe='')}", "type": "知识库"})
     if url and not out:
         out.append({"doc": "", "title": q, "link": q, "type": "链接"})
     return out

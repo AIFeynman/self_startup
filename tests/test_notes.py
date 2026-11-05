@@ -102,6 +102,25 @@ def test_comment_becomes_note(client):
     assert len(client.get("/api/notes").json()["notes"]) == 2
 
 
+def test_sources_find_intel(client):
+    """产品雷达里的公司能按名字和拆解卡正文找到，事件和增长 Case 也能找到；出处能指回去。"""
+    from app import db
+    from app.modules import intel  # noqa: F401 —— 建表
+    cid = db.insert("intel_company", {"slug": "acme-x", "name": "AcmeX"})
+    db.insert("intel_profile", {"company_id": cid, "content": "渠道和产品合一的打法"})
+    db.insert("intel_event", {"company_id": cid, "title": "BetaWidget 发布"})
+    assert {"doc": "intel:company:acme-x", "title": "AcmeX", "link": "#intel/c/acme-x", "type": "产品雷达"} in client.get("/api/notes/sources?q=AcmeX").json()
+    assert "intel:company:acme-x" in [s["doc"] for s in client.get("/api/notes/sources?q=渠道和产品").json()]
+    assert any(s["title"] == "BetaWidget 发布" and s["type"] == "产品雷达" for s in client.get("/api/notes/sources?q=BetaWidget").json())
+
+
+def test_chat_quote_source(client):
+    """从 Agent 对话划线记的便签：出处标成 Agent 对话，链接留得住。"""
+    _clean()
+    n = client.post("/api/notes", json={"text": "渠道和产品合一", "sources": [{"doc": "chat:7", "title": "讨论：选题", "link": "#chat/7"}]}).json()
+    assert n["sources"][0]["type"] == "Agent 对话" and n["sources"][0]["link"] == "#chat/7"
+
+
 def test_old_db_migration(tmp_path, monkeypatch):
     """老库没有新字段：补上列，已有记录算系统记的，内容不变。"""
     from app import db

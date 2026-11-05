@@ -178,7 +178,9 @@ body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { 
 .msg.assistant .body pre { overflow-x: auto; max-width: 100%; }
 .msg.assistant .body table { display: block; overflow-x: auto; max-width: 100%; }
 .msg.assistant .body { position: relative; }
-.read-btn { float: right; margin: 0 0 4px 8px; font-size: 12px; padding: 2px 8px; gap: 4px; }
+.note-sel-bar { position: fixed; z-index: 95; display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; font-size: 13px; border-radius: 8px; background: var(--panel); border: 1px solid var(--accent); color: var(--accent); box-shadow: var(--shadow); cursor: pointer; }
+.note-sel-bar[hidden] { display: none; }
+.read-btn { user-select: none; float: right; margin: 0 0 4px 8px; font-size: 12px; padding: 2px 8px; gap: 4px; }
 .read-btn svg.i { width: 13px; height: 13px; }
 .reader { position: fixed; inset: 0; z-index: 90; background: rgba(40, 30, 20, .35); display: flex; justify-content: center; padding: 32px 16px; overflow-y: auto; }
 .reader-doc { background: var(--panel); border-radius: 18px; box-shadow: var(--shadow); width: min(880px, 100%); height: max-content; min-height: 60vh; }

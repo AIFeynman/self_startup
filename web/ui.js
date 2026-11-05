@@ -182,8 +182,49 @@ export function kindChips(kinds, current, onPick) {
   return box;
 }
 
+// Agent 说的话可以划线记便签：对话区域用 noteZone 标上出处（对象或返回对象的函数），选中文字后浮出「加入便签」
+export const noteZone = (el, source) => { el._noteSrc = source; return el; };
+function selectedInZone() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  let zone = range.commonAncestorContainer;
+  while (zone && !zone._noteSrc) zone = zone.parentNode;
+  const text = sel.toString().trim();
+  if (!zone || text.length < 2) return null;
+  const src = zone._noteSrc;
+  return { text, rect: range.getBoundingClientRect(), source: (typeof src === 'function' ? src() : src) || null };
+}
+let noteBar = null, noteDragging = false, noteTimer;
+function paintNoteBar() {
+  const picked = selectedInZone();
+  if (!picked || closeQuick) { if (noteBar) noteBar.hidden = true; return; }
+  if (!noteBar) { noteBar = h('button.note-sel-bar', { type: 'button', hidden: true, onmousedown: (e) => e.preventDefault() }, [icon('plus'), '加入便签']); document.body.append(noteBar); }
+  noteBar.hidden = false;
+  noteBar.onclick = () => { noteBar.hidden = true; openQuick({ text: picked.text, source: picked.source }); };
+  const { left, width, top, bottom } = picked.rect;
+  if (bottom < 0 || top > window.innerHeight) { noteBar.hidden = true; return; }
+  const w = noteBar.offsetWidth, ht = noteBar.offsetHeight;
+  noteBar.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, left + width / 2 - w / 2))}px`;
+  noteBar.style.top = `${Math.max(8, bottom + ht + 16 < window.innerHeight ? bottom + 8 : top - ht - 8)}px`; // 优先放下面：手机上系统菜单在上面
+}
+document.addEventListener('selectionchange', () => {
+  clearTimeout(noteTimer);
+  if (!noteDragging) noteTimer = setTimeout(paintNoteBar, 200);
+});
+document.addEventListener('mousedown', (e) => { if (!noteBar?.contains(e.target)) { noteDragging = true; if (noteBar) noteBar.hidden = true; } });
+document.addEventListener('mouseup', () => { if (noteDragging) { noteDragging = false; clearTimeout(noteTimer); noteTimer = setTimeout(paintNoteBar); } });
+window.addEventListener('scroll', () => { // 滚动后跟着选区走，选区还在就重新摆，不要收掉
+  if (!noteBar || noteDragging) return;
+  noteBar.hidden = true;
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(paintNoteBar, 200);
+}, true);
+
 // ⌘K 时用户正在读的文章：选中的文字所在的正文优先（选中的话算引文），否则是当前页的正文
 function readingSource() {
+  const picked = selectedInZone();
+  if (picked?.source) return { ...picked.source, quote: picked.text.slice(0, 2000) };
   const sel = window.getSelection();
   const node = sel && !sel.isCollapsed ? sel.anchorNode : null;
   const body = (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.('.an-body');
@@ -197,11 +238,10 @@ let quickDraft = '';
 let closeQuick = null;
 const BUILTIN_KINDS = [['spark', '灵感'], ['feeling', '感想'], ['idea', '想法'], ['problem', '问题'], ['lesson', '经验'], ['insight', '洞察']]
   .map(([key, label]) => ({ key, label, builtin: true }));
-function openQuick() {
-  let source = readingSource(); // 要在输入框拿走焦点之前取，不然选区没了
+function openQuick({ text: preset = '', source = readingSource() } = {}) { // readingSource 要在输入框拿走焦点之前取，不然选区没了
   let kind = (() => { try { return localStorage.getItem('note-kind') || 'spark'; } catch { return 'spark'; } })();
   let kinds = BUILTIN_KINDS;
-  const ta = h('textarea', { rows: 3, value: quickDraft, placeholder: '突然想到什么，写下来…（#标签；写「问题:」这样的前缀也能换类型）' });
+  const ta = h('textarea', { rows: preset ? 6 : 3, value: preset || quickDraft, placeholder: '突然想到什么，写下来…（#标签；写「问题:」这样的前缀也能换类型）' });
   const chipBox = h('div', { style: { marginTop: '8px' } });
   const srcBox = h('div');
   const paintKinds = () => chipBox.replaceChildren(kindChips(kinds, kind, (k) => { kind = k; paintKinds(); ta.focus(); }));
@@ -212,7 +252,7 @@ function openQuick() {
   paintKinds(); paintSrc();
   api.get('/api/notes/kinds').then((r) => { kinds = r; paintKinds(); }).catch(() => {});
   let busy = false;
-  const close = () => { quickDraft = ta.value; ov.remove(); closeQuick = null; };
+  const close = () => { if (!preset) quickDraft = ta.value; ov.remove(); closeQuick = null; }; // 划线带来的文字不算草稿
   const save = async () => {
     const text = ta.value.trim();
     if (!text || busy) return;

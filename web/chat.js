@@ -2,7 +2,7 @@
 // openChat({module, ref, title, prefill, send, sessionId, fresh, expand})
 //   send: 直接发送这条消息；prefill: 只填入输入框；fresh: 开新对话；sessionId: 打开指定会话。
 import { api, h, md } from './api.js';
-import { icon, composer, chips } from './ui.js';
+import { icon, composer, chips, noteZone } from './ui.js';
 import { inCall, sentenceFeed, tts } from './voice.js';
 
 const TIPS = {
@@ -78,7 +78,7 @@ function render(sessions) {
   sessSel = h('select', { title: '历史对话', onchange: async (e) => { state.sessionId = e.target.value ? +e.target.value : null; await loadMessages(); } },
     [h('option', { value: '' }, '＋ 新对话'), ...sessions.map((s) => h('option', { value: s.id, selected: s.id === state.sessionId }, (s.title || '对话').slice(0, 18)))]);
   engineSel = h('select', { title: '引擎' }, [h('option', { value: '' }, '默认引擎'), h('option', { value: 'claude' }, 'Claude Code'), h('option', { value: 'codex' }, 'Codex')]);
-  log = h('div.chat-log');
+  log = noteZone(h('div.chat-log'), chatSource);
   const talk = state.module === 'talk';
   box = composer({ placeholder: talk ? '接着说…' : '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', voiceAutoSend: talk, onSubmit: (t) => submit(t) });
   const wideBtn = h('button.icon.chat-wide', { title: '加宽 / 还原（也可以拖左边缘调宽度）', onclick: () => toggleWide(wideBtn) }, icon('expand'));
@@ -116,6 +116,13 @@ function startResize(e) {
 }
 try { const w = +localStorage.getItem('chat-w'); if (w) setWidth(w, false); } catch { /* 无痕模式 */ }
 
+// 划线记便签的出处：这段对话，点开能回来
+function chatSource() {
+  if (!state.sessionId) return null;
+  const name = sessSel?.value ? sessSel.selectedOptions[0]?.text : '';
+  return { doc: `chat:${state.sessionId}`, title: name ? `${state.title}：${name}` : state.title, link: `#chat/${state.sessionId}`, type: 'Agent 对话' };
+}
+
 function tips() {
   return h('div.chat-tips', {}, [
     h('div', {}, state.module === 'talk' ? '我能看到今天的事项和你的本地知识库。这里只讨论，不会改动任何数据。' : '我能看到这个板块的当前数据和你的本地知识库，可以直接帮你查、改、记。'),
@@ -149,7 +156,7 @@ function openReader(content) {
     h('div.reader-bar', {}, [h('span.muted', {}, `${state.title} · Agent 回复`), h('span.grow'),
       h('button.sm.ghost', { onclick: () => navigator.clipboard?.writeText(content) }, '复制'),
       h('button.icon', { title: '关闭 (Esc)', onclick: close }, icon('x'))]),
-    h('div.reader-body', {}, md(content)),
+    noteZone(h('div.reader-body', {}, md(content)), chatSource),
   ]));
   document.addEventListener('keydown', esc);
   window.addEventListener('hashchange', close); // 点了站内链接就关掉
