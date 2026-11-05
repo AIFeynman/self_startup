@@ -345,8 +345,9 @@ def test_result_waits_while_user_is_talking(env):
     _call(body)
 
 
-def test_web_search_tool_returns_results_and_replies(env, monkeypatch):
+def test_web_search_tool_returns_at_once_and_reads_the_answer(env, monkeypatch):
     monkeypatch.setattr(voice_rt, "web_search", lambda q: {"results": [{"title": q}]})
+    monkeypatch.setattr(voice_rt, "spoken_search", lambda q, f: (f"搜到{f['results'][0]['title']}", {}))
 
     async def body(ws, call):
         env.feed("response.created")
@@ -356,7 +357,9 @@ def test_web_search_tool_returns_results_and_replies(env, monkeypatch):
         await until(lambda: env.of("response.create"))
     _call(body)
     out = env.of("conversation.item.create")[0]["item"]
-    assert out["call_id"] == "s1" and json.loads(out["output"]) == {"results": [{"title": "杭州天气"}]}
+    assert out["call_id"] == "s1" and "results" not in json.loads(out["output"])
+    assert any(voice_rt.ANSWER_MARK in s and "搜到杭州天气" in s for s in env.said())
+    assert len(env.of("response.create")) == 1
 
 
 def test_upstream_drop_falls_back_to_local(env):
@@ -659,3 +662,161 @@ def test_answer_waits_during_hold_and_speaking_again_lifts_it(env):
         await until(lambda: not call.user_speaking)
         assert call.hold_until == 0.0
     _call(body)
+
+
+# ---------- 通话记录、成本、工具权限 ----------
+def _call_row():
+    return db.row("SELECT * FROM voice_calls ORDER BY id DESC LIMIT 1")
+
+
+def _usage(text=1000, audio=10, out_text=5, out_audio=20):
+    return {"input_tokens_details": {"text_tokens": text, "audio_tokens": audio}, "output_tokens_details": {"text_tokens": out_text, "audio_tokens": out_audio}}
+
+
+def test_call_keeps_audio_events_and_cost(env, monkeypatch, tmp_path):
+    from app import voice_record
+    monkeypatch.setattr(voice_record, "CALLS_DIR", tmp_path)
+    monkeypatch.setattr(voice_record, "finish", lambda d: None)
+
+    async def body(ws, call):
+        ws.in_.put_nowait({"type": "websocket.receive", "bytes": b"\x01\x02" * 100})
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="你好")
+        env.feed("response.created")
+        env.feed("response.audio.delta", delta=audio(0.1))
+        env.feed("response.audio_transcript.done", transcript="你好呀")
+        env.feed("response.done", response={"status": "completed", "usage": _usage()})
+        await until(lambda: _call_row() and _call_row()["responses"] == 1)
+    _call(body)
+    row = _call_row()
+    assert (row["input_text"], row["output_audio"]) == (1000, 20)
+    assert row["cost_yuan"] == pytest.approx((1000 * 1.5 + 10 * 6 + 5 * 4.5 + 20 * 12) / 1e6, abs=1e-6)
+    d = tmp_path / str(row["id"])
+    assert (d / "mic.pcm").stat().st_size == 200
+    assert (d / "bot.pcm").stat().st_size >= int(voice_call.OUT_RATE * 0.1) * 2
+    events = [json.loads(x) for x in (d / "events.jsonl").read_text("utf-8").splitlines()]
+    kinds = {e["kind"] for e in events}
+    assert {"sent", "got", "user", "fast"} <= kinds
+    assert not any(e["kind"] == "got" and e["ev"]["type"] == "response.audio.delta" for e in events)
+    assert not any(e["kind"] == "sent" and e["type"] == "input_audio_buffer.append" for e in events)
+
+
+def test_barge_cuts_what_was_not_played(tmp_path, monkeypatch):
+    from app import voice_record
+    monkeypatch.setattr(voice_record, "CALLS_DIR", tmp_path)
+    monkeypatch.setattr(voice_record.db, "insert", lambda *a: 7)
+    rec = voice_record.Recorder()
+    rec.open("m", "v")
+    rec.bot(bytes(48000), 1.0)  # 第 1 秒开始放 1 秒
+    rec.cut(1.5)
+    rec.close_files()
+    assert (tmp_path / "7" / "bot.pcm").stat().st_size == 72000  # 前 1 秒留空 + 放出去的 0.5 秒
+
+
+def test_finish_makes_playable_files_and_only_then_removes_raw(tmp_path):
+    from app import voice_record
+    (tmp_path / "mic.pcm").write_bytes(bytes(32000))
+    (tmp_path / "bot.pcm").write_bytes(bytes(48000))
+    assert voice_record.finish(tmp_path)
+    assert all((tmp_path / f).stat().st_size for f in ("call.m4a", "mic.flac", "bot.flac"))
+    assert not (tmp_path / "mic.pcm").exists() and voice_record.finish(tmp_path)
+
+
+def test_finish_keeps_raw_when_conversion_fails(tmp_path, monkeypatch):
+    from app import voice_record
+    (tmp_path / "mic.pcm").write_bytes(bytes(3200))
+    monkeypatch.setattr(voice_record.subprocess, "run", lambda *a, **k: type("P", (), {"returncode": 1, "stderr": "坏了"})())
+    assert not voice_record.finish(tmp_path)
+    assert (tmp_path / "mic.pcm").exists()
+
+
+def test_search_text_stays_local_and_only_spoken_goes_up(env, monkeypatch):
+    long = "网页原文" * 100
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: {"results": [{"title": "t", "summary": long}]})
+    monkeypatch.setattr(voice_rt, "spoken_search", lambda q, f: ("杭州今天晴。", {}))
+
+    async def body(ws, call):
+        env.feed("response.created")
+        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"杭州天气"}')
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: any("杭州今天晴" in s for s in env.said()))
+    _call(body)
+    assert long not in json.dumps(env.sent, ensure_ascii=False)
+    outs = [e["item"]["output"] for e in env.of("conversation.item.create") if e["item"]["type"] == "function_call_output"]
+    assert len(outs) == 1 and len(outs[0]) < 40
+
+
+def test_answer_is_deleted_upstream_after_read_but_kept_if_cut(env):
+    async def body(ws, call):
+        call.outbox.append(("spoken", "答案一"))
+        await until(lambda: any("答案一" in s for s in env.said()))
+        env.feed("response.created")
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: env.of("conversation.item.delete"))
+        first = env.of("conversation.item.delete")[0]["item_id"]
+        assert first == next(e["item"]["id"] for e in env.of("conversation.item.create") if "答案一" in json.dumps(e, ensure_ascii=False))
+        call.outbox.append(("spoken", "答案二"))
+        await until(lambda: any("答案二" in s for s in env.said()))
+        env.feed("response.created")
+        env.feed("response.done", response={"status": "cancelled"})
+        await asyncio.sleep(0.05)
+        assert len(env.of("conversation.item.delete")) == 1
+    _call(body)
+
+
+def test_barge_on_answer_says_dont_rethink(env):
+    async def body(ws, call):
+        call.outbox.append(("spoken", "答案"))
+        await until(lambda: call.reading_answer)
+        env.feed("response.created")
+        env.feed("response.audio.delta", delta=audio(5))
+        env.feed("response.audio_transcript.done", transcript="答案很长很长")
+        await asyncio.sleep(0.05)
+        env.feed("input_audio_buffer.speech_started")
+        await until(lambda: any("不要重新想" in s for s in env.said()))
+    _call(body)
+
+
+def test_claim_of_search_goes_to_search_not_slow(env, monkeypatch):
+    searched = []
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {"results": []})
+
+    async def body(ws, call):
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="今天有什么新闻")
+        env.feed("response.created")
+        env.feed("response.audio_transcript.done", transcript="我搜一下。")
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: searched)
+        assert call.thinker.task is None
+    _call(body)
+    assert searched == ["今天有什么新闻"]
+
+
+def test_tool_turned_off_is_hidden_and_refused(env, monkeypatch):
+    from app import settings
+    real = settings.get
+    monkeypatch.setattr(settings, "get", lambda p, d=None: False if p == "voice_rt.permissions.web_search" else real(p, d))
+    called = []
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: called.append(q) or {})
+
+    async def body(ws, call):
+        env.feed("response.created")
+        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"天气"}')
+        env.feed("response.function_call_arguments.done", call_id="x1", name="rm_rf", arguments='{}')
+        await until(lambda: len([e for e in env.of("conversation.item.create") if e["item"]["type"] == "function_call_output"]) == 2)
+    _call(body)
+    session = env.of("session.update")[0]["session"]
+    assert "web_search" not in {t["function"]["name"] for t in session["tools"]} and "think_deep" in {t["function"]["name"] for t in session["tools"]}
+    assert "不能上网搜" in session["instructions"]
+    assert not called
+
+
+def test_unregistered_tool_is_never_allowed():
+    from app import voice_tools
+    assert not voice_tools.tool_allowed("rm_rf") and not voice_tools.enabled("rm_rf")
+    assert all(t["function"]["name"] in {n for g in voice_tools.GROUPS.values() for n in g["tools"]} for t in voice_rt.TOOLS)
+
+
+def test_slow_stays_readonly():
+    cmd = agent._claude_cmd("q", "", "", [], readonly=True)
+    assert cmd[cmd.index("--tools") + 1] == "Read,Glob,Grep,WebSearch,WebFetch" and "--strict-mcp-config" in cmd

@@ -14,9 +14,10 @@ import time
 from collections import deque
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 
-from . import agent, chat, db, settings, voice_rt
+from . import agent, chat, db, settings, voice_record, voice_rt, voice_tools
 from .voice_think import Thinker
 
 log = logging.getLogger(__name__)
@@ -30,7 +31,11 @@ IDLE_S = 600  # 这么久没人说话就挂断，免得一直计费
 TICK_S = 0.1
 HEARD_WAIT_S = 1  # 工具调用比转写早到约 0.15 秒（2026-11-04 实测），等它到了再执行，最多等这么久
 HOLD_S = 10  # 用户说「等一下」后，这么久内不主动开口；再说话就解除
+BRIEF_MAX = 200  # 提纲留在百炼的历史里，每轮都要算钱
+# 这些事件量大又没有内容，不进通话记录（音频本身在录音文件里，转写的完整句子在 done 事件里）
+NOISY_EVENTS = {"response.audio.delta", "response.audio_transcript.delta", "response.function_call_arguments.delta", "response.text.delta"}
 # 模型偶尔嘴上说转交却没调工具（2026-11-04 实测），用户就白等了：听到这些话而没调用，替它转
+CLAIMS_SEARCH = re.compile(r"我[^。！？]{0,6}搜")
 CLAIMS_FORWARD = re.compile(r"think_deep|第一反应|这边(?:看不到|没)|转给|转交|慢思考|后台|稍等|想一下|想想|帮你(?:理|想|捋)|我[^。！？]{0,6}(?:查|搜|翻|找|看看|看一下)")
 # 提示词压不到零：工具名、方括号占位、「让后台想」还会冒出来。文字比音频早到（2026-11-04 实测约 15 毫秒，且一句话整句先到），先拦不增加延迟
 INTERNAL_WORDS = re.compile(r"慢思考|快思考|转给|转交|交出去|交给|让(?:后台|搭档)|让\s*Claude|Claude\s*帮|think_deep|update_thinking|get_thinking_status|cancel_thinking|web_search|^\s*[\[【]")
@@ -66,6 +71,11 @@ def _rt_config() -> dict:
 class Call:
     def __init__(self, ws: WebSocket):
         self.ws, self.up, self.sid = ws, None, None
+        self.rec = voice_record.Recorder()
+        self.speech_start = 0.0
+        self.once: list[str] = []  # 念完就从百炼的历史里删掉的注入：念出来的话模型自己的回应里有，留着每轮多算一遍
+        self.injected = 0
+        self.reading_answer, self.forward_said = False, ""
         self.loop = asyncio.get_running_loop()
         self.response_active = self.user_speaking = self.dropping = self.want_response = self.reply_done = False
         self.searching = 0
@@ -93,6 +103,7 @@ class Call:
         if not self.sid:
             self.sid = db.insert("chat_sessions", {"module": "talk", "ref": "", "engine": "claude", "title": title[:40] or "语音通话",
                                                    "created_at": db.now(), "updated_at": db.now()})
+            self.rec.link(self.sid)
         return self.sid
 
     def _record(self, role: str, text: str) -> None:
@@ -110,11 +121,22 @@ class Call:
             pass
 
     async def _up(self, type_: str, **kw) -> None:
+        if type_ != "input_audio_buffer.append":
+            self.rec.event("sent", type=type_, **kw)
         await self.up.send(json.dumps({"type": type_, **kw}, ensure_ascii=False))
 
-    async def _inject(self, text: str) -> None:
+    async def _inject(self, text: str, once: bool = False) -> None:
+        self.injected += 1
+        item_id = f"inj_{self.injected}"
+        if once:
+            self.once.append(item_id)
         await self._up("conversation.item.create",
-                       item={"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})
+                       item={"id": item_id, "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})
+
+    async def _drop_once(self) -> None:
+        ids, self.once = self.once, []
+        for item_id in ids:
+            await self._up("conversation.item.delete", item_id=item_id)
 
     async def _respond(self) -> None:
         self.want_response = False
@@ -130,11 +152,15 @@ class Call:
             args = {}
         t = self.thinker
         log.info("语音工具 %s", name)
+        search_for = ""
         try:
             await asyncio.wait_for(self.heard.wait(), HEARD_WAIT_S)
         except asyncio.TimeoutError:
             pass
-        if time.monotonic() < self.hold_until:
+        if not voice_tools.tool_allowed(name):  # 没登记或没打开的一律不执行
+            log.warning("语音工具没有权限：%s", name)
+            out, follow = {"error": "这个工具现在不能用，直说做不了，不要假装做了"}, True
+        elif time.monotonic() < self.hold_until:
             out, follow = {"status": "用户让你等，这件事不做"}, False
         elif name == "think_deep":
             out, follow = {"status": t.ask(str(args.get("objective", "")))}, not self.spoke_this_response
@@ -151,34 +177,56 @@ class Call:
             out = {"error": f"还没有搜。用户的原话是「{self.last_user}」，你可能听错了。按这句话的意思重新用 web_search，这次不要说话；这句话不是要搜东西就不要搜，按规矩处理。"}
             follow = True
         elif name == "web_search":
-            self.searching += 1
-            try:
-                out = await asyncio.to_thread(voice_rt.web_search, str(args.get("query", "")))
-            finally:
-                self.searching -= 1
-            self._record("tool", f"web_search: {args.get('query', '')}")
-            follow = True
+            search_for = str(args.get("query", ""))
+            out, follow = {"status": "在查，结果会送来"}, False  # 结果几秒就到，不为这个多算一轮
         else:
             out, follow = {"error": f"没有这个工具：{name}"}, True
+        self.rec.event("tool", name=name, args=args, out=out)
         await self._up("conversation.item.create",
                        item={"type": "function_call_output", "call_id": call_id, "output": json.dumps(out, ensure_ascii=False)})
         self.want_response = self.want_response or follow
+        if search_for:
+            await self._search(search_for)
 
-    async def _forward_claimed(self) -> None:
-        if self.thinker.task:  # 已经在想了，多半是在说进度
+    async def _search(self, query: str) -> None:
+        """搜到的原文只留在本机，百炼只拿到念的那句。"""
+        self.searching += 1
+        started = time.monotonic()
+        try:
+            found = await asyncio.to_thread(voice_rt.web_search, query)
+            spoken, usage = await asyncio.to_thread(voice_rt.spoken_search, self.last_user or query, found)
+        finally:
+            self.searching -= 1
+        self._record("tool", f"web_search: {query}")
+        self.rec.event("search", query=query, found=found, spoken=spoken, usage=usage, took_s=round(time.monotonic() - started, 2))
+        self.outbox.append(("spoken", spoken))
+
+    async def _forward_claimed(self, said: str = "") -> None:
+        self.forward_said = said or self.forward_said
+        wants_search = CLAIMS_SEARCH.search(self.forward_said) and voice_tools.enabled("web_search")
+        if not wants_search and (self.thinker.task or not voice_tools.enabled("claude_code")):  # 已经在想了，多半是在说进度
+            return
+        if wants_search and self.searching:
             return
         if not self.last_user:  # 转写还没到，到了再转
             self.forward_waiting = True
             return
         self.forward_waiting = False
+        self.rec.event("forward", said=self.forward_said, to="web_search" if wants_search else "think_deep", user=self.last_user)
+        if wants_search:  # 说「我搜一下」就是搜，转去慢思考要多等半分钟（2026-11-04 实测）
+            log.warning("模型说了搜却没调用工具，补搜")
+            self._later(self._search(self.last_user))
+            return
         log.warning("模型说了转交但没调用工具，补转")
         status = self.thinker.ask(self.last_user)
         await self._inject(f"【系统】这个问题开始想了（{status}），想好的答案之后会送来。")
 
     def _on_slow(self, kind: str, text: str) -> None:
         if kind in ("spoken", "brief"):
+            self.rec.event("slow_" + kind, text=text, elapsed_s=self.thinker.status().get("elapsed_s"))
             self.outbox.append((kind, text))
         elif kind == "full":
+            self.rec.event("slow_full", text=text)
             self._record("assistant", text)
             self._later(self.tell(type="slow", text=text))
         else:
@@ -197,10 +245,12 @@ class Call:
             return ""
         if heard is None:
             self._record("fast", text)
+            self.rec.event("fast", at=self.rec.at(self.audio_started), text=text)
             self.recent.append(f"快思考：{text}")
             return text
         part = text[:int(len(text) * heard)]
         self._record("fast", part + chat.INTERRUPTED)
+        self.rec.event("fast", at=self.rec.at(self.audio_started), text=part, interrupted=True)
         self.recent.append(f"快思考：{part}（被打断）")
         return part
 
@@ -213,28 +263,35 @@ class Call:
             return
         heard = min(1.0, (now - self.audio_started) / self.audio_s) if self.audio_s else 0.0
         self.play_until = now
+        self.rec.cut(self.rec.at(now))
         await self.tell(type="clear")
         part = self._flush_reply(heard)
         # 百炼没有截断接口，云端记的是整句：告诉它用户其实听到哪
-        await self._inject(f"【系统】刚才那句用户只听到「{part[-60:]}」就打断了，后面的没听到。" if part else "【系统】刚才那句用户没听到就打断了。")
+        note = f"【系统】刚才那句用户只听到「{part[-60:]}」就打断了，后面的没听到。" if part else "【系统】刚才那句用户没听到就打断了。"
+        if self.reading_answer:  # 用户问「有答案了吗」时直接接着念，不用再想一遍（2026-11-04 实测重想了 14 秒，结论一样）
+            note += "这句是想好的答案，用户问结果时接着念没听到的部分，不要重新想。"
+        await self._inject(note)
 
     async def _mute(self) -> None:
         """这句不让用户听到。不取消回应：工具调用可能还在后面，取消了问题就没人想了。"""
         self.muted, self.muted_text, self.dropping = True, self.reply, True
         self.reply = ""
         self.play_until = time.monotonic()
+        self.rec.cut(self.rec.at(self.play_until))
         await self.tell(type="clear")  # 前面的句子可能已经发出去了
 
     async def _after_mute(self) -> None:
         """没调工具就重说一次；重说的不再拦，宁可漏一句也不能一直没声音。"""
         if CLAIMS_FORWARD.search(self.muted_text):
-            await self._forward_claimed()
+            await self._forward_claimed(self.muted_text)
         # 「等一下」这类话模型也可能回方括号：不能逼它开口，否则会没话找话
-        await self._inject("【系统】刚才那句用户没听到。用户在等你回应就重新说，只说给用户听的话；用户让你等、或者不是在跟你说话，就什么都不说，也不要用工具。")
+        await self._inject("【系统】刚才那句用户没听到。用户在等你回应就重新说，只说给用户听的话；用户让你等、或者不是在跟你说话，就什么都不说，也不要用工具。", once=True)
         self.retrying, self.want_response = True, True
 
     async def _on_event(self, ev: dict) -> None:
         t, now = ev.get("type"), time.monotonic()
+        if t not in NOISY_EVENTS:
+            self.rec.event("got", ev=ev)
         if t == "response.audio.delta":
             if self.dropping:
                 return
@@ -245,6 +302,7 @@ class Call:
                 self.t_stop = None
             if now >= self.play_until:
                 self.audio_started, self.audio_s = now, 0.0
+            self.rec.bot(pcm, self.rec.at(max(now, self.play_until)))
             self.spoke_this_response = True
             self.audio_s += len(pcm) / 2 / OUT_RATE
             self.play_until = max(now, self.play_until) + len(pcm) / 2 / OUT_RATE
@@ -281,6 +339,11 @@ class Call:
         elif t == "response.done":
             self.response_active, self.reply_done = False, True
             resp = ev.get("response") or {}
+            self.rec.usage(resp.get("usage") or {})
+            if resp.get("status") == "completed":
+                await self._drop_once()
+            elif resp.get("status") == "cancelled":  # 念到一半被打断的留着，后面的只在这里有
+                self.once = []
             if resp.get("status") == "failed":
                 log.warning("百炼回应失败：%s", resp.get("status_details"))
                 await self.tell(type="error", message="这一句没答上来，再说一次")
@@ -289,12 +352,13 @@ class Call:
                 if not self.tool_called and resp.get("status") == "completed":
                     await self._after_mute()
             elif self.from_user and not self.tool_called and not self.dropping and CLAIMS_FORWARD.search(self.reply):
-                await self._forward_claimed()
+                await self._forward_claimed(self.reply)
         elif t == "response.function_call_arguments.done":
             self.tool_called = True
             self.loop.create_task(self._on_tool(ev))
         elif t == "input_audio_buffer.speech_started":
             self.user_speaking, self.last_voice, self.last_user = True, now, ""
+            self.speech_start = now
             self.early_reply = ""
             self.hold_until, self.query_checked = 0.0, False
             self.heard.clear()
@@ -307,6 +371,7 @@ class Call:
             if HOLD.fullmatch(text):
                 log.info("用户让等：%s", text)
                 self._record("user", text)
+                self.rec.event("user", at=self.rec.at(self.speech_start), text=text, hold=True)
                 self.recent.append(f"用户：{text}")
                 self.last_user, self.hold_until, self.forward_waiting = text, now + HOLD_S, False
                 self.want_response = self.retrying = False  # 拦下内部说法时可能已经要了重说
@@ -316,8 +381,10 @@ class Call:
                     await self._mute()
             elif text:
                 self._record("user", text)
+                self.rec.event("user", at=self.rec.at(self.speech_start), text=text)
                 self.recent.append(f"用户：{text}")
                 self.last_user = text
+                self.reading_answer = False
                 await self.tell(type="user", text=text)
                 if self.forward_waiting:
                     await self._forward_claimed()
@@ -357,16 +424,17 @@ class Call:
         if not self._safe(now):
             return
         while self.outbox and self.outbox[0][0] == "brief":
-            await self._inject(f"{voice_rt.NOTES_MARK}{self.outbox.popleft()[1]}")
+            await self._inject(f"{voice_rt.NOTES_MARK}{self.outbox.popleft()[1][:BRIEF_MAX]}")
         if self.outbox:
             kind, text = self.outbox.popleft()
             await self._inject(f"{voice_rt.ANSWER_MARK}（直接念下面这段，一字不改）{text}" if kind == "spoken"
-                               else "【系统】这个问题这次没想出结果。告诉用户没想出来，可以换个问法，不要自己回答这个问题。")
+                               else "【系统】这个问题这次没想出结果。告诉用户没想出来，可以换个问法，不要自己回答这个问题。", once=True)
+            self.reading_answer = kind == "spoken"
             await self._respond()
             return
         doing = self.thinker.due_cue(CUE_AT)
         if doing:
-            await self._inject(f"【进度】你正{doing}。用一句很短的话告诉用户，不要说别的。")
+            await self._inject(f"【进度】你正{doing}。用一句很短的话告诉用户，不要说别的。", once=True)
             await self._respond()
 
     # ---------- 三个循环 ----------
@@ -376,6 +444,7 @@ class Call:
             if msg["type"] == "websocket.disconnect":
                 return
             if msg.get("bytes"):
+                self.rec.mic(msg["bytes"])
                 await self._up("input_audio_buffer.append", audio=base64.b64encode(msg["bytes"]).decode())
             elif msg.get("text") and json.loads(msg["text"]).get("type") == "hangup":
                 return
@@ -400,6 +469,8 @@ class Call:
             log.warning("连不上百炼：%s", e)
             await self.tell(type="fallback", reason="实时通话连不上，切回本地")
             return
+        voice = cfg.get("voice") or voice_rt.DEFAULT_VOICE
+        self.rec.open(model, voice)
         ctx, dirs = chat._context("talk", "")
         self.thinker = Thinker(self.loop, self._on_slow, system=agent.build_system("talk", ctx), dirs=dirs,
                                model=agent.module_model("talk"), history=lambda: "\n".join(self.recent),
@@ -408,7 +479,7 @@ class Call:
         tasks = []
         try:
             await self._up("session.update", session=voice_rt.session_config(
-                voice=cfg.get("voice") or voice_rt.DEFAULT_VOICE, speech_rate=cfg.get("speech_rate") or 1.0,
+                voice=voice, speech_rate=cfg.get("speech_rate") or 1.0,
                 turn_detection=cfg.get("turn_detection")))
             asyncio.get_running_loop().run_in_executor(None, self.thinker.warm)
             client, upstream, tick = [asyncio.create_task(c) for c in (self._from_client(), self._from_up(), self._tick())]
@@ -427,6 +498,9 @@ class Call:
             self.thinker.cancel()
             self._flush_reply()
             await self.up.close()
+            self.rec.close()
+            if self.rec.dir:
+                self.loop.run_in_executor(None, voice_record.finish, self.rec.dir)
             chat.active -= 1
 
 
@@ -441,6 +515,39 @@ def rt_status():
     cfg = _rt_config()
     return {"configured": configured(), "model": cfg.get("model") or voice_rt.DEFAULT_MODEL,
             "voice": cfg.get("voice") or voice_rt.DEFAULT_VOICE}
+
+
+@router.get("/api/voice/tools")
+def tools():
+    return voice_tools.listing()
+
+
+@router.get("/api/voice/calls")
+def calls(limit: int = 50):
+    return db.rows("""SELECT c.*, s.title FROM voice_calls c LEFT JOIN chat_sessions s ON s.id=c.session_id
+                      ORDER BY c.id DESC LIMIT ?""", [limit])
+
+
+@router.get("/api/voice/calls/{call_id}")
+def call_detail(call_id: int):
+    """原始事件太多，页面只要说的话和工具；要分析就看 /raw。"""
+    row = db.row("SELECT * FROM voice_calls WHERE id=?", [call_id])
+    if not row:
+        raise HTTPException(404)
+    return {**row, "events": [e for e in voice_record.events(call_id) if e["kind"] not in ("sent", "got")]}
+
+
+@router.get("/api/voice/calls/{call_id}/raw")
+def call_raw(call_id: int):
+    return voice_record.events(call_id)
+
+
+@router.get("/api/voice/calls/{call_id}/audio")
+def call_audio(call_id: int):
+    call_dir = voice_record.CALLS_DIR / str(call_id)
+    if not voice_record.finish(call_dir):
+        raise HTTPException(404, "这通电话没有录音")
+    return FileResponse(call_dir / "call.m4a", media_type="audio/mp4")
 
 
 @router.websocket("/api/voice/rt")
