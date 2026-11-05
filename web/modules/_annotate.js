@@ -181,11 +181,11 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     const del = async () => { if (!confirm('删除这条批注和它的讨论？')) return; await api.del(`/api/annotations/${t.id}`); load(); };
     const msgs = t.msgs.map((m) => m.role === 'user'
       ? h('div.an-msg.me', {}, m.content)
-      : h('div.an-msg.ai' + (m.status === 'pending' ? '.pending' : m.status === 'failed' ? '.failed' : ''), {}, [
+      : ui.noteZone(h('div.an-msg.ai' + (m.status === 'pending' ? '.pending' : m.status === 'failed' ? '.failed' : ''), {}, [
         h('span.an-who', {}, [ui.icon('spark'), 'Claude']),
         m.content ? md(m.content) : null,
         m.status === 'pending' ? h('div.an-step', {}, ((x) => (x ? '正在：' + x : '正在读材料…'))((m.log || '').split('\n').filter(Boolean).slice(-1)[0])) : null,
-      ]));
+      ]), { ...wrap._src, annotation_id: t.id }));
     const el = h('div.an-card' + (t.status === 'resolved' ? '.resolved' : ''), { 'data-aid': t.id }, [
       t.quote ? h('div.an-quote', { title: '在正文里定位', onclick: () => body.querySelector(`mark.an-hl[data-aid="${t.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }) },
         [t.quote, lost ? h('span.tag', { style: { marginLeft: '6px' } }, '原文已变') : null])

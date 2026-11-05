@@ -173,7 +173,16 @@ async function loadRecent() {
   }, [ui.icon('chat'), (s.title || '对话')]))] : []));
 }
 
+let chatAfterRoute = null;
 async function route() {
+  const jump = /^#chat\/(\d+)$/.exec(location.hash); // 便签出处里的对话链接：回到那个板块，打开那段对话
+  if (jump) {
+    const s = await api.get(`/api/chat/session/${jump[1]}`).catch(() => null);
+    if (!s) toast('这段对话已经删了', true);
+    chatAfterRoute = s;
+    location.replace(`#${s?.module || 'notes'}`);
+    return;
+  }
   const id = currentId();
   document.querySelectorAll('#nav-links a, .nav-foot a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
   page.innerHTML = '';
@@ -190,7 +199,8 @@ async function route() {
   const ctx = { api, h, md, toast, field, ui, openChat, ask, refresh, module: id, title: m.title, sub: location.hash.slice(1).split('/').slice(1) };
   try {
     mod = await import(`./modules/${id}.js?v=${Date.now()}`);
-    openChat({ module: id, title: m.title, expand: false });
+    if (chatAfterRoute) { const s = chatAfterRoute; chatAfterRoute = null; openChat({ module: s.module, ref: s.ref, title: titleOf(s.module), sessionId: s.id }); }
+    else openChat({ module: id, title: m.title, expand: false });
     await mod.default.render(wrap, ctx);
   } catch (e) {
     console.error(e);
