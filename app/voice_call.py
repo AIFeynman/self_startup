@@ -41,6 +41,17 @@ CANCEL = re.compile(r"[那好]?就?(?:别想了|不用想了|别查了|不用查
 # 还在想的时候问进度：照实说在做什么，不用停掉重想
 PROGRESS = re.compile(r"好了(?:吗|没)|还没(?:好|想好|找到|查到|搜到)|怎么样了|还要多久|还要等")
 PROGRESS_MAX = 12  # 长句多半是在说别的
+# 固定的客套话不用等 Claude。百炼自己接话只会复述（「谢谢」答「谢谢」，2026-11-05 实测），所以回什么写死。
+# 「好的」「行」可能是在答应上一句，要留给 Claude。
+QUICK = ((re.compile(r"(?:喂)?(?:你|您)?(?:能|可以)?听(?:得到|得见|到了?|见了?)(?:我说话|我的声音)?(?:吗|嘛|没|没有)"), "听得到，你说。"),
+         (re.compile(r"喂+|你好|您好|哈喽|嗨|hello|hi|在吗|喂在吗"), "你好，你说。"),
+         (re.compile(r"(?:好的)?谢谢(?:你|您)?|多谢|感谢"), "不客气。"),
+         (re.compile(r"(?:好的)?(?:再见|拜拜)"), "好，再见。"))
+
+
+def quick_reply(text: str) -> str:
+    said = re.sub(r"[\s，。！？,.!?、~～]", "", text).lower()
+    return next((reply for pattern, reply in QUICK if pattern.fullmatch(said)), "")
 
 
 class _End(Exception):
@@ -69,7 +80,7 @@ class Call:
         self.rec = voice_record.Recorder()
         self.speech_start = 0.0
         self.loop = asyncio.get_running_loop()
-        self.response_active = self.user_speaking = self.dropping = self.reply_done = False
+        self.response_active = self.user_speaking = self.dropping = self.reply_done = self.reply_now = False
         self.asked_at = 0.0
         self.hold_until = self.filler_at = 0.0
         self.fillers = 0
@@ -126,13 +137,18 @@ class Call:
         """让百炼把这段话念出来。"""
         await self._up("conversation.item.create", item={"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})
         self.response_active, self.asked_at = True, time.monotonic()  # 先占住，下一次检查不会重复触发
-        await self._up("response.create", response={"modalities": ["audio", "text"]})
+        self.reply_now = False
+        await self._up("response.create", response={"modalities": ["audio", "text"], "instructions": voice_rt.read_instructions(text)})
 
     # ---------- 用户说的每句话都到这里 ----------
     def _route(self, text: str) -> None:
         t = self.thinker
         self.outbox.clear()  # 还没念的是回答上一句的，用户已经往下说了
-        if not voice_tools.enabled("claude_code"):
+        quick = "" if t.task else quick_reply(text)  # 还在想就并进去，别丢了正在想的事
+        if quick:
+            self.outbox.append(quick)
+            self.reply_now = True
+        elif not voice_tools.enabled("claude_code"):
             self.outbox.append(NO_BRAIN)
         elif t.task and CANCEL.fullmatch(text):
             t.cancel()
@@ -256,7 +272,7 @@ class Call:
 
     # ---------- 调度：等安全的时候才说 ----------
     def _safe(self, now: float) -> bool:
-        return now >= self.play_until and now - self.last_speech_end >= SAFE_SILENCE_S
+        return now >= self.play_until and (self.reply_now or now - self.last_speech_end >= SAFE_SILENCE_S)
 
     async def _send_status(self, now: float) -> None:
         st = self.thinker.status()

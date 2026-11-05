@@ -75,7 +75,7 @@ data/kb/
 
 每通电话都留在 `data/voice_calls/<id>/`：`call.m4a`（混音，回听用）、`mic.flac` 和 `bot.flac`（分轨，分析用）、`events.jsonl`（发给百炼和百炼发回的全部非音频事件、本机 Claude 用的工具和答的话，时间和录音对齐），约 1–3MB/分钟，不自动清理。讨论页的「历史通话」可以看内容、点时间跳到那一段回听，也显示每通和总共占多大；「删除」连录音、事件和这通电话说的话一起删（Claude Code 自己的会话日志不动）；「接着聊」开一通新电话，接着同一个讨论和同一个 Claude 会话。
 
-每轮回应的 token 用量记进 `voice_calls`，按设置里的 `voice_rt.price` 算钱（元/百万 token，不扣免费额度，以百炼账单为准）。百炼只负责听（转写、判断说完、打断）和念，模型自己抢着答的话直接丢掉，每句话都由本机 Claude（`module_models.talk`，默认 Sonnet 5.5）回答，只把它写在 `<spoken>` 里的几句送去念，完整回答和搜到的原文都不上云。费用只算百炼：本机 Claude 走订阅，DeepSeek 搜索另计。超过 2 秒没答出来先垫一句，查资料时报一次真实进度。
+每轮回应的 token 用量记进 `voice_calls`，按设置里的 `voice_rt.price` 算钱（元/百万 token，不扣免费额度，以百炼账单为准）。百炼只负责听（转写、判断说完、打断）和念，模型自己抢着答的话直接丢掉，除了「听得到吗」「你好」「谢谢」「再见」这几句固定的客套话（`QUICK`，直接念写好的回复，1 秒内开口），每句话都由本机 Claude（`module_models.talk`，默认 Sonnet 5.5）回答，只把它写在 `<spoken>` 里的几句送去念，完整回答和搜到的原文都不上云。费用只算百炼：本机 Claude 走订阅，DeepSeek 搜索另计。超过 2 秒没答出来先垫一句，查资料时报一次真实进度。
 
 本机 Claude 用的工具都登记在 `app/voice_tools.py`，写清每样能碰到什么；讨论页可以开关。关掉的不给它用。搜索是给 Claude 的 MCP 工具（`app/voice_search_mcp.py`，走 DeepSeek），关掉本机 Claude 后通话只会告诉你现在答不了。这是应用层的权限，不是操作系统隔离：本机 Claude Code 的只读靠它自己的 `--tools` 限制。
 

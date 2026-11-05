@@ -192,6 +192,44 @@ def test_auto_response_is_dropped_and_ours_is_played(env):
     assert all("它自己接的话" not in c for _, c in _rows(call.sid))
 
 
+@pytest.mark.parametrize("text,reply", [("喂，听得到吗？", "听得到，你说。"), ("你好。", "你好，你说。"), ("谢谢", "不客气。"), ("拜拜！", "好，再见。")])
+def test_quick_phrases_answer_at_once_without_claude(text, reply):
+    assert voice_call.quick_reply(text) == reply
+
+
+@pytest.mark.parametrize("text", ["好的", "行", "为什么", "听得到吗我想问个问题", "你好像说错了", "谢谢你帮我查一下"])
+def test_other_sentences_are_not_quick(text):
+    assert voice_call.quick_reply(text) == ""
+
+
+def test_quick_phrase_skips_claude_and_silence_wait(env, monkeypatch):
+    async def body(ws, call):
+        heard = []
+        monkeypatch.setattr(call.thinker, "hear", heard.append)
+        _hear(env, "谢谢")
+        await until(lambda: env.said())
+        assert env.said() == ["不客气。"] and not heard
+        assert "不客气。" in env.of("response.create")[0]["response"]["instructions"]
+        assert time.monotonic() - call.last_speech_end < voice_call.SAFE_SILENCE_S
+    _call(body)
+
+
+def test_quick_phrase_while_thinking_goes_to_claude(env, monkeypatch):
+    gate = threading.Event()
+    _slow_brain(monkeypatch, gate)
+
+    async def body(ws, call):
+        _hear(env, "我上周定了什么")
+        await until(lambda: call.thinker.task)
+        heard = []
+        monkeypatch.setattr(call.thinker, "hear", heard.append)
+        _hear(env, "谢谢")
+        await until(lambda: heard)
+        assert "不客气。" not in env.said()
+        gate.set()
+    _call(body)
+
+
 def test_barge_in_cancels_clears_and_drops_late_audio(env, monkeypatch):
     _slow_brain(monkeypatch, threading.Event())
 
@@ -289,7 +327,7 @@ def test_no_filler_when_answer_is_quick(env, monkeypatch):
     _slow_brain(monkeypatch, answer="<spoken>在呢。</spoken>")
 
     async def body(ws, call):
-        _hear(env, "喂")
+        _hear(env, "我上周定了什么")
         await until(lambda: env.said())
         await asyncio.sleep(0.1)
     ws, _ = _call(body)
@@ -330,7 +368,7 @@ def test_brain_switched_off_says_so(env, monkeypatch):
     asked = _slow_brain(monkeypatch)
 
     async def body(ws, call):
-        _hear(env, "在吗")
+        _hear(env, "我上周定了什么")
         await until(lambda: env.said())
     _call(body)
     assert env.said() == [voice_call.NO_BRAIN] and not asked
@@ -343,7 +381,7 @@ def test_failed_brain_says_so(env, monkeypatch):
     monkeypatch.setattr(agent, "run_stream", run)
 
     async def body(ws, call):
-        _hear(env, "在吗")
+        _hear(env, "我上周定了什么")
         await until(lambda: env.said())
     ws, call = _call(body)
     assert "没想出来" in env.said()[0] and "坏了" not in json.dumps(env.sent, ensure_ascii=False)

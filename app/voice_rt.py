@@ -14,6 +14,11 @@ SEARCH_TIMEOUT_S = 8
 READ_PROMPT = """你是电话里的声音，不回答问题、不思考。每条文字消息都是要念给用户听的稿子，一字不差地念出来，只念稿子本身。听到用户说话不要回答。"""
 
 
+def read_instructions(text: str) -> str:
+    """每次念都点明稿子：刚听完用户说话时，短稿会和用户的话混起来念（「听得到，你说」念成「听得到吗」，2026-11-05 实测）。"""
+    return f"{READ_PROMPT}\n这一条的稿子是：{text}\n只念稿子，不管用户说了什么。"
+
+
 def web_search(query: str, limit: int = 5) -> dict:
     """DeepSeek 搜索，只留用得上的字段。出错也返回结果，让 Claude 能直说搜不到。"""
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
