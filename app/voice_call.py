@@ -34,7 +34,8 @@ HEARD_WAIT_S = 1.5  # 模型比转写快，用到转写时最多等这么久
 ACK = {"think_deep": "好，我想一下。", "web_search": "我查一下。"}  # 模型用了工具却没出声，用户不能干等
 # 这些事件量大又没有内容，不进通话记录（音频本身在录音文件里，转写的完整句子在 done 事件里）
 NOISY_EVENTS = {"response.audio.delta", "response.audio_transcript.delta", "response.function_call_arguments.delta", "response.text.delta"}
-# 模型偶尔嘴上说查却没调工具（2026-11-04 实测），用户就白等了：听到这些话而没调用，替它做
+# 模型偶尔嘴上说查却没调工具（2026-11-04 实测），用户就白等了：只说了这么一句短话而没调用，替它做。长回答里的「我现在只能查网页」不算（通话 6 实测）
+CLAIM_MAX_CHARS = 12
 CLAIMS_SEARCH = re.compile(r"我[^。！？]{0,6}(?:查|搜)")
 CLAIMS_THINK = re.compile(r"想一下|想想|我[^。！？]{0,6}(?:翻|找|看看|看一下)")
 # 提示词压不到零：工具名、方括号占位还会冒出来。文字比音频早到（2026-11-04 实测约 15 毫秒），先拦不增加延迟
@@ -184,7 +185,8 @@ class Call:
         """搜到的原文只留在本机，百炼只拿到念的那句。"""
         self.searching += 1
         started = time.monotonic()
-        question = self.last_user or query
+        # 追问的原话没有上下文（「开回去远吗」），整理结果时要带上搜的是什么
+        question = f"{self.last_user}（搜的是：{query}）" if self.last_user and self.last_user != query else self.last_user or query
         try:
             found = await asyncio.to_thread(voice_rt.web_search, query)
             spoken, usage = await asyncio.to_thread(voice_rt.spoken_search, question, found)
@@ -317,8 +319,13 @@ class Call:
             elif not self.ours and resp.get("status") == "completed":
                 await self._after_own_reply()
         elif t == "response.function_call_arguments.done":
-            self.tools_used.append(ev.get("name"))
-            self._later(self._on_tool(ev))
+            if self.ours:  # 念稿时模型又调工具，是把刚才那件事重做一遍（2026-11-05 实测，结果念了两次）。历史里要有输出，否则后面的回应会等它
+                self.rec.event("tool", name=ev.get("name"), ignored=True)
+                await self._up("conversation.item.create",
+                               item={"type": "function_call_output", "call_id": ev.get("call_id"), "output": json.dumps({"status": "已经在做了"}, ensure_ascii=False)})
+            else:
+                self.tools_used.append(ev.get("name"))
+                self._later(self._on_tool(ev))
         elif t == "input_audio_buffer.speech_started":
             self.user_speaking, self.last_voice, self.speech_start, self.hold_until = True, now, now, 0.0
             self.last_user, self.early_reply = "", ""
@@ -356,12 +363,15 @@ class Call:
             tool = self.tools_used[0]
             ack = ACK.get(tool) if voice_tools.fast_allowed(tool) else ""  # 没权限的那边已经说了做不了
             if ack and not self.spoke and time.monotonic() >= self.hold_until:
-                self.outbox.appendleft(ack)
+                if self.user_speaking:
+                    self.outbox.appendleft(ack)
+                else:  # 这句是接话，和模型自己答一样马上说，不等念结果的那段静音
+                    await self._say(ack)
         elif self.muted:
             log.warning("拦下内部说法，重说")
             self.response_active, self.asked_at = True, time.monotonic()
             await self._up("response.create", response={"modalities": ["audio", "text"]})
-        elif self.reply and not self.dropping and (CLAIMS_SEARCH.search(self.reply) or CLAIMS_THINK.search(self.reply)):
+        elif self.reply and not self.dropping and len(self.reply.strip()) <= CLAIM_MAX_CHARS and (CLAIMS_SEARCH.search(self.reply) or CLAIMS_THINK.search(self.reply)):
             self._later(self._do_what_it_claimed(self.reply))
 
     # ---------- 调度：等安全的时候才说 ----------
