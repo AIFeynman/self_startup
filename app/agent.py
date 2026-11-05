@@ -133,7 +133,10 @@ def _parse_claude(obj: dict) -> list[dict]:
         if delta.get("type") == "text_delta" and delta.get("text"):
             out.append({"type": "delta", "text": delta["text"]})
     elif t == "result":
-        bad = {m: u.get("provider") for m, u in (obj.get("modelUsage") or {}).items() if u.get("provider") != "firstParty"}
+        providers = {m: u.get("provider") for m, u in (obj.get("modelUsage") or {}).items()}
+        bad = {m: p for m, p in providers.items() if p and p != "firstParty"}
+        if providers and "firstParty" not in providers.values():  # 续聊时 CLI 的辅助调用（Haiku）不带 provider，主模型带就算数
+            bad = providers
         if bad:  # 这一轮不算数，也不回退别的引擎，让人知道
             return [{"type": "error", "text": f"Claude 调用没有走本机登录（provider={bad}），已停止", "fatal": True, "gateway": True}]
         if obj.get("is_error"):

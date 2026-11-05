@@ -131,13 +131,21 @@ def headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {key}", "x-dashscope-dataInspection": "disable"}
 
 
+def resume_note(said: list[tuple[str, str]]) -> str:
+    """接着上次聊：提示词每轮回应都算钱，只带最后几句。"""
+    if not said:
+        return ""
+    lines = "\n".join(f"{'用户' if who == 'user' else '你'}：{text}" for who, text in said)
+    return f"\n\n这是接着上次的通话，上次最后说到：\n{lines}\n用户开口后接着聊，不要主动复述上面的话。"
+
+
 def session_config(voice: str = DEFAULT_VOICE, speech_rate: float = 1.0, max_history_turns: int = 20,
-                   turn_detection: dict | None = None) -> dict:
+                   turn_detection: dict | None = None, resume: str = "") -> dict:
     return {
         "modalities": ["text", "audio"],
         "voice": voice,
         "speech_rate": speech_rate,
-        "instructions": FAST_PROMPT + voice_tools.denied_note(),
+        "instructions": FAST_PROMPT + voice_tools.denied_note() + resume,
         "input_audio_format": "pcm",
         "output_audio_format": "pcm",
         "input_audio_transcription": {"language": "zh"},
