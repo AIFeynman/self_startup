@@ -149,6 +149,28 @@ a.fd-cid:hover { color: var(--accent); }
 .fd-fresh { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .fd-fresh.ok { color: var(--ok); }
 .fd-follow { margin: 0 0 16px; padding: 16px 20px; }
+.fd-evo .top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.fd-evo .top .sp { flex: 1; }
+.fd-evo .trend { font-size: 15px; font-weight: 600; margin-top: 10px; }
+.fd-evo .note { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.fd-evo .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 12px; }
+.fd-evo .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+.fd-evo { --evo-like: #c4552f; --evo-dislike: #2f7fb8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .fd-evo { --evo-like: #d9683e; --evo-dislike: #4a9bd6; } }
+:root[data-theme="dark"] .fd-evo { --evo-like: #d9683e; --evo-dislike: #4a9bd6; }
+.fd-evo .like { background: var(--evo-like); } .fd-evo .dislike { background: var(--evo-dislike); }
+.fd-evo .chart { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; margin: 6px 0 12px; }
+.fd-evo .col { text-align: center; font-size: 11px; color: var(--muted); border-radius: 6px; padding: 2px 0 4px; }
+.fd-evo .col:hover { background: var(--bg-2); }
+.fd-evo .col .rate { height: 16px; font-size: 12px; font-weight: 600; color: var(--text); }
+.fd-evo .col .bar { height: 72px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; border-bottom: 1px solid var(--line-2); margin-bottom: 4px; }
+.fd-evo .col .bar span { width: min(28px, 60%); }
+.fd-evo .col .bar span:first-child { border-radius: 4px 4px 0 0; }
+.fd-evo .col .ver { color: var(--text); }
+.fd-evo .summary { font-size: 14px; line-height: 1.6; padding: 10px 0 12px; border-top: 1px solid var(--line); }
+.fd-evo .diff { display: grid; grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1fr); gap: 6px 14px; font-size: 13px; line-height: 1.5; }
+.fd-evo .diff .th { font-size: 12px; color: var(--muted); } .fd-evo .diff .lab { display: none; color: var(--muted); }
+@media (max-width: 640px) { .fd-evo .diff { grid-template-columns: minmax(0, 1fr); } .fd-evo .diff .th { display: none; } .fd-evo .diff .lab { display: inline; } .fd-evo .col .cnt { font-size: 10px; } }
 .fd-follow .fg { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 14px; padding: 12px 0; border-top: 1px solid var(--line); }
 .fd-follow .fg:first-of-type { border-top: none; padding-top: 4px; }
 .fd-follow .fg > b { font-size: 13px; padding-top: 4px; }
@@ -214,9 +236,11 @@ export default {
     const refreshBtn = h('button.outline', { onclick: doRefresh }, [ui.icon('refresh'), h('span', {}, '刷新')]);
     const followBtn = h('button.ghost', { onclick: () => toggleFollow() }, [ui.icon('user'), h('span', {}, '关注源')]);
     const kwBtn = h('button.ghost', { onclick: () => toggleKw() }, [ui.icon('search'), h('span', {}, '关键词')]);
-    const head = ui.pageHead('今天值得看', '', [kwBtn, followBtn, h('div.fd-refresh', {}, [refreshBtn, pop])]);
+    const evoBtn = h('button.ghost', { onclick: () => toggleEvo() }, [ui.icon('spark'), h('span', {}, '兴趣进化')]);
+    const head = ui.pageHead('今天值得看', '', [evoBtn, kwBtn, followBtn, h('div.fd-refresh', {}, [refreshBtn, pop])]);
     const followBox = h('div');
     const kwBox = h('div');
+    const evoBox = h('div');
     head.querySelector('.titles').append(subEl);
 
     // ---------- 输入框 ----------
@@ -278,7 +302,7 @@ export default {
     // 刚刷完的结果常驻在按钮旁；有新增时本次新收的排到列表最前（否则按综合分常落到几十名开外，看着像没刷）
     const freshNote = h('span.fd-fresh');
     let fresh = null;   // { since, added, label }
-    el.append(h('style', {}, CSS), head, kwBox, followBox, comp, intsEl, quick,
+    el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条'), topBox,
       h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
 
@@ -467,7 +491,7 @@ export default {
 
       const srcs = h('div.srcs', {}, ['这次各来源搜：', ...Object.keys(kw.langs).map((s) => kw.explicit.includes(s)
         ? h('span', { title: (kw.queries[s] || []).join('\n') }, `${kw.labels[s]} 用自己的列表`)
-        : h('span', { title: (kw.queries[s] || []).join('\n') || '不搜' }, `${kw.labels[s]} ${(kw.queries[s] || []).length}/${kw.caps[s]}`))]);
+        : h('span', { title: (kw.queries[s] || []).join('\n') || '不搜' }, `${kw.labels[s]} ${(kw.queries[s] || []).length - (kw.auto?.[s] || []).length}/${kw.caps[s]}${kw.auto?.[s]?.length ? ` +${kw.auto[s].length} 自动` : ''}`))]);
       const badBox = bad.length ? h('div.fg', {}, [h('b', {}, ['建议换掉', h('small', {}, `近 ${kw.days} 天`)]), h('div.chips', {},
         bad.map(({ ti, term, x }) => h('span.fd-int.bad', { title: x.title }, [term, h('small', {}, x.verdict === '没搜到' ? '没搜到' : `${x.found}→${x.kept}`),
           h('button', { title: '从所有主题里删掉这个词', onclick: () => removeTerm(null, term) }, ui.icon('x'))])))]) : null;
@@ -500,6 +524,75 @@ export default {
     async function answerSug(name, action, msg) {
       const r = await api.post('/api/feed/topics/suggestion', { name, action }).catch((e) => { toast(errMsg(e)); return null; });
       if (r) { kw = r; renderKw(); toast(msg); }
+    }
+
+    // ---------- 兴趣进化（每周偏好提炼 + 赞踩比例） ----------
+    let evoOpen = false, evo = null, evoBusy = false;
+    async function toggleEvo() {
+      evoOpen = !evoOpen;
+      evoBtn.classList.toggle('on', evoOpen);
+      if (!evoOpen) { evoBox.replaceChildren(); return; }
+      evo = await api.get('/api/feed/profile').catch((e) => { toast(errMsg(e)); return null; });
+      renderEvo();
+    }
+    async function evoPost(path, body, msg) {
+      const r = await api.post(path, body).catch((e) => { toast(errMsg(e)); return null; });
+      if (r) { evo = r; if (msg) toast(msg); reloadAll(); }
+      return r;
+    }
+    function renderEvo() {
+      if (!evoOpen || !evo) return;
+      const md = (s) => (s || '').slice(5, 10).replace('-', '/');
+      const pct = (r) => `${Math.round(r * 100)}%`;
+      const p = evo.profile, sa = evo.samples, t = evo.trend;
+      const running = evoBusy || evo.running;
+      const runBtn = h('button.sm.outline', { disabled: running || !sa.enough, title: sa.enough ? '用本地 Sonnet 重新提炼一版，约一两分钟' : '样本不够', onclick: async () => {
+        evoBusy = true; renderEvo();
+        await evoPost('/api/feed/profile/run', {}, '已提炼新一版，列表已按它重排');
+        evoBusy = false; renderEvo();
+      } }, [ui.icon('spark'), running ? '提炼中…' : '立即提炼']);
+      const onBox = h('input', { type: 'checkbox', checked: evo.on, onchange: async () => {
+        await evoPost('/api/feed/profile/toggle', { on: onBox.checked }, onBox.checked ? '已开启：提炼结果参与排序和搜索' : '已关闭：提炼结果不再影响排序和搜索');
+        renderEvo();
+      } });
+      const sub = [p ? `第 ${evo.version_count} 版 · ${fmtTime(p.created_at)} 提炼（${p.model || '默认模型'}，喜欢 ${p.n_liked} / 不喜欢 ${p.n_disliked} 条）` : '还没有提炼过',
+        evo.on ? (evo.next_at ? `下次 ${md(evo.next_at)} 之后` : '每周自动更新') : '已关闭'].join(' · ');
+
+      const max = Math.max(1, ...evo.weeks.map((w) => w.likes + w.dislikes));
+      const seg = (n, cls) => (n ? h(`span.${cls}`, { style: `height:${Math.max(3, (n / max) * 64)}px` }) : null);
+      const col = (w) => {
+        const total = w.likes + w.dislikes;
+        return h('div.col', { title: `${w.week} 这一周\n赞 ${w.likes} · 踩 ${w.dislikes}` + (w.rate === null ? '' : `\n赞的比例 ${pct(w.rate)}${w.thin ? '（样本少，不比较）' : ''}`) + (w.versions.length ? '\n这周提炼过新一版' : '') }, [
+          h('div.rate', {}, w.thin ? '' : pct(w.rate)),
+          h('div.bar', {}, [seg(w.dislikes, 'dislike'), seg(w.likes, 'like')]),
+          h('div', {}, md(w.week)),
+          h('div.cnt', {}, total ? `${w.likes} / ${w.dislikes}` : '—'),
+          w.versions.length ? h('div.ver', {}, '提炼') : null]);
+      };
+      const trend = t
+        ? `赞的比例 ${pct(t.from_rate)} → ${pct(t.to_rate)}（${t.delta >= 0 ? '+' : ''}${Math.round(t.delta * 100)} 个百分点，${md(t.to_week)} 那周对比 ${md(t.from_week)} 那周）`
+        : '样本还少，暂不比较：要有两周各 5 次以上赞踩';
+      const chips = (arr) => h('div.chips', {}, arr.map((x) => h('span.fd-int', typeof x === 'string' ? {} : { title: x.why }, typeof x === 'string' ? x : x.name)));
+      const group = (label, small, arr, node) => ((arr || []).length ? h('div.fg', {}, [h('b', {}, [label, h('small', {}, small)]), node || chips(arr)]) : null);
+      const recall = p ? [...(p.recall?.en || []), ...(p.recall?.zh || [])] : [];
+
+      evoBox.replaceChildren(h('div.card.fd-follow.fd-evo', {}, [
+        h('div.top', {}, [h('b', {}, '兴趣进化'), h('span.muted', {}, sub), h('span.sp'),
+          h('label.muted', { title: '关掉后不再自动提炼，已有结果也不影响排序和搜索' }, [onBox, ' 参与排序和搜索']), runBtn]),
+        evo.error ? h('div.note', { style: 'color:var(--err)' }, `上次提炼失败：${evo.error}`) : null,
+        !p && !sa.enough ? h('div.note', {}, `样本不够：至少要 ${sa.min_liked} 条喜欢、${sa.min_disliked} 条不喜欢，现在 ${sa.liked} / ${sa.disliked}`) : null,
+        h('div.trend', {}, trend),
+        h('div.note', {}, '只算你点过赞或踩的内容，每条按最后一次操作计。比例要和当周次数一起看：点得少时波动不说明什么。'),
+        h('div.legend', {}, [h('span', {}, [h('i.like'), '赞']), h('span', {}, [h('i.dislike'), '踩']), h('span', {}, '柱下数字：赞 / 踩')]),
+        h('div.chart', {}, evo.weeks.map(col)),
+        p?.summary ? h('div.summary', {}, p.summary) : null,
+        p ? group('赞和踩的区别', '模型对比两边样本', p.differences, h('div.diff', {}, [
+          h('div.th'), h('div.th', {}, '赞的内容'), h('div.th', {}, '踩的内容'),
+          ...(p.differences || []).flatMap((d) => [h('b', {}, d.dimension), h('div', {}, [h('span.lab', {}, '赞：'), d.liked]), h('div', {}, [h('span.lab', {}, '踩：'), d.disliked])])])) : null,
+        p ? group('兴趣提炼', '悬停看依据', p.interests) : null,
+        p ? group('排序加分', '标题或简介出现就加分', p.boost) : null,
+        p ? group('排序减分', '标题或简介出现就减分', p.penalize) : null,
+        p ? group('多搜的词', '下次刷新起，每来源最多 2 个', recall) : null]));
     }
 
     // ---------- 兴趣词 ----------
