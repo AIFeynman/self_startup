@@ -1,7 +1,8 @@
-"""阅读批注：平台里能读的材料（调研报告、深读笔记、知识库文档、学习计划）可以划线评论、直接问 Claude，讨论都存下来。
+"""阅读批注：平台里能读的材料（调研报告、深读笔记、知识库文档、学习计划、产品雷达卡片、复盘 AI 分析）可以划线评论、直接问 Claude，讨论都存下来。
 
 doc 是材料的稳定标识：research:<id>:synth / research:<id>:r<结果id> / research_doc:<id> / learn:item:<id> /
-learn:plan:<id> / learn:step:<id> / kb:<相对路径>。一条批注 = 一段划线（quote 为空表示针对全文）+ 一串讨论；
+learn:plan:<id> / learn:step:<id> / kb:<相对路径> /
+intel:event:<id> / intel:company:<slug> / intel:growth:<id> / review:<日期>:improve|check|reflection。一条批注 = 一段划线（quote 为空表示针对全文）+ 一串讨论；
 问 Claude 时在后台线程里跑 claude -p，第一问带上全文和划线，追问续接同一个会话。讨论同步进知识库 annotations/。
 """
 from __future__ import annotations

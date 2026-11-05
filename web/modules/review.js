@@ -3,6 +3,7 @@
 import { today } from '../api.js';
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
+import { annotate } from './_annotate.js';
 
 const CSS = `
 .rv-top { display: flex; justify-content: flex-end; margin-bottom: -8px; }
@@ -354,7 +355,7 @@ export default {
         [ui.icon('spark'), running ? '分析中' : rec.improve_md ? '重新分析' : '分析怎么改进']);
       return h('div.card.rv-improve', {}, [
         h('div.row.between', {}, [h('span.card-label', {}, 'AI 改进分析 · 结合当天会话与学习反馈'), rec.improve_md ? btn : null]),
-        rec.improve_md ? h('div.md', {}, md(rec.improve_md))
+        rec.improve_md ? annotate(ctx, h('div.md', {}, md(rec.improve_md)), { doc: `review:${state.date}:improve`, title: `${state.date} · AI 改进分析`, link: `#review/${state.date}`, source: rec.improve_md })
           : h('div', {}, [h('div.muted', { style: { margin: '2px 0 12px' } },
             (rec.entries || []).length ? '每次写复盘后会自动分析；也可以手动开始。' : '写下复盘后，AI 会把每条放回当天时间线，对照会话和学习记录找根因、给改进。'),
           (rec.entries || []).length && !running ? btn : null]),
@@ -401,7 +402,7 @@ export default {
             ...lx.events.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
         ]));
       }
-      if (rec.ai_analysis) nodes.push(h('details.card.flat', {}, [h('summary', {}, 'AI 检查完整分析'), md(rec.ai_analysis)]));
+      if (rec.ai_analysis) nodes.push(h('details.card.flat', {}, [h('summary', {}, 'AI 检查完整分析'), annotate(ctx, md(rec.ai_analysis), { doc: `review:${state.date}:check`, title: `${state.date} · AI 检查分析`, link: `#review/${state.date}`, source: rec.ai_analysis })]));
       nodes.push(ui.section('问题与经验', d.notes.length ? `${d.notes.length} 条` : ''),
         d.notes.length ? h('div.rv-notes', {}, d.notes.map((n) => noteCard(n, show)))
           : ui.empty('还没有记录', 'Agent 和系统复盘记下的会出现在这里；你自己写的在「便签」'));
@@ -483,7 +484,7 @@ export default {
         ]),
         h('div', { style: { marginBottom: '14px' } }, Object.entries(a.kinds || {}).map(([k, v]) => h('span.tag.' + (MSG_CLS[k] || ''), {}, `${MSG_KIND[k] || k} ${v}`))),
         status,
-        e.reflection ? h('div.card', {}, [h('span.card-label', {}, 'AI 反思'), md(e.reflection)])
+        e.reflection ? h('div.card', {}, [h('span.card-label', {}, 'AI 反思'), annotate(ctx, md(e.reflection), { doc: `review:${state.date}:reflection`, title: `${state.date} · Agent 效率 AI 反思`, link: `#review/${state.date}`, source: e.reflection })])
           : h('div.card.flat', {}, [h('span.card-label', {}, 'AI 反思'), h('div.muted', {}, '还没有反思。点右上「AI 反思」，让 Agent 分析人工介入是否必要、怎么减少。')]),
       ];
       const inter = e.sessions.filter((s) => !s.automated || s.human_turns);
