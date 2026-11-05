@@ -276,6 +276,16 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .rt-line.slow { padding-top: 8px; border-top: 1px solid var(--line); }
 .talk-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .talk-row:first-child { border-top: none; }
+.call-detail { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.call-detail[hidden] { display: none; }
+.call-detail audio { width: 100%; }
+.call-lines { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }
+.call-line { display: block; min-width: 0; }
+.call-line.user { color: var(--muted); }
+.call-line pre { overflow-x: auto; font-size: 12px; }
+.call-time { margin-right: 8px; padding: 0 4px; border: none; background: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.tool-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.tool-row:first-child { border-top: none; }
 .talk-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .talk-draft { display: flex; flex-direction: column; gap: 10px; }
 .talk-draft textarea { min-height: 200px; }

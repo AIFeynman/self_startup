@@ -10,6 +10,50 @@ const DOING_NOW = (m) => {
   return '等你说';
 };
 
+const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const yuan = (v) => `¥${(v || 0).toFixed(v < 0.01 ? 4 : 2)}`;
+
+function callHistory(calls, { api, h, md, toast }) {
+  const detail = h('div.call-detail', { hidden: true });
+  const show = async (c) => {
+    let d;
+    try { d = await api.get(`/api/voice/calls/${c.id}`); } catch (e) { toast('打不开：' + e.message); return; }
+    const audio = h('audio', { controls: true, preload: 'metadata', src: `/api/voice/calls/${c.id}/audio` });
+    const seek = (t) => { audio.currentTime = t; audio.play().catch(() => {}); };
+    const WHO = { user: '你', fast: '接话' };
+    const rows = d.events.flatMap((e) => {
+      const time = h('button.call-time', { onclick: () => seek(e.t) }, clock(e.t));
+      if (WHO[e.kind]) return [h('div.call-line.' + e.kind, {}, [time, h('span', {}, e.text + (e.interrupted ? '（被打断）' : ''))])];
+      if (e.kind === 'slow_full') return [h('details.call-line', {}, [h('summary', {}, [time, '完整回答']), h('div', {}, md(e.text))])];
+      if (e.kind === 'search') return [h('details.call-line', {}, [h('summary', {}, [time, `搜索「${e.query}」${e.took_s} 秒`]), h('pre', {}, JSON.stringify(e.found, null, 1))])];
+      if (e.kind === 'tool' && e.name !== 'web_search') return [h('details.call-line', {}, [h('summary', {}, [time, `工具 ${e.name}`]), h('pre', {}, JSON.stringify({ args: e.args, out: e.out }, null, 1))])];
+      if (e.kind === 'forward') return [h('div.call-line.muted', {}, [time, `模型没调工具，补转到 ${e.to}`])];
+      return [];
+    });
+    detail.hidden = false;
+    detail.replaceChildren(
+      h('div.muted', {}, `${c.started_at.slice(5, 16).replace('T', ' ')} · ${clock(c.duration_s)} · ${c.responses} 次回应 · 文本入 ${c.input_text} 音频入 ${c.input_audio} 文本出 ${c.output_text} 音频出 ${c.output_audio} token · 约 ${yuan(c.cost_yuan)}`),
+      audio, h('div.call-lines', {}, rows.length ? rows : h('div.muted', {}, '这通电话没有说话内容')));
+    detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+  return h('div.card', {}, [...calls.slice(0, 30).map((c) => h('div.talk-row', {}, [
+    h('a.t', { href: '#talk', onclick: (e) => { e.preventDefault(); show(c); } }, c.title || '（没说话）'),
+    h('span.muted', {}, (c.started_at || '').slice(5, 16).replace('T', ' ')),
+    h('span.muted', {}, clock(c.duration_s || 0)),
+    h('span.muted', {}, yuan(c.cost_yuan)),
+  ])), detail]);
+}
+
+function toolPermissions(tools, { api, h, toast }) {
+  return h('div.card', {}, tools.map((t) => {
+    const box = h('input', { type: 'checkbox', checked: t.enabled, onchange: async () => {
+      try { await api.put('/api/settings', { voice_rt: { permissions: { [t.key]: box.checked } } }); toast(`${t.label}已${box.checked ? '打开' : '关闭'}`); }
+      catch (e) { box.checked = !box.checked; toast('没改成：' + e.message); }
+    } });
+    return h('label.tool-row', {}, [box, h('div', {}, [h('div', {}, t.label), h('div.muted', {}, t.access)])]);
+  }));
+}
+
 export default {
   async render(el, { api, h, md, ui, toast, openChat, refresh }) {
     // 一次通话里说的每句都接着同一个对话
@@ -106,7 +150,10 @@ export default {
       btn.disabled = false; btn.textContent = '整理';
     };
 
-    const [sessions, saved] = await Promise.all([api.get('/api/chat/talk/sessions'), api.get('/api/talk/summaries?limit=50')]);
+    const [sessions, saved, calls, tools] = await Promise.all([api.get('/api/chat/talk/sessions'), api.get('/api/talk/summaries?limit=50'),
+      api.get('/api/voice/calls').catch(() => []), api.get('/api/voice/tools').catch(() => [])]);
+    if (calls.length) el.append(ui.section('历史通话', '录音和全部内容都只存在本机'), callHistory(calls, { api, h, md, toast }));
+    if (tools.length) el.append(ui.section('通话工具权限', '关掉的工具从下一通电话起不给模型，通话中调用也不执行'), toolPermissions(tools, { api, h, toast }));
     const savedOf = (id) => saved.find((s) => s.session_id === id && s.saved_at);
     const pendingOf = (id) => saved.find((s) => s.session_id === id && !s.saved_at);
     if (!sessions.length) { el.append(ui.empty('还没有讨论', '说一句话就能开始')); return; }

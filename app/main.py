@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks, voice, voice_call
+from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks, voice, voice_call, voice_record
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -17,7 +17,7 @@ app = FastAPI(title="本地学习平台", version="0.1.0")
 settings.apply_timezone()
 
 mods = modules.discover()
-db.init([annotations.SCHEMA, notify.SCHEMA, *(getattr(m, "SCHEMA", "") for m in mods.values())])
+db.init([annotations.SCHEMA, notify.SCHEMA, voice_record.SCHEMA, *(getattr(m, "SCHEMA", "") for m in mods.values())])
 
 app.include_router(chat.router)
 app.include_router(annotations.router)
