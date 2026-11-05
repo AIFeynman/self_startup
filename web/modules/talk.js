@@ -85,6 +85,15 @@ export default {
       window.removeEventListener('hashchange', hangRt);
     };
     const hangRt = () => hangup?.();
+    let callId = null;
+    const showCost = async () => {  // 挂断后等服务端把最后的用量写完
+      const id = callId;
+      callId = null;
+      if (!id) return;
+      await new Promise((r) => setTimeout(r, 800));
+      const c = await api.get(`/api/voice/calls/${id}`).catch(() => null);
+      if (c?.responses) line('cost', `这通电话 ${clock(c.duration_s)}，${c.responses} 次回应，约 ${yuan(c.cost_yuan)}`);
+    };
     const startRt = async () => {
       callBtn.disabled = true;
       chip.hidden = false; chip.textContent = '连接中';
@@ -92,12 +101,13 @@ export default {
       box.hidden = true;
       try {
         const call = await startCall({
+          onReady: (m) => { callId = m.call; },
           onStatus: (m) => { chip.textContent = DOING_NOW(m); },
           onUser: (t) => line('user', t),
           onReply: (t) => line('fast', t),
           onSlow: (t) => line('slow', md(t)),
           onFallback: (why) => { toast(why); setTimeout(() => box.querySelector('.mic')?.click(), 0); },
-          onEnd: () => endRt(),
+          onEnd: () => { endRt(); showCost(); },
         });
         hangup = call.hangup;
         callBtn.textContent = '结束通话';

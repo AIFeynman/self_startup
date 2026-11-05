@@ -701,6 +701,18 @@ def test_call_keeps_audio_events_and_cost(env, monkeypatch, tmp_path):
     assert not any(e["kind"] == "sent" and e["type"] == "input_audio_buffer.append" for e in events)
 
 
+def test_ready_tells_page_which_call_for_cost(env, monkeypatch, tmp_path):
+    from app import voice_record
+    monkeypatch.setattr(voice_record, "CALLS_DIR", tmp_path)
+    monkeypatch.setattr(voice_record, "finish", lambda d: None)
+    seen = []
+
+    async def body(ws, call):
+        seen.append(ws.told("ready")[0]["call"])
+    _call(body)
+    assert seen[0] == _call_row()["id"]
+
+
 def test_barge_cuts_what_was_not_played(tmp_path, monkeypatch):
     from app import voice_record
     monkeypatch.setattr(voice_record, "CALLS_DIR", tmp_path)

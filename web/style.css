@@ -273,6 +273,7 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .rt-chip[hidden], .rt-log[hidden], .composer[hidden] { display: none; }
 .rt-log { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px 0; max-height: 45vh; overflow-y: auto; border-top: 1px solid var(--line); }
 .rt-line.user { align-self: flex-end; max-width: 80%; color: var(--muted); }
+.rt-line.cost { color: var(--muted); font-size: 12px; }
 .rt-line.slow { padding-top: 8px; border-top: 1px solid var(--line); }
 .talk-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .talk-row:first-child { border-top: none; }

@@ -484,7 +484,7 @@ class Call:
             asyncio.get_running_loop().run_in_executor(None, self.thinker.warm)
             client, upstream, tick = [asyncio.create_task(c) for c in (self._from_client(), self._from_up(), self._tick())]
             tasks = [client, upstream, tick]
-            await self.tell(type="ready", model=model)
+            await self.tell(type="ready", model=model, call=self.rec.id)
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if not client.done():
                 failed = tick.done() and isinstance(tick.exception(), _End)
