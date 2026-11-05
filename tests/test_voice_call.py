@@ -231,7 +231,7 @@ def test_web_search_reads_result_and_raw_text_stays_here(env, monkeypatch):
         _flash_tool(env, "web_search", spoke="我查一下。", query="北京天气")
         await until(lambda: env.said())
     ws, call = _call(body)
-    assert searched == ["北京天气"] and env.said() == ["北京天气怎么样：今天晴。"]
+    assert searched == ["北京天气"] and env.said() == ["北京天气怎么样（搜的是：北京天气）：今天晴。"]
     assert "原文在这" not in json.dumps(env.sent, ensure_ascii=False)
     assert ("tool", "web_search: 北京天气") in _rows(call.sid)
 
@@ -284,6 +284,35 @@ def test_claiming_a_search_without_the_tool_really_searches(env, monkeypatch):
         await until(lambda: searched)
     ws, _ = _call(body)
     assert searched == ["今天金价多少"]
+
+
+def test_tool_call_while_reading_a_script_is_not_run_again(env, monkeypatch):
+    searched = []
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {"results": []})
+
+    async def body(ws, call):
+        _hear(env, "北京天气怎么样")
+        _flash_tool(env, "web_search", query="北京天气")
+        await until(lambda: env.said())  # 念「我查一下」
+        env.feed("response.created")
+        env.feed("response.function_call_arguments.done", name="web_search", call_id="again", arguments='{"query": "北京 天气 今天"}')
+        await until(lambda: any('"again"' in json.dumps(m) for m in env.sent))
+        env.feed("response.done", response={"status": "completed"})
+        await asyncio.sleep(0.2)
+    _call(body)
+    assert searched == ["北京天气"]
+
+
+def test_mentioning_search_in_a_long_answer_does_not_search(env, monkeypatch):
+    searched = []
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {"results": []})
+
+    async def body(ws, call):
+        _hear(env, "你还缺什么能力")
+        _flash_says(env, "我现在只能查网页，没法直接调用地图或生活服务平台。")
+        await asyncio.sleep(0.3)
+    _call(body)
+    assert searched == []
 
 
 def test_claiming_to_think_without_the_tool_really_thinks(env, monkeypatch):
