@@ -18,6 +18,7 @@ from .. import db, settings
 from . import _wealth_market as market
 from . import _wealth_sell_backtest as sell_backtest
 from . import _wealth_sell_plan as sell_plan
+from . import _wealth_signals as signals
 from . import _wealth_switch_plan as switch_plan
 from . import _wealth_target_plan as target_plan
 from . import _wealth_valuation as asset_valuation
@@ -243,6 +244,8 @@ def refresh(symbols: Iterable[str] | None = None) -> dict[str, Any]:
                 inserted += store_news([n for n in found if not terms or any(t in n["title"].lower() for t in terms)], _bucket(symbol), symbol)
             result["news_inserted"] = inserted
             stats["symbols"][symbol] = result
+        if wanted is None:
+            _refresh_benchmarks(stats)
         stats["research"] = refresh_research()
         record_job("positions", started, "partial" if stats["errors"] else "completed", json.dumps(stats["errors"], ensure_ascii=False) if stats["errors"] else "")
         return stats
@@ -251,6 +254,23 @@ def refresh(symbols: Iterable[str] | None = None) -> dict[str, Any]:
         raise
     finally:
         _refresh_lock.release()
+
+
+def _refresh_benchmarks(stats: dict[str, Any]) -> None:
+    """强弱信号比较用的大盘：只存日线，第一次取两年，之后补最近几天。"""
+    for symbol in dict.fromkeys(bench for bench, _ in signals.BENCHMARKS.values()):
+        try:
+            history_range = "5d" if len(price_history(symbol, signals.MIN_BARS)) >= signals.MIN_BARS else HISTORY_RANGE
+            store_bars(symbol, "1d", market.chart(symbol, history_range, "1d")["bars"])
+        except Exception as exc:
+            stats["errors"][f"{symbol}:benchmark"] = f"{type(exc).__name__}: {exc}"
+
+
+def signal_snapshot(symbol: str) -> dict[str, Any] | None:
+    bench = signals.BENCHMARKS.get(symbol)
+    if not bench:
+        return None
+    return signals.snapshot(price_history(symbol, days=600), price_history(bench[0], days=600), bench[1])
 
 
 def refresh_research(force: bool = False) -> dict[str, Any]:
@@ -370,6 +390,7 @@ def sell(symbol: str, target_avg: float | None = None, horizon_days: int | None 
         },
         "plan": plan,
         "timing": _sell_timing(symbol, meta["currency"], price),
+        "signals": _sell_signals(symbol, price, target, daily, total - sold_shares, lot, market_code),
         "costs": {"schedule": costs, "labels": sell_plan.COST_LABELS},
         "backtest": sell_backtest_evidence(horizon, target / price - 1),
         "ceiling": ceiling,
@@ -386,6 +407,13 @@ def sell(symbol: str, target_avg: float | None = None, horizon_days: int | None 
         "refresh_minutes": read_positions().get("refresh_minutes", 60),
         "generated_at": utc_now(),
     }
+
+
+def _sell_signals(symbol: str, price: float, target: float, daily: list[dict[str, Any]], remaining: int, lot: int, market_code: str) -> dict[str, Any]:
+    """和大盘比、成交量、均线的现状，减持阶段表，组合回放。只作观察，不改挂单。"""
+    report = signals.load(DATA) if symbol == signals.HOLDOUT else None    # 回放用的是美团的价格和阶梯
+    return {"snapshot": signal_snapshot(symbol), "stages": signals.stages(price, target, daily, report), "evidence": signals.evidence(report),
+            "example": signals.combo_example(price, remaining, lot, market_code), "disclaimer": signals.DISCLAIMER}
 
 
 def _sell_timing(symbol: str, currency: str, price: float) -> dict[str, Any] | None:
@@ -486,6 +514,28 @@ def run_switch_backtest() -> dict[str, Any]:
                                     threshold_ratio=tax["threshold"] / price, target_ratio=float(item.get("target_avg") or price * 1.1) / price)
     (DATA / switch_plan.RESULT_FILE).write_text(json.dumps(report, ensure_ascii=False, indent=1))
     return report
+
+
+def run_signals_backtest(refresh: bool = True) -> dict[str, Any]:
+    """强弱信号分组和减持组合回放，阶梯用当前页面的挂单。纯 Python，约半分钟。"""
+    if not _backtest_lock.acquire(blocking=False):
+        raise Busy("减持回测正在运行")
+    try:
+        data = sell(signals.HOLDOUT)
+        price, rows = data["quote"]["price"], data["plan"]["ladder"]
+        total = sum(r["shares"] for r in rows)
+        ladder = [(r["price"] / price, r["shares"] / total) for r in rows]
+        _, rate = sell_plan._linear_cost(sell_plan.cost_schedule("HK", read_positions().get("costs")))
+        report = signals.run_backtest(DATA, price, ladder, rate, refresh=refresh)
+        signals.save(report, DATA)
+        return report
+    finally:
+        _backtest_lock.release()
+
+
+def signals_backtest_due() -> bool:
+    report = signals.load(DATA)
+    return not report or _hours_since(report["generated_at"]) > 24 * signals.CACHE_DAYS
 
 
 def sell_backtest_due() -> bool:
@@ -642,6 +692,7 @@ def target(goal: float | None = None, shape: str | None = None, delay: int | Non
             "curve": [{"target": g, "probability": tp.hit_probability(result["mu"], result["spread"], g)} for g in tp.CURVE],
             "similar": similar, "valuation": valuation, "news": news, "timing": own_timing, "reasons": lines,
             "val_timing": asset_timing(symbol, histories[symbol]["close"], closes[-1], asset(symbol)["currency"], valuation.get("forwardPE"), own_timing),
+            "signal": signal_snapshot(symbol),
         })
     # 债基组合：按净值，没有实时报价、趋势和新闻背景
     bond = histories[tp.BOND]

@@ -249,3 +249,16 @@ def test_chat_context_survives_plan_errors(client, monkeypatch):
     monkeypatch.setattr(wealth.svc, "target", boom)
     assert "暂时算不出来：正在回测" in wealth.agent_context("wealth:target")
     assert "用户正在看" not in wealth.agent_context("")      # 侧边栏的新对话没有绑定页面
+
+
+def test_sell_plan_includes_signals_without_changing_plan(positions):
+    before = svc.sell("3690.HK")
+    assert before["signals"]["snapshot"] is None    # 还没有大盘数据
+    assert before["signals"]["evidence"] is None
+    assert any(r["active"] for r in before["signals"]["stages"])
+    bench = [_bar(datetime.now(UTC) - timedelta(days=d), 3.0) for d in range(300, 0, -1)]
+    svc.store_bars("3033.HK", "1d", bench)
+    after = svc.sell("3690.HK")
+    assert after["signals"]["snapshot"]["benchmark"]["name"] == "恒生科技 ETF"
+    assert after["plan"]["ladder"] == before["plan"]["ladder"]
+    assert after["plan"]["probability_target"] == before["plan"]["probability_target"]

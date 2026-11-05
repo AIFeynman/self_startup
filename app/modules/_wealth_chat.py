@@ -61,6 +61,14 @@ def _timing(t: dict[str, Any] | None) -> list[str]:
     return out
 
 
+def _signal(s: dict[str, Any] | None) -> list[str]:
+    """和大盘比、成交量、均线的现状（目标页每个标的、减持页共用）。"""
+    if not s:
+        return []
+    return [f"强弱信号（{s.get('as_of')}）：分数 {s.get('score'):+d}，{s.get('label')}" + ("，已触发转弱" if s.get("weak_exit") else ""),
+            *[f"{part.get('label')}：{part.get('text')}" for part in (s.get("relative") or {}, s.get("volume") or {}, s.get("ma") or {}, s.get("benchmark") or {})]]
+
+
 def _orders(plan: dict[str, Any]) -> list[str]:
     out = []
     for order in plan.get("orders") or []:
@@ -83,6 +91,7 @@ def target_context(d: dict[str, Any], view: dict[str, Any], region: dict[str, An
         lines.append(f"- {a['name']}（{a['symbol']}）现价 {_num(a.get('price'))} {a.get('currency', '')}：{a.get('action_label', '—')}，"
                      f"一年达标概率 {_pct(a.get('probability'), digits=0)}，悲观 10% {_pct(a.get('p10'), True)} / 中位 {_pct(a.get('p50'), True)} / 乐观 10% {_pct(a.get('p90'), True)}")
         lines += [f"  {x}" for x in _timing(a.get("val_timing"))]
+        lines += [f"  {x}" for x in _signal(a.get("signal"))]
     s, hist = plan.get("stats") or {}, plan.get("history") or {}
     weights = " · ".join(f"{names.get(k, k)} {_pct(v, digits=0)}" for k, v in (plan.get("weights") or {}).items() if v)
     lines += [f"### {mode_name}方案配比\n{weights}",
@@ -121,6 +130,17 @@ def sell_context(d: dict[str, Any], view: dict[str, Any]) -> str:
     timing = _timing(d.get("timing"))
     if timing:
         lines += ["### 估值和均线", *timing]
+    sig = d.get("signals") or {}
+    if sig.get("snapshot"):
+        lines += ["### 和大盘比、成交量、均线", *_signal(sig["snapshot"])]
+    current = next((r for r in sig.get("stages") or [] if r.get("active")), None)
+    if current:
+        lines.append(f"当前阶段：{current['name']}（{current['range']}）。重点观察：{current['watch']}。减持含义：{current['view']}。回测：{current['evidence']}")
+    ev = sig.get("evidence") or {}
+    if ev.get("findings"):
+        lines += [f"### 减持组合回放（{ev.get('years')} 年，每股价值，含卖出后转红利低波）", *[f"- {x}" for x in ev["findings"]]]
+        for key, group in (ev.get("combos") or {}).items():
+            lines.append(f"{(ev.get('labels') or {}).get(key, key)}：" + "；".join(f"{r['label']} 平均 {r['mean']:.1f}、最差 10% {r['p10']:.1f}" for r in group["rows"].values()))
     sw = d.get("switch") or {}
     if sw.get("strategies"):
         lines.append(f"### 换 QQQ 对比（{sw.get('years')} 年，以现在全部卖出的税后到手为 1 倍）")
