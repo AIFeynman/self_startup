@@ -784,3 +784,168 @@ def test_diversify_gives_one_release_one_official_pick():
     items = [pin("blog:a", "blog", "r"), pin("github:a", "github", "r"), pin("blog:b", "blog")]
     out = [x["id"] for x in rk.diversify(items)]
     assert out[:2] == ["blog:a", "blog:b"] and "github:a" in out[2:]
+
+
+# ---------- 每周偏好提炼 ----------
+
+def _reset_profile():
+    from app import db, settings
+    from app.modules import feed
+    for t in ("feed_items", "feed_feedback", "feed_vote_log", "feed_profiles"):
+        db.execute(f"DELETE FROM {t}")
+    settings.save({"feed": {"profile_on": True}})
+    feed._profile_state.update(error="", last_try=0.0)
+
+
+def _prof_rows(n, word):
+    return [{"title": f"{word} {i}", "summary": "", "source": "hn", "signal": "赞", "at": ""} for i in range(n)]
+
+
+def test_profile_samples_signals_and_priority():
+    from app.modules import _feed_profile as prof
+    items = [_it("a", "liked"), _it("b", "disliked"), _it("c", "hidden"), _it("d", "saved"), _it("e", "deep", url="https://example.com/deep"),
+             _it("f", "imported good", extra={"le_rating": "good"}), _it("g", "imported bad", extra={"le_rating": "bad"}), _it("h", "untouched"),
+             _it("i", "saved then disliked")]
+    fb = {"a": {"vote": 1}, "b": {"vote": -1}, "c": {"hidden": 1}, "d": {"saved": 1}, "i": {"vote": -1, "saved": 1}}
+    s = prof.samples(items, fb, {rk.norm_url("https://example.com/deep")})
+    assert {r["title"] for r in s["liked"]} == {"liked", "saved", "deep", "imported good"}
+    assert {r["title"] for r in s["disliked"]} == {"disliked", "hidden", "imported bad", "saved then disliked"}
+    assert s["native"] == 6
+
+
+def test_profile_normalize_drops_contradicting_terms():
+    from app.modules import _feed_profile as prof
+    sample = {"liked": _prof_rows(3, "benchmark"), "disliked": _prof_rows(3, "tutorial")}
+    raw = {"summary": "x", "boost": ["benchmark", "tutorial", "agent", "both"], "penalize": ["tutorial", "benchmark", "both"],
+           "recall": {"en": ["evals"], "zh": "不是列表"}, "differences": [{"dimension": "深度", "liked": "深", "disliked": "浅"}, "坏数据"]}
+    out = prof.normalize(raw, sample, interests=["agent"])
+    assert out["boost"] == ["benchmark"]    # tutorial 方向相反，agent 是用户自己的兴趣词，both 两边都写了
+    assert out["penalize"] == ["tutorial"]
+    assert out["recall"] == {"en": ["evals"], "zh": []}
+    assert out["differences"] == [{"dimension": "深度", "liked": "深", "disliked": "浅"}]
+
+
+def test_profile_moves_ranking_and_says_why():
+    items = [_it("a", "Agent benchmark results"), _it("b", "Agent tutorial for beginners"), _it("c", "Agent news")]
+    profile = {"boost": ["benchmark"], "penalize": ["tutorial"]}
+    out = rk.rank(items, now=NOW, profile=profile)
+    assert [x["id"] for x in out] == ["a", "c", "b"]
+    assert "符合你的偏好（benchmark）" in out[0]["why"] and "你常踩的类型（tutorial）" in out[2]["why"]
+    plain = {x["id"]: x["score"] for x in rk.rank(items, now=NOW)}
+    assert plain["a"] == plain["c"]    # 不给 profile 时排序不受影响
+
+
+def test_recall_terms_respects_dismissed_stats_and_limit():
+    from app.modules import _feed_profile as prof
+    p = {"recall": {"en": ["evals", "Rejected", "bad one", "kept", "extra"], "zh": ["评测"]}}
+    got = prof.recall_terms(p, "hn", ["evals"], {"hn|bad one": {"verdict": "低效"}}, ["rejected"])
+    assert got == ["kept", "extra"]
+    assert prof.recall_terms(p, "zhihu", [], None, []) == ["评测"]
+    assert prof.recall_terms(None, "hn", [], None, []) == []
+
+
+def test_vote_weeks_counts_last_action_only():
+    from app.modules import _feed_profile as prof
+    now = datetime(2026, 11, 5, 12)  # 周四，本周一是 11/02
+    log = [{"item_id": "a", "vote": 1, "at": "2026-10-27T10:00:00"}, {"item_id": "a", "vote": 0, "at": "2026-10-27T10:00:05"},  # 点完取消
+           {"item_id": "b", "vote": 1, "at": "2026-10-28T10:00:00"}, {"item_id": "b", "vote": -1, "at": "2026-11-03T10:00:00"},  # 改了主意，算新的这周
+           *[{"item_id": f"l{i}", "vote": 1, "at": "2026-11-02T00:00:00"} for i in range(4)],
+           *[{"item_id": f"m{i}", "vote": 1 if i < 2 else -1, "at": "2026-11-01T23:59:59"} for i in range(5)],
+           {"item_id": "old", "vote": 1, "at": "2020-01-01T00:00:00"}]
+    weeks = prof.vote_weeks(log, now, [{"id": 7, "created_at": "2026-11-04T09:00:00"}])
+    assert len(weeks) == prof.WEEKS and weeks[-1]["week"] == "2026-11-02"
+    assert (weeks[-1]["likes"], weeks[-1]["dislikes"], weeks[-1]["rate"], weeks[-1]["versions"]) == (4, 1, 0.8, [7])
+    assert (weeks[-2]["likes"], weeks[-2]["dislikes"], weeks[-2]["thin"]) == (2, 3, False)
+    assert prof.trend(weeks) == {"from_week": "2026-10-26", "to_week": "2026-11-02", "from_rate": 0.4, "to_rate": 0.8, "delta": 0.4}
+    weeks[-1]["thin"] = True
+    assert prof.trend(weeks) is None    # 少于两周样本够的，不比
+
+
+def _seed_votes(client, liked=5, disliked=3):
+    from app import db
+    _reset_profile()
+    for i, (word, n) in enumerate((("benchmark", liked), ("tutorial", disliked))):
+        for j in range(n):
+            db.execute("INSERT INTO feed_items (id, source, type, title, url) VALUES (?,?,?,?,?)",
+                       [f"{word}{j}", "hn", "discussion", f"{word} post {j}", f"https://example.com/{word}{j}"])
+            assert client.post("/api/feed/feedback", json={"id": f"{word}{j}", "vote": 1 - 2 * i}).status_code == 200
+
+
+def test_profile_api_runs_applies_and_stays_append_only(client, monkeypatch):
+    from app import agent, db
+    from app.modules import feed
+    calls = []
+    answer = {"summary": "爱看评测", "interests": [{"name": "评测", "why": "赞过"}], "differences": [{"dimension": "类型", "liked": "评测", "disliked": "教程"}],
+              "boost": ["benchmark"], "penalize": ["tutorial"], "recall": {"en": ["evals"], "zh": []}}
+    _reset_profile()
+    monkeypatch.setattr(agent, "run_once", lambda prompt, **kw: calls.append((prompt, kw)) or {"text": "好的\n```json\n" + json.dumps(answer) + "\n```", "log": ""})
+    assert client.post("/api/feed/profile/run").status_code == 400    # 没样本不调模型
+    assert not calls
+    _seed_votes(client)
+    v = client.post("/api/feed/profile/run").json()
+    assert calls[0][1]["fallback"] is False and calls[0][1]["engine"] == "claude" and calls[0][1]["readonly"] is True
+    assert calls[0][1]["model"] == "claude-sonnet-5-5"
+    assert "benchmark post 0" in calls[0][0]
+    assert v["profile"]["boost"] == ["benchmark"] and v["version_count"] == 1
+    assert v["weeks"][-1]["likes"] == 5 and v["weeks"][-1]["dislikes"] == 3 and v["weeks"][-1]["versions"]
+
+    assert "evals" in feed.queries("hn") and "evals" not in feed.queries("hn", auto=False)
+    assert "evals" not in feed.queries("x")    # X 上限 0，不加词
+    assert client.get("/api/feed/topics").json()["auto"]["hn"] == ["evals"]
+
+    item = next(x for x in feed.ranked() if x["id"] == "benchmark0")
+    assert "符合你的偏好" in item["why"]
+    client.post("/api/feed/profile/run")
+    assert len(db.rows("SELECT id FROM feed_profiles")) == 2     # 只追加
+
+    assert client.post("/api/feed/profile/toggle", json={"on": False}).json()["on"] is False
+    assert feed.active_profile() is None and "evals" not in feed.queries("hn")
+    assert "符合你的偏好" not in next(x for x in feed.ranked() if x["id"] == "benchmark0")["why"]
+    _reset_profile()
+
+
+def test_profile_failure_keeps_old_version_and_reports(client, monkeypatch):
+    from app import agent, db
+    _seed_votes(client)
+    monkeypatch.setattr(agent, "run_once", lambda prompt, **kw: {"text": "没有 JSON", "log": ""})
+    r = client.post("/api/feed/profile/run")
+    assert r.status_code == 502 and "没有 JSON" in r.json()["detail"]
+    assert not db.rows("SELECT id FROM feed_profiles")
+    assert "没有 JSON" in client.get("/api/feed/profile").json()["error"]
+
+
+def test_vote_log_appends_only_on_change(client):
+    from app import db
+    from app.modules import feed
+    _reset_profile()
+    db.execute("INSERT INTO feed_items (id, source, type, title) VALUES ('x','hn','discussion','t')")
+    for vote in (1, 1, 0, -1):
+        client.post("/api/feed/feedback", json={"id": "x", "vote": vote})
+    client.post("/api/feed/feedback", json={"id": "x", "saved": True})
+    assert [r["vote"] for r in db.rows("SELECT vote FROM feed_vote_log ORDER BY id")] == [1, 0, -1]
+    # 加日志之前就有的赞踩：按最后更新时间补算，不写库
+    db.execute("INSERT INTO feed_feedback (item_id, vote, updated_at) VALUES ('old', 1, '2026-11-01T00:00:00')")
+    assert {"item_id": "old", "vote": 1, "at": "2026-11-01T00:00:00"} in feed._vote_log()
+
+
+def test_profile_due_rules(client, monkeypatch):
+    from datetime import datetime as dt
+
+    from app import db
+    from app.modules import feed
+    _reset_profile()
+    assert feed.profile_due() is False     # 样本不够
+    _seed_votes(client)
+    assert feed.profile_due() is True      # 第一版不用等
+    old = (dt.now() - timedelta(days=8)).isoformat(timespec="seconds")
+    recent = (dt.now() - timedelta(days=1)).isoformat(timespec="seconds")
+    db.insert("feed_profiles", {"created_at": recent, "data": "{}"})
+    assert feed.profile_due() is False     # 还没满一周
+    db.execute("UPDATE feed_profiles SET created_at=?", [old])
+    assert feed.profile_due() is True      # 满一周且之后有新反馈
+    db.execute("UPDATE feed_feedback SET updated_at=?", [(dt.now() - timedelta(days=9)).isoformat(timespec="seconds")])
+    assert feed.profile_due() is False     # 没新反馈，不花模型
+    db.execute("UPDATE feed_feedback SET updated_at=?", [dt.now().isoformat(timespec="seconds")])
+    feed._profile_state["last_try"] = dt.now().timestamp()
+    assert feed.profile_due() is False     # 刚失败过，隔一天再试
+    _reset_profile()

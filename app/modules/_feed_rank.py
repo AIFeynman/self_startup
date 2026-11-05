@@ -15,7 +15,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
      "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "trending": 0.8,
-     "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3}
+     "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3,
+     "pref": 0.3, "pref_max": 3, "avoid": -0.4, "avoid_max": 3}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
 OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
                   "openai.com": "OpenAI", "deepmind.google": "Google DeepMind", "blog.google": "Google",
@@ -200,7 +201,8 @@ def _leave_one_out(aff: dict, it: dict) -> dict:
 
 
 def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, interests: list[str],
-               aff: dict | None = None, fb: dict | None = None, release: datetime | None = None) -> tuple[float, list[str]]:
+               aff: dict | None = None, fb: dict | None = None, release: datetime | None = None,
+               pref: dict | None = None) -> tuple[float, list[str]]:
     # why 的顺序 = 读者判断「值不值得看」的顺序：硬信号（官方 / 长文 / 关注 / 多源）→ 热度 → 新鲜 → 兴趣 → 偏好
     lead: list[str] = []
     why: list[str] = []
@@ -283,6 +285,16 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
         if src_s >= 0.3:
             why.append(f"你常赞 {SOURCE_LABEL.get(src, src)}")
 
+    if pref:
+        good = [t for t, pat in pref["boost"] if pat.search(text)]
+        bad = [t for t, pat in pref["penalize"] if pat.search(text)]
+        if good:
+            s += W["pref"] * min(len(good), W["pref_max"])
+            why.append("符合你的偏好（" + "、".join(good[:2]) + "）")
+        if bad:
+            s += W["avoid"] * min(len(bad), W["avoid_max"])
+            why.append("你常踩的类型（" + "、".join(bad[:2]) + "）")
+
     rating = (it.get("extra") or {}).get("le_rating") or ""
     if rating in LE_PRIOR:
         s += LE_PRIOR[rating]
@@ -300,12 +312,14 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
 
 def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float = 72, interests: list[str] = (),
          feedback: dict[str, dict] | None = None, examples: list[dict] | None = None,
-         include_hidden: bool = False) -> list[dict]:
+         include_hidden: bool = False, profile: dict | None = None) -> list[dict]:
     """items: feed_items 行（extra 已解析成 dict）。feedback: {item_id: {vote, saved, hidden}}。
-    examples: 训练亲和度的样本（赞/踩/收藏 + learn_evolve 评分）。返回去重后按分数降序的新列表。"""
+    examples: 训练亲和度的样本（赞/踩/收藏 + learn_evolve 评分）。profile: 每周提炼的偏好（boost / penalize 词）。
+    返回去重后按分数降序的新列表。"""
     now = now or datetime.now(timezone.utc)
     feedback = feedback or {}
     aff = build_affinity(examples) if examples else None
+    pref = {k: [(t, _interest_re(t)) for t in profile.get(k) or []] for k in ("boost", "penalize")} if profile else None
     pops = pop_index(items, now)
     releases = release_pairs(items, now)
 
@@ -321,7 +335,7 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
         pn = pop_norm(pops, it)
         rel_t, rel_key = releases.get(it["id"], (None, ""))
         s, why = score_item(it, pop_norm=pn, now=now, half_life_h=half_life_h, interests=list(interests),
-                            aff=aff, fb=fb, release=rel_t)
+                            aff=aff, fb=fb, release=rel_t, pref=pref)
         pin = important_official(it, now) or bool(rel_t and (now - rel_t).total_seconds() <= PIN_DAYS * 86400)
         if pin:
             why.insert(1, "重要更新")    # 紧跟在「X 官方」后面

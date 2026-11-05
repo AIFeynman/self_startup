@@ -10,17 +10,18 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db, settings
+from .. import agent, db, settings
 from . import _feed_follow as follow
 from . import _feed_gist as gist
 from . import _feed_hn as hnd
 from . import _feed_product as pa
+from . import _feed_profile as prof
 from . import _feed_judge as judge
 from . import _feed_rank as rk
 from . import _feed_sources as src
@@ -58,11 +59,27 @@ CREATE TABLE IF NOT EXISTS feed_query_log (    -- 每个搜索词搜过几次：
     last_run    TEXT,
     PRIMARY KEY (source, query)
 );
+CREATE TABLE IF NOT EXISTS feed_vote_log (     -- 每次赞 / 踩 / 取消都追加一行：feed_feedback 只有当前状态，算不出每周变化
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id     TEXT NOT NULL,
+    vote        INTEGER NOT NULL,
+    at          TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS feed_profiles (     -- 每周提炼的偏好，只追加，最新一条生效
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    model       TEXT DEFAULT '',
+    n_liked     INTEGER DEFAULT 0,
+    n_disliked  INTEGER DEFAULT 0,
+    data        TEXT NOT NULL              -- summary / interests / differences / boost / penalize / recall
+);
 """
 
 # settings.feed 之外的旋钮的缺省值（可在 data/settings.json 的 feed 下覆盖）
 CFG_DEFAULTS = {
     "half_life_hours": 72,
+    "profile_on": True,           # 每周偏好提炼：关掉后不再自动提炼，提炼结果也不影响排序和搜索词
+    "profile_days": 7,
     "auto_refresh_hours": 6,      # 数据超过这么久自动后台刷新；0 = 关闭
     "stale_source_days": 7,       # 某来源最新条目早于这么多天，status 里标为停更
     # 搜索关键词：一份主题表派生 HN / GitHub / Reddit / YouTube / 知乎（/ X）的搜索词，见 _feed_topics.py；
@@ -233,12 +250,14 @@ def _feedback() -> dict[str, dict]:
             for r in db.rows("SELECT * FROM feed_feedback")}
 
 
-def _examples(items: list[dict], fb: dict[str, dict]) -> list[dict]:
-    """亲和度样本：本平台的赞/收藏（+）与踩（-）；早先从 learn_evolve 导入的条目，其 star/good（+）与 bad（-）评分也算。"""
+def _examples(items: list[dict], fb: dict[str, dict], deep_urls: set[str] = frozenset()) -> list[dict]:
+    """亲和度样本：本平台的赞/收藏/深读（+）与踩/隐藏（-）；早先从 learn_evolve 导入的条目，其 star/good（+）与 bad（-）评分也算。"""
     ex = []
     for it in items:
         f = fb.get(it["id"], {})
-        pol = 1 if (f.get("vote", 0) > 0 or f.get("saved")) else (-1 if f.get("vote", 0) < 0 else 0)
+        pol = 1 if (f.get("vote", 0) > 0 or f.get("saved")) else (-1 if (f.get("vote", 0) < 0 or f.get("hidden")) else 0)
+        if not pol and rk.norm_url(it.get("url") or "") in deep_urls:
+            pol = 1
         if not pol:
             pol = {"star": 1, "good": 1, "bad": -1}.get(it["extra"].get("le_rating", ""), 0)
         if pol:
@@ -269,8 +288,8 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     _mark_gone(items)
     fb = _feedback()
     out = rk.rank(items, now=now, half_life_h=float(cfg("half_life_hours")),
-                  interests=list(cfg("interests") or []), feedback=fb, examples=_examples(items, fb),
-                  include_hidden=saved)
+                  interests=list(cfg("interests") or []), feedback=fb, examples=_examples(items, fb, _deep_urls()),
+                  include_hidden=saved, profile=active_profile())
     if saved:
         out = [x for x in out if x["feedback"].get("saved")]
     if type_ == "x_article":  # 「X 长文」标签页：自己发的长文 + 引用了长文的推文
@@ -303,13 +322,18 @@ def src_list(lst: str) -> list:
     return follow.effective(list(cfg(lst) or []), follow_cfg(), lst)
 
 
-def queries(source: str, stats: dict | None = None) -> list[str]:
-    """某来源这次搜哪些词：settings 显式写了 <来源>_queries 用它，否则从主题表派生（效果差的排后、按上限截）。"""
+def queries(source: str, stats: dict | None = None, auto: bool = True) -> list[str]:
+    """某来源这次搜哪些词：settings 显式写了 <来源>_queries 用它，否则从主题表派生（效果差的排后、按上限截），
+    再加上每周提炼的新词（auto，不占上限）。"""
     explicit = settings.get(f"feed.{source}_queries")
     if explicit is not None:
         return list(explicit or [])
     caps = {**topics.CAPS, **(cfg("topic_caps") or {})}
-    return topics.queries_for(list(cfg("topics") or []), source, stats, cap=int(caps.get(source, 6)))
+    cap = int(caps.get(source, 6))
+    out = topics.queries_for(list(cfg("topics") or []), source, stats, cap=cap)
+    if auto and cap > 0:   # 上限 0 的来源（X 按量付费）不加词
+        out += prof.recall_terms(active_profile(), source, out, stats, settings.get("feed.topic_dismissed", []) or [])
+    return out
 
 
 # 采集器 → 它会用到搜索词的来源；跑完记查询日志。YouTube / 知乎没 key 时不搜，不记
@@ -793,6 +817,8 @@ def feedback(body: FeedbackIn):
     new = {"vote": max(-1, min(1, body.vote)) if body.vote is not None else cur["vote"],
            "saved": int(body.saved) if body.saved is not None else cur["saved"],
            "hidden": int(body.hidden) if body.hidden is not None else cur["hidden"]}
+    if new["vote"] != cur["vote"]:
+        db.execute("INSERT INTO feed_vote_log (item_id, vote, at) VALUES (?,?,?)", [body.id, new["vote"], db.now()])
     db.execute("INSERT INTO feed_feedback (item_id, vote, saved, hidden, updated_at) VALUES (?,?,?,?,?) "
                "ON CONFLICT(item_id) DO UPDATE SET vote=excluded.vote, saved=excluded.saved, hidden=excluded.hidden, "
                "updated_at=excluded.updated_at", [body.id, new["vote"], new["saved"], new["hidden"], db.now()])
@@ -903,6 +929,7 @@ def topics_view() -> dict:
     explicit = [s for s in topics.LANG if settings.get(f"feed.{s}_queries") is not None]
     caps = {**topics.CAPS, **(cfg("topic_caps") or {})}
     return {"topics": list(cfg("topics") or []), "queries": {s: queries(s, stats) for s in topics.LANG},
+            "auto": {s: queries(s, stats)[len(queries(s, stats, auto=False)):] for s in topics.LANG},
             "stats": stats, "caps": caps, "explicit": explicit, "labels": topics.SOURCE_LABEL, "langs": topics.LANG,
             "suggestions": settings.get("feed.topic_suggestions", []) or [], "days": topics.STATS_DAYS}
 
@@ -985,6 +1012,130 @@ def maybe_auto_refresh() -> bool:
     return True
 
 
+# ---------- 每周偏好提炼 ----------
+
+_profile_lock = threading.Lock()
+_profile_state = {"error": "", "last_try": 0.0}   # 失败后隔一天才自动重试；重启后清零无妨
+
+
+def _latest_profile() -> dict | None:
+    r = db.row("SELECT * FROM feed_profiles ORDER BY id DESC LIMIT 1")
+    return {**json.loads(r.pop("data")), **r} if r else None
+
+
+def active_profile() -> dict | None:
+    return _latest_profile() if cfg("profile_on") else None
+
+
+def _profile_samples() -> dict:
+    _ensure_cols()
+    fb = {r["item_id"]: r for r in db.rows("SELECT * FROM feed_feedback")}
+    return prof.samples(_load_items(), fb, _deep_urls())
+
+
+def _vote_log() -> list[dict]:
+    """加日志之前就有的赞踩没有历史，按它最后更新的时间算一次。"""
+    log_rows = db.rows("SELECT item_id, vote, at FROM feed_vote_log ORDER BY id")
+    seen = {r["item_id"] for r in log_rows}
+    old = [{"item_id": r["item_id"], "vote": r["vote"], "at": r["updated_at"]}
+           for r in db.rows("SELECT item_id, vote, updated_at FROM feed_feedback WHERE vote<>0 AND updated_at IS NOT NULL")
+           if r["item_id"] not in seen]
+    return old + log_rows
+
+
+def run_profile() -> dict:
+    """调本地 Claude（Sonnet，model_tiers.standard）提炼一版偏好并存下来。不回退 Codex，模型不对宁可这周不更新。"""
+    from . import plan
+    if not _profile_lock.acquire(blocking=False):
+        raise RuntimeError("正在提炼，稍等一下")
+    try:
+        _profile_state["last_try"] = time.time()
+        sample = _profile_samples()
+        if not prof.enough(sample):
+            raise ValueError(f"样本不够：至少要 {prof.MIN_LIKED} 条喜欢、{prof.MIN_DISLIKED} 条不喜欢，"
+                             f"现在 {len(sample['liked'])} / {len(sample['disliked'])}")
+        interests = list(cfg("interests") or [])
+        model = agent.tier_model("standard")
+        r = agent.run_once(prof.prompt(sample, interests), engine="claude", fallback=False, readonly=True, model=model)
+        raw = plan.extract_json(r["text"])
+        data = prof.normalize(raw, sample, interests) if isinstance(raw, dict) else {}
+        if not data.get("summary"):
+            raise RuntimeError("模型没有返回可用的结果：" + (r["text"] or r["log"] or "")[:200])
+        db.insert("feed_profiles", {"created_at": db.now(), "model": model, "n_liked": len(sample["liked"]),
+                                    "n_disliked": len(sample["disliked"]), "data": json.dumps(data, ensure_ascii=False)})
+        _profile_state["error"] = ""
+        return _latest_profile()
+    except Exception as e:
+        _profile_state["error"] = str(e)[:300]
+        raise
+    finally:
+        _profile_lock.release()
+
+
+def _profile_next(last: dict | None) -> str:
+    if not last:
+        return ""
+    return (datetime.fromisoformat(last["created_at"]) + timedelta(days=float(cfg("profile_days")))).isoformat(timespec="seconds")
+
+
+def profile_due() -> bool:
+    """到期（距上一版满 profile_days 天）、上一版之后有新反馈、样本够，才值得花一次模型。第一版不用等。"""
+    if not cfg("profile_on") or _profile_lock.locked() or time.time() - _profile_state["last_try"] < 86400:
+        return False
+    last = _latest_profile()
+    if last:
+        if db.now() < _profile_next(last):
+            return False
+        if not db.row("SELECT 1 FROM feed_feedback WHERE updated_at>? AND (vote<>0 OR saved OR hidden) LIMIT 1", [last["created_at"]]):
+            return False
+    return prof.enough(_profile_samples())
+
+
+def _profile_bg():
+    try:
+        run_profile()
+    except Exception as e:  # noqa: BLE001
+        log.warning("feed profile failed: %s", e)
+
+
+@router.get("/profile")
+def profile_view():
+    """进化面板：最新一版偏好、每周赞踩变化、下次更新时间。"""
+    last = _latest_profile()
+    versions = db.rows("SELECT id, created_at FROM feed_profiles ORDER BY id")
+    sample = _profile_samples()
+    weeks = prof.vote_weeks(_vote_log(), datetime.now(), versions)
+    return {"profile": last, "version_count": len(versions), "weeks": weeks, "trend": prof.trend(weeks),
+            "on": bool(cfg("profile_on")), "running": _profile_lock.locked(), "error": _profile_state["error"],
+            "next_at": _profile_next(last) if cfg("profile_on") else "",
+            "samples": {"liked": len(sample["liked"]), "disliked": len(sample["disliked"]), "native": sample["native"],
+                        "enough": prof.enough(sample), "min_liked": prof.MIN_LIKED, "min_disliked": prof.MIN_DISLIKED}}
+
+
+@router.post("/profile/run")
+def profile_run():
+    """手动提炼一版：阻塞到模型返回，约一两分钟。"""
+    if _profile_lock.locked():
+        raise HTTPException(409, "正在提炼，稍等一下")
+    try:
+        run_profile()
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(502, f"提炼失败：{e}") from e
+    return profile_view()
+
+
+class ProfileToggleIn(BaseModel):
+    on: bool
+
+
+@router.post("/profile/toggle")
+def profile_toggle(body: ProfileToggleIn):
+    settings.save({"feed": {"profile_on": body.on}})
+    return profile_view()
+
+
 def _auto_loop():
     time.sleep(90)  # 启动后先等一会儿，别和服务启动抢资源
     while True:
@@ -992,6 +1143,11 @@ def _auto_loop():
             maybe_auto_refresh()
         except Exception as e:  # noqa: BLE001
             log.warning("feed auto refresh check failed: %s", e)
+        try:
+            if profile_due():
+                threading.Thread(target=_profile_bg, daemon=True, name="feed-profile").start()
+        except Exception as e:  # noqa: BLE001
+            log.warning("feed profile check failed: %s", e)
         try:
             from . import _paper_maintain
             _paper_maintain.start()          # 论文库每周维护：到期才跑（paper.maintain_days）
