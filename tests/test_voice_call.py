@@ -1,4 +1,4 @@
-"""快慢思考通话的中转和慢思考调度：百炼、浏览器、Claude Code 都用假的，不联网。"""
+"""语音通话的中转和本机 Claude 调度：百炼、浏览器、Claude Code 都用假的，不联网。"""
 import asyncio
 import base64
 import json
@@ -9,10 +9,10 @@ import httpx
 import pytest
 import websockets
 
-from app import agent, chat, db, voice_call, voice_rt
+from app import agent, chat, db, settings, voice_call, voice_rt, voice_search_mcp, voice_tools
 from app.voice_think import Thinker, body_of, fallback_spoken
 
-ANSWER = "<spoken>你上周定的是先做中转。</spoken><brief>先做中转，理由是最影响体验</brief>\n完整回答：记录在 secret.md 第 3 行"
+ANSWER = "<spoken>你上周定的是先做中转。</spoken>\n完整回答：记录在 secret.md 第 3 行"
 
 
 class FakeWS:
@@ -122,23 +122,83 @@ def _rows(sid):
     return [(r["role"], r["content"]) for r in db.rows("SELECT role, content FROM chat_messages WHERE session_id=? ORDER BY id", [sid])]
 
 
-def test_session_goes_up_with_tools_and_mic_is_forwarded(env):
+def _ours(env, call, text):
+    """百炼念我们要它念的话。"""
+    async def go():
+        await call._say(text)
+        env.feed("response.created")
+        env.feed("response.audio.delta", delta=audio(5))
+        env.feed("response.audio_transcript.done", transcript=text)
+    return go()
+
+
+def _hear(env, text):
+    env.feed("input_audio_buffer.speech_started")
+    env.feed("input_audio_buffer.speech_stopped")
+    env.feed("conversation.item.input_audio_transcription.completed", transcript=text)
+
+
+def _slow_brain(monkeypatch, gate=None, answer=ANSWER):
+    asked = []
+
+    def run(prompt, **kw):
+        asked.append(prompt)
+        kw["on_proc"](object())
+        if gate:
+            gate.wait(3)
+        yield {"type": "delta", "text": answer}
+        yield {"type": "done", "text": answer}
+    monkeypatch.setattr(agent, "run_stream", run)
+    return asked
+
+
+def test_session_goes_up_only_to_read_and_mic_is_forwarded(env):
     async def body(ws, call):
         ws.in_.put_nowait({"type": "websocket.receive", "bytes": b"\x01\x02"})
         await until(lambda: env.of("input_audio_buffer.append"))
     _call(body)
-    assert {t["function"]["name"] for t in env.of("session.update")[0]["session"]["tools"]} >= {"think_deep", "web_search"}
+    session = env.of("session.update")[0]["session"]
+    assert session["tools"] == [] and session["max_history_turns"] == 1 and "念" in session["instructions"]
     assert base64.b64decode(env.of("input_audio_buffer.append")[0]["audio"]) == b"\x01\x02"
     assert env.closed and chat.active == 0
 
 
-def test_barge_in_cancels_clears_and_drops_late_audio(env):
+def test_every_sentence_goes_to_claude_and_only_spoken_goes_up(env, monkeypatch):
+    asked = _slow_brain(monkeypatch)
+
     async def body(ws, call):
-        env.feed("input_audio_buffer.speech_stopped")
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="第一句")
+        _hear(env, "上周定了啥")
+        await until(lambda: "你上周定的是先做中转。" in env.said())
+        await until(lambda: ws.told("slow"))
+    ws, call = _call(body)
+    assert "用户刚说：上周定了啥" in asked[0]
+    assert env.said() == ["你上周定的是先做中转。"]  # 没有任何标记，也没有别的
+    assert "secret.md" not in json.dumps(env.sent, ensure_ascii=False)
+    assert ("assistant", "完整回答：记录在 secret.md 第 3 行") in _rows(call.sid)
+
+
+def test_auto_response_is_dropped_and_ours_is_played(env):
+    # 百炼听完会自己接一句，关不掉（create_response:false 它不认），不能放出来
+    async def body(ws, call):
         env.feed("response.created")
-        env.feed("response.audio.delta", delta=audio(5))
-        env.feed("response.audio_transcript.delta", delta="这是一句很长的回答，用户没听完")
+        env.feed("response.audio.delta", delta=audio())
+        env.feed("response.audio_transcript.done", transcript="它自己接的话")
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: call.reply_done)
+        assert not ws.audio and not ws.told("reply")
+        await _ours(env, call, "我们的话")
+        await until(lambda: ws.audio and ws.told("reply"))
+    ws, call = _call(body)
+    assert all("它自己接的话" not in c for _, c in _rows(call.sid))
+
+
+def test_barge_in_cancels_clears_and_drops_late_audio(env, monkeypatch):
+    _slow_brain(monkeypatch, threading.Event())
+
+    async def body(ws, call):
+        _hear(env, "第一句")
+        await until(lambda: call.thinker.task)
+        await _ours(env, call, "这是一句很长的回答，用户没听完")
         await until(lambda: ws.audio and call.reply)
         env.feed("input_audio_buffer.speech_started")
         await until(lambda: ws.told("clear"))
@@ -147,7 +207,7 @@ def test_barge_in_cancels_clears_and_drops_late_audio(env):
         env.feed("response.done", response={"status": "cancelled"})
         await asyncio.sleep(0.05)
         assert len(ws.audio) == 1
-        assert any("打断" in t for t in env.said())  # 云端记的是整句，要告诉它用户只听到哪
+        call.thinker.cancel()
     ws, call = _call(body)
     rows = _rows(call.sid)
     assert rows[0] == ("user", "第一句")
@@ -158,9 +218,7 @@ def test_barge_in_cancels_clears_and_drops_late_audio(env):
 def test_barge_in_after_generation_finished_still_stops_playback(env):
     # 实测模型生成比播放快得多：用户打断时回应常常已经结束，cancel 会报错，但还在放的声音要停
     async def body(ws, call):
-        env.feed("response.created")
-        env.feed("response.audio.delta", delta=audio(5))
-        env.feed("response.audio_transcript.done", transcript="已经全部生成完的一句")
+        await _ours(env, call, "已经全部生成完的一句")
         env.feed("response.done", response={"status": "completed"})
         await until(lambda: not call.response_active and call.reply_done)
         env.feed("input_audio_buffer.speech_started")
@@ -170,196 +228,136 @@ def test_barge_in_after_generation_finished_still_stops_playback(env):
     assert _rows(call.sid)[0][1].endswith(chat.INTERRUPTED)
 
 
-def test_think_deep_result_is_spoken_when_safe_and_full_stays_local(env):
+def test_barge_in_before_our_response_starts_drops_it(env):
     async def body(ws, call):
-        env.feed("response.created")
-        env.feed("response.function_call_arguments.done", call_id="c1", name="think_deep", arguments='{"objective":"上周定了啥"}')
-        await until(lambda: env.of("conversation.item.create"))
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: env.of("response.create"))  # 先接一句
-        env.feed("response.created")
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: any(voice_rt.ANSWER_MARK in t for t in env.said()))
-        await until(lambda: ws.told("slow"))
-        env.feed("response.created")
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: any(voice_rt.NOTES_MARK in t for t in env.said()))  # 提纲悄悄记下，不触发说话
-    ws, call = _call(body)
-    output = [e["item"] for e in env.of("conversation.item.create") if e["item"]["type"] == "function_call_output"][0]
-    assert json.loads(output["output"]) == {"status": "accepted"} and output["call_id"] == "c1"
-    said = env.said()
-    assert f"{voice_rt.NOTES_MARK}先做中转，理由是最影响体验" in said and any("你上周定的是先做中转。" in t and voice_rt.ANSWER_MARK in t for t in said)
-    assert env.of("response.create")
-    # 完整回答只给本机：不上云，进记录，显示在屏幕上
-    assert "secret.md" not in json.dumps(env.sent, ensure_ascii=False)
-    assert "secret.md" in ws.told("slow")[0]["text"]
-    assert ("assistant", "完整回答：记录在 secret.md 第 3 行") in _rows(call.sid)
-
-
-def _say_without_tool(reply, transcript_first=True):
-    def feed(env):
-        if transcript_first:
-            env.feed("conversation.item.input_audio_transcription.completed", transcript="我纠结先做哪个")
-        env.feed("response.created")
-        env.feed("response.audio_transcript.done", transcript=reply)
-        env.feed("response.done", response={"status": "completed"})
-        if not transcript_first:
-            env.feed("conversation.item.input_audio_transcription.completed", transcript="我纠结先做哪个")
-    return feed
-
-
-@pytest.mark.parametrize("transcript_first", [True, False])
-def test_claimed_forward_without_tool_call_is_forwarded(env, monkeypatch, transcript_first):
-    # 实测 Flash 会只说「我转给慢思考」而不调工具；转写也可能比回应晚到
-    asked = []
-
-    def run(prompt, **kw):
-        asked.append(prompt)
-        kw["on_proc"](object())
-        yield {"type": "done", "text": ANSWER}
-    monkeypatch.setattr(agent, "run_stream", run)
-
-    async def body(ws, call):
-        _say_without_tool("这个我想一下。", transcript_first)(env)
-        await until(lambda: any("你上周定的是先做中转" in t for t in env.said()))  # 念结果等下一拍，不能只等 slow
-    ws, call = _call(body)
-    assert "我纠结先做哪个" in asked[0]
-
-
-def test_tool_name_spoken_aloud_counts_as_forward(env, monkeypatch):
-    # 实测 Flash 偶尔把「[调用 think_deep]」当话说出来，工具其实没调
-    asked = []
-
-    def run(prompt, **kw):
-        asked.append(prompt)
-        kw["on_proc"](object())
-        yield {"type": "done", "text": ANSWER}
-    monkeypatch.setattr(agent, "run_stream", run)
-
-    async def body(ws, call):
-        _say_without_tool("[调用 think_deep]")(env)
-        await until(lambda: asked)
-    _call(body)
-
-
-def _say_leak(env, text):
-    env.feed("conversation.item.input_audio_transcription.completed", transcript="算了")
-    env.feed("response.created")
-    env.feed("response.audio_transcript.delta", delta=text)
-    env.feed("response.audio.delta", delta=audio())
-
-
-def test_internal_words_are_muted_and_said_again(env):
-    async def body(ws, call):
-        _say_leak(env, "[正在处理]")
-        await until(lambda: ws.told("clear"))
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: env.of("response.create"))
-        assert not ws.audio and any("用户没听到" in t for t in env.said())
-        env.feed("response.created")  # 重说的不再拦，不能一直没声音
-        env.feed("response.audio_transcript.delta", delta="[好的]")
-        env.feed("response.audio.delta", delta=audio())
-        await until(lambda: ws.audio)
-        env.feed("response.done", response={"status": "completed"})
-        await asyncio.sleep(0.05)
-        assert len(env.of("response.create")) == 1
-    ws, call = _call(body)
-    assert all("正在处理" not in c for _, c in _rows(call.sid))
-
-
-def test_muted_reply_with_tool_call_still_runs_the_tool(env, monkeypatch):
-    asked = []
-
-    def run(prompt, **kw):
-        asked.append(prompt)
-        kw["on_proc"](object())
-        yield {"type": "done", "text": ANSWER}
-    monkeypatch.setattr(agent, "run_stream", run)
-
-    async def body(ws, call):
-        _say_leak(env, "我让后台分析一下。")
-        await until(lambda: ws.told("clear"))
-        assert not ws.audio and not env.of("response.cancel")
-        env.feed("response.function_call_arguments.done", name="think_deep", call_id="c1", arguments=json.dumps({"objective": "选哪个"}))
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: asked)
-        assert not any("用户没听到" in t for t in env.said())
-    _call(body)
-
-
-def test_muted_claim_without_tool_is_forwarded(env, monkeypatch):
-    asked = []
-
-    def run(prompt, **kw):
-        asked.append(prompt)
-        kw["on_proc"](object())
-        yield {"type": "done", "text": ANSWER}
-    monkeypatch.setattr(agent, "run_stream", run)
-
-    async def body(ws, call):
-        _say_leak(env, "[")  # 文字是一段段到的，先拦住，再看整句
-        await until(lambda: ws.told("clear"))
-        env.feed("response.audio_transcript.delta", delta="调用 think_deep]")
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: asked)
-    _call(body)
-
-
-def test_answer_with_internal_words_is_not_muted(env):
-    async def body(ws, call):
-        await call._respond()
-        env.feed("response.created")
-        env.feed("response.audio_transcript.delta", delta="这类任务放后台，再转交给同事。")
-        env.feed("response.audio.delta", delta=audio())
-        await until(lambda: ws.audio)
-        assert not ws.told("clear")
-    _call(body)
-
-
-def test_plain_reply_or_our_own_response_is_not_forwarded(env):
-    async def body(ws, call):
-        _say_without_tool("听得见，我在呢。")(env)
-        await asyncio.sleep(0.05)
-        assert call.thinker.task is None
-        call.last_user = "好的"
-        await call._respond()  # 念结果时的话里有「慢思考」，不算转交
-        env.feed("response.created")
-        env.feed("response.audio_transcript.done", transcript="慢思考说先做中转。")
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: call.reply_done and not call.response_active)
-        await asyncio.sleep(0.05)
-        assert call.thinker.task is None
-    _call(body)
-
-
-def test_result_waits_while_user_is_talking(env):
-    async def body(ws, call):
+        await call._say("要念还没开始的话")
         env.feed("input_audio_buffer.speech_started")
         await until(lambda: call.user_speaking)
-        call.thinker.ask("上周定了啥")
-        await until(lambda: ws.told("slow"))
-        await asyncio.sleep(0.1)
-        assert not any(voice_rt.ANSWER_MARK in t for t in env.said())
-        env.feed("input_audio_buffer.speech_stopped")
-        await until(lambda: any(voice_rt.ANSWER_MARK in t for t in env.said()))
+        env.feed("response.created")
+        env.feed("response.audio.delta", delta=audio())
+        await asyncio.sleep(0.05)
+        assert not ws.audio
     _call(body)
 
 
-def test_web_search_tool_returns_at_once_and_reads_the_answer(env, monkeypatch):
-    monkeypatch.setattr(voice_rt, "web_search", lambda q: {"results": [{"title": q}]})
-    monkeypatch.setattr(voice_rt, "spoken_search", lambda q, f: (f"搜到{f['results'][0]['title']}", {}))
+def test_answer_waits_while_user_is_talking(env, monkeypatch):
+    _slow_brain(monkeypatch)
 
     async def body(ws, call):
-        env.feed("response.created")
-        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"杭州天气"}')
-        await until(lambda: env.of("conversation.item.create"))
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: env.of("response.create"))
+        _hear(env, "上周定了啥")
+        env.feed("input_audio_buffer.speech_started")
+        await until(lambda: ws.told("slow"))
+        await asyncio.sleep(0.1)
+        assert not env.said()
+        env.feed("input_audio_buffer.speech_stopped")
+        await until(lambda: env.said())
     _call(body)
-    out = env.of("conversation.item.create")[0]["item"]
-    assert out["call_id"] == "s1" and "results" not in json.loads(out["output"])
-    assert any(voice_rt.ANSWER_MARK in s and "搜到杭州天气" in s for s in env.said())
-    assert len(env.of("response.create")) == 1
+
+
+def test_new_sentence_drops_answer_not_read_yet(env, monkeypatch):
+    asked = _slow_brain(monkeypatch)
+
+    async def body(ws, call):
+        _hear(env, "第一句")
+        env.feed("input_audio_buffer.speech_started")
+        await until(lambda: call.outbox)
+        env.feed("input_audio_buffer.speech_stopped")
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="不对，第二句")
+        await until(lambda: len(asked) == 2)
+    _call(body)
+    assert "用户刚说：不对，第二句" in asked[1] and "第一句\n" not in asked[1].split("用户刚说：")[1]
+
+
+def test_filler_only_when_claude_is_slow(env, monkeypatch):
+    monkeypatch.setattr(voice_call, "FILLER_S", 0.05)
+    gate = threading.Event()
+    _slow_brain(monkeypatch, gate)
+
+    async def body(ws, call):
+        _hear(env, "这个怎么选")
+        await until(lambda: env.said())
+        assert env.said()[0] in voice_call.FILLERS
+        env.feed("response.created")
+        env.feed("response.done", response={"status": "completed"})
+        gate.set()
+        await until(lambda: "你上周定的是先做中转。" in env.said())
+        assert len(env.said()) == 2
+    _call(body)
+
+
+def test_no_filler_when_answer_is_quick(env, monkeypatch):
+    _slow_brain(monkeypatch, answer="<spoken>在呢。</spoken>")
+
+    async def body(ws, call):
+        _hear(env, "喂")
+        await until(lambda: env.said())
+        await asyncio.sleep(0.1)
+    ws, _ = _call(body)
+    assert env.said() == ["在呢。"] and not ws.told("slow")  # 寒暄没有屏幕正文
+
+
+def test_progress_question_answers_without_restarting(env, monkeypatch):
+    gate = threading.Event()
+    asked = _slow_brain(monkeypatch, gate)
+
+    async def body(ws, call):
+        _hear(env, "查一下")
+        await until(lambda: call.thinker.task)
+        task = call.thinker.task
+        task.doing = "在上网查"
+        _hear(env, "还没找到吗？")
+        await until(lambda: "在上网查，稍等。" in env.said())
+        assert call.thinker.task is task and len(asked) == 1
+        call.thinker.cancel()
+    _call(body)
+
+
+def test_cancel_stops_thinking(env, monkeypatch):
+    _slow_brain(monkeypatch, threading.Event())
+
+    async def body(ws, call):
+        _hear(env, "查一下")
+        await until(lambda: call.thinker.task)
+        _hear(env, "算了")
+        await until(lambda: "好，不想了。" in env.said())
+        assert call.thinker.task is None
+    _call(body)
+
+
+def test_brain_switched_off_says_so(env, monkeypatch):
+    real = settings.get
+    monkeypatch.setattr(settings, "get", lambda p, d=None: False if p == "voice_rt.permissions.claude_code" else real(p, d))
+    asked = _slow_brain(monkeypatch)
+
+    async def body(ws, call):
+        _hear(env, "在吗")
+        await until(lambda: env.said())
+    _call(body)
+    assert env.said() == [voice_call.NO_BRAIN] and not asked
+
+
+def test_failed_brain_says_so(env, monkeypatch):
+    def run(prompt, **kw):
+        kw["on_proc"](object())
+        yield {"type": "error", "text": "坏了", "fatal": True}
+    monkeypatch.setattr(agent, "run_stream", run)
+
+    async def body(ws, call):
+        _hear(env, "在吗")
+        await until(lambda: env.said())
+    ws, call = _call(body)
+    assert "没想出来" in env.said()[0] and "坏了" not in json.dumps(env.sent, ensure_ascii=False)
+    assert any(role == "error" for role, _ in _rows(call.sid))
+
+
+def test_response_that_never_starts_does_not_block_results(env, monkeypatch):
+    monkeypatch.setattr(voice_call, "RESPONSE_WAIT_S", 0.05)
+
+    async def body(ws, call):
+        call.outbox.append("一句话")
+        await until(lambda: env.of("response.create"))
+        await until(lambda: not call.response_active)  # 百炼没有回应 response.create，不能一直占着
+    _call(body)
 
 
 def test_upstream_drop_falls_back_to_local(env):
@@ -386,16 +384,6 @@ def test_cannot_connect_falls_back_to_local(env, monkeypatch):
     assert ws.told("fallback") and chat.active == 0
 
 
-def test_response_that_never_starts_does_not_block_results(env, monkeypatch):
-    monkeypatch.setattr(voice_call, "RESPONSE_WAIT_S", 0.05)
-
-    async def body(ws, call):
-        call.want_response = True
-        await until(lambda: env.of("response.create"))
-        await until(lambda: not call.response_active)  # 百炼没有回应 response.create，不能一直占着
-    _call(body)
-
-
 def test_other_sites_cannot_open_the_call():
     assert voice_call._same_origin(FakeWS(origin="http://127.0.0.1:8780"))
     assert voice_call._same_origin(FakeWS())
@@ -403,7 +391,7 @@ def test_other_sites_cannot_open_the_call():
     assert not voice_call._same_origin(FakeWS(origin="http://127.0.0.1:9999"))
 
 
-# ---------- 慢思考调度 ----------
+# ---------- 本机 Claude ----------
 def _thinker(monkeypatch, events=(), gate=None):
     got = []
 
@@ -424,34 +412,48 @@ def _thinker(monkeypatch, events=(), gate=None):
     return Thinker(Loop(), lambda k, t: got.append((k, t)), system="s", dirs=[], history=lambda: "用户：你好"), got, run
 
 
-def test_second_question_queues_and_third_merges(monkeypatch):
+def test_new_sentence_merges_before_answer_and_replaces_after(monkeypatch):
     gate = threading.Event()
-    t, got, run = _thinker(monkeypatch, [{"type": "done", "text": ANSWER}], gate)
-    assert t.ask("甲") == "accepted" and t.ask("乙") == "queued" and t.ask("丙") == "queued"
-    assert t.queued == "乙；丙"
-    gate.set()
-    end = time.monotonic() + 3
-    while len(run.prompts) < 2 and time.monotonic() < end:
-        time.sleep(0.01)
-    assert "乙；丙" in run.prompts[1] and "用户：你好" in run.prompts[1]
-
-
-def test_update_restarts_with_new_info_and_old_result_is_dropped(monkeypatch):
-    gate = threading.Event()
-    t, got, run = _thinker(monkeypatch, [{"type": "done", "text": ANSWER}], gate)
-    t.ask("甲")
+    t, got, run = _thinker(monkeypatch, [{"type": "delta", "text": ANSWER}, {"type": "done", "text": ANSWER}], gate)
+    t.hear("甲")
     old = t.task
-    assert t.update("其实是周四") == "updated"
-    assert old.cancelled and "其实是周四" in t.task.objective and "甲" in t.task.objective
-    assert t.cancel() == "cancelled" and t.status() == {"state": "idle"}
+    t.hear("其实是周四")
+    assert old.cancelled and "甲\n其实是周四" == t.task.objective
+    t.task.spoke = True
+    t.hear("乙")
+    assert t.task.objective == "乙"
+    t.cancel()
+    assert t.status() == {"state": "idle"}
     gate.set()
     time.sleep(0.05)
     assert got == []
 
 
+def test_spoken_is_sent_as_soon_as_written_before_the_rest(monkeypatch):
+    gate = threading.Event()
+    t, got, run = _thinker(monkeypatch)
+
+    def later(prompt, **kw):
+        kw["on_proc"](object())
+        yield {"type": "delta", "text": "<spoken>先说这句。</spoken>"}
+        gate.wait(3)
+        yield {"type": "delta", "text": "正文"}
+        yield {"type": "done", "text": "<spoken>先说这句。</spoken>正文"}
+    monkeypatch.setattr(agent, "run_stream", later)
+    t.hear("甲")
+    end = time.monotonic() + 3
+    while not got and time.monotonic() < end:
+        time.sleep(0.01)
+    assert got == [("spoken", "先说这句。")]
+    gate.set()
+    while len(got) < 2 and time.monotonic() < end:
+        time.sleep(0.01)
+    assert got[1] == ("full", "正文")
+
+
 def test_cue_only_reports_real_new_activity(monkeypatch):
     t, _, _ = _thinker(monkeypatch, [], threading.Event())
-    t.ask("甲")
+    t.hear("甲")
     assert t.due_cue((0, 0)) == ""  # 还没有工具动作，不编
     t.task.doing = "在读资料"
     assert t.due_cue((0, 0)) == "在读资料"
@@ -466,7 +468,7 @@ def test_cue_only_reports_real_new_activity(monkeypatch):
 def test_output_format_fallbacks():
     assert fallback_spoken("**结论**是先做。理由有二。第一快。第二稳。") == "结论是先做。理由有二。第一快。"
     assert body_of(ANSWER) == "完整回答：记录在 secret.md 第 3 行"
-    assert body_of("<spoken>只有这句</spoken>") == "只有这句"
+    assert body_of("<spoken>只有这句</spoken>") == ""
 
 
 # ---------- 搜索 ----------
@@ -534,123 +536,10 @@ def test_helper_call_without_provider_passes_but_no_provider_at_all_stops():
     assert any(e.get("gateway") for e in agent._parse_claude(none))
 
 
-def test_internal_words_cover_naming_the_model_but_not_talking_about_it():
-    assert voice_call.INTERNAL_WORDS.search("这个问题我让 Claude 结合资料想想。")
-    assert not voice_call.INTERNAL_WORDS.search("Claude Code 和 Codex 各自适合做什么，我想一下。")
-
-
-def test_search_query_that_drifted_from_the_transcript_goes_back_once(env, monkeypatch):
-    searched = []
-    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {"results": []})
-
-    async def body(ws, call):
-        env.feed("input_audio_buffer.speech_started")
-        env.feed("input_audio_buffer.speech_stopped")
-        env.feed("response.created")
-        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"这个月新车"}')
-        await asyncio.sleep(0.1)
-        assert not env.of("conversation.item.create")  # 转写到了才执行
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="这个月的新模型有哪些")
-        await until(lambda: env.of("conversation.item.create"))
-        assert not searched and "这个月的新模型有哪些" in env.of("conversation.item.create")[0]["item"]["output"]
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: env.of("response.create"))
-        env.feed("response.created")
-        env.feed("response.function_call_arguments.done", call_id="s2", name="web_search", arguments='{"query":"11月 新模型"}')
-        await until(lambda: searched)
-    _call(body)
-    assert searched == ["11月 新模型"]
-
-
-@pytest.mark.parametrize("query,heard,ok", [("今天杭州天气", "今天杭州天气怎么样？", True), ("OpenAI 发布", "OpenAI 最近发布了什么", True),
-                                            ("今天北京空气质量", "今天北京的空气质量怎么样", True), ("2026年11月 新模型", "这个月的新模型有哪些", True),
-                                            ("这个月新车", "这个月的新模型有哪些", False), ("上海天气", "那上海呢", False)])
-def test_query_from_user(query, heard, ok):
-    assert voice_call._query_from_user(query, heard) is ok
-
-
-def test_reply_text_waits_for_transcript_so_a_pause_shows_nothing(env):
-    async def body(ws, call):
-        env.feed("input_audio_buffer.speech_started")
-        env.feed("input_audio_buffer.speech_stopped")
-        env.feed("response.created")
-        env.feed("response.audio_transcript.done", transcript="好，你慢慢说")
-        env.feed("response.audio.delta", delta=audio())
-        await until(lambda: ws.audio)  # 声音不等转写，不增加延迟
-        assert not ws.told("reply")
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下")
-        await until(lambda: call.hold_until)
-        await asyncio.sleep(0.25)
-        assert not ws.told("reply") and ws.told("clear")
-    _call(body)
-
-
-def test_reply_text_shows_when_transcript_arrives_or_is_late(env, monkeypatch):
-    monkeypatch.setattr(voice_call, "HEARD_WAIT_S", 0.1)
-
-    async def body(ws, call):
-        env.feed("input_audio_buffer.speech_started")
-        env.feed("input_audio_buffer.speech_stopped")
-        env.feed("response.created")
-        env.feed("response.audio_transcript.done", transcript="因为")
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="为什么")
-        await until(lambda: ws.told("reply"))
-        env.feed("response.done", response={"status": "completed"})
-        env.feed("input_audio_buffer.speech_started")
-        env.feed("input_audio_buffer.speech_stopped")
-        env.feed("response.created")
-        n = len(ws.told("reply"))
-        env.feed("response.audio_transcript.done", transcript="转写一直没到")
-        await until(lambda: len(ws.told("reply")) > n)
-    _call(body)
-
-
-def test_hold_cancels_a_retry_already_asked_for(env):
-    async def body(ws, call):
-        env.feed("input_audio_buffer.speech_started")
-        env.feed("input_audio_buffer.speech_stopped")
-        _say_leak(env, "[没听清]")
-        await until(lambda: ws.told("clear"))
-        env.feed("response.done", response={"status": "completed"})
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下")
-        await until(lambda: call.hold_until)
-        assert not call.want_response
-        env.feed("response.created")  # 重说的回应已经要了也不出声
-        env.feed("response.audio.delta", delta=audio())
-        await asyncio.sleep(0.05)
-        assert not ws.audio
-    _call(body)
-
-
 @pytest.mark.parametrize("text,held", [("等一下。", True), ("稍等一下", True), ("你先等我一下", True), ("等等！", True),
                                        ("等一下，我补充一点", False), ("等一下我们再聊这个问题", False), ("好的", False)])
 def test_hold_only_when_the_whole_sentence_is_a_pause(text, held):
     assert bool(voice_call.HOLD.fullmatch(text)) is held
-
-
-def test_hold_mutes_reply_skips_tool_and_says_nothing_again(env, monkeypatch):
-    searched = []
-    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {})
-
-    async def body(ws, call):
-        env.feed("input_audio_buffer.speech_started")
-        env.feed("input_audio_buffer.speech_stopped")
-        env.feed("response.created")
-        env.feed("response.audio_transcript.delta", delta="我搜一下。")
-        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"北京天气"}')
-        await until(lambda: call.tool_called)
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下。")
-        await until(lambda: ws.told("clear") and env.of("conversation.item.create"))
-        env.feed("response.audio.delta", delta=audio())
-        env.feed("response.done", response={"status": "completed"})
-        await asyncio.sleep(0.25)
-        assert not ws.audio and not env.of("response.create") and not searched
-        assert json.loads(env.of("conversation.item.create")[0]["item"]["output"])["status"]
-        env.feed("response.created")  # 转写之后才来的回应也不出声
-        env.feed("response.audio.delta", delta=audio())
-        await asyncio.sleep(0.05)
-        assert not ws.audio
-    _call(body)
 
 
 def test_answer_waits_during_hold_and_speaking_again_lifts_it(env):
@@ -660,7 +549,7 @@ def test_answer_waits_during_hold_and_speaking_again_lifts_it(env):
         env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下")
         await until(lambda: call.hold_until)
         call.last_speech_end = 0.0
-        call.outbox.append(("spoken", "想好的话"))
+        call.outbox.append("想好的话")
         await asyncio.sleep(0.25)
         assert call.outbox and not env.of("response.create")
         env.feed("input_audio_buffer.speech_started")
@@ -689,6 +578,8 @@ def test_call_keeps_audio_events_and_cost(env, monkeypatch, tmp_path):
         ws.in_.put_nowait({"type": "websocket.receive", "bytes": b"\x01\x02" * 100})
         env.feed("input_audio_buffer.speech_started")
         env.feed("conversation.item.input_audio_transcription.completed", transcript="你好")
+        await until(lambda: ws.told("user"))
+        await call._say("你好呀")
         env.feed("response.created")
         env.feed("response.audio.delta", delta=audio(0.1))
         env.feed("response.audio_transcript.done", transcript="你好呀")
@@ -749,14 +640,15 @@ def test_resume_continues_the_same_discussion_without_local_only_text(env, monke
         run = asyncio.create_task(c.run())
         await until(lambda: ws.told("ready"))
         env.feed("conversation.item.input_audio_transcription.completed", transcript="接着说")
-        await until(lambda: _rows(sid)[-1:] == [("user", "接着说")])
+        await until(lambda: ("user", "接着说") in _rows(sid))
         ws.in_.put_nowait({"type": "websocket.disconnect"})
         await asyncio.wait_for(run, 3)
     asyncio.run(go())
     assert ws.told("ready")[0]["resumed"] is True
-    prompt = env.of("session.update")[0]["session"]["instructions"]
-    assert "用户：先做哪个" in prompt and "你：先做 A" in prompt and "本机才有的正文" not in prompt
+    said = "\n".join(seen["c"].recent)
+    assert "用户：先做哪个" in said and "你：先做 A" in said and "本机才有的正文" not in said
     assert seen["c"].thinker.session == "claude-1"
+    assert "先做哪个" not in json.dumps(env.of("session.update"), ensure_ascii=False)  # 上文只在本机 Claude 这边
     new = _call_row()
     assert new["id"] != cid and new["session_id"] == sid
 
@@ -771,7 +663,6 @@ def test_resume_of_missing_call_is_a_new_call(env):
         await asyncio.wait_for(run, 3)
     asyncio.run(go())
     assert ws.told("ready")[0]["resumed"] is False
-    assert "接着上次" not in env.of("session.update")[0]["session"]["instructions"]
 
 
 def test_calls_report_size_and_total(env, client, monkeypatch, tmp_path):
@@ -837,93 +728,29 @@ def test_finish_keeps_raw_when_conversion_fails(tmp_path, monkeypatch):
     assert (tmp_path / "mic.pcm").exists()
 
 
-def test_search_text_stays_local_and_only_spoken_goes_up(env, monkeypatch):
-    long = "网页原文" * 100
-    monkeypatch.setattr(voice_rt, "web_search", lambda q: {"results": [{"title": "t", "summary": long}]})
-    monkeypatch.setattr(voice_rt, "spoken_search", lambda q, f: ("杭州今天晴。", {}))
-
-    async def body(ws, call):
-        env.feed("response.created")
-        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"杭州天气"}')
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: any("杭州今天晴" in s for s in env.said()))
-    _call(body)
-    assert long not in json.dumps(env.sent, ensure_ascii=False)
-    outs = [e["item"]["output"] for e in env.of("conversation.item.create") if e["item"]["type"] == "function_call_output"]
-    assert len(outs) == 1 and len(outs[0]) < 40
+# ---------- 搜索接给本机 Claude ----------
+def test_slow_stays_readonly_with_only_search_added():
+    cmd = agent._claude_cmd("q", "", "", [], readonly=True)
+    assert cmd[cmd.index("--tools") + 1] == "Read,Glob,Grep,WebSearch,WebFetch" and "--strict-mcp-config" in cmd and "--mcp-config" not in cmd
+    cmd = agent._claude_cmd("q", "", "", [], readonly=True, mcp=voice_tools.slow_mcp())
+    servers = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]
+    assert list(servers) == ["voice_search"] and "mcp__voice_search" in cmd and "--strict-mcp-config" in cmd
+    assert "KEY" not in json.dumps(servers)  # 密钥不进命令行
 
 
-def test_answer_is_deleted_upstream_after_read_but_kept_if_cut(env):
-    async def body(ws, call):
-        call.outbox.append(("spoken", "答案一"))
-        await until(lambda: any("答案一" in s for s in env.said()))
-        env.feed("response.created")
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: env.of("conversation.item.delete"))
-        first = env.of("conversation.item.delete")[0]["item_id"]
-        assert first == next(e["item"]["id"] for e in env.of("conversation.item.create") if "答案一" in json.dumps(e, ensure_ascii=False))
-        call.outbox.append(("spoken", "答案二"))
-        await until(lambda: any("答案二" in s for s in env.said()))
-        env.feed("response.created")
-        env.feed("response.done", response={"status": "cancelled"})
-        await asyncio.sleep(0.05)
-        assert len(env.of("conversation.item.delete")) == 1
-    _call(body)
-
-
-def test_barge_on_answer_says_dont_rethink(env):
-    async def body(ws, call):
-        call.outbox.append(("spoken", "答案"))
-        await until(lambda: call.reading_answer)
-        env.feed("response.created")
-        env.feed("response.audio.delta", delta=audio(5))
-        env.feed("response.audio_transcript.done", transcript="答案很长很长")
-        await asyncio.sleep(0.05)
-        env.feed("input_audio_buffer.speech_started")
-        await until(lambda: any("不要重新想" in s for s in env.said()))
-    _call(body)
-
-
-def test_claim_of_search_goes_to_search_not_slow(env, monkeypatch):
-    searched = []
-    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {"results": []})
-
-    async def body(ws, call):
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="今天有什么新闻")
-        env.feed("response.created")
-        env.feed("response.audio_transcript.done", transcript="我搜一下。")
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: searched)
-        assert call.thinker.task is None
-    _call(body)
-    assert searched == ["今天有什么新闻"]
-
-
-def test_tool_turned_off_is_hidden_and_refused(env, monkeypatch):
-    from app import settings
+def test_search_tool_follows_its_switch(monkeypatch):
     real = settings.get
     monkeypatch.setattr(settings, "get", lambda p, d=None: False if p == "voice_rt.permissions.web_search" else real(p, d))
-    called = []
-    monkeypatch.setattr(voice_rt, "web_search", lambda q: called.append(q) or {})
-
-    async def body(ws, call):
-        env.feed("response.created")
-        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"天气"}')
-        env.feed("response.function_call_arguments.done", call_id="x1", name="rm_rf", arguments='{}')
-        await until(lambda: len([e for e in env.of("conversation.item.create") if e["item"]["type"] == "function_call_output"]) == 2)
-    _call(body)
-    session = env.of("session.update")[0]["session"]
-    assert "web_search" not in {t["function"]["name"] for t in session["tools"]} and "think_deep" in {t["function"]["name"] for t in session["tools"]}
-    assert "不能上网搜" in session["instructions"]
-    assert not called
+    assert voice_tools.slow_mcp() == {}
+    assert not voice_tools.enabled("rm_rf")
 
 
-def test_unregistered_tool_is_never_allowed():
-    from app import voice_tools
-    assert not voice_tools.tool_allowed("rm_rf") and not voice_tools.enabled("rm_rf")
-    assert all(t["function"]["name"] in {n for g in voice_tools.GROUPS.values() for n in g["tools"]} for t in voice_rt.TOOLS)
-
-
-def test_slow_stays_readonly():
-    cmd = agent._claude_cmd("q", "", "", [], readonly=True)
-    assert cmd[cmd.index("--tools") + 1] == "Read,Glob,Grep,WebSearch,WebFetch" and "--strict-mcp-config" in cmd
+def test_search_server_speaks_mcp(monkeypatch):
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: {"results": [{"title": q}]})
+    handle = voice_search_mcp.handle
+    assert handle({"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})["result"]["protocolVersion"] == "2025-06-18"
+    assert handle({"method": "notifications/initialized"}) is None
+    assert handle({"id": 2, "method": "tools/list"})["result"]["tools"][0]["name"] == "web_search"
+    out = handle({"id": 3, "method": "tools/call", "params": {"name": "web_search", "arguments": {"query": "杭州天气"}}})["result"]
+    assert "杭州天气" in out["content"][0]["text"] and not out["isError"]
+    assert "error" in handle({"id": 4, "method": "没有的"})

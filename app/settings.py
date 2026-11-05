@@ -53,7 +53,7 @@ DEFAULTS: dict = {
     },
     # 按板块指定 Claude 模型（后台任务和对话都生效；空 / 不写 = 用 engines.claude.model）
     "module_models": {"learn": "claude-sonnet-5-5", "talk": "claude-sonnet-5-5"},
-    # 快慢思考语音通话：model / voice 空 = 用 voice_rt 的默认；speech_rate 语速；turn_detection 断句方式
+    # 语音通话：model / voice 空 = 用 voice_rt 的默认；speech_rate 语速；turn_detection 断句方式
     "voice_rt": {"model": "", "voice": "", "speech_rate": 1.2, "turn_detection": {"type": "smart_turn"},
                  # 工具权限见 voice_tools；单价是百炼帮助中心北京区的 qwen-audio-3.1-realtime-flash，元/百万 token（2026-11-04 查，控制台文本输入显示 3，以账单为准）
                  "permissions": {"claude_code": True, "web_search": True},
