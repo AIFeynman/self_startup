@@ -42,6 +42,7 @@ def fake_claude(tmp_path):
 
 @pytest.mark.real_runner
 def test_runner_process_runs_and_pauses(client, fake_claude):
+    db.execute("UPDATE jobs SET status='done' WHERE status IN ('queued','running')")  # 别的用例留下的任务占着并发名额
     jid = jobs.submit("nomod", "fast", engine="claude")
     j = _wait(jid, lambda j: j["status"] not in ("queued", "running"))
     assert j["status"] == "done" and j["output"] == "ok fast" and j["pid"] and j["pid"] != os.getpid()
@@ -52,8 +53,10 @@ def test_runner_process_runs_and_pauses(client, fake_claude):
     assert client.post(f"/api/jobs/{jid}/pause").json() == {"ok": True}
     j = _wait(jid, lambda j: j["status"] != "running", timeout=8)  # 不用等那 30 秒
     assert j["status"] == "paused" and j["engine_session"] == "fake-sess"
-    time.sleep(0.5)
-    jobs.reap()  # 回收退出的子进程
+    end = time.time() + 8  # runner 暂停后还要同步知识库、再 kick 一次才退出，机器忙时要几秒
+    while jobs._alive(j["pid"]) and time.time() < end:
+        jobs.reap()  # 回收退出的子进程
+        time.sleep(0.1)
     assert not jobs._alive(j["pid"])  # runner 自己也退出了
 
 
