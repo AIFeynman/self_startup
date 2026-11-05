@@ -185,7 +185,8 @@ STEP_COLS = {"goal": "TEXT DEFAULT ''", "chapter_md": "TEXT DEFAULT ''", "chapte
              "chapter_job": "INTEGER", "quiz": "TEXT DEFAULT '[]'", "quiz_result": "TEXT DEFAULT ''",
              "cards": "TEXT DEFAULT '[]'", "checks": "TEXT DEFAULT '{}'",
              "origin": "TEXT DEFAULT ''", "parent_id": "INTEGER", "request": "TEXT DEFAULT ''",
-             "step_kind": "TEXT DEFAULT ''", "material_status": "TEXT DEFAULT ''", "material_job": "INTEGER"}
+             "step_kind": "TEXT DEFAULT ''", "material_status": "TEXT DEFAULT ''", "material_job": "INTEGER",
+             "chapter_opened_at": "TEXT DEFAULT ''"}
 EXTRA = {"interest": "深入", "confused": "补课"}  # 按需加一节的两种：感兴趣 → 往深处展开；没懂 → 换个讲法讲透
 SKILL_DIR = ROOT / "skills" / "learn"
 KINDS = ("paper", "github", "article", "video")
@@ -357,12 +358,32 @@ def _ensure_step_cols() -> None:
     for k, decl in STEP_COLS.items():
         if k not in cols:
             db.execute(f"ALTER TABLE learn_steps ADD COLUMN {k} {decl}")
+    if "chapter_opened_at" not in cols:
+        _backfill_opened_steps()
 
 
 # Deep Dive：dd_status '' / running / done / failed；dd_stage 当前（或失败停在的）阶段；dd_error 失败原因；
 # dd_experiments 校验过的实验清单 JSON
 DD_COLS = {"dd_status": "TEXT DEFAULT ''", "dd_stage": "TEXT DEFAULT ''", "dd_job": "INTEGER", "dd_error": "TEXT DEFAULT ''",
            "dd_experiments": "TEXT DEFAULT '[]'", "dd_title": "TEXT DEFAULT ''", "dd_at": "TEXT DEFAULT ''"}
+# 打开过的时间，空 = 生成好了还没看（重新生成后清空）。上线前的老记录没有打开记录，有作答 / 笔记 / 追问等痕迹的算看过，值记 backfill
+OPENED_COLS = {"opened_at": "TEXT DEFAULT ''", "dd_opened_at": "TEXT DEFAULT ''"}
+
+
+def _backfill_opened_items() -> None:
+    for it in db.rows("SELECT * FROM learn_items"):
+        if it.get("rating") or (it.get("my_notes") or "").strip() or _reads.qa_answers(it) or _reads.user_lines(it["id"]) or _reads.annot_lines(it["id"]):
+            db.update("learn_items", it["id"], {"opened_at": "backfill"})
+
+
+def _backfill_opened_steps() -> None:
+    for s in db.rows("SELECT id, status, understanding, notes, feedback, checks, quiz_result FROM learn_steps"):
+        touched = (s["status"] == "done" or s["understanding"] or (s["notes"] or "").strip() or (s["feedback"] or "").strip()
+                   or (s["checks"] or "{}") != "{}" or s["quiz_result"]
+                   or db.row("SELECT 1 FROM annotations WHERE doc=?", [f"learn:chapter:{s['id']}"])
+                   or db.row("SELECT 1 FROM chat_messages m JOIN chat_sessions c ON c.id=m.session_id WHERE c.ref=? AND m.role='user'", [f"learn:step:{s['id']}"]))
+        if touched:
+            db.update("learn_steps", s["id"], {"chapter_opened_at": "backfill"})
 
 
 def _ensure_depth_col() -> None:
@@ -372,9 +393,11 @@ def _ensure_depth_col() -> None:
         db.execute("ALTER TABLE learn_items ADD COLUMN depth TEXT DEFAULT 'quick'")
     if "qa" not in cols:
         db.execute("ALTER TABLE learn_items ADD COLUMN qa TEXT DEFAULT '{}'")
-    for c, t in DD_COLS.items():
+    for c, t in {**DD_COLS, **OPENED_COLS}.items():
         if c not in cols:
             db.execute(f"ALTER TABLE learn_items ADD COLUMN {c} {t}")
+    if "opened_at" not in cols:
+        _backfill_opened_items()
 
 
 class ItemPatch(BaseModel):
@@ -644,6 +667,7 @@ def import_chat_reads() -> list[int]:
 
 @router.get("/items")
 def list_items():
+    _ensure_depth_col()
     if not _imported:
         try:
             import_chat_reads()
@@ -924,6 +948,16 @@ def on_chat(ref: str, text: str) -> None:
         _reads.sync_task(int(m.group(1)))
 
 
+@router.post("/items/{iid}/seen")
+def item_seen(iid: int, deepdive: bool = False):
+    """打开过这篇文档（deepdive：Deep Dive 那一篇），去掉「未看」标记。不动 updated_at：复盘按它算当天动静。"""
+    _ensure_depth_col()
+    col = "dd_opened_at" if deepdive else "opened_at"
+    if not _item(iid).get(col):
+        db.update("learn_items", iid, {col: db.now()})
+    return {"ok": True}
+
+
 @router.post("/items/{iid}/rerun")
 def rerun_item(iid: int, body: dict | None = None):
     _ensure_depth_col()
@@ -936,9 +970,8 @@ def rerun_item(iid: int, body: dict | None = None):
     url, _ = normalize_target(it["url"])  # 旧数据里混进了说明文字的链接，顺手修正
     if url != it["url"]:
         upd["url"] = url
-    if upd:
-        db.update("learn_items", iid, upd)
-        it = _item(iid)
+    db.update("learn_items", iid, {**upd, "opened_at": ""})
+    it = _item(iid)
     start_item_job(it)
     return _item(iid)
 
@@ -1045,7 +1078,7 @@ def _submit_dd_stage(it: dict, stage: str) -> int:
     dd = _deepdive.dd_dir(out)
     jid = jobs.submit("learn", _deepdive.prompt(stage, it, out, _known_knowledge(it["id"])),
                       ref=f"learn:item:{it['id']}:deepdive:{stage}", cwd=str(dd), add_dirs=[str(out)], tier=_tier(f"deepdive_{stage}"))
-    db.update("learn_items", it["id"], {"dd_status": "running", "dd_stage": stage, "dd_job": jid, "dd_error": "", "updated_at": db.now()})
+    db.update("learn_items", it["id"], {"dd_status": "running", "dd_stage": stage, "dd_job": jid, "dd_error": "", "dd_opened_at": "", "updated_at": db.now()})
     return jid
 
 
@@ -1188,7 +1221,8 @@ def _progress(steps: list[dict]) -> dict:
     total = sum(1 for s in steps if s["status"] != "skipped")
     done = sum(1 for s in steps if s["status"] == "done")
     hours = sum(float(s["est_hours"] or 0) for s in steps if s["status"] != "skipped")
-    return {"total": total, "done": done, "hours": round(hours, 1), "pct": round(100 * done / total) if total else 0}
+    unread = sum(1 for s in steps if s["chapter_status"] == "ready" and not s.get("chapter_opened_at") and s["status"] not in ("done", "skipped"))
+    return {"total": total, "done": done, "hours": round(hours, 1), "pct": round(100 * done / total) if total else 0, "unread": unread}
 
 
 def _clean_resources(rs) -> list[dict]:
@@ -2161,6 +2195,7 @@ def create_extra(sid: int, kind: str, request: str, quote: str = "") -> dict:
 
 
 def start_chapter_job(s: dict, note: str = "", prefetch: bool = False) -> int:
+    db.update("learn_steps", s["id"], {"chapter_opened_at": ""})
     out = _step_dir(s)
     out.mkdir(parents=True, exist_ok=True)
     archived = _archive_chapter(s)
@@ -2346,6 +2381,14 @@ def open_chapter(sid: int, body: dict | None = None):
     elif s["chapter_status"] == "ready":
         _prefetch_next(s)
     return public_step(_step(sid))
+
+
+@router.post("/steps/{sid}/seen")
+def step_seen(sid: int):
+    """打开过生成好的这一章，去掉「未看」标记。"""
+    if not _step(sid).get("chapter_opened_at"):
+        db.update("learn_steps", sid, {"chapter_opened_at": db.now()})
+    return {"ok": True}
 
 
 class ExtraIn(BaseModel):

@@ -745,3 +745,38 @@ def test_course_chapter_gets_glossary(tmp_path):
     assert out.rstrip().endswith("| RoPE | 旋转位置编码 | … |") and "关键原文" not in out
     assert learn._with_glossary("正文\n\n## 术语表\n已有", mat) == "正文\n\n## 术语表\n已有"
     assert learn._with_glossary("正文", tmp_path / "none.md") == "正文"
+
+
+def test_unread_item_and_chapter(client, fake_submit):
+    iid = client.post("/api/learn/items", json={"url": "https://arxiv.org/abs/2401.12345"}).json()["id"]
+    db.update("learn_items", iid, {"status": "done", "updated_at": "2026-01-01 00:00:00"})
+    assert not client.get(f"/api/learn/items/{iid}").json()["opened_at"]
+    assert client.post(f"/api/learn/items/{iid}/seen").json()["ok"]
+    it = client.get(f"/api/learn/items/{iid}").json()
+    assert it["opened_at"] and not it["dd_opened_at"]
+    assert it["updated_at"] == "2026-01-01 00:00:00"  # 复盘按 updated_at 算当天动静，打开不算
+    client.post(f"/api/learn/items/{iid}/seen?deepdive=true")
+    assert client.get(f"/api/learn/items/{iid}").json()["dd_opened_at"]
+    client.post(f"/api/learn/items/{iid}/rerun", json={})  # 重新生成后又是新文档
+    assert not client.get(f"/api/learn/items/{iid}").json()["opened_at"]
+
+    pid = db.insert("learn_plans", {"topic": "t", "status": "active"})
+    sid = db.insert("learn_steps", {"plan_id": pid, "title": "一章", "chapter_status": "ready"})
+    db.insert("learn_steps", {"plan_id": pid, "title": "做完了", "chapter_status": "ready", "status": "done"})
+    assert client.get(f"/api/learn/plans/{pid}").json()["progress"]["unread"] == 1
+    client.post(f"/api/learn/steps/{sid}/seen")
+    assert client.get(f"/api/learn/plans/{pid}").json()["progress"]["unread"] == 0
+    client.post(f"/api/learn/steps/{sid}/open", json={"force": True})
+    db.update("learn_steps", sid, {"chapter_status": "ready"})
+    assert client.get(f"/api/learn/plans/{pid}").json()["progress"]["unread"] == 1
+
+
+def test_unread_backfill_keeps_touched_as_read(client):
+    cols = {r["name"] for r in db.rows("PRAGMA table_info(learn_items)")}
+    for c in {"opened_at", "dd_opened_at"} & cols:  # 模拟上线前的老库
+        db.execute(f"ALTER TABLE learn_items DROP COLUMN {c}")
+    rated = db.insert("learn_items", {"kind": "paper", "url": "u1", "status": "done", "rating": 4})
+    plain = db.insert("learn_items", {"kind": "paper", "url": "u2", "status": "done"})
+    rows = {r["id"]: r for r in client.get("/api/learn/items").json()}
+    assert rows[rated]["opened_at"] == "backfill"
+    assert rows[plain]["opened_at"] == ""

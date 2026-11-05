@@ -144,6 +144,7 @@ const CSS = `
 .ln-purpose b { color: var(--text); font-weight: 500; }
 .ln-goal { font-size: 13px; margin: 0 0 8px; } .ln-goal b { color: var(--accent); font-weight: 500; margin-right: 4px; }
 .ln-cs { font-size: 11px; }
+.tag.ln-unread { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .ln-continue { display: flex; gap: 14px; align-items: center; padding: 14px 18px; margin-bottom: 16px; border-color: var(--accent); }
 .ln-continue .t { flex: 1; min-width: 0; } .ln-continue .t .k { font-size: 12px; color: var(--muted); } .ln-continue .t .n { font-weight: 600; }
 /* 章节阅读 */
@@ -342,11 +343,24 @@ const stageNo = (p, no) => (p.unit === '轮' ? `第 ${no} 轮` : p.unit === '单
 // 「停一下」点评只分两项：抓到了（含要点外的合理补充）/ 漏掉了（含想偏的）。老记录的 off / extra 并进来
 const reviewLists = (rv) => ({ got: [...(rv.covered || []), ...(rv.extra || [])], miss: [...(rv.missing || []), ...(rv.off || [])] });
 const quizScore = (s) => (s.quiz_result?.status === 'graded' ? s.quiz_result.score : null);
+const unreadTag = (h, text = '未看') => h('span.tag.ln-cs.ln-unread', { title: '生成好了，还没打开看过' }, text);
+// 记一次「打开过」。后台标签页里自动刷新出来的不算看过，等切回来还停在这一页才记
+function markSeen(ctx, url) {
+  const at = location.hash;
+  if (!document.hidden) { ctx.api.post(url, {}).catch(() => {}); return; }
+  const onShow = () => {
+    if (document.hidden) return;
+    document.removeEventListener('visibilitychange', onShow);
+    if (location.hash === at) ctx.api.post(url, {}).catch(() => {});
+  };
+  document.addEventListener('visibilitychange', onShow);
+}
 function chapterTag(h, s) {
   const sc = quizScore(s);
   if (sc !== null) return h('span.tag.ln-cs' + (s.quiz_result.passed ? '.ok' : '.err'), {}, `测试 ${sc} 分`);
   if (s.quiz_result?.status === 'grading') return h('span.tag.warn.ln-cs', {}, '批改中');
   if (s.chapter_status === 'generating') return h('span.tag.warn.ln-cs', {}, s.material_status === 'generating' ? '整理课件中' : '章节生成中');
+  if (s.chapter_status === 'ready' && !s.chapter_opened_at && !['done', 'skipped'].includes(s.status)) return unreadTag(h);
   if (s.chapter_status === 'ready') return h('span.tag.gray.ln-cs', {}, '章节就绪');
   return null;
 }
@@ -601,7 +615,8 @@ async function renderHome(el, ctx, scrollToPlans) {
 function planCard(p, ctx) {
   const { h, ui } = ctx;
   return h('div.card.ln-pcard.ln-card-click', { onclick: () => { location.hash = `#learn/plan/${p.id}`; } }, [
-    h('div.row.between', {}, [h('span.card-label', {}, `每周 ${p.hours_per_week}h · 约 ${p.progress.hours}h`), tag(h, p.status)]),
+    h('div.row.between', {}, [h('span.card-label', {}, `每周 ${p.hours_per_week}h · 约 ${p.progress.hours}h`),
+      h('span.row', {}, [p.progress.unread && p.status !== 'archived' ? unreadTag(h, `${p.progress.unread} 章未看`) : null, tag(h, p.status)])]),
     h('h3', {}, p.topic),
     h('div.row', {}, [h('div.grow', {}, ui.progress(p.progress.pct)), h('span.muted', {}, `${p.progress.done}/${p.progress.total} · ${p.progress.pct}%`)]),
     p.goal ? h('div.muted.clamp2', { style: { marginTop: '8px' } }, '目标：' + p.goal) : null,
@@ -634,7 +649,9 @@ function itemCard(it, ctx) {
   const busy = BUSY.includes(it.status);
   const go = () => { location.hash = `#learn/item/${it.id}`; };
   return h('div.card.ln-icard.ln-card-click', { onclick: go }, [
-    h('div.row', {}, [badge(h, it.kind), it.status !== 'done' ? tag(h, it.status) : null, h('span.grow'),
+    h('div.row', {}, [badge(h, it.kind), it.status !== 'done' ? tag(h, it.status) : null,
+      it.status === 'done' && !it.opened_at ? unreadTag(h) : null,
+      it.dd_status === 'done' && !it.dd_opened_at ? unreadTag(h, 'Deep Dive 未看') : null, h('span.grow'),
       it.rating ? stars(h, ui, it.rating, null, { readonly: true }) : null, h('span.muted', {}, (it.created_at || '').slice(5, 10))]),
     h('h3.serif.clamp2', {}, it.title || it.url),
     busy ? h('div.tldr.dots', {}, '后台解析中，完成后自动刷新')
@@ -684,10 +701,15 @@ async function renderItem(el, ctx, iid) {
     el.append(h('div.ln-tabs2', {}, [
       h('button' + (ddTab ? '' : '.on'), { onclick: () => { location.hash = `#learn/item/${it.id}`; } }, '深读笔记'),
       h('button' + (ddTab ? '.on' : ''), { title: '自己拉仓库、写测试、做实验的深度解读（点了才生成）', onclick: () => { location.hash = `#learn/item/${it.id}/deepdive`; } },
-        ['Deep Dive', it.dd_status === 'running' ? h('span.muted.dots', { style: { marginLeft: '6px' } }, '生成中') : it.dd_status === 'done' ? ' ✓' : '']),
+        ['Deep Dive', it.dd_status === 'running' ? h('span.muted.dots', { style: { marginLeft: '6px' } }, '生成中') : it.dd_status === 'done' ? (!ddTab && !it.dd_opened_at ? unreadTag(h) : ' ✓') : '']),
     ]));
   }
-  if (ddTab) { el.append(await deepDivePane(ctx, it)); return; }
+  if (ddTab) {
+    if (it.dd_status === 'done' && !it.dd_opened_at) markSeen(ctx, `/api/learn/items/${it.id}/seen?deepdive=true`);
+    el.append(await deepDivePane(ctx, it));
+    return;
+  }
+  if (it.status === 'done' && !it.opened_at) markSeen(ctx, `/api/learn/items/${it.id}/seen`);
 
   const reader = h('div.ln-reader');
   el.append(reader);
@@ -1194,6 +1216,7 @@ async function renderChapter(el, ctx, pid, sid) {
     openedChapters.add(sid);
     if (!['generating'].includes(s.chapter_status)) s = await api.post(`/api/learn/steps/${sid}/open`, {}).catch(() => s);
   }
+  if (s.chapter_status === 'ready' && !s.chapter_opened_at) { markSeen(ctx, `/api/learn/steps/${sid}/seen`); s = { ...s, chapter_opened_at: 'now' }; }
   const seq = p.steps.filter((x) => x.status !== 'skipped' || x.id === sid);
   const idx = seq.findIndex((x) => x.id === sid);
   const prev = seq[idx - 1], next = seq[idx + 1];
