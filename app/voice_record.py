@@ -1,4 +1,4 @@
-"""把每通语音电话留下来，便于反查和回听。只追加，不改不删。
+"""把每通语音电话留下来，便于反查和回听。只追加，只有用户在页面上点删除才删。
 
 data/voice_calls/<id>/
   events.jsonl  发给百炼和百炼发回的全部非音频事件、工具的输入输出、慢思考的结果，t 是通话开始后的秒数
@@ -158,6 +158,35 @@ def finish(call_dir: Path) -> bool:
     if bot.exists():
         bot.unlink()
     return True
+
+
+def size_of(call_id: int) -> int:
+    call_dir = CALLS_DIR / str(call_id)
+    return sum(f.stat().st_size for f in call_dir.iterdir() if f.is_file()) if call_dir.exists() else 0
+
+
+def total_size() -> int:
+    return sum(size_of(int(d.name)) for d in CALLS_DIR.iterdir() if d.name.isdigit()) if CALLS_DIR.exists() else 0
+
+
+def remove(call_id: int) -> None:
+    """录音、事件、这通电话说的话都删。讨论里别的时间写的（接着聊的其他通电话、打字续聊）不动，什么都不剩了才删讨论。"""
+    row = db.row("SELECT * FROM voice_calls WHERE id=?", [call_id])
+    shutil.rmtree(CALLS_DIR / str(call_id), ignore_errors=True)
+    db.execute("DELETE FROM voice_calls WHERE id=?", [call_id])
+    sid = row["session_id"]
+    if not sid:
+        return
+    if row["ended_at"]:  # 进程中途退出的没有结束时间，分不清哪些话是它的，宁可留着
+        db.execute("DELETE FROM chat_messages WHERE session_id=? AND created_at>=? AND created_at<=?", [sid, row["started_at"], row["ended_at"]])
+    if not db.row("SELECT 1 AS x FROM chat_messages WHERE session_id=? LIMIT 1", [sid]) and not db.row("SELECT 1 AS x FROM voice_calls WHERE session_id=? LIMIT 1", [sid]):
+        db.execute("DELETE FROM chat_sessions WHERE id=?", [sid])
+
+
+def spoken_lines(call_id: int, limit: int = 8, width: int = 100) -> list[tuple[str, str]]:
+    """这通电话最后说的几句 (user|fast, 话)。只有说出口的，本来就上过云；慢思考的完整回答只留在本机，不在里面。"""
+    said = [(e["kind"], e.get("text", "")[:width]) for e in events(call_id) if e["kind"] in ("user", "fast") and e.get("text")]
+    return said[-limit:]
 
 
 def events(call_id: int) -> list[dict]:

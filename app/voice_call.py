@@ -68,9 +68,13 @@ def _rt_config() -> dict:
     return settings.get("voice_rt", {}) or {}
 
 
+live_calls: set[int] = set()  # 正在打的电话不能删
+
+
 class Call:
-    def __init__(self, ws: WebSocket):
+    def __init__(self, ws: WebSocket, resume: int = 0):
         self.ws, self.up, self.sid = ws, None, None
+        self.resume = resume
         self.rec = voice_record.Recorder()
         self.speech_start = 0.0
         self.once: list[str] = []  # 念完就从百炼的历史里删掉的注入：念出来的话模型自己的回应里有，留着每轮多算一遍
@@ -109,6 +113,19 @@ class Call:
     def _record(self, role: str, text: str) -> None:
         db.insert("chat_messages", {"session_id": self._session(text), "role": role, "content": text, "created_at": db.now()})
         db.update("chat_sessions", self.sid, {"updated_at": db.now()})
+
+    def _pick_up(self) -> tuple[str, str]:
+        """接着哪通电话聊：同一个讨论、同一个 Claude 会话。返回 (Claude 会话, 给快思考的那几句)；那通电话没了就是新通话。"""
+        row = db.row("SELECT session_id FROM voice_calls WHERE id=?", [self.resume]) if self.resume else None
+        if not row:
+            return "", ""
+        said = voice_record.spoken_lines(self.resume)
+        self.recent.extend(f"{'用户' if who == 'user' else '快思考'}：{text}" for who, text in said)
+        session = db.row("SELECT id, engine_session FROM chat_sessions WHERE id=?", [row["session_id"]]) if row["session_id"] else None
+        if session:
+            self.sid = session["id"]
+            self.rec.link(self.sid)
+        return (session or {}).get("engine_session") or "", voice_rt.resume_note(said)
 
     def _on_slow_session(self, session: str) -> None:
         db.update("chat_sessions", self._session(), {"engine_session": session, "updated_at": db.now()})
@@ -471,20 +488,22 @@ class Call:
             return
         voice = cfg.get("voice") or voice_rt.DEFAULT_VOICE
         self.rec.open(model, voice)
+        live_calls.add(self.rec.id)
+        engine_session, resume_note = self._pick_up()
         ctx, dirs = chat._context("talk", "")
         self.thinker = Thinker(self.loop, self._on_slow, system=agent.build_system("talk", ctx), dirs=dirs,
-                               model=agent.module_model("talk"), history=lambda: "\n".join(self.recent),
+                               model=agent.module_model("talk"), session=engine_session, history=lambda: "\n".join(self.recent),
                                on_session=self._on_slow_session)
         chat.active += 1  # 自动重启要等通话结束
         tasks = []
         try:
             await self._up("session.update", session=voice_rt.session_config(
                 voice=voice, speech_rate=cfg.get("speech_rate") or 1.0,
-                turn_detection=cfg.get("turn_detection")))
+                turn_detection=cfg.get("turn_detection"), resume=resume_note))
             asyncio.get_running_loop().run_in_executor(None, self.thinker.warm)
             client, upstream, tick = [asyncio.create_task(c) for c in (self._from_client(), self._from_up(), self._tick())]
             tasks = [client, upstream, tick]
-            await self.tell(type="ready", model=model, call=self.rec.id)
+            await self.tell(type="ready", model=model, call=self.rec.id, resumed=bool(resume_note or self.sid))
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if not client.done():
                 failed = tick.done() and isinstance(tick.exception(), _End)
@@ -499,6 +518,7 @@ class Call:
             self._flush_reply()
             await self.up.close()
             self.rec.close()
+            live_calls.discard(self.rec.id)
             if self.rec.dir:
                 self.loop.run_in_executor(None, voice_record.finish, self.rec.dir)
             chat.active -= 1
@@ -524,8 +544,14 @@ def tools():
 
 @router.get("/api/voice/calls")
 def calls(limit: int = 50):
-    return db.rows("""SELECT c.*, s.title FROM voice_calls c LEFT JOIN chat_sessions s ON s.id=c.session_id
+    rows = db.rows("""SELECT c.*, s.title FROM voice_calls c LEFT JOIN chat_sessions s ON s.id=c.session_id
                       ORDER BY c.id DESC LIMIT ?""", [limit])
+    return [{**r, "size_bytes": voice_record.size_of(r["id"])} for r in rows]
+
+
+@router.get("/api/voice/calls/usage")
+def calls_usage():
+    return {"bytes": voice_record.total_size()}
 
 
 @router.get("/api/voice/calls/{call_id}")
@@ -535,6 +561,16 @@ def call_detail(call_id: int):
     if not row:
         raise HTTPException(404)
     return {**row, "events": [e for e in voice_record.events(call_id) if e["kind"] not in ("sent", "got")]}
+
+
+@router.delete("/api/voice/calls/{call_id}")
+def delete_call(call_id: int):
+    if not db.row("SELECT id FROM voice_calls WHERE id=?", [call_id]):
+        raise HTTPException(404)
+    if call_id in live_calls:
+        raise HTTPException(409, "这通电话还没挂")
+    voice_record.remove(call_id)
+    return {"ok": True}
 
 
 @router.get("/api/voice/calls/{call_id}/raw")
@@ -551,13 +587,13 @@ def call_audio(call_id: int):
 
 
 @router.websocket("/api/voice/rt")
-async def rt(ws: WebSocket):
+async def rt(ws: WebSocket, resume: int = 0):
     if not _same_origin(ws):
         await ws.close(code=4403)
         return
     await ws.accept()
     try:
-        await Call(ws).run()
+        await Call(ws, resume).run()
     finally:
         try:
             await ws.close()

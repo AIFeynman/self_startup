@@ -277,6 +277,7 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .rt-line.slow { padding-top: 8px; border-top: 1px solid var(--line); }
 .talk-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .talk-row:first-child { border-top: none; }
+.talk-row { flex-wrap: wrap; }
 .call-detail { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .call-detail[hidden] { display: none; }
 .call-detail audio { width: 100%; }

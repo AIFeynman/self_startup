@@ -527,6 +527,13 @@ echo '{"type":"result","result":"好","session_id":"s","modelUsage":{"m":{"provi
     assert agent.run_once("问", engine="claude")["text"] == "好"
 
 
+def test_helper_call_without_provider_passes_but_no_provider_at_all_stops():
+    ok = {"type": "result", "result": "好", "modelUsage": {"haiku": {}, "sonnet": {"provider": "firstParty"}}}
+    assert not any(e.get("gateway") for e in agent._parse_claude(ok))
+    none = {"type": "result", "result": "好", "modelUsage": {"haiku": {}}}
+    assert any(e.get("gateway") for e in agent._parse_claude(none))
+
+
 def test_internal_words_cover_naming_the_model_but_not_talking_about_it():
     assert voice_call.INTERNAL_WORDS.search("这个问题我让 Claude 结合资料想想。")
     assert not voice_call.INTERNAL_WORDS.search("Claude Code 和 Codex 各自适合做什么，我想一下。")
@@ -711,6 +718,94 @@ def test_ready_tells_page_which_call_for_cost(env, monkeypatch, tmp_path):
         seen.append(ws.told("ready")[0]["call"])
     _call(body)
     assert seen[0] == _call_row()["id"]
+
+
+def _old_call(tmp_path, monkeypatch):
+    """一通打完的电话：说了两句，慢思考的完整回答只在本机。"""
+    from app import voice_record
+    monkeypatch.setattr(voice_record, "CALLS_DIR", tmp_path)
+    monkeypatch.setattr(voice_record, "finish", lambda d: None)
+    sid = db.insert("chat_sessions", {"module": "talk", "ref": "", "engine": "claude", "title": "旧话题", "engine_session": "claude-1",
+                                      "created_at": "2026-11-01T10:00:00", "updated_at": "2026-11-01T10:05:00"})
+    cid = db.insert("voice_calls", {"session_id": sid, "started_at": "2026-11-01T10:00:00", "ended_at": "2026-11-01T10:05:00"})
+    db.insert("chat_messages", {"session_id": sid, "role": "user", "content": "先做哪个", "created_at": "2026-11-01T10:01:00"})
+    d = tmp_path / str(cid)
+    d.mkdir()
+    (d / "call.m4a").write_bytes(bytes(1000))
+    (d / "events.jsonl").write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in [
+        {"t": 1, "kind": "user", "text": "先做哪个"}, {"t": 2, "kind": "slow_full", "text": "本机才有的正文"},
+        {"t": 3, "kind": "fast", "text": "先做 A"}]) + "\n", "utf-8")
+    return cid, sid, d
+
+
+def test_resume_continues_the_same_discussion_without_local_only_text(env, monkeypatch, tmp_path):
+    cid, sid, _ = _old_call(tmp_path, monkeypatch)
+    ws = FakeWS()
+    seen = {}
+
+    async def go():
+        c = voice_call.Call(ws, resume=cid)
+        seen["c"] = c
+        run = asyncio.create_task(c.run())
+        await until(lambda: ws.told("ready"))
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="接着说")
+        await until(lambda: _rows(sid)[-1:] == [("user", "接着说")])
+        ws.in_.put_nowait({"type": "websocket.disconnect"})
+        await asyncio.wait_for(run, 3)
+    asyncio.run(go())
+    assert ws.told("ready")[0]["resumed"] is True
+    prompt = env.of("session.update")[0]["session"]["instructions"]
+    assert "用户：先做哪个" in prompt and "你：先做 A" in prompt and "本机才有的正文" not in prompt
+    assert seen["c"].thinker.session == "claude-1"
+    new = _call_row()
+    assert new["id"] != cid and new["session_id"] == sid
+
+
+def test_resume_of_missing_call_is_a_new_call(env):
+    ws = FakeWS()
+
+    async def go():
+        run = asyncio.create_task(voice_call.Call(ws, resume=999).run())
+        await until(lambda: ws.told("ready"))
+        ws.in_.put_nowait({"type": "websocket.disconnect"})
+        await asyncio.wait_for(run, 3)
+    asyncio.run(go())
+    assert ws.told("ready")[0]["resumed"] is False
+    assert "接着上次" not in env.of("session.update")[0]["session"]["instructions"]
+
+
+def test_calls_report_size_and_total(env, client, monkeypatch, tmp_path):
+    cid, _, _ = _old_call(tmp_path, monkeypatch)
+    with client:
+        row = next(c for c in client.get("/api/voice/calls").json() if c["id"] == cid)
+        assert row["size_bytes"] > 1000
+        assert client.get("/api/voice/calls/usage").json()["bytes"] == row["size_bytes"]
+
+
+def test_delete_call_removes_its_content_only(env, client, monkeypatch, tmp_path):
+    cid, sid, d = _old_call(tmp_path, monkeypatch)
+    later = db.insert("voice_calls", {"session_id": sid, "started_at": "2026-11-02T10:00:00", "ended_at": "2026-11-02T10:05:00"})
+    db.insert("chat_messages", {"session_id": sid, "role": "user", "content": "后来说的", "created_at": "2026-11-02T10:01:00"})
+    with client:
+        assert client.delete(f"/api/voice/calls/{cid}").json() == {"ok": True}
+        assert client.delete(f"/api/voice/calls/{cid}").status_code == 404
+    assert not d.exists() and not db.row("SELECT id FROM voice_calls WHERE id=?", [cid])
+    assert _rows(sid) == [("user", "后来说的")]  # 接着聊的那通还在，讨论留着
+    with client:
+        client.delete(f"/api/voice/calls/{later}")
+    assert not _rows(sid) and not db.row("SELECT id FROM chat_sessions WHERE id=?", [sid])
+
+
+def test_delete_keeps_typed_messages_and_refuses_live_call(env, client, monkeypatch, tmp_path):
+    cid, sid, _ = _old_call(tmp_path, monkeypatch)
+    db.insert("chat_messages", {"session_id": sid, "role": "user", "content": "后来打字续的", "created_at": "2026-11-03T09:00:00"})
+    monkeypatch.setattr(voice_call, "live_calls", {cid})
+    with client:
+        assert client.delete(f"/api/voice/calls/{cid}").status_code == 409
+        monkeypatch.setattr(voice_call, "live_calls", set())
+        client.delete(f"/api/voice/calls/{cid}")
+    assert _rows(sid) == [("user", "后来打字续的")]
+    assert db.row("SELECT id FROM chat_sessions WHERE id=?", [sid])
 
 
 def test_barge_cuts_what_was_not_played(tmp_path, monkeypatch):

@@ -12,8 +12,9 @@ const DOING_NOW = (m) => {
 
 const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const yuan = (v) => `¥${(v || 0).toFixed(v < 0.01 ? 4 : 2)}`;
+const mb = (b) => `${Math.max((b || 0) / 1048576, 0.1).toFixed(1)} MB`;
 
-function callHistory(calls, { api, h, md, toast }) {
+function callHistory(calls, { api, h, md, toast, onResume, onDeleted }) {
   const detail = h('div.call-detail', { hidden: true });
   const show = async (c) => {
     let d;
@@ -36,11 +37,18 @@ function callHistory(calls, { api, h, md, toast }) {
       audio, h('div.call-lines', {}, rows.length ? rows : h('div.muted', {}, '这通电话没有说话内容')));
     detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
+  const remove = async (c) => {
+    if (!confirm(`删除这通电话的录音和说过的话？（${mb(c.size_bytes)}，删了找不回来）`)) return;
+    try { await api.del(`/api/voice/calls/${c.id}`); onDeleted(); } catch (e) { toast('没删成：' + e.message); }
+  };
   return h('div.card', {}, [...calls.slice(0, 30).map((c) => h('div.talk-row', {}, [
     h('a.t', { href: '#talk', onclick: (e) => { e.preventDefault(); show(c); } }, c.title || '（没说话）'),
     h('span.muted', {}, (c.started_at || '').slice(5, 16).replace('T', ' ')),
     h('span.muted', {}, clock(c.duration_s || 0)),
     h('span.muted', {}, yuan(c.cost_yuan)),
+    h('span.muted', {}, mb(c.size_bytes)),
+    h('button.ghost.sm', { onclick: () => onResume(c) }, '接着聊'),
+    h('button.ghost.sm', { onclick: () => remove(c) }, '删除'),
   ])), detail]);
 }
 
@@ -94,14 +102,15 @@ export default {
       const c = await api.get(`/api/voice/calls/${id}`).catch(() => null);
       if (c?.responses) line('cost', `这通电话 ${clock(c.duration_s)}，${c.responses} 次回应，约 ${yuan(c.cost_yuan)}`);
     };
-    const startRt = async () => {
+    const startRt = async (resume) => {
       callBtn.disabled = true;
       chip.hidden = false; chip.textContent = '连接中';
       rtLog.replaceChildren();
       box.hidden = true;
       try {
         const call = await startCall({
-          onReady: (m) => { callId = m.call; },
+          resume,
+          onReady: (m) => { callId = m.call; if (m.resumed) line('cost', '接着上次聊，直接说就行'); },
           onStatus: (m) => { chip.textContent = DOING_NOW(m); },
           onUser: (t) => line('user', t),
           onReply: (t) => line('fast', t),
@@ -160,9 +169,14 @@ export default {
       btn.disabled = false; btn.textContent = '整理';
     };
 
-    const [sessions, saved, calls, tools] = await Promise.all([api.get('/api/chat/talk/sessions'), api.get('/api/talk/summaries?limit=50'),
-      api.get('/api/voice/calls').catch(() => []), api.get('/api/voice/tools').catch(() => [])]);
-    if (calls.length) el.append(ui.section('历史通话', '录音和全部内容都只存在本机'), callHistory(calls, { api, h, md, toast }));
+    const [sessions, saved, calls, tools, usage] = await Promise.all([api.get('/api/chat/talk/sessions'), api.get('/api/talk/summaries?limit=50'),
+      api.get('/api/voice/calls').catch(() => []), api.get('/api/voice/tools').catch(() => []), api.get('/api/voice/calls/usage').catch(() => ({}))]);
+    const resumeCall = (c) => {
+      if (hangup) { toast('先挂断现在这通电话'); return; }
+      startRt(c.id);
+      callWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    if (calls.length) el.append(ui.section('历史通话', `录音和全部内容都只存在本机，共占 ${mb(usage.bytes)}`), callHistory(calls, { api, h, md, toast, onResume: resumeCall, onDeleted: () => (hangup ? toast('删好了') : refresh()) }));
     if (tools.length) el.append(ui.section('通话工具权限', '关掉的工具从下一通电话起不给模型，通话中调用也不执行'), toolPermissions(tools, { api, h, toast }));
     const savedOf = (id) => saved.find((s) => s.session_id === id && s.saved_at);
     const pendingOf = (id) => saved.find((s) => s.session_id === id && !s.saved_at);

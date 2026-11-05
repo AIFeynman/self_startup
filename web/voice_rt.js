@@ -1,12 +1,12 @@
 // 快慢思考通话：麦克风 16k PCM 发给服务端，收 24k PCM 播放；开口时服务端发 clear，立刻停播。
-// startCall({ onReady, onStatus, onUser, onReply, onSlow, onFallback, onEnd, onMetrics }) → { hangup() }
+// startCall({ resume, onReady, onStatus, onUser, onReply, onSlow, onFallback, onEnd, onMetrics }) → { hangup() }；resume 是要接着聊的通话 id
 const FRAME = 1024;
 const OUT_RATE = 24000;
 const LOUD = 0.03; // 播放时麦克风超过这个响度算开口。服务端判定要一秒左右，这里先压低声音，打断才跟手
 const LOUD_FRAMES = 2;
 const DUCK_MS = 1500; // 压低后这么久服务端没确认，算误判，声音恢复
 
-export async function startCall({ onReady, onStatus, onUser, onReply, onSlow, onFallback, onEnd, onMetrics }) {
+export async function startCall({ resume, onReady, onStatus, onUser, onReply, onSlow, onFallback, onEnd, onMetrics }) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   const mic = new AudioContext({ sampleRate: 16000 });
   const out = new AudioContext({ sampleRate: OUT_RATE });
@@ -14,7 +14,7 @@ export async function startCall({ onReady, onStatus, onUser, onReply, onSlow, on
   if (out.state === 'suspended') out.resume();
   const src = mic.createMediaStreamSource(stream);
   const node = mic.createScriptProcessor(FRAME, 1, 1);
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/voice/rt`);
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/voice/rt${resume ? `?resume=${resume}` : ''}`);
   ws.binaryType = 'arraybuffer';
 
   const gain = out.createGain();
