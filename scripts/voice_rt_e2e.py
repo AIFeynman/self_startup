@@ -38,6 +38,7 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
     needs_slow = case["expect"] == "think_deep"
     async with websockets.connect(url, max_size=None, proxy=None) as ws:
         t_end, first_audio, replies, heard, slow, doing, audio_s = None, None, [], "", None, set(), 0.0
+        audio_at = 0.0
         fallback, searching = None, False
 
         async def send():
@@ -69,10 +70,15 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
                     last_activity = now
                     if first_audio is None and t_end:
                         first_audio = now - t_end + tail
+                        audio_at = now
                     continue
                 m = json.loads(msg)
                 if m["type"] == "ready":
                     sender = asyncio.create_task(send())
+                elif m["type"] == "clear":
+                    row["cleared"] = True
+                    if audio_at:  # 拦下之前已经放出去多久
+                        row["audible_s"] = round(now - audio_at, 3)
                 elif m["type"] == "user":
                     heard = m["text"]
                 elif m["type"] == "reply":
@@ -105,6 +111,8 @@ async def run_case(url: str, case: dict, audio_dir: Path, slow_wait: float) -> d
 
 def route_ok(row: dict) -> bool:
     want = {"think_deep": "think", "web_search": "search"}.get(row["expect"])
+    if row["expect"] == "silent":  # 说了又被拦下的不算说
+        return not row["did"] and not row["replies"]
     return want in row["did"] if want else row["expect"] != "fast" or not row["did"]
 
 

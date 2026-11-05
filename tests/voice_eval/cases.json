@@ -51,7 +51,14 @@
 
     {"id": "noise-1", "kind": "噪声", "text": "嗯。", "expect": "silent"},
     {"id": "noise-2", "kind": "噪声", "text": "帮我想想这周先推哪件事。", "expect": "think_deep", "mix": "noise"},
-    {"id": "noise-3", "kind": "噪声", "text": "你晚上想吃什么，要不要点外卖？", "expect": "silent", "mix": "faint"}
+    {"id": "noise-3", "kind": "噪声", "text": "你晚上想吃什么，要不要点外卖？", "expect": "silent", "mix": "faint"},
+    {"id": "hold-1", "kind": "噪声", "text": "等一下。", "expect": "silent"},
+    {"id": "hold-2", "kind": "噪声", "text": "稍等一下。", "expect": "silent"},
+    {"id": "hold-3", "kind": "噪声", "text": "等等。", "expect": "silent"},
+    {"id": "hold-4", "kind": "控制", "text": "等一下，我补充一点，周四我要出差。", "expect": "any"},
+    {"id": "pick-1", "kind": "建议", "text": "最近有哪些新模型值得关注？", "expect": "think_deep"},
+    {"id": "pick-2", "kind": "建议", "text": "这个月的新论文有哪些值得看？", "expect": "think_deep"},
+    {"id": "search-5", "kind": "搜索", "text": "今天北京的空气质量怎么样？", "expect": "web_search"}
   ],
   "spoken": [
     {"id": "say-1", "text": "我建议先做实时接入。现在说完要等五六秒，这个不解决，问答你也不想多用。", "keep": ["实时接入", "五六秒"]},

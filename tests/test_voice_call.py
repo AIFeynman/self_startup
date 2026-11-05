@@ -527,3 +527,135 @@ echo '{"type":"result","result":"好","session_id":"s","modelUsage":{"m":{"provi
 def test_internal_words_cover_naming_the_model_but_not_talking_about_it():
     assert voice_call.INTERNAL_WORDS.search("这个问题我让 Claude 结合资料想想。")
     assert not voice_call.INTERNAL_WORDS.search("Claude Code 和 Codex 各自适合做什么，我想一下。")
+
+
+def test_search_query_that_drifted_from_the_transcript_goes_back_once(env, monkeypatch):
+    searched = []
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {"results": []})
+
+    async def body(ws, call):
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        env.feed("response.created")
+        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"这个月新车"}')
+        await asyncio.sleep(0.1)
+        assert not env.of("conversation.item.create")  # 转写到了才执行
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="这个月的新模型有哪些")
+        await until(lambda: env.of("conversation.item.create"))
+        assert not searched and "这个月的新模型有哪些" in env.of("conversation.item.create")[0]["item"]["output"]
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: env.of("response.create"))
+        env.feed("response.created")
+        env.feed("response.function_call_arguments.done", call_id="s2", name="web_search", arguments='{"query":"11月 新模型"}')
+        await until(lambda: searched)
+    _call(body)
+    assert searched == ["11月 新模型"]
+
+
+@pytest.mark.parametrize("query,heard,ok", [("今天杭州天气", "今天杭州天气怎么样？", True), ("OpenAI 发布", "OpenAI 最近发布了什么", True),
+                                            ("今天北京空气质量", "今天北京的空气质量怎么样", True), ("2026年11月 新模型", "这个月的新模型有哪些", True),
+                                            ("这个月新车", "这个月的新模型有哪些", False), ("上海天气", "那上海呢", False)])
+def test_query_from_user(query, heard, ok):
+    assert voice_call._query_from_user(query, heard) is ok
+
+
+def test_reply_text_waits_for_transcript_so_a_pause_shows_nothing(env):
+    async def body(ws, call):
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        env.feed("response.created")
+        env.feed("response.audio_transcript.done", transcript="好，你慢慢说")
+        env.feed("response.audio.delta", delta=audio())
+        await until(lambda: ws.audio)  # 声音不等转写，不增加延迟
+        assert not ws.told("reply")
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下")
+        await until(lambda: call.hold_until)
+        await asyncio.sleep(0.25)
+        assert not ws.told("reply") and ws.told("clear")
+    _call(body)
+
+
+def test_reply_text_shows_when_transcript_arrives_or_is_late(env, monkeypatch):
+    monkeypatch.setattr(voice_call, "HEARD_WAIT_S", 0.1)
+
+    async def body(ws, call):
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        env.feed("response.created")
+        env.feed("response.audio_transcript.done", transcript="因为")
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="为什么")
+        await until(lambda: ws.told("reply"))
+        env.feed("response.done", response={"status": "completed"})
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        env.feed("response.created")
+        n = len(ws.told("reply"))
+        env.feed("response.audio_transcript.done", transcript="转写一直没到")
+        await until(lambda: len(ws.told("reply")) > n)
+    _call(body)
+
+
+def test_hold_cancels_a_retry_already_asked_for(env):
+    async def body(ws, call):
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        _say_leak(env, "[没听清]")
+        await until(lambda: ws.told("clear"))
+        env.feed("response.done", response={"status": "completed"})
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下")
+        await until(lambda: call.hold_until)
+        assert not call.want_response
+        env.feed("response.created")  # 重说的回应已经要了也不出声
+        env.feed("response.audio.delta", delta=audio())
+        await asyncio.sleep(0.05)
+        assert not ws.audio
+    _call(body)
+
+
+@pytest.mark.parametrize("text,held", [("等一下。", True), ("稍等一下", True), ("你先等我一下", True), ("等等！", True),
+                                       ("等一下，我补充一点", False), ("等一下我们再聊这个问题", False), ("好的", False)])
+def test_hold_only_when_the_whole_sentence_is_a_pause(text, held):
+    assert bool(voice_call.HOLD.fullmatch(text)) is held
+
+
+def test_hold_mutes_reply_skips_tool_and_says_nothing_again(env, monkeypatch):
+    searched = []
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {})
+
+    async def body(ws, call):
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        env.feed("response.created")
+        env.feed("response.audio_transcript.delta", delta="我搜一下。")
+        env.feed("response.function_call_arguments.done", call_id="s1", name="web_search", arguments='{"query":"北京天气"}')
+        await until(lambda: call.tool_called)
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下。")
+        await until(lambda: ws.told("clear") and env.of("conversation.item.create"))
+        env.feed("response.audio.delta", delta=audio())
+        env.feed("response.done", response={"status": "completed"})
+        await asyncio.sleep(0.25)
+        assert not ws.audio and not env.of("response.create") and not searched
+        assert json.loads(env.of("conversation.item.create")[0]["item"]["output"])["status"]
+        env.feed("response.created")  # 转写之后才来的回应也不出声
+        env.feed("response.audio.delta", delta=audio())
+        await asyncio.sleep(0.05)
+        assert not ws.audio
+    _call(body)
+
+
+def test_answer_waits_during_hold_and_speaking_again_lifts_it(env):
+    async def body(ws, call):
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="等一下")
+        await until(lambda: call.hold_until)
+        call.last_speech_end = 0.0
+        call.outbox.append(("spoken", "想好的话"))
+        await asyncio.sleep(0.25)
+        assert call.outbox and not env.of("response.create")
+        env.feed("input_audio_buffer.speech_started")
+        await until(lambda: call.user_speaking)
+        env.feed("input_audio_buffer.speech_stopped")
+        await until(lambda: not call.user_speaking)
+        assert call.hold_until == 0.0
+    _call(body)

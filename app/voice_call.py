@@ -28,10 +28,23 @@ CUE_AT = (8.0, 25.0)  # 慢思考想了这么久时报进度，一个任务最�
 RESPONSE_WAIT_S = 5  # 要了回应这么久还没开始（比如百炼报错），就别再占着，后面的结果还要送
 IDLE_S = 600  # 这么久没人说话就挂断，免得一直计费
 TICK_S = 0.1
+HEARD_WAIT_S = 1  # 工具调用比转写早到约 0.15 秒（2026-11-04 实测），等它到了再执行，最多等这么久
+HOLD_S = 10  # 用户说「等一下」后，这么久内不主动开口；再说话就解除
 # 模型偶尔嘴上说转交却没调工具（2026-11-04 实测），用户就白等了：听到这些话而没调用，替它转
 CLAIMS_FORWARD = re.compile(r"think_deep|第一反应|这边(?:看不到|没)|转给|转交|慢思考|后台|稍等|想一下|想想|帮你(?:理|想|捋)|我[^。！？]{0,6}(?:查|搜|翻|找|看看|看一下)")
 # 提示词压不到零：工具名、方括号占位、「让后台想」还会冒出来。文字比音频早到（2026-11-04 实测约 15 毫秒，且一句话整句先到），先拦不增加延迟
 INTERNAL_WORDS = re.compile(r"慢思考|快思考|转给|转交|交出去|交给|让(?:后台|搭档)|让\s*Claude|Claude\s*帮|think_deep|update_thinking|get_thinking_status|cancel_thinking|web_search|^\s*[\[【]")
+# 模型直接听音频，常常和转写不一致，纯「等一下」也可能接话甚至去搜（2026-11-04 实测），只能看转写来拦。整句都是才算，「等一下，我补充一点」不算
+HOLD = re.compile(r"(?:你先|你|先)?(?:等一?下|等等|稍等(?:一下)?|等会儿?|等我一下)[啊哈吧]?[。！？!?,，.\s]*")
+
+
+def _terms(text: str) -> set[str]:
+    return set(re.findall(r"[a-z]+|[\u4e00-\u9fff]", text.lower())) - set("年月日号")
+
+
+def _query_from_user(query: str, heard: str) -> bool:
+    """搜索词的每个字都在用户原话里（日期除外），就不是听错后跑了题。比连着的词宽松：模型常省掉「的」、调换语序。"""
+    return _terms(query) <= _terms(heard)
 
 
 class _End(Exception):
@@ -60,6 +73,11 @@ class Call:
         self.spoke_this_response = self.tool_called = self.from_user = self.forward_waiting = False
         self.muted, self.muted_text, self.retrying, self.guarded = False, "", False, False
         self.last_user = ""
+        self.query_checked = False
+        self.heard = asyncio.Event()
+        self.early_reply = ""  # 转写到之前不显示回复：可能是「等一下」，这句要拦
+        self.heard.set()
+        self.hold_until = 0.0
         now = time.monotonic()
         self.play_until = self.audio_started = 0.0
         self.audio_s = 0.0
@@ -112,7 +130,13 @@ class Call:
             args = {}
         t = self.thinker
         log.info("语音工具 %s", name)
-        if name == "think_deep":
+        try:
+            await asyncio.wait_for(self.heard.wait(), HEARD_WAIT_S)
+        except asyncio.TimeoutError:
+            pass
+        if time.monotonic() < self.hold_until:
+            out, follow = {"status": "用户让你等，这件事不做"}, False
+        elif name == "think_deep":
             out, follow = {"status": t.ask(str(args.get("objective", "")))}, not self.spoke_this_response
         elif name == "update_thinking":
             out, follow = {"status": t.update(str(args.get("info", "")))}, not self.spoke_this_response
@@ -120,6 +144,12 @@ class Call:
             out, follow = t.status(), True
         elif name == "cancel_thinking":
             out, follow = {"status": t.cancel()}, True
+        elif name == "web_search" and self.last_user and not self.query_checked and not _query_from_user(str(args.get("query", "")), self.last_user):
+            # 模型听错时搜词跟着错，结果会念成别的话题（2026-11-04 实测：新模型→新车、电影）。这时它手上有文字了，让它再给一次；追问时搜词本来就和原话不同，再给一次也能过
+            self.query_checked = True
+            log.info("搜索词和原话不一致，让模型核对")
+            out = {"error": f"还没有搜。用户的原话是「{self.last_user}」，你可能听错了。按这句话的意思重新用 web_search，这次不要说话；这句话不是要搜东西就不要搜，按规矩处理。"}
+            follow = True
         elif name == "web_search":
             self.searching += 1
             try:
@@ -228,6 +258,8 @@ class Call:
             self.dropping = self.reply_done = False
             if self.reply:  # 上一句还没放完就来了新回应
                 self._flush_reply()
+            if now < self.hold_until:
+                await self._mute()
         elif t == "response.audio_transcript.delta":
             if self.muted:  # 判断要不要补转得看整句，一拦住就只有个「[」
                 self.muted_text += ev.get("delta", "")
@@ -242,6 +274,8 @@ class Call:
                 self.reply = ev.get("transcript") or self.reply
                 if self.guarded and INTERNAL_WORDS.search(self.reply):
                     await self._mute()
+                elif not self.heard.is_set():
+                    self.early_reply = self.reply
                 else:
                     await self.tell(type="reply", text=self.reply)
         elif t == "response.done":
@@ -250,7 +284,7 @@ class Call:
             if resp.get("status") == "failed":
                 log.warning("百炼回应失败：%s", resp.get("status_details"))
                 await self.tell(type="error", message="这一句没答上来，再说一次")
-            elif self.muted:
+            elif self.muted and now >= self.hold_until:
                 log.warning("拦下内部说法：%s", self.muted_text[:80])
                 if not self.tool_called and resp.get("status") == "completed":
                     await self._after_mute()
@@ -261,12 +295,26 @@ class Call:
             self.loop.create_task(self._on_tool(ev))
         elif t == "input_audio_buffer.speech_started":
             self.user_speaking, self.last_voice, self.last_user = True, now, ""
+            self.early_reply = ""
+            self.hold_until, self.query_checked = 0.0, False
+            self.heard.clear()
             await self._barge(now)
         elif t == "input_audio_buffer.speech_stopped":
             self.user_speaking, self.last_speech_end, self.t_stop = False, now, now
         elif t == "conversation.item.input_audio_transcription.completed":
             text = (ev.get("transcript") or "").strip()
-            if text:
+            self.heard.set()
+            if HOLD.fullmatch(text):
+                log.info("用户让等：%s", text)
+                self._record("user", text)
+                self.recent.append(f"用户：{text}")
+                self.last_user, self.hold_until, self.forward_waiting = text, now + HOLD_S, False
+                self.want_response = self.retrying = False  # 拦下内部说法时可能已经要了重说
+                self.early_reply = ""
+                await self.tell(type="user", text=text)
+                if self.response_active or now < self.play_until:
+                    await self._mute()
+            elif text:
                 self._record("user", text)
                 self.recent.append(f"用户：{text}")
                 self.last_user = text
@@ -293,12 +341,15 @@ class Call:
         if self.reply and self.reply_done and now >= self.play_until:
             self._flush_reply()
         await self._send_status(now)
+        if self.early_reply and (self.heard.is_set() or now - self.last_speech_end > HEARD_WAIT_S):
+            await self.tell(type="reply", text=self.early_reply)
+            self.early_reply = ""
         if self.asked_at and now - self.asked_at > RESPONSE_WAIT_S:
             self.response_active, self.asked_at = False, 0.0
         if now - self.last_voice > IDLE_S:
             await self.tell(type="end", reason="很久没听到说话，已挂断")
             raise _End
-        if self.response_active or self.user_speaking:
+        if self.response_active or self.user_speaking or now < self.hold_until:
             return
         if self.want_response:
             await self._respond()
