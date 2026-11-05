@@ -1,4 +1,4 @@
-// 阅读批注（调研报告、深读笔记、知识库文档、学习计划共用）：选中文字 → 「评论 / 问 Claude」，被评论的文字高亮，
+// 阅读批注（调研报告、深读笔记、知识库文档、学习计划、产品雷达卡片、复盘 AI 分析共用）：选中文字 → 「评论 / 问 Claude」，被评论的文字高亮，
 // 讨论串列在旁边（窄屏在下方）；问 Claude 的回答就地挂在讨论串里，可以继续追问。数据在 /api/annotations。
 // 用法：import { annotate } from './_annotate.js';
 //   el.append(annotate(ctx, md(text), { doc: 'research:3:synth', title, link: '#research/r/3', source: text }))

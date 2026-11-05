@@ -4,6 +4,7 @@
 //       #intel/growth（每日增长 Case + 候选池）· #intel/g/<id>（增长 Case 卡）
 //       #intel/startups · #intel/tracks · #intel/t/<赛道> · #intel/ph · #intel/oss/<查询>（开源雷达，见 _intel_oss.js）· #intel/companies · #intel/sources
 import oss from './_intel_oss.js';
+import { annotate } from './_annotate.js';
 const LV = { S: ['S', 'err'], A: ['A', 'warn'], B: ['B', 'ok'], C: ['C', 'gray'] };
 const CARD = { queued: ['解读中', 'line'], done: ['解读卡', 'ok'], incomplete: ['解读卡不完整', 'warn'], failed: ['解读失败', 'err'] };
 const DAYS = [['7', '7 天'], ['30', '30 天'], ['90', '90 天'], ['0', '全部']];
@@ -263,8 +264,7 @@ async function renderEvent(el, ctx, id) {
   if (e.card?.content) {
     if (e.card.missing.length) el.append(h('div.card', { style: { borderColor: 'var(--warn)' } }, `缺少：${e.card.missing.join('、')}（或缺带链接 / 日期的出处）`));
     // 卡片出处写成 [来源](链接, 日期)，marked 不认这种写法，先拆成 [来源](链接)（日期）
-    const box = cardMd(md, e.card.content);
-    el.append(h('div.card', {}, box));
+    el.append(h('div.card', {}, annotate(ctx, cardMd(md, e.card.content), { doc: `intel:event:${id}`, title: e.title, link: `#intel/e/${id}`, source: e.card.content })));
     if (e.versions.length > 1) el.append(h('div.muted', { style: { fontSize: '12px', marginTop: '6px' } }, `共 ${e.versions.length} 个版本，显示最新（${e.card.created_at.slice(0, 16)}）`));
   } else {
     el.append(ui.empty(e.card_status === 'queued' ? '后台正在写解读卡' : '还没有解读卡'));
@@ -334,7 +334,7 @@ async function renderStartup(el, ctx, c) {
   el.append(h('div.section-title', {}, ['生意拆解卡', h('span.extra', {}, [ps ? ps[0] : '未生成', ' ', regen])]));
   if (c.profile?.content) {
     if (c.profile.missing.length) el.append(h('div.card', { style: { borderColor: 'var(--warn)' } }, `缺少：${c.profile.missing.join('、')}`));
-    el.append(h('div.card', {}, cardMd(md, c.profile.content)));
+    el.append(h('div.card', {}, annotate(ctx, cardMd(md, c.profile.content), { doc: `intel:company:${c.slug}`, title: `${c.name} · 生意拆解卡`, link: `#intel/c/${c.slug}`, source: c.profile.content })));
     el.append(h('div.muted', { style: { fontSize: '12px', marginTop: '6px' } }, `${c.profile.created_at.slice(0, 16)} 生成${c.profile_versions > 1 ? ` · 共 ${c.profile_versions} 版` : ''}`));
   } else {
     el.append(ui.empty(c.profile_status === 'queued' ? '后台正在写拆解卡' : '还没有拆解卡',
@@ -586,7 +586,7 @@ async function renderGrowthCase(el, ctx, id) {
   el.append(ui.section('增长 Case 卡', s[0]));
   if (g.content) {
     if (g.missing.length) el.append(h('div.card', { style: { borderColor: 'var(--warn)' } }, `缺少：${g.missing.join('、')}（或缺带链接 / 日期的出处）`));
-    el.append(h('div.card', {}, cardMd(md, g.content)));
+    el.append(h('div.card', {}, annotate(ctx, cardMd(md, g.content), { doc: `intel:growth:${id}`, title: `${g.company || '?'} · ${it.title || ''}`, link: `#intel/g/${id}`, source: g.content })));
   } else {
     el.append(ui.empty(g.status === 'queued' ? '后台正在写卡（联网读原文 + 找第二来源，通常几分钟）' : '写卡失败，点「重写」再来一次'));
     if (g.status === 'queued' && g.job_id) api.waitJob(g.job_id).then(() => ctx.refresh());

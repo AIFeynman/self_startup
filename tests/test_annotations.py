@@ -78,3 +78,12 @@ def test_failed_answer_is_recorded(client, monkeypatch):
     a = client.post("/api/annotations", json={"doc": "research:9:synth", "ask": True}).json()
     t = _wait_answer(client, a["id"])
     assert t["msgs"][-1]["status"] == "failed" and "claude 不可用" in t["msgs"][-1]["content"]
+
+
+def test_intel_card_annotation_reaches_kb(client):
+    doc = {"doc": "intel:event:152", "title": "产品变化 · 解读卡", "link": "#intel/e/152"}
+    client.post("/api/annotations", json={**doc, "quote": "定价变了", "text": "和竞品对比一下"})
+    assert [t["quote"] for t in client.get("/api/annotations", params={"doc": doc["doc"]}).json()] == ["定价变了"]
+    kb.sync()
+    text = "".join(f.read_text() for f in (kb.KB_DIR / "annotations").glob("*.md"))
+    assert "批注：产品变化 · 解读卡" in text and "#intel/e/152" in text and "和竞品对比一下" in text
