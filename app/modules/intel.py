@@ -276,6 +276,8 @@ def _migrate() -> None:
                 db.execute("UPDATE intel_company SET kind='native' WHERE tier>1")
     if "ext_key" not in {r["name"] for r in db.rows("PRAGMA table_info(intel_event)")}:
         db.execute("ALTER TABLE intel_event ADD COLUMN ext_key TEXT DEFAULT ''")  # 收入事件的去重键（里程碑 / 月度暴涨…）
+    if "fetch_via" not in {r["name"] for r in db.rows("PRAGMA table_info(intel_source)")}:
+        db.execute("ALTER TABLE intel_source ADD COLUMN fetch_via TEXT DEFAULT ''")  # jina = 直连不行，固定走 Jina Reader
     db.execute("CREATE INDEX IF NOT EXISTS idx_intel_company_kind ON intel_company(kind, ai)")
     _migrated = True
 
@@ -350,8 +352,8 @@ def _old_text(last: dict | None) -> str:
         return ""
 
 
-def process_page(src: dict, status: int, ctype: str, body: str) -> dict:
-    """一个信息源抓回来的内容 → 快照 + 候选。和抓取分开，测试直接喂内容。"""
+def process_page(src: dict, status: int, ctype: str, body: str, rebase: bool = False) -> dict:
+    """一个信息源抓回来的内容 → 快照 + 候选。和抓取分开，测试直接喂内容。rebase：换了抓法，这版当首次快照，不和旧版 diff。"""
     sid, label = src["id"], src.get("label") or src["url"]
     base = {"source_label": f"{label}", "product": src.get("product", ""), "official": 1}
     if status >= 400:
@@ -376,7 +378,7 @@ def process_page(src: dict, status: int, ctype: str, body: str) -> dict:
     if h == src.get("last_hash"):
         db.update("intel_source", sid, {**upd, "last_ok": db.now(), "last_err": ""})
         return {"ok": True, "unchanged": True, "candidates": 0}
-    last = _last_snapshot(sid)
+    last = None if rebase else _last_snapshot(sid)
     old = _old_text(last)
     new, structure = 0, None
     if src["kind"] == "pricing":
@@ -403,12 +405,50 @@ def process_page(src: dict, status: int, ctype: str, body: str) -> dict:
     return {"ok": True, "candidates": new, "first": not old}
 
 
-def fetch_source(src: dict) -> dict:
+def _fetch_error(src: dict, e: Exception) -> dict:
+    db.update("intel_source", src["id"], {"last_fetch": db.now(), "last_err": f"{type(e).__name__}: {str(e)[:160]}"})
+    return {"ok": False, "error": type(e).__name__}
+
+
+def _jina_usable(src: dict, status: int, ctype: str, body: str) -> bool:
+    """Jina 也可能只拿回站点外壳（Gemini 定价页就只有一段欢迎横幅），这种不算抓到。"""
+    if status >= 400:
+        return False
+    text = snap.extract_text(body, ctype, src["url"])
+    return len(text) >= 200 and (src["kind"] != "pricing" or bool(snap.PRICE_RE.search(text)))
+
+
+def _switch_to_jina(src: dict) -> dict | None:
+    """直连不行时改走 Jina，以后这个源固定走 Jina：两种抓法的正文写法不同，来回切会把整页当新增。None = Jina 也不行。"""
     try:
-        status, ctype, body = snap.fetch(src["url"])
+        status, ctype, body = snap.jina_fetch(src["url"])
+    except Exception:  # noqa: BLE001 —— 记直连的错误，下轮再试
+        return None
+    if not _jina_usable(src, status, ctype, body):
+        return None
+    r = process_page(src, status, ctype, body, rebase=True)
+    if r.get("ok"):
+        db.update("intel_source", src["id"], {"fetch_via": "jina"})
+    return r
+
+
+def fetch_source(src: dict) -> dict:
+    if src.get("fetch_via") == "jina":
+        try:
+            return process_page(src, *snap.jina_fetch(src["url"]))
+        except Exception as e:  # noqa: BLE001
+            return _fetch_error(src, e)
+    can_switch = src["kind"] != "rss"  # Jina 返回的是 markdown，解析不了 feed
+    try:
+        status, ctype, body = snap.fetch_retry(src["url"])
     except Exception as e:  # noqa: BLE001
-        db.update("intel_source", src["id"], {"last_fetch": db.now(), "last_err": f"{type(e).__name__}: {str(e)[:160]}"})
-        return {"ok": False, "error": type(e).__name__}
+        # 成功过的源连不上多半是网络抖动，不换抓法；从没成功过的（如证书一直不过）才换
+        r = _switch_to_jina(src) if can_switch and not src.get("last_ok") else None
+        return r or _fetch_error(src, e)
+    if can_switch and (status in snap.BLOCKED_STATUS or (status < 400 and len(snap.extract_text(body, ctype, src["url"])) < 200)):
+        r = _switch_to_jina(src)
+        if r:
+            return r
     return process_page(src, status, ctype, body)
 
 

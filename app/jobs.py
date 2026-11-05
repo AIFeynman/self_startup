@@ -78,7 +78,7 @@ def submit(module: str, prompt: str, *, ref: str = "", engine: str = "", system:
     有 chat_session_id 时再把结果回帖到那个对话（对话里让 Agent 提交的任务，见 chat.link_jobs）。
     tier：任务难度档（light / standard，见设置 model_tiers），定下这个任务用哪个 Claude 模型；空 = 板块默认。"""
     engine = engine or settings.get("engines.default", "claude")
-    prompt = prompt.rstrip() + "\n\n" + RESOURCE_RULE
+    prompt = prompt.rstrip() + "\n\n" + RESOURCE_RULE + "\n\n" + agent.FETCH_RULE
     jid = db.insert("jobs", {"module": module, "ref": ref, "engine": engine, "prompt": prompt,
                              "status": "queued", "created_at": db.now(), "chat_session_id": chat_session_id, "cwd": cwd or "",
                              "system": system, "add_dirs": json.dumps([*(add_dirs or []), str(kb.KB_DIR)]), "session_in": session,

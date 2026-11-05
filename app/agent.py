@@ -29,6 +29,11 @@ log = logging.getLogger(__name__)
 
 API_BASE = os.environ.get("SELF_STARTUP_API") or f"http://127.0.0.1:{os.environ.get('PORT', '8780')}"
 
+FETCH_RULE = """读网页原文时：
+- 直连 401 / 402 / 403 / 429、超时、证书错误或只拿到空壳，都不算读不到：改读 `https://r.jina.ai/<原链接>`（WebFetch 或 curl；环境变量 JINA_API_KEY 有值时 curl 加 `-H "Authorization: Bearer $JINA_API_KEY"`）。X 帖子先试 `https://api.fxtwitter.com/<用户>/status/<id>`。
+- 404 或 Jina 显示页面不存在（如 Nothing to see here）：说明链接失效，换抓法没用，去搜官方站的新地址和其它一手来源。
+- 都试过仍拿不到，才写没读到，并写清试了哪些办法、缺了什么内容。"""
+
 PLATFORM_GUIDE = f"""
 你运行在「本地学习平台」中，作为某个板块的对话 Agent。平台 HTTP API：{API_BASE}
 - 读写平台数据用 curl 调 API（JSON），例如：curl -s {API_BASE}/api/plan/day
@@ -40,7 +45,7 @@ PLATFORM_GUIDE = f"""
 - 提交后台任务（深读、学习计划、调研等）后不要 sleep / 轮询等结果：说明已提交、大概多久、在哪看，然后结束本轮。
   任务完成后平台会自动把结果回帖到这个对话并通知用户。
 - 默认中文回答，简洁、具体，不要过度设计。
-""".strip()
+""".strip() + "\n" + FETCH_RULE
 
 
 READONLY_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]

@@ -9,6 +9,7 @@ import html
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
 from html.parser import HTMLParser
@@ -23,6 +24,9 @@ BLOCK_MAX = 1500        # 一个候选最多带多少字正文给分类
 FIRST_DAYS = 14         # 首次快照只把最近这么多天的条目当候选
 TIMEOUT = httpx.Timeout(25.0, connect=10.0)
 LLM_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+JINA_READER = "https://r.jina.ai/"
+JINA_TIMEOUT = httpx.Timeout(90.0, connect=15.0)
+BLOCKED_STATUS = {401, 403, 451}  # 直连被站点拦：换 Jina 能解决；429 / 5xx 多半是一时的，下轮再试
 
 SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "header", "footer", "template", "iframe", "button", "form"}
 BLOCK_TAGS = {"p", "div", "section", "article", "main", "li", "ul", "ol", "br", "tr", "table", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -105,6 +109,36 @@ def fetch(url: str, client: httpx.Client | None = None) -> tuple[int, str, str]:
     try:
         r = c.get(url)
         return r.status_code, r.headers.get("content-type", ""), r.text
+    finally:
+        if own:
+            c.close()
+
+
+def fetch_retry(url: str, tries: int = 3, sleep=time.sleep) -> tuple[int, str, str]:
+    """连接类错误（代理抖动的 SSL EOF、超时）重试几次；HTTP 错误码不重试，照实返回。"""
+    for i in range(tries):
+        try:
+            return fetch(url)
+        except httpx.TransportError:
+            if i == tries - 1:
+                raise
+            sleep(2 ** i)
+    raise AssertionError("unreachable")
+
+
+def jina_fetch(url: str, client: httpx.Client | None = None) -> tuple[int, str, str]:
+    """(status, content_type, 正文 markdown)。经 Jina Reader 渲染页面；JINA_API_KEY 可选，没有就走免费额度。"""
+    headers = {"Accept": "application/json", "X-Retain-Images": "none"}
+    key = os.environ.get("JINA_API_KEY", "").strip()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    own = client is None
+    c = client or httpx.Client(timeout=JINA_TIMEOUT, follow_redirects=True)
+    try:
+        r = c.get(JINA_READER + url, headers=headers)
+        if r.status_code >= 400:
+            return r.status_code, "", ""
+        return 200, "text/markdown", (r.json().get("data") or {}).get("content") or ""
     finally:
         if own:
             c.close()

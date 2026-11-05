@@ -716,3 +716,84 @@ def test_growth_daily_extra_cards(client, monkeypatch):
     assert picked[0] in {f"hot{i}" for i in range(6)}  # 保底按总排序：新的 15 分优先于存档
     assert "archive2" not in picked and "fresh12" not in picked and "fresh13b" not in picked
     assert intel.growth_daily()["picked"] == []  # 当天满 5 张不再加
+
+
+def _source(kind="changelog", **kw):
+    co = db.row("SELECT id FROM intel_company LIMIT 1")["id"]
+    sid = db.insert("intel_source", {"company_id": co, "kind": kind, "label": "t", "url": f"https://t.example/{kind}{time.time()}", **kw})
+    return db.row("SELECT * FROM intel_source WHERE id=?", [sid])
+
+
+JINA_MD = f"## {D1}\n" + "Added background agents to the CLI so that long tasks keep running after you close it. " * 4
+
+
+def test_blocked_source_switches_to_jina_and_stays(fresh, monkeypatch):
+    intel.seed()
+    src = _source()
+    calls = []
+    monkeypatch.setattr(snap, "fetch_retry", lambda url: (calls.append("direct"), (403, "text/html", ""))[1])
+    monkeypatch.setattr(snap, "jina_fetch", lambda url: (calls.append("jina"), (200, "text/markdown", JINA_MD))[1])
+    assert intel.fetch_source(src)["ok"]
+    src = db.row("SELECT * FROM intel_source WHERE id=?", [src["id"]])
+    assert src["fetch_via"] == "jina" and src["last_err"] == "" and src["last_ok"]
+    calls.clear()
+    assert intel.fetch_source(src)["unchanged"]
+    assert calls == ["jina"]  # 之后固定走 Jina，不再两边切
+
+
+def test_switch_rebases_instead_of_diffing_old_page(fresh, monkeypatch):
+    intel.seed()
+    src = _source()
+    intel.process_page(src, 200, "text/html", CHANGELOG_V1)
+    src = db.row("SELECT * FROM intel_source WHERE id=?", [src["id"]])
+    r = intel.process_page(src, 200, "text/markdown", JINA_MD, rebase=True)
+    assert r["first"]  # 换抓法当首次快照，旧页面的每一行不会都变成「新增」
+
+
+def test_jina_shell_page_is_not_accepted(fresh, monkeypatch):
+    intel.seed()
+    src = _source("pricing")
+    monkeypatch.setattr(snap, "fetch_retry", lambda url: (403, "text/html", ""))
+    monkeypatch.setattr(snap, "jina_fetch", lambda url: (200, "text/markdown", "Welcome to the new docs home. " * 20))
+    assert not intel.fetch_source(src)["ok"]
+    src = db.row("SELECT * FROM intel_source WHERE id=?", [src["id"]])
+    assert src["fetch_via"] == "" and src["last_err"] == "HTTP 403"
+
+
+def test_network_blip_keeps_direct_on_healthy_source(fresh, monkeypatch):
+    intel.seed()
+    src = _source(last_ok="2026-11-05T11:05:31")
+    def boom(url):
+        raise snap.httpx.ConnectError("SSL EOF")
+    monkeypatch.setattr(snap, "fetch_retry", boom)
+    monkeypatch.setattr(snap, "jina_fetch", lambda url: pytest.fail("抖动不该换抓法"))
+    assert intel.fetch_source(src)["error"] == "ConnectError"
+
+
+def test_rss_never_goes_through_jina(fresh, monkeypatch):
+    intel.seed()
+    src = _source("rss")
+    monkeypatch.setattr(snap, "fetch_retry", lambda url: (403, "text/xml", ""))
+    monkeypatch.setattr(snap, "jina_fetch", lambda url: pytest.fail("feed 不走 Jina"))
+    assert not intel.fetch_source(src)["ok"]
+
+
+def test_fetch_retry_only_retries_transport_errors():
+    n = []
+    def flaky(url):
+        n.append(1)
+        if len(n) < 3:
+            raise snap.httpx.ConnectError("SSL EOF")
+        return 200, "text/html", "ok"
+    orig, snap.fetch = snap.fetch, flaky
+    try:
+        assert snap.fetch_retry("u", sleep=lambda s: None)[0] == 200 and len(n) == 3
+    finally:
+        snap.fetch = orig
+
+
+def test_background_jobs_get_fetch_rule(client, monkeypatch):
+    monkeypatch.setattr(jobs, "kick", lambda *a, **k: None)
+    jid = jobs.submit("intel", "写卡")
+    assert "r.jina.ai" in db.row("SELECT prompt FROM jobs WHERE id=?", [jid])["prompt"]
+    assert "r.jina.ai" in jobs.agent.PLATFORM_GUIDE
