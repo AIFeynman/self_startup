@@ -152,90 +152,173 @@ def _slow_brain(monkeypatch, gate=None, answer=ANSWER):
     return asked
 
 
-def test_session_goes_up_only_to_read_and_mic_is_forwarded(env):
+def _flash_tool(env, name, spoke="", **args):
+    """实时模型这一轮用了工具；spoke 是它同时说的话。"""
+    env.feed("response.created")
+    if spoke:
+        env.feed("response.audio.delta", delta=audio())
+        env.feed("response.audio_transcript.done", transcript=spoke)
+    env.feed("response.function_call_arguments.done", name=name, call_id="c1", arguments=json.dumps(args, ensure_ascii=False))
+    env.feed("response.done", response={"status": "completed"})
+
+
+def _flash_says(env, text):
+    env.feed("response.created")
+    env.feed("response.audio.delta", delta=audio())
+    env.feed("response.audio_transcript.done", transcript=text)
+    env.feed("response.done", response={"status": "completed"})
+
+
+def test_session_gives_flash_prompt_tools_and_history_and_mic_is_forwarded(env):
     async def body(ws, call):
         ws.in_.put_nowait({"type": "websocket.receive", "bytes": b"\x01\x02"})
         await until(lambda: env.of("input_audio_buffer.append"))
     _call(body)
     session = env.of("session.update")[0]["session"]
-    assert session["tools"] == [] and session["max_history_turns"] == 1 and "念" in session["instructions"]
+    assert {t["function"]["name"] for t in session["tools"]} == {"think_deep", "web_search"}
+    assert session["max_history_turns"] == 20 and session["instructions"].startswith("你在和用户打电话")
     assert base64.b64decode(env.of("input_audio_buffer.append")[0]["audio"]) == b"\x01\x02"
     assert env.closed and chat.active == 0
 
 
-def test_every_sentence_goes_to_claude_and_only_spoken_goes_up(env, monkeypatch):
+def test_flash_answers_by_itself_without_claude(env, monkeypatch):
     asked = _slow_brain(monkeypatch)
 
     async def body(ws, call):
-        _hear(env, "上周定了啥")
+        env.feed("input_audio_buffer.speech_started")
+        env.feed("input_audio_buffer.speech_stopped")
+        _flash_says(env, "大约一千多公里。")
+        await until(lambda: ws.audio and call.early_reply)
+        assert not ws.told("reply")  # 模型比转写快，屏幕上要先出用户的话
+        env.feed("conversation.item.input_audio_transcription.completed", transcript="北京到上海多远")
+        await until(lambda: ws.told("reply"))
+        assert [m["type"] for m in ws.sent if m["type"] in ("user", "reply")] == ["user", "reply"]
+    ws, call = _call(body)
+    assert not asked and not env.said()
+    assert _rows(call.sid) == [("user", "北京到上海多远"), ("fast", "大约一千多公里。")]
+
+
+def test_think_deep_goes_to_claude_and_only_spoken_goes_up(env, monkeypatch):
+    asked = _slow_brain(monkeypatch)
+
+    async def body(ws, call):
+        _hear(env, "帮我查查我上周定了啥")
+        _flash_tool(env, "think_deep", spoke="好，我想一下。", objective="上周定了啥")
         await until(lambda: "你上周定的是先做中转。" in env.said())
         await until(lambda: ws.told("slow"))
+        assert "你上周定的是先做中转。" in env.of("response.create")[-1]["response"]["instructions"]
+        env.feed("response.created")
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: env.of("conversation.item.delete"))  # 稿子不能留在历史里当用户说的话
     ws, call = _call(body)
-    assert "用户刚说：上周定了啥" in asked[0]
+    assert "要想的事：上周定了啥" in asked[0] and "用户：帮我查查我上周定了啥" in asked[0]
     assert env.said() == ["你上周定的是先做中转。"]  # 没有任何标记，也没有别的
     assert "secret.md" not in json.dumps(env.sent, ensure_ascii=False)
     assert ("assistant", "完整回答：记录在 secret.md 第 3 行") in _rows(call.sid)
 
 
-def test_auto_response_is_dropped_and_ours_is_played(env):
-    # 百炼听完会自己接一句，关不掉（create_response:false 它不认），不能放出来
+def test_web_search_reads_result_and_raw_text_stays_here(env, monkeypatch):
+    searched = []
+
+    def search(query):
+        searched.append(query)
+        return {"results": [{"title": "天气", "summary": "原文在这"}]}
+    monkeypatch.setattr(voice_rt, "web_search", search)
+    monkeypatch.setattr(voice_rt, "spoken_search", lambda q, f: (f"{q}：今天晴。", {}))
+
     async def body(ws, call):
-        env.feed("response.created")
-        env.feed("response.audio.delta", delta=audio())
-        env.feed("response.audio_transcript.done", transcript="它自己接的话")
-        env.feed("response.done", response={"status": "completed"})
-        await until(lambda: call.reply_done)
-        assert not ws.audio and not ws.told("reply")
-        await _ours(env, call, "我们的话")
-        await until(lambda: ws.audio and ws.told("reply"))
-    ws, call = _call(body)
-    assert all("它自己接的话" not in c for _, c in _rows(call.sid))
-
-
-@pytest.mark.parametrize("text,reply", [("喂，听得到吗？", "听得到，你说。"), ("你好。", "你好，你说。"), ("谢谢", "不客气。"), ("拜拜！", "好，再见。")])
-def test_quick_phrases_answer_at_once_without_claude(text, reply):
-    assert voice_call.quick_reply(text) == reply
-
-
-@pytest.mark.parametrize("text", ["好的", "行", "为什么", "听得到吗我想问个问题", "你好像说错了", "谢谢你帮我查一下"])
-def test_other_sentences_are_not_quick(text):
-    assert voice_call.quick_reply(text) == ""
-
-
-def test_quick_phrase_skips_claude_and_silence_wait(env, monkeypatch):
-    async def body(ws, call):
-        heard = []
-        monkeypatch.setattr(call.thinker, "hear", heard.append)
-        _hear(env, "谢谢")
+        _hear(env, "北京天气怎么样")
+        _flash_tool(env, "web_search", spoke="我查一下。", query="北京天气")
         await until(lambda: env.said())
-        assert env.said() == ["不客气。"] and not heard
-        assert "不客气。" in env.of("response.create")[0]["response"]["instructions"]
-        assert time.monotonic() - call.last_speech_end < voice_call.SAFE_SILENCE_S
-    _call(body)
+    ws, call = _call(body)
+    assert searched == ["北京天气"] and env.said() == ["北京天气怎么样：今天晴。"]
+    assert "原文在这" not in json.dumps(env.sent, ensure_ascii=False)
+    assert ("tool", "web_search: 北京天气") in _rows(call.sid)
 
 
-def test_quick_phrase_while_thinking_goes_to_claude(env, monkeypatch):
-    gate = threading.Event()
-    _slow_brain(monkeypatch, gate)
+@pytest.mark.parametrize("query,heard,words", [("北京天气", "北京天气怎么样", "北京天气"), ("2026年北京天气", "北京天气", "2026年北京天气"),
+                                               ("最新汽车", "最新模型", "最新模型 最新汽车"), ("随便", "", "随便")])
+def test_search_words_keep_what_user_said(query, heard, words):
+    assert voice_call.search_words(query, heard) == words
+
+
+@pytest.mark.parametrize("tool,ack", [("think_deep", "好，我想一下。"), ("web_search", "我查一下。")])
+def test_silent_tool_call_gets_an_acknowledgement(env, monkeypatch, tool, ack):
+    _slow_brain(monkeypatch, threading.Event())
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: {"results": []})
 
     async def body(ws, call):
-        _hear(env, "我上周定了什么")
-        await until(lambda: call.thinker.task)
-        heard = []
-        monkeypatch.setattr(call.thinker, "hear", heard.append)
-        _hear(env, "谢谢")
-        await until(lambda: heard)
-        assert "不客气。" not in env.said()
-        gate.set()
+        _hear(env, "问题")
+        _flash_tool(env, tool, query="问题", objective="问题")
+        await until(lambda: env.said())
+        assert env.said()[0] == ack
+        call.thinker.cancel()
     _call(body)
 
 
-def test_barge_in_cancels_clears_and_drops_late_audio(env, monkeypatch):
-    _slow_brain(monkeypatch, threading.Event())
+def test_chatting_on_while_thinking_keeps_the_answer(env, monkeypatch):
+    gate = threading.Event()
+    asked = _slow_brain(monkeypatch, gate)
 
+    async def body(ws, call):
+        _hear(env, "帮我想想")
+        _flash_tool(env, "think_deep", spoke="好，我想一下。", objective="帮我想想")
+        await until(lambda: call.thinker.task)
+        task = call.thinker.task
+        _hear(env, "北京到上海多远")
+        _flash_says(env, "一千多公里。")
+        await asyncio.sleep(0.05)
+        assert call.thinker.task is task and len(asked) == 1
+        gate.set()
+        await until(lambda: "你上周定的是先做中转。" in env.said())
+    _call(body)
+
+
+def test_claiming_a_search_without_the_tool_really_searches(env, monkeypatch):
+    searched = []
+    monkeypatch.setattr(voice_rt, "web_search", lambda q: searched.append(q) or {"results": []})
+
+    async def body(ws, call):
+        _hear(env, "今天金价多少")
+        _flash_says(env, "我查一下。")
+        await until(lambda: searched)
+    ws, _ = _call(body)
+    assert searched == ["今天金价多少"]
+
+
+def test_claiming_to_think_without_the_tool_really_thinks(env, monkeypatch):
+    asked = _slow_brain(monkeypatch)
+
+    async def body(ws, call):
+        _hear(env, "这个怎么选")
+        _flash_says(env, "好，我想一下。")
+        await until(lambda: asked)
+    _call(body)
+    assert "要想的事：这个怎么选" in asked[0]
+
+
+def test_internal_words_are_muted_and_retried_once(env):
+    async def body(ws, call):
+        _hear(env, "你好")
+        env.feed("response.created")
+        env.feed("response.audio_transcript.delta", delta="[调用 think_deep]")
+        env.feed("response.audio.delta", delta=audio())
+        env.feed("response.done", response={"status": "completed"})
+        await until(lambda: env.of("response.create"))
+        assert not ws.audio and ws.told("clear")
+        assert "instructions" not in env.of("response.create")[0]["response"]
+        env.feed("response.created")
+        env.feed("response.audio_transcript.delta", delta="你好。")
+        env.feed("response.audio.delta", delta=audio())
+        await until(lambda: ws.audio)
+    ws, call = _call(body)
+    assert all("think_deep" not in c for _, c in _rows(call.sid))
+
+
+def test_barge_in_cancels_clears_and_drops_late_audio(env):
     async def body(ws, call):
         _hear(env, "第一句")
-        await until(lambda: call.thinker.task)
+        await until(lambda: call.last_user)
         await _ours(env, call, "这是一句很长的回答，用户没听完")
         await until(lambda: ws.audio and call.reply)
         env.feed("input_audio_buffer.speech_started")
@@ -245,7 +328,6 @@ def test_barge_in_cancels_clears_and_drops_late_audio(env, monkeypatch):
         env.feed("response.done", response={"status": "cancelled"})
         await asyncio.sleep(0.05)
         assert len(ws.audio) == 1
-        call.thinker.cancel()
     ws, call = _call(body)
     rows = _rows(call.sid)
     assert rows[0] == ("user", "第一句")
@@ -283,8 +365,11 @@ def test_answer_waits_while_user_is_talking(env, monkeypatch):
 
     async def body(ws, call):
         _hear(env, "上周定了啥")
+        _flash_tool(env, "think_deep", spoke="好，我想一下。", objective="上周定了啥")
+        await until(lambda: call.thinker.task is None and ws.told("slow"))
         env.feed("input_audio_buffer.speech_started")
-        await until(lambda: ws.told("slow"))
+        await until(lambda: call.user_speaking)
+        call.outbox.append("等用户说完")
         await asyncio.sleep(0.1)
         assert not env.said()
         env.feed("input_audio_buffer.speech_stopped")
@@ -292,86 +377,31 @@ def test_answer_waits_while_user_is_talking(env, monkeypatch):
     _call(body)
 
 
-def test_new_sentence_drops_answer_not_read_yet(env, monkeypatch):
-    asked = _slow_brain(monkeypatch)
-
-    async def body(ws, call):
-        _hear(env, "第一句")
-        env.feed("input_audio_buffer.speech_started")
-        await until(lambda: call.outbox)
-        env.feed("input_audio_buffer.speech_stopped")
-        env.feed("conversation.item.input_audio_transcription.completed", transcript="不对，第二句")
-        await until(lambda: len(asked) == 2)
-    _call(body)
-    assert "用户刚说：不对，第二句" in asked[1] and "第一句\n" not in asked[1].split("用户刚说：")[1]
-
-
-def test_filler_only_when_claude_is_slow(env, monkeypatch):
-    monkeypatch.setattr(voice_call, "FILLER_S", 0.05)
-    gate = threading.Event()
-    _slow_brain(monkeypatch, gate)
-
-    async def body(ws, call):
-        _hear(env, "这个怎么选")
-        await until(lambda: env.said())
-        assert env.said()[0] in voice_call.FILLERS
-        env.feed("response.created")
-        env.feed("response.done", response={"status": "completed"})
-        gate.set()
-        await until(lambda: "你上周定的是先做中转。" in env.said())
-        assert len(env.said()) == 2
-    _call(body)
-
-
-def test_no_filler_when_answer_is_quick(env, monkeypatch):
-    _slow_brain(monkeypatch, answer="<spoken>在呢。</spoken>")
-
-    async def body(ws, call):
-        _hear(env, "我上周定了什么")
-        await until(lambda: env.said())
-        await asyncio.sleep(0.1)
-    ws, _ = _call(body)
-    assert env.said() == ["在呢。"] and not ws.told("slow")  # 寒暄没有屏幕正文
-
-
-def test_progress_question_answers_without_restarting(env, monkeypatch):
-    gate = threading.Event()
-    asked = _slow_brain(monkeypatch, gate)
-
-    async def body(ws, call):
-        _hear(env, "查一下")
-        await until(lambda: call.thinker.task)
-        task = call.thinker.task
-        task.doing = "在上网查"
-        _hear(env, "还没找到吗？")
-        await until(lambda: "在上网查，稍等。" in env.said())
-        assert call.thinker.task is task and len(asked) == 1
-        call.thinker.cancel()
-    _call(body)
-
-
 def test_cancel_stops_thinking(env, monkeypatch):
     _slow_brain(monkeypatch, threading.Event())
 
     async def body(ws, call):
-        _hear(env, "查一下")
+        _hear(env, "帮我想想")
+        _flash_tool(env, "think_deep", objective="帮我想想")
         await until(lambda: call.thinker.task)
         _hear(env, "算了")
-        await until(lambda: "好，不想了。" in env.said())
-        assert call.thinker.task is None
+        await until(lambda: call.thinker.task is None)
     _call(body)
 
 
-def test_brain_switched_off_says_so(env, monkeypatch):
+def test_switched_off_tools_are_not_offered_or_run(env, monkeypatch):
     real = settings.get
     monkeypatch.setattr(settings, "get", lambda p, d=None: False if p == "voice_rt.permissions.claude_code" else real(p, d))
     asked = _slow_brain(monkeypatch)
 
     async def body(ws, call):
         _hear(env, "我上周定了什么")
+        _flash_tool(env, "think_deep", objective="我上周定了什么")
         await until(lambda: env.said())
     _call(body)
-    assert env.said() == [voice_call.NO_BRAIN] and not asked
+    session = env.of("session.update")[0]["session"]
+    assert [t["function"]["name"] for t in session["tools"]] == ["web_search"] and "直说现在做不了" in session["instructions"]
+    assert not asked and "这个我现在做不了。" in env.said()
 
 
 def test_failed_brain_says_so(env, monkeypatch):
@@ -382,9 +412,10 @@ def test_failed_brain_says_so(env, monkeypatch):
 
     async def body(ws, call):
         _hear(env, "我上周定了什么")
-        await until(lambda: env.said())
+        _flash_tool(env, "think_deep", spoke="好，我想一下。", objective="我上周定了什么")
+        await until(lambda: any("没想出来" in x for x in env.said()))
     ws, call = _call(body)
-    assert "没想出来" in env.said()[0] and "坏了" not in json.dumps(env.sent, ensure_ascii=False)
+    assert "坏了" not in json.dumps(env.sent, ensure_ascii=False)
     assert any(role == "error" for role, _ in _rows(call.sid))
 
 
@@ -686,7 +717,8 @@ def test_resume_continues_the_same_discussion_without_local_only_text(env, monke
     said = "\n".join(seen["c"].recent)
     assert "用户：先做哪个" in said and "你：先做 A" in said and "本机才有的正文" not in said
     assert seen["c"].thinker.session == "claude-1"
-    assert "先做哪个" not in json.dumps(env.of("session.update"), ensure_ascii=False)  # 上文只在本机 Claude 这边
+    up = json.dumps(env.of("session.update"), ensure_ascii=False)
+    assert "先做哪个" in up and "本机才有的正文" not in up  # 实时模型要接着聊，只带说出口的话
     new = _call_row()
     assert new["id"] != cid and new["session_id"] == sid
 
