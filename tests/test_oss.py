@@ -1,5 +1,6 @@
 """开源雷达：入库、标注校验 / 重问 / 续跑、检索（召回 + 精排 + 缓存 + 按 star）、接口、信息推荐反向复用。不联网。"""
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -203,7 +204,7 @@ def test_feed_reuses_radar_labels(monkeypatch):
                                  "extra": {"repo": name, "trending": True}, "fetched_at": db.now()})
     asked = []
     monkeypatch.setattr(feed.judge, "judge", lambda todo, **k: (asked.extend(it["id"] for it, _, _ in todo) or {}, []))
-    feed.run_judge()
+    feed.run_judge(now=datetime(2026, 11, 2, tzinfo=timezone.utc))   # 固定时间：条目日期写死，超过 PIN_DAYS 就不判了
     assert asked == ["github:z/unknown"]                       # 库里有的不再问 Jev
     ex = json.loads(db.row("SELECT extra FROM feed_items WHERE id='github:c/webui'")["extra"])
     assert ex["judge_ai"] == 0.0 and ex["judge_by"] == "oss" and ex["oss"]["d"] == "frontend"
