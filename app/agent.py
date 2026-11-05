@@ -77,7 +77,7 @@ def tier_model(tier: str, engine: str = "claude") -> str:
     return str((settings.get("model_tiers", {}) or {}).get(tier) or "")
 
 
-def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], model: str = "", readonly: bool = False) -> list[str]:
+def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], model: str = "", readonly: bool = False, mcp: dict | None = None) -> list[str]:
     cfg = settings.get("engines.claude", {})
     cmd = [cfg.get("bin", "claude"), "-p", prompt, "--output-format", "stream-json", "--verbose"]
     if session:
@@ -87,7 +87,10 @@ def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], mod
     if model or cfg.get("model"):
         cmd += ["--model", model or cfg["model"]]
     if readonly:  # 只读板块工具只留这几个（子 Agent、Bash 都不给，curl 能调写接口）；回复要快，边生成边出字，也不加载用不上的 MCP
-        cmd += ["--tools", ",".join(READONLY_TOOLS), "--allowedTools", *READONLY_TOOLS, "--include-partial-messages", "--strict-mcp-config"]
+        cmd += ["--tools", ",".join(READONLY_TOOLS), "--allowedTools", *READONLY_TOOLS, *[f"mcp__{name}" for name in mcp or {}],
+                "--include-partial-messages", "--strict-mcp-config"]
+        if mcp:
+            cmd += ["--mcp-config", json.dumps({"mcpServers": mcp}, ensure_ascii=False)]
     else:
         if cfg.get("permission_mode"):
             cmd += ["--permission-mode", cfg["permission_mode"]]
@@ -230,12 +233,12 @@ def _drop_warm() -> None:
         stop(proc)
 
 
-def warm_up(*, system: str = "", session: str = "", add_dirs: list[str] | None = None, model: str = "") -> None:
+def warm_up(*, system: str = "", session: str = "", add_dirs: list[str] | None = None, model: str = "", mcp: dict | None = None) -> None:
     """只读会话用：提前起好下一轮的 CLI。没用上的 WARM_IDLE_S 后停掉；平台退出时 stdin 断开，它也自己退出。"""
     if not available("claude"):
         return
     add_dirs = [d for d in (add_dirs or []) if d and Path(d).expanduser().exists()]
-    cmd = _waiting_cmd(_claude_cmd("", system, session, add_dirs, model, True))
+    cmd = _waiting_cmd(_claude_cmd("", system, session, add_dirs, model, True, mcp))
     if _warm.get("key") == cmd and _warm["proc"].poll() is None:
         return
     _drop_warm()
@@ -348,10 +351,11 @@ def _transient(text: str) -> bool:
 
 def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str = "",
                cwd: str | None = None, add_dirs: list[str] | None = None,
-               fallback: bool = True, on_proc=None, model: str = "", readonly: bool = False) -> Iterator[dict]:
+               fallback: bool = True, on_proc=None, model: str = "", readonly: bool = False, mcp: dict | None = None) -> Iterator[dict]:
     """on_proc(proc)：每启动一个 CLI 子进程回调一次（后台任务用它来暂停）。
     model：只覆盖 Claude 的模型（板块级设置，见 module_model）；回退到 Codex 时用 Codex 自己的模型。
-    readonly：Agent 只能读，不能改文件、不能跑命令（语音讨论用，听错一句不会动到数据）。"""
+    readonly：Agent 只能读，不能改文件、不能跑命令（语音讨论用，听错一句不会动到数据）。
+    mcp：只读时额外给的 MCP 服务（语音通话的搜索），格式同 mcpServers。"""
     engine = engine or settings.get("engines.default", "claude")
     # 默认不在项目目录里跑（acceptEdits 下可写文件），放到 data/workspace
     default_cwd = not cwd
@@ -364,7 +368,7 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
         if not available(eng):
             yield {"type": "error", "text": f"{eng} 不可用，尝试备选" if i + 1 < len(order) else f"{eng} 不可用"}
             continue
-        cmd = _claude_cmd(prompt, system, session, add_dirs, model, readonly) if eng == "claude" \
+        cmd = _claude_cmd(prompt, system, session, add_dirs, model, readonly, mcp) if eng == "claude" \
             else _codex_cmd(prompt, system, session, add_dirs, cwd, readonly)
         for attempt in range(TRANSIENT_RETRIES + 1):
             failed = retry = False

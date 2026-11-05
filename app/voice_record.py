@@ -1,7 +1,7 @@
 """把每通语音电话留下来，便于反查和回听。只追加，只有用户在页面上点删除才删。
 
 data/voice_calls/<id>/
-  events.jsonl  发给百炼和百炼发回的全部非音频事件、工具的输入输出、慢思考的结果，t 是通话开始后的秒数
+  events.jsonl  发给百炼和百炼发回的全部非音频事件、本机 Claude 用的工具和答的话，t 是通话开始后的秒数
   mic.pcm / bot.pcm  通话中的原始录音，和通话时间对齐。挂断后转成 call.m4a（混音，回听用）、mic.flac、bot.flac（分轨，分析用）
 """
 from __future__ import annotations
@@ -184,7 +184,7 @@ def remove(call_id: int) -> None:
 
 
 def spoken_lines(call_id: int, limit: int = 8, width: int = 100) -> list[tuple[str, str]]:
-    """这通电话最后说的几句 (user|fast, 话)。只有说出口的，本来就上过云；慢思考的完整回答只留在本机，不在里面。"""
+    """这通电话最后说的几句 (user|fast, 话)。只有说出口的，本来就上过云；屏幕上的完整回答只留在本机，不在里面。"""
     said = [(e["kind"], e.get("text", "")[:width]) for e in events(call_id) if e["kind"] in ("user", "fast") and e.get("text")]
     return said[-limit:]
 

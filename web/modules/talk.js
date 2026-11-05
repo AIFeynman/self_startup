@@ -5,7 +5,6 @@ const OPENERS = ['我有个想法想理一理：', '帮我想想这件事该不�
 const DOING_NOW = (m) => {
   if (m.talk === 'listening') return '在听';
   if (m.talk === 'speaking') return '在说';
-  if (m.searching) return '在搜索';
   if (m.thinking) return m.doing || '在想';
   return '等你说';
 };
@@ -27,6 +26,7 @@ function callHistory(calls, { api, h, md, toast, onResume, onDeleted }) {
       if (WHO[e.kind]) return [h('div.call-line.' + e.kind, {}, [time, h('span', {}, e.text + (e.interrupted ? '（被打断）' : ''))])];
       if (e.kind === 'slow_full') return [h('details.call-line', {}, [h('summary', {}, [time, '完整回答']), h('div', {}, md(e.text))])];
       if (e.kind === 'search') return [h('details.call-line', {}, [h('summary', {}, [time, `搜索「${e.query}」${e.took_s} 秒`]), h('pre', {}, JSON.stringify(e.found, null, 1))])];
+      if (e.kind === 'tool' && e.text) return [h('div.call-line.muted', {}, [time, e.text.replace('mcp__voice_search__', '')])];
       if (e.kind === 'tool' && e.name !== 'web_search') return [h('details.call-line', {}, [h('summary', {}, [time, `工具 ${e.name}`]), h('pre', {}, JSON.stringify({ args: e.args, out: e.out }, null, 1))])];
       if (e.kind === 'forward') return [h('div.call-line.muted', {}, [time, `模型没调工具，补转到 ${e.to}`])];
       return [];
