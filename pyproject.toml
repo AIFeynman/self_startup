@@ -11,6 +11,7 @@ dependencies = [
     "playwright>=1.64.1",
     "yfinance>=1.7.0",
     "sherpa-onnx>=2.0.1",
+    "websockets>=14",
 ]
 
 [dependency-groups]

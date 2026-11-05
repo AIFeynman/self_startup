@@ -25,6 +25,7 @@ from pathlib import Path
 import httpx
 
 from .. import db, settings
+from ..agent import GATEWAY_ENV
 from . import _paper_collect as col
 from ._feed_judge import API as JEV_API, MODEL as JEV_MODEL
 from ._oss_label import DEEPSEEK_MODEL, DEEPSEEK_PRICE
@@ -34,7 +35,6 @@ log = logging.getLogger(__name__)
 TAXONOMY_PATH = Path(__file__).with_name("paper_taxonomy.json")
 BATCH, REFS_SHOWN = 25, 15
 PARALLEL = {"deepseek": 8, "haiku": 4}
-GATEWAY_ENV = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENROUTER_API_KEY")
 JEV_BATCH = 20
 TIMEOUT = 600
 

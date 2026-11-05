@@ -1598,6 +1598,8 @@ dependencies = [
     { name = "playwright" },
     { name = "sherpa-onnx" },
     { name = "uvicorn" },
+    { name = "websockets", version = "16.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "websockets", version = "17.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "yfinance" },
 ]
 
@@ -1614,6 +1616,7 @@ requires-dist = [
     { name = "playwright", specifier = ">=1.64.1" },
     { name = "sherpa-onnx", specifier = ">=2.0.1" },
     { name = "uvicorn", specifier = ">=0.29" },
+    { name = "websockets", specifier = ">=14" },
     { name = "yfinance", specifier = ">=1.7.0" },
 ]
 

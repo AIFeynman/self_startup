@@ -33,7 +33,7 @@ ORGANIZE_PROMPT = """下面是用户和你的一次讨论记录（用户的话�
 
 
 def _transcript(sid: int) -> str:
-    msgs = db.rows("SELECT role,content FROM chat_messages WHERE session_id=? AND role IN ('user','assistant') ORDER BY id", [sid])
+    msgs = db.rows("SELECT role,content FROM chat_messages WHERE session_id=? AND role IN ('user','assistant','fast') ORDER BY id", [sid])
     return "\n\n".join(("用户：" if m["role"] == "user" else "你：") + m["content"] for m in msgs)
 
 

@@ -267,6 +267,13 @@ mark { background: var(--accent-soft); color: var(--accent); border-radius: 3px;
 .nav-badge { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--warn); color: #fff; font: 600 11px/18px var(--font); text-align: center; }
 
 /* ---------- 讨论 ---------- */
+.rt-call { margin-bottom: 12px; }
+.rt-bar { display: flex; align-items: center; gap: 10px; }
+.rt-chip { color: var(--muted); font-size: 13px; }
+.rt-chip[hidden], .rt-log[hidden], .composer[hidden] { display: none; }
+.rt-log { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 12px 0; max-height: 45vh; overflow-y: auto; border-top: 1px solid var(--line); }
+.rt-line.user { align-self: flex-end; max-width: 80%; color: var(--muted); }
+.rt-line.slow { padding-top: 8px; border-top: 1px solid var(--line); }
 .talk-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .talk-row:first-child { border-top: none; }
 .talk-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

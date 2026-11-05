@@ -53,6 +53,8 @@ DEFAULTS: dict = {
     },
     # 按板块指定 Claude 模型（后台任务和对话都生效；空 / 不写 = 用 engines.claude.model）
     "module_models": {"learn": "claude-sonnet-5-5", "talk": "claude-sonnet-5-5"},
+    # 快慢思考语音通话：model / voice 空 = 用 voice_rt 的默认；speech_rate 语速；turn_detection 断句方式
+    "voice_rt": {"model": "", "voice": "", "speech_rate": 1.2, "turn_detection": {"type": "smart_turn"}},
     # 按任务难度分档（比板块设置优先）：light = 抽取、翻译、整理、初判；standard = 精讲、出题、调整计划。哪类任务用哪档见 learn.task_tiers
     "model_tiers": {"light": "claude-haiku-5-5", "standard": "claude-sonnet-5-5"},
     # 开源雷达批量标注引擎：deepseek（默认，DeepSeek v4 flash API，全库约 1 小时 / $6）或 haiku（订阅 CLI，不另付费，约 6-9 小时）

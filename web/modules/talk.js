@@ -1,5 +1,14 @@
 // 讨论：说出想法，Agent 在右侧对话面板里帮忙理思路、给建议（只读）；讨论完「整理」，确认后再存。
+import { startCall } from '../voice_rt.js';
+
 const OPENERS = ['我有个想法想理一理：', '帮我想想这件事该不该做：', '我卡在一个问题上：'];
+const DOING_NOW = (m) => {
+  if (m.talk === 'listening') return '在听';
+  if (m.talk === 'speaking') return '在说';
+  if (m.searching) return '在搜索';
+  if (m.thinking) return m.doing || '在想';
+  return '等你说';
+};
 
 export default {
   async render(el, { api, h, md, ui, toast, openChat, refresh }) {
@@ -15,8 +24,52 @@ export default {
       onSubmit: (t) => { start(t); },
     });
     const draftWrap = h('div');
+
+    // 实时通话：连不上或中途断了，退回上面输入框的本地通话，下一句接着说
+    const callWrap = h('div.rt-call');
+    let hangup = null;
+    const callBtn = h('button.primary', { onclick: () => (hangup ? hangup() : startRt()) }, '开始实时通话');
+    const chip = h('span.rt-chip', { hidden: true });
+    const rtLog = h('div.rt-log', { hidden: true });
+    const line = (who, content) => { rtLog.hidden = false; rtLog.append(h('div.rt-line.' + who, {}, content)); rtLog.scrollTop = rtLog.scrollHeight; };
+    const endRt = () => {
+      hangup = null;
+      callBtn.textContent = '开始实时通话';
+      callBtn.disabled = false;
+      chip.hidden = true;
+      box.hidden = false;
+      window.removeEventListener('hashchange', hangRt);
+    };
+    const hangRt = () => hangup?.();
+    const startRt = async () => {
+      callBtn.disabled = true;
+      chip.hidden = false; chip.textContent = '连接中';
+      rtLog.replaceChildren();
+      box.hidden = true;
+      try {
+        const call = await startCall({
+          onStatus: (m) => { chip.textContent = DOING_NOW(m); },
+          onUser: (t) => line('user', t),
+          onReply: (t) => line('fast', t),
+          onSlow: (t) => line('slow', md(t)),
+          onFallback: (why) => { toast(why); setTimeout(() => box.querySelector('.mic')?.click(), 0); },
+          onEnd: () => endRt(),
+        });
+        hangup = call.hangup;
+        callBtn.textContent = '结束通话';
+        callBtn.disabled = false;
+        window.addEventListener('hashchange', hangRt);
+      } catch (e) {
+        endRt();
+        toast(e.name === 'NotAllowedError' ? '麦克风没有授权，在浏览器地址栏左侧打开' : '通话打不开：' + e.message);
+      }
+    };
+    const rtInfo = await api.get('/api/voice/rt/status').catch(() => null);
+    if (rtInfo?.configured) callWrap.append(h('div.rt-bar', {}, [callBtn, chip]), rtLog);
+
     el.append(
       ui.pageHead('讨论', '把没想清楚的事说出来。这里只讨论，不改数据；要留下的结论，整理确认后再保存'),
+      callWrap,
       box,
       ui.chips(OPENERS.map((t) => ({ label: t, onClick: () => box.setValue(t) }))),
       draftWrap,
