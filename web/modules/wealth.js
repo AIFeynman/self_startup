@@ -251,11 +251,53 @@ function assetCard(a) {
       <div><span>达标概率</span><b>${pr(a.probability)}</b>${bar(a.probability, 1, '')}</div>
       <div><span>中位</span><b class="${tone(a.p50)}">${ret(a.p50)}</b><small>${ret(a.p10)} ~ ${ret(a.p90)}</small></div>
       <div><span>${third[0]}</span><b>${third[1]}</b><small>${third[2]}</small></div>
-    </div>${fundTable}${timingPanel(a.val_timing)}
+    </div>${fundTable}${timingPanel(a.val_timing)}${signalPanel(a.signal)}
     <p class="wl-pacing"><b>节奏</b>${esc(a.pacing)}</p>
     <details open><summary>理由</summary>${list(a.reasons)}</details>
     ${heads ? `<details><summary>最近资讯（${a.news.count} 条，偏正面 ${a.news.positive} / 偏负面 ${a.news.negative}）</summary><ul class="wl-ul">${heads}</ul></details>` : ''}
   </article>`;
+}
+
+// 和大盘比、成交量、均线：只作观察，不进概率和挂单
+function signalPanel(s) {
+  if (!s) return '';
+  const tag = (state) => (state > 0 ? 'ok' : state < 0 ? 'warn' : 'gray');
+  const rows = [['和大盘比', s.relative], ['成交量', s.volume], ['均线', s.ma], ['大盘自身', s.benchmark]];
+  return `<div class="wl-timing">
+    <div class="row between"><b>强弱信号</b><span class="tag ${s.key === 'strong' ? 'ok' : s.key === 'weak' ? 'warn' : 'gray'}">${esc(s.label)} · ${s.score > 0 ? '+' : ''}${s.score} 分（-3 ~ +3）</span></div>
+    ${s.weak_exit ? '<p class="wl-levels">已触发转弱：之前 60 个交易日到过 +1，现在跌到 -2 或更低。</p>' : ''}
+    <div class="wl-scroll">${table(['维度', '现状', '数字'], rows.map(([name, r]) => `<tr><td>${name}</td><td><span class="tag ${tag(r.state)}">${esc(r.label)}</span></td><td>${esc(r.text)}</td></tr>`).join(''), 'wl-text')}</div>
+    <p class="muted wl-small">日线截至 ${esc(s.as_of)}。分数 = 和大盘比 + 成交量 + 均线，各 -1 ~ +1；大盘自身只作背景，不计分。</p>
+  </div>`;
+}
+
+function comboTable(ev, groups) {
+  const keys = Object.keys(groups);
+  const first = groups[keys[0]]?.rows;
+  if (!first) return '';
+  const head = ['组合', ...keys.map((k) => `${esc(ev.labels[k])}<br><small class="muted">平均 / 最差 10% / 中位</small>`)];
+  const body = Object.entries(first).map(([rule, row]) => `<tr><td>${esc(row.label)}</td>${keys.map((k) => { const r = groups[k].rows[rule]; return `<td>${r.mean.toFixed(1)} / ${r.p10.toFixed(1)} / ${r.median.toFixed(1)}</td>`; }).join('')}</tr>`).join('');
+  return table(head, body);
+}
+
+function signalsCard(d) {
+  const sig = d.signals;
+  if (!sig) return '';
+  const stages = table(['阶段', '价格', '重点观察', '减持含义', '历史检验'], sig.stages.map((r) => `<tr class="${r.active ? 'sel' : ''}"><td>${esc(r.name)}${r.active ? ' <span class="tag ok">现在</span>' : ''}</td><td>${esc(r.range)}</td><td>${esc(r.watch)}</td><td>${esc(r.view)}</td><td>${esc(r.evidence)}</td></tr>`).join(''), 'wl-text');
+  const ev = sig.evidence, ex = sig.example;
+  const example = ex ? `<p class="wl-levels">「卖一半 + 低阶梯 + 转弱全卖」换成现在的股数：现价 ${money(ex.price)} 卖 ${int(ex.now_shares)} 股；${ex.rungs.map((r) => `${money(r.price)} 卖 ${int(r.shares)} 股`).join('，')}；${esc(ex.exit)}。只作对照，不会下单，也不改上面的挂单。</p>` : '';
+  const replay = ev ? `<details class="wl-fold"><summary class="row between"><span class="card-label">减持组合回放</span><span class="muted wl-extra">生成于 ${local(ev.generated_at)}${ev.stale ? '（已超过一周）' : ''} · 按现价 ${money(ev.price)}</span></summary>
+      ${list(ev.findings)}
+      <h4 class="wl-h4">持有 ${ev.years} 年后的每股价值</h4>${comboTable(ev, ev.combos)}
+      <h4 class="wl-h4">持有 1 年后的每股价值</h4>${comboTable(ev, ev.one_year)}
+      ${example}
+      <p class="muted wl-note">真实日线按比例缩放到现价，每 10 个交易日起一次；卖出所得转红利低波（含分红），计费用和超过 100 部分的 20% 税，到期未卖的按收盘价算。美团 ${ev.combos.holdout?.n ?? 0} 个起点，独立样本约 ${(ev.combos.holdout?.n_eff ?? 0).toFixed(0)} 段；港股样本包含 2021–22 年大跌，同期红利低波走势很强（自 ${esc(ev.start['512890.SS'].slice(0, 4))} 年），结果不能直接外推。</p>
+    </details>` : emptyText('组合回放还没生成（之后每周自动重跑）');
+  return `<section class="card wl-card"><div class="row between wl-card-head"><div class="card-label">和大盘、成交量、均线一起看</div><span class="muted wl-extra">只作观察，不改概率、挂单和提醒</span></div>
+    ${signalPanel(sig.snapshot) || emptyText('暂无大盘数据，下次行情刷新后显示')}
+    <h4 class="wl-h4">减持阶段观察</h4>${stages}
+    ${replay}
+    <p class="muted wl-small">${esc(sig.disclaimer)}</p></section>`;
 }
 
 function timingPanel(t) {
@@ -485,7 +527,7 @@ function renderSell(box, ctx) {
     ['期末未成交（期望）', `${int(Math.round(plan.expected_unfilled_shares / 100) * 100)} 股`, `未成交部分按${hl}后的价格计入`],
     ['现在全部卖出', money(plan.sell_all_now_avg), `扣费后 ${money(plan.sell_all_now_net_avg)} · ${pctv((plan.sell_all_now_avg / plan.target_avg - 1) * 100)} vs 目标`],
   ]);
-  box.innerHTML = head + top + ladderCard(plan, d, hl) + (d.timing ? `<section class="card">${timingPanel(d.timing)}</section>` : '') + reasonsCard(plan) + ceilingCard(d, hl) + switchCard(d) + sweepCard(plan)
+  box.innerHTML = head + top + ladderCard(plan, d, hl) + (d.timing ? `<section class="card">${timingPanel(d.timing)}</section>` : '') + signalsCard(d) + reasonsCard(plan) + ceilingCard(d, hl) + switchCard(d) + sweepCard(plan)
     + costsCard(plan, d) + shapesCard(plan) + sellBacktestCard(d) + executionCard(d) + hourlyCard(d) + newsCard(d)
     + `<p class="muted wl-note wl-foot">${DISCLAIMER}</p>`;
   drawCeiling(box, d);
@@ -835,6 +877,9 @@ const CSS = `
 .wl-table td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .wl-table th:first-child, .wl-table td:first-child { text-align: left; }
 .wl-table td.wl-wrap { white-space: normal; text-align: left; min-width: 200px; }
+.wl-table.wl-text { min-width: 560px; }
+.wl-table.wl-text th, .wl-table.wl-text td { text-align: left; white-space: normal; vertical-align: top; line-height: 1.5; }
+.wl-table.wl-text td:first-child { white-space: nowrap; }
 .wl-table tr.sel td { background: var(--accent-soft); }
 .wl-table tr.dim td { opacity: .5; }
 .wl-table tr.click { cursor: pointer; } .wl-table tr.click:hover td { background: var(--bg-2); }

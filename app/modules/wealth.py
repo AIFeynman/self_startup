@@ -100,7 +100,7 @@ def post_refresh():
 @router.post("/backtest/{kind}")
 def post_backtest(kind: str):
     """重跑回测（后台）：target = 目标计划（约 10 秒，含重拉长日线）；sell = 减持 / 换仓（约 2 分钟）。"""
-    runner = {"target": lambda: svc.run_target_backtest(refresh=True), "sell": svc.run_sell_backtest}.get(kind)
+    runner = {"target": lambda: svc.run_target_backtest(refresh=True), "sell": svc.run_sell_backtest, "signals": svc.run_signals_backtest}.get(kind)
     if runner is None:
         raise HTTPException(404, "kind 只能是 target 或 sell")
     threading.Thread(target=_quietly, args=(runner,), daemon=True, name=f"wealth-backtest-{kind}").start()
@@ -207,6 +207,8 @@ def _tick() -> None:
             _quietly(check_alerts)
     if svc.sell_backtest_due():
         _quietly(svc.run_sell_backtest)
+    if svc.signals_backtest_due():
+        _quietly(svc.run_signals_backtest)
 
 
 def _loop() -> None:
