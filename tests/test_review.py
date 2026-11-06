@@ -346,3 +346,18 @@ def test_core_metrics_api_and_score_job(client, monkeypatch):
     review.on_job_done({"id": 4243, "ref": f"score:{d}", "status": "done", "output": "坏输出"})
     r = client.get(f"/api/agents/core?date={d}").json()
     assert r["error"] and r["core"]["result"] == 100       # 坏输出不覆盖已有评分
+
+
+def test_agent_improve_reads_review_notes_and_open_problems_only(client):
+    from app import db
+    db.execute("DELETE FROM tasks WHERE kind='issue'")
+    d = "2026-05-10"
+    client.post("/api/notes/review", json={"date": d, "entries": {
+        "AI协作·做得好的": "并行开了三个会话", "AI协作·有问题的": "任务书没写完成标准"}})
+    client.post("/api/notes", json={"text": "这条灵感只留本地", "kind": "spark", "date": d})
+
+    job_id = client.post("/api/review/improve", json={"date": d}).json()["job_id"]
+
+    prompt = db.row("SELECT prompt FROM jobs WHERE id=?", [job_id])["prompt"]
+    assert "并行开了三个会话" in prompt and "AI协作：任务书没写完成标准" in prompt
+    assert "这条灵感只留本地" not in prompt

@@ -324,7 +324,7 @@ export default {
       head.replaceChildren(pageHead(d));
       body.replaceChildren(...(d.draft ? [draftCard(d.draft)] : []), approvals(ctx, { fallback: () => parsedNeeds(d), onChange: load }),
         ...liveCard(d), submitted(ctx), ...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
-        items(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
+        items(d), ...issues(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
         timeline(d));
       for (const j of d.jobs) watch(j.id, 'AI 拆解');
     }
@@ -607,6 +607,22 @@ export default {
         ]);
       });
       return h('div.card.pl-list', {}, rows);
+    }
+
+    function issues(d) {
+      if (!d.issues.length) return [];
+      const row = (t, i) => {
+        const done = t.status === 'done';
+        const days = Math.max(0, Math.round((new Date(state.date) - new Date(t.created_at.slice(0, 10))) / 864e5)) + 1;
+        return h(`div.pl-row${done ? '.done' : ''}`, {}, [
+          h('div.pl-num', {}, pad2(i + 1)),
+          h('div', {}, [h('div.pl-title', {}, t.title),
+            h('div.meta', {}, `加入于 ${t.created_at.slice(0, 16).replace('T', ' ')} · ${done ? `解决于 ${t.updated_at.slice(0, 16).replace('T', ' ')}` : `第 ${days} 天`}`)]),
+          h('button.sm' + (done ? '.ghost' : ''), { onclick: () => patch(t.id, { status: done ? 'todo' : 'done' }) }, done ? '撤销' : '解决'),
+        ]);
+      };
+      return [ui.section('持续问题', `${d.issues.filter((t) => t.status !== 'done').length} 个未解决 · 来自复盘「有问题的」，每天都在，不进排程，解决了手动点`),
+        h('div.card.pl-list', {}, d.issues.map(row))];
     }
 
     function timeline(d) {

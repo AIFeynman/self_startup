@@ -922,7 +922,7 @@ def day(date: str = ""):
     except Exception:  # noqa: BLE001
         pass
     ts = tasks.list_for(date)
-    return {"date": date, "tasks": ts, "tree": _tree(ts), "config": _cfg(), "schedule": last_schedule(date),
+    return {"date": date, "tasks": ts, "tree": _tree(ts), "issues": tasks.issues_for(date), "config": _cfg(), "schedule": last_schedule(date),
             "runs": runs(date=date),
             "jobs": db.rows("SELECT id,ref,status,created_at FROM jobs WHERE module='plan' AND ref=? AND status IN ('queued','running')",
                             [f"plan:decompose:{date}"]),
@@ -943,7 +943,7 @@ def schedule(body: DateIn):
 def carry(body: DateIn):
     """把之前最近一天未完成的顶层事项（及其未完成子任务）顺延到 date。"""
     date = body.date or db.today()
-    prev = db.row("SELECT MAX(date) d FROM tasks WHERE date<?", [date])
+    prev = db.row("SELECT MAX(date) d FROM tasks WHERE date<? AND kind IS NOT ?", [date, tasks.ISSUE_KIND])
     src = prev and prev["d"]
     if not src:
         return {"from": None, "created": []}
@@ -1033,6 +1033,10 @@ def agent_context(ref: str) -> str:
                      f"{t['depends_on'] or ''}|{t['parallel_group'] or ''}|{t['title']} — {(t['goal'] or '')[:80]}")
     if not ts:
         lines.append("（今天还没有事项）")
+    open_issues = [i for i in tasks.issues_for(date) if i["status"] != "done"]
+    if open_issues:
+        lines.append("持续未解决的问题（来自复盘，不进排程）：")
+        lines += [f"- {i['title']}（加入于 {i['created_at'][:10]}）" for i in open_issues]
     sch = last_schedule(date)
     if sch:
         s = sch["summary"]

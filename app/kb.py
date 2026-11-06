@@ -443,7 +443,7 @@ def _learn_events_md(date: str = "", plan_id: int = 0) -> list[str]:
 
 
 def _daily(docs: list[dict]) -> list[dict]:
-    dates = {r["date"] for r in db.rows("SELECT DISTINCT date FROM tasks")}
+    dates = {r["date"] for r in db.rows("SELECT DISTINCT date FROM tasks WHERE kind IS NOT 'issue'")}
     for t in ("review_days", "review_notes", "review_agent_stats", "agent_util"):
         if _has(t):
             dates |= {r["date"] for r in db.rows(f"SELECT DISTINCT date FROM {t}")}
@@ -456,7 +456,7 @@ def _daily(docs: list[dict]) -> list[dict]:
     out = []
     st_name = {"todo": "未开始", "doing": "进行中", "done": "完成", "partial": "部分", "dropped": "放弃"}
     for date in sorted(x for x in dates if x):
-        tasks = db.rows("SELECT * FROM tasks WHERE date=? ORDER BY COALESCE(start_time,''), priority, id", [date])
+        tasks = db.rows("SELECT * FROM tasks WHERE date=? AND kind IS NOT 'issue' ORDER BY COALESCE(start_time,''), priority, id", [date])
         tops = [t for t in tasks if not t["parent_id"]]
         done = sum(t["status"] == "done" for t in tops)
         body = [f"## 事项与目标（完成 {done}/{len(tops)}）"]
