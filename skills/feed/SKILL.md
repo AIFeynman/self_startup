@@ -37,7 +37,7 @@ score = 热度（同源最近 30 天条目里的百分位，0–1；整源无热
         早先从 learn_evolve 导入的条目，其 star/good/bad 评分也算样本和先验）
       + 1.2 官方博客（链接域名是 anthropic.com / claude.com / claude.dev / openai.com / deepmind.google / blog.google / research.google）
       + 0.8 代码和博客一起发布（同一机构的官方博客和新仓库，博客提到仓库链接或足够特别的仓库名，或有推文同时链接两者；两条都标重要更新置顶，仓库按博客时间算新鲜度）
-      + 0.4 X 长文（引用长文 +0.2；自己发的 ≥5000 赞再 +0.5，新鲜度按博客的半衰期算）+ 0.3 关注账号（X 名单里的账号，搜索来的不加）
+      + 0.4 X 长文（引用长文 +0.2；自己发的 ≥5000 赞再 +0.5，新鲜度按博客的半衰期算）+ 0.3 关注账号（X 名单里的账号，搜索来的不加）+ 1.2 重点关注（`feed.x_priority` 里的账号，取代关注账号的 0.3，搜索来的也算，没在名单里也会抓）
       + 0.25 × 其它来源也收了同一条（最多 2 个，「也见于」）
       + 本条自己被赞 +1 / 被踩 −2；隐藏的条目不出现
 同一 URL（arXiv/HF 论文统一按 arXiv id）、同一标题，或「同一件事」（标题词重合 ≥3 个、Jaccard ≥0.5、发布相差 ≤4 天）
@@ -46,7 +46,7 @@ score = 热度（同源最近 30 天条目里的百分位，0–1；整源无热
 `gist`：排序前列（全部前 60 + 每类前 10，标题已是中文的除外）的中文一句话（≤40 字，DeepSeek deepseek-v4-flash 根据标题和简介生成，
 不补充给出内容以外的事实）。完整刷新后自动补，只刷部分来源不跑；`POST /api/feed/gist` 手动补。推荐时优先用 gist 当中文简介。
 API 返回的 `summary` 已去掉与标题重复的开头（推文标题就是第一句）；HN 链接帖的简介是原文页的 og:description，GitHub 标题带一句话描述。
-「全部」列表做多样化：前 5 条（今日精选）每个来源最多 1 条、每类最多 2 条；前 30 条每类 ≤40%、每个来源 ≤20%。
+「全部」列表做多样化：前 5 条（今日精选）每个来源最多 1 条、每类最多 2 条；前 30 条每类 ≤40%、每个来源 ≤20%（重点关注的条目不受限也不占名额，但前 5 条仍按上面的规则）。
 每条带 `why`，例如 `HN 312分 · 24 小时内 · 命中 agent · 你赞过相似内容（memory）`。
 
 ## API
@@ -64,7 +64,7 @@ curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{
 curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{"id":"hn:123","saved":true}'
 curl -s -X POST $API/api/feed/feedback -H 'Content-Type: application/json' -d '{"id":"hn:123","hidden":true}'
 curl -s $API/api/feed/config                                 # 当前兴趣词、半衰期、查询词、RSS / 官方站 / 播客 / X 名单
-# 修改兴趣词（整体替换列表）；其它旋钮同理写在 feed 下：half_life_hours / reddit / rss / sites / podcasts / xiaoyuzhou / rsshub_bases / x_accounts / x_queries / x_min_likes / sources
+# 修改兴趣词（整体替换列表）；其它旋钮同理写在 feed 下：half_life_hours / reddit / rss / sites / podcasts / xiaoyuzhou / rsshub_bases / x_accounts / x_priority / x_queries / x_min_likes / sources
 curl -s -X PUT $API/api/settings -H 'Content-Type: application/json' -d '{"feed":{"interests":["agent","llm","mcp","rl"]}}'
 # 搜索关键词：一份主题表派生 HN / GitHub / Reddit / YouTube / 知乎 的搜索词（X 仍用 x_queries 高级语法）
 curl -s $API/api/feed/topics                                 # 主题表、各来源这次搜哪些词、按词近 30 天效果（verdict：有效 / 低效 / 没搜到 / 数据不足）
