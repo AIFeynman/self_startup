@@ -129,17 +129,17 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   function newCard() {
     const c = composer;
     const ta = h('textarea', { rows: 3, placeholder: c.ask ? '问 Claude 什么？留空 = 解释这段' : '写评论…（Enter 发送，Shift+Enter 换行）' });
-    const kind = c.ask ? null : noteKindSelect(ctx);
+    const kind = noteKindSelect(ctx);
     const send = async (ask) => {
       const text = ta.value.trim();
       if (!ask && !text) { ta.focus(); return toast('先写点评论', true); }
       try {
-        const note_kind = !ask && kind ? kind.remember() : '';
+        const note_kind = kind.remember();
         await api.post('/api/annotations', { doc, title, link, quote: c.quote, prefix: c.prefix, suffix: c.suffix, text, ask, source, note_kind });
         composer = null;
         window.getSelection()?.removeAllRanges();
         load();
-        if (note_kind) toast('评论已贴到便签');
+        if (note_kind && text) toast('已贴到便签');
       } catch (e) { toast(e.message, true); }
     };
     ta.onkeydown = (e) => {
@@ -149,7 +149,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     return h('div.an-card.an-new', {}, [
       c.quote ? h('div.an-quote', {}, c.quote) : h('div.an-quote.all', {}, '针对全文'),
       ta,
-      kind ? h('div.an-to-note', {}, ['同时贴到便签', kind.el]) : null,
+      h('div.an-to-note', {}, ['同时贴到便签', kind.el]),
       h('div.an-acts', {}, [
         h('button.sm.primary', { onclick: () => send(true) }, [ui.icon('spark'), '问 Claude']),
         h('button.sm.outline', { onclick: () => send(false) }, [ui.icon('chat'), '评论']),
@@ -166,16 +166,16 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
       const text = ta.value.trim();
       if (!text && !ask) return;
       try {
-        const note_kind = !ask ? kind.remember() : '';
+        const note_kind = kind.remember();
         await api.post(`/api/annotations/${t.id}/msgs`, { text, ask, source, note_kind });
         load();
-        if (note_kind && text) toast('评论已贴到便签');
+        if (note_kind && text) toast('已贴到便签');
       } catch (e) { toast(e.message, true); }
     };
     ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing && ta.value.trim()) send(true); };
-    // 写了字才出现：只记评论时同时贴到便签；回车是追问 Claude，不进便签
+    // 写了字才出现：评论和追问都同时贴到便签
     const kind = noteKindSelect(ctx);
-    const toNote = h('div.an-to-note', { hidden: true, title: '点右边的评论按钮才会贴；回车追问 Claude 不进便签' }, ['只记评论时贴到便签', kind.el]);
+    const toNote = h('div.an-to-note', { hidden: true }, ['同时贴到便签', kind.el]);
     ta.oninput = () => { toNote.hidden = !ta.value.trim(); };
     const setStatus = async (status) => { await api.patch(`/api/annotations/${t.id}`, { status }); load(); };
     const del = async () => { if (!confirm('删除这条批注和它的讨论？')) return; await api.del(`/api/annotations/${t.id}`); load(); };
@@ -299,7 +299,7 @@ function wrapRange(root, start, end, decorate) {
   }
 }
 
-// 评论时选的便签类型：内置 + 自己用过的类型 +「不进便签」，记住上次的选择（一开始是灵感）
+// 评论或提问时选的便签类型：内置 + 自己用过的类型 +「不进便签」，记住上次的选择（一开始是灵感）
 const NOTE_KIND_KEY = 'an-note-kind';
 let noteKinds = null;
 function noteKindSelect({ api, h }) {
