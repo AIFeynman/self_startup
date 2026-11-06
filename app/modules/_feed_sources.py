@@ -124,6 +124,7 @@ def fetch_hf_papers(limit: int = 50) -> list[dict]:
             "url": f"https://huggingface.co/papers/{pid}", "date": p.get("publishedAt") or d.get("publishedAt", ""),
             "popularity": float(p.get("upvotes") or 0),
             "extra": {"arxiv_url": f"https://arxiv.org/abs/{pid}", "comments": d.get("numComments") or 0,
+                      "orgs": (p.get("organization") or d.get("organization") or {}).get("fullname") or "",
                       "keywords": (p.get("ai_keywords") or [])[:6]}})
     return out
 
@@ -149,8 +150,37 @@ def fetch_alphaxiv(days: int = 14, page_size: int = 60) -> list[dict]:
             "url": f"https://arxiv.org/abs/{pid}", "date": date,
             "popularity": float(m.get("public_total_votes") or m.get("total_votes") or 0),
             "extra": {"alphaxiv_url": f"https://www.alphaxiv.org/overview/{pid}", "github_url": p.get("github_url") or "",
+                      "orgs": ", ".join(o["name"] for o in p.get("organization_info") or [] if o.get("name")),
                       "visits": (m.get("visits_count") or {}).get("all", 0) if isinstance(m.get("visits_count"), dict) else 0}})
     return out
+
+
+def parse_arxiv_authors(page: str) -> str:
+    m = re.search(r'class="ltx_authors"(.*?)(?=class="ltx_abstract"|<section)', page, re.S)
+    return clean(f"<{m[1]}", 1500) if m else ""
+
+
+def fetch_paper_authors(arxiv_ids: list[str]) -> tuple[dict[str, str], list[str]]:
+    """arXiv 论文页的作者和单位。没有 HTML 版（404）算读过、内容为空；其它失败不进结果，下次再试。"""
+    out: dict[str, str] = {}
+    errors = []
+
+    def one(c, pid):
+        try:
+            r = c.get(f"https://arxiv.org/html/{pid}")
+            if r.status_code != 404:
+                r.raise_for_status()
+            return pid, parse_arxiv_authors(r.text) if r.status_code == 200 else "", None
+        except Exception as e:  # noqa: BLE001
+            return pid, None, f"arxiv {pid}: {type(e).__name__}: {str(e)[:80]}"
+
+    with _client() as c, ThreadPoolExecutor(max_workers=3) as ex:
+        for pid, text, err in ex.map(lambda p: one(c, p), arxiv_ids):
+            if err:
+                errors.append(err)
+            else:
+                out[pid] = text
+    return out, errors
 
 
 TRENDING_URL = "https://github.com/trending"

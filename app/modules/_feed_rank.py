@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
-     "follow": 0.3, "priority": 1.2, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "viral_article": 0.5, "trending": 0.8,
+     "follow": 0.3, "priority": 1.2, "paper_org": 0.6, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "viral_article": 0.5, "trending": 0.8,
      "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3,
      "pref": 0.3, "pref_max": 3, "avoid": -0.4, "avoid_max": 3}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
@@ -26,6 +26,37 @@ OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "clau
 GITHUB_ORGS = {"deepseek-ai": "DeepSeek", "openai": "OpenAI", "anthropics": "Anthropic", "google": "Google",
                "google-deepmind": "Google DeepMind", "google-research": "Google Research", "meta-llama": "Meta",
                "facebookresearch": "Meta", "microsoft": "Microsoft"}
+# 知名企业 / 研究机构（区分大小写：MIT、Meta 不能匹配 permit、metadata；名字容易撞的只认全称）
+PAPER_ORGS = {name: re.compile(p) for name, p in {
+    "Google": r"Google|DeepMind|@google\.com",
+    "Meta": r"\bMeta\b|\bFAIR\b|@meta\.com|@fb\.com",
+    "OpenAI": r"OpenAI|@openai\.com",
+    "Anthropic": r"Anthropic|@anthropic\.com",
+    "Microsoft": r"Microsoft|@microsoft\.com",
+    "NVIDIA": r"NVIDIA|Nvidia|@nvidia\.com",
+    "Apple": r"\bApple\b|@apple\.com",
+    "Amazon": r"\bAmazon\b|\bAWS\b|@amazon\.com",
+    "DeepSeek": r"DeepSeek",
+    "ByteDance": r"ByteDance|Bytedance|@bytedance\.com",
+    "Alibaba": r"Alibaba|Qwen|Tongyi",
+    "Tencent": r"Tencent",
+    "Stanford": r"Stanford|stanford\.edu",
+    "MIT": r"\bMIT\b|Massachusetts Institute of Technology|[@.]mit\.edu",
+    "Berkeley": r"(?<!Lawrence )\bBerkeley\b|berkeley\.edu",
+    "CMU": r"Carnegie Mellon|\bCMU\b|[@.]cmu\.edu",
+    "Princeton": r"Princeton|princeton\.edu",
+    "Harvard": r"Harvard|harvard\.edu",
+    "Cornell": r"Cornell|cornell\.edu",
+    "Caltech": r"Caltech|California Institute of Technology|caltech\.edu",
+    "UW": r"University of Washington|uw\.edu",
+    "Oxford": r"University of Oxford|Oxford University|ox\.ac\.uk",
+    "Cambridge": r"University of Cambridge|Cambridge University|cam\.ac\.uk",
+    "ETH": r"\bETH\b|ethz\.ch",
+    "Toronto": r"University of Toronto|utoronto\.ca",
+    "Mila": r"Mila\b.{0,3}Qu[eé]bec|Quebec AI Institute|mila\.quebec",
+    "Tsinghua": r"Tsinghua",
+    "PKU": r"Peking University|\bPKU\b|pku\.edu\.cn",
+}.items()}
 # 新鲜度半衰期 = 基准（settings feed.half_life_hours，默认 72h）× 类型系数：
 # 讨论 / 产品一两天就过气；论文、项目、播客的价值衰减慢，且论文日期只精确到天
 TYPE_HALF_LIFE = {"discussion": 0.5, "product": 0.67, "blog": 1.0, "news": 1.0, "repo": 1.67, "paper": 1.67,
@@ -236,6 +267,9 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
     if org:
         s += W["official"]
         lead.append(f"{org} 官方")
+    if orgs := paper_orgs(it):
+        s += W["paper_org"]
+        lead.append(f"{'、'.join(orgs[:2])} 论文")
     if release:
         s += W["release"]
         lead.append("代码和博客一起发布")
@@ -425,6 +459,15 @@ def display_summary(title: str, summary: str) -> str:
     if len(body) >= 10 and sm.lower().startswith(body.lower()):
         sm = sm[len(body):].lstrip(" .。:：-—|｜").strip()
     return sm if len(norm_title(sm)) >= 8 else ""
+
+
+def paper_orgs(it: dict) -> list[str]:
+    """论文作者单位（extra.orgs 来源自带、extra.affil 读自 arXiv 页面）里的知名机构。"""
+    if it.get("type") != "paper":
+        return []
+    ex = it.get("extra") or {}
+    text = f"{ex.get('orgs') or ''} {ex.get('affil') or ''}"
+    return [name for name, pat in PAPER_ORGS.items() if pat.search(text)]
 
 
 def official_org(it: dict) -> str:
