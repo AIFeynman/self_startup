@@ -12,7 +12,8 @@ const PAGE = 40;
 const TOP_N = 5;
 const DAYS = [['0', '不限时间'], ['1', '24 小时内'], ['3', '3 天内'], ['7', '7 天内'], ['30', '30 天内']];
 const SORTS = [['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）']];
-const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score', hnView: 'posts' };
+const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score', hnView: 'posts', read: 'unread' };
+const READS = [['unread', '未读'], ['', '含已读'], ['read', '已读']];
 const HN_ITEM = (id) => `https://news.ycombinator.com/item?id=${id}`;
 const SENT = { pos: ['好评', 'ok'], neg: ['差评', 'err'], mixed: ['褒贬不一', 'warn'], neutral: ['提及', 'gray'] };
 
@@ -40,6 +41,8 @@ const CSS = `
   font: 600 12px/20px var(--font); vertical-align: 2px; }
 .fd-new { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--ok-soft); color: var(--ok);
   font: 600 11.5px/18px var(--font); vertical-align: 2px; }
+.fd-readtag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--bg-2); color: var(--muted); font: 400 11.5px/18px var(--font); vertical-align: 2px; white-space: nowrap; }
+.fd-isread .fd-t { color: var(--muted); font-weight: 500; }
 .fd-old { display: inline-block; margin-left: 6px; color: var(--muted); font: 400 11.5px/18px var(--font); vertical-align: 2px; white-space: nowrap; }
 .fd-sum { color: var(--text); opacity: .82; font-size: 13.5px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .fd-gist { color: var(--text); font-size: 14.5px; font-weight: 500; line-height: 1.5; margin-top: 4px; }
@@ -296,14 +299,14 @@ export default {
         opts.map(([v, name]) => h('option', { value: v, selected: st[key] === v }, name)));
       return s;
     };
-    const opts = h('div.fd-opts', {}, [optSel(DAYS, 'days', '按发布时间筛选'), optSel(SORTS, 'sort', '列表排序方式')]);
+    const opts = h('div.fd-opts', {}, [optSel(READS, 'read', '按是否读过筛选（搜索和已收藏不受影响）'), optSel(DAYS, 'days', '按发布时间筛选'), optSel(SORTS, 'sort', '列表排序方式')]);
 
     const tabRefresh = h('button.ghost.sm.fd-tabref', { onclick: () => doRefresh(st.tab) });
     // 刚刷完的结果常驻在按钮旁；有新增时本次新收的排到列表最前（否则按综合分常落到几十名开外，看着像没刷）
     const freshNote = h('span.fd-fresh');
     let fresh = null;   // { since, added, label }
     el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick,
-      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条'), topBox,
+      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox,
       h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
@@ -645,12 +648,21 @@ export default {
         h('button.fd-deep', { title: '深读 (d)', onclick: () => deep(x) }, ['深读', ui.icon('arrow')]),
       ]);
     };
-    // 打开原文只做统计（推荐 → 点击 → 深读的转化），失败不打扰
-    const logClick = (x) => { api.post('/api/feed/click', { id: x.id }).catch(() => {}); };
+    const unreadOnly = () => !st.q && st.tab !== 'saved' && st.read === 'unread';
+    const markRead = (entry) => {
+      api.post('/api/feed/click', { id: entry.x.id }).catch(() => {});
+      if (entry.x.read) return;
+      if (unreadOnly()) {
+        listOffset = Math.max(0, listOffset - 1); listTotal = Math.max(0, listTotal - 1);
+        renderSentinel();
+      }
+      for (const e of entries) if (e.x.id === entry.x.id) { e.x.read = true; setTimeout(() => mount(e)); }
+    };
+    const readTag = (x) => x.read ? h('span.fd-readtag', {}, '已读') : null;
     // 新增 / 在榜天数：第一次收进来不到 24 小时标「新」，在榜 3 天以上标天数，长期霸榜的一眼能看出来
     const ageTag = (x) => x.new ? h('span.fd-new', { title: '24 小时内新收录' }, '新')
       : x.seen_days >= 3 ? h('span.fd-old', { title: '第一次收录到现在的天数（10-31 之前收的从 10-31 算起）' }, `在榜 ${x.seen_days} 天`) : null;
-    const titleLink = (x) => h('a.fd-t', { href: x.url, target: '_blank', rel: 'noopener', onclick: () => logClick(x), onauxclick: () => logClick(x) }, x.title);
+    const titleLink = (x) => h('a.fd-t', { href: x.url, target: '_blank', rel: 'noopener' }, x.title);
     // 一句话判断：已写的直接显示，点「编辑」展开输入框；论文每天写 1–2 篇是学习习惯之一
     const verdictBox = (entry) => {
       const { x } = entry;
@@ -735,7 +747,7 @@ export default {
         node = h('div.fd-row' + (i === 0 ? '.first' : ''), {}, [
           h('div.fd-n', {}, String(i + 1).padStart(2, '0')),
           h('div', { style: { minWidth: 0 } }, [
-            h('div', {}, [titleLink(x), ageTag(x), i === 0 ? h('span.fd-best', {}, '最推荐') : null]),
+            h('div', {}, [titleLink(x), readTag(x), ageTag(x), i === 0 ? h('span.fd-best', {}, '最推荐') : null]),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
             paBox(entry),
@@ -749,7 +761,7 @@ export default {
       } else {
         node = h('div.fd-item', {}, [
           h('div', { style: { minWidth: 0 } }, [
-            titleLink(x), ageTag(x),
+            titleLink(x), readTag(x), ageTag(x),
             x.gist ? h('div.fd-gist', { title: '模型根据标题和简介生成的一句话概括' }, x.gist) : null,
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
             paBox(entry),
@@ -767,6 +779,10 @@ export default {
         ]);
       }
       node.addEventListener('mousedown', (e) => { if (!e.target.closest('button, a')) select(entries.indexOf(entry), false); });
+      const onOpen = (e) => { if (e.button <= 1 && e.target.closest('a[target=_blank]')) markRead(entry); };
+      node.addEventListener('click', onOpen);
+      node.addEventListener('auxclick', onOpen);
+      if (x.read) node.classList.add('fd-isread');
       node._hay = norm([x.title, x.gist, x.summary, x.source_label, x.why, x.extra?.feed, x.extra?.channel, x.extra?.subreddit, x.extra?.flair, TYPE_NAME[x.type],
         x.extra?.revenue, ...Object.values(x.extra?.pa || {}), x.extra?.hn?.tldr, ...(x.extra?.hn?.entities || []).map((e) => e.name)].join(' '));
       if (st.q && !matches(node)) node.classList.add('fd-hidden');
@@ -835,7 +851,7 @@ export default {
         j: () => move(1), k: () => move(-1),
         l: () => cur && fb(cur, { vote: f.vote > 0 ? 0 : 1 }),
         s: () => cur && fb(cur, { saved: !f.saved }),
-        o: () => { if (cur) { logClick(cur.x); window.open(cur.x.url, '_blank', 'noopener'); } },
+        o: () => { if (cur) { markRead(cur); window.open(cur.x.url, '_blank', 'noopener'); } },
         d: () => cur && deep(cur.x),
         x: () => cur && fb(cur, { hidden: !f.hidden }),
       }[e.key];
@@ -866,7 +882,7 @@ export default {
       }, name)));
     }
     async function loadTop() {
-      const r = await api.get(`/api/feed/items?limit=${TOP_N}`);
+      const r = await api.get(`/api/feed/items?limit=${TOP_N}&read=unread`);
       for (const e of entries.filter((e) => e.kind === 'top')) e.el.remove();
       entries = entries.filter((e) => e.kind !== 'top');
       const tops = r.items.map((x, i) => ({ x, kind: 'top', i }));
@@ -875,9 +891,9 @@ export default {
       if (st.q) for (const e of tops) e.el.classList.toggle('fd-hidden', !matches(e.el));
     }
     // 「全部」、综合排序、不限时间且无筛选时，列表从第 6 条开始，避免与精选重复
-    const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' && !fresh?.added ? TOP_N : 0);
+    const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' && st.read === 'unread' && !fresh?.added ? TOP_N : 0);
     function params(offset) {
-      const p = new URLSearchParams({ limit: PAGE, offset, q: st.q, days: st.days, sort: st.sort });
+      const p = new URLSearchParams({ limit: PAGE, offset, q: st.q, days: st.days, sort: st.sort, read: st.q ? '' : st.read });
       if (st.tab === 'saved') p.set('saved', 'true'); else if (st.tab) p.set('type', st.tab);
       if (fresh?.added && fresh.since) p.set('since', fresh.since);
       return p;
@@ -940,7 +956,7 @@ export default {
       const rows = r.items.map((x) => ({ x, kind: 'list' }));
       entries.push(...rows);
       listBox.replaceChildren(...(rows.length ? rows.map(mount)
-        : [ui.empty(st.q ? `没有匹配「${st.q}」的内容` : st.tab === 'saved' ? '还没有收藏' : st.days !== '0' ? '这段时间内没有内容' : '暂无内容', st.q ? '换个词，或切到「问 Agent」' : st.tab === 'saved' ? '按 ☆ 或 s 收藏' : '点右上角「刷新」抓取')]));
+        : [ui.empty(st.q ? `没有匹配「${st.q}」的内容` : st.tab === 'saved' ? '还没有收藏' : st.read === 'read' ? '这里还没有读过的内容' : st.days !== '0' ? '这段时间内没有内容' : unreadOnly() ? '这里的都读过了' : '暂无内容', st.q ? '换个词，或切到「问 Agent」' : st.tab === 'saved' ? '按 ☆ 或 s 收藏' : unreadOnly() ? '右上角选「含已读」能再看，或点「刷新」抓新的' : '点右上角「刷新」抓取')]));
       if (selId) { const i = entries.findIndex((e) => e.kind === 'list' && e.x.id === selId); if (i >= 0) select(i, false); }
       renderSentinel();
     }

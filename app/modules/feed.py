@@ -21,6 +21,7 @@ from . import _feed_follow as follow
 from . import _feed_gist as gist
 from . import _feed_hn as hnd
 from . import _feed_product as pa
+from . import _read_log
 from . import _feed_profile as prof
 from . import _feed_judge as judge
 from . import _feed_rank as rk
@@ -280,8 +281,9 @@ def _mark_gone(items: list[dict]) -> None:
 
 
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
-           sort: str = "score") -> list[dict]:
-    """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合 / new 最新 / hot 最热（同源热度百分位）。
+           sort: str = "score", read: str = "") -> list[dict]:
+    """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合 / new 最新 / hot 最热（同源热度百分位）；
+    read: unread 只要没读过的 / read 只要读过的（打开过原文或进过深读），收藏夹不按这个筛。
     只有「全部 + 综合 + 不限时间 + 无筛选」时做类型 / 来源多样化（今日精选就取这个列表的前 5 条）。"""
     now = now or datetime.now(timezone.utc)
     items = _load_items()
@@ -304,6 +306,11 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         ql = q.lower()
         out = [x for x in out if ql in f"{x['title']} {x['summary']} {x['extra'].get('gist', '')}".lower()]
     out = rk.within_days(out, days, now)
+    read_urls = _read_log.urls("feed") | _deep_urls()
+    for x in out:
+        x["read"] = rk.norm_url(x["url"]) in read_urls
+    if read and not saved:
+        out = [x for x in out if x["read"] == (read == "read")]
     if sort in ("new", "hot"):
         return rk.sort_items(out, sort, now)
     if not (type_ or saved or q or days):
@@ -783,7 +790,7 @@ def source_health() -> dict:
 
 def _public(x: dict) -> dict:
     return {k: x[k] for k in ("id", "source", "type", "title", "url", "date", "popularity", "score",
-                              "why", "feedback", "also")} | {k: x.get(k) for k in ("new", "seen_days")} | {"summary": rk.display_summary(x["title"], x["summary"]),
+                              "why", "feedback", "also", "read")} | {k: x.get(k) for k in ("new", "seen_days")} | {"summary": rk.display_summary(x["title"], x["summary"]),
                                                               "gist": (x.get("extra") or {}).get("gist", ""),
                                                               "extra": x.get("extra", {}),
                                                               "source_label": rk.SOURCE_LABEL.get(x["source"], x["source"])}
@@ -791,11 +798,13 @@ def _public(x: dict) -> dict:
 
 @router.get("/items")
 def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0, days: float = 0,
-          sort: str = "score", since: str = ""):
+          sort: str = "score", since: str = "", read: str = ""):
     """since：刷新开始时间（status.started_utc），这之后第一次收进来的条目排到最前（刷完让人一眼看到新增）。"""
     if sort not in ("score", "new", "hot"):
         raise HTTPException(400, "sort 只能是 score / new / hot")
-    out = ranked(type, saved, q, days=days, sort=sort)
+    if read not in ("", "unread", "read"):
+        raise HTTPException(400, "read 只能是 unread / read")
+    out = ranked(type, saved, q, days=days, sort=sort, read=read)
     if t0 := rk._parse_dt(since):
         fresh = lambda x: (rk._parse_dt((x.get("extra") or {}).get("first_seen") or "") or datetime.min.replace(tzinfo=timezone.utc)) >= t0
         out = [x for x in out if fresh(x)] + [x for x in out if not fresh(x)]
@@ -864,10 +873,12 @@ class ClickIn(BaseModel):
 
 @router.post("/click")
 def click(body: ClickIn):
-    """打开原文链接时前端上报一次；只做统计（转化漏斗），不参与排序。"""
+    """打开原文链接时前端上报一次：记已读历史 + 转化漏斗统计，不参与排序。"""
     _ensure_cols()
-    if not db.row("SELECT id FROM feed_items WHERE id=?", [body.id]):
+    it = db.row("SELECT title, url, source FROM feed_items WHERE id=?", [body.id])
+    if not it:
         raise HTTPException(404, "条目不存在")
+    _read_log.log("feed", body.id, it["title"], it["url"], rk.SOURCE_LABEL.get(it["source"], it["source"]))
     db.execute("INSERT INTO feed_feedback (item_id, clicks, last_click, updated_at) VALUES (?,1,?,?) "
                "ON CONFLICT(item_id) DO UPDATE SET clicks=coalesce(clicks,0)+1, last_click=excluded.last_click",
                [body.id, db.now(), db.now()])

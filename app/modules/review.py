@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import agent, chat, db, jobs, settings, tasks
-from . import _review_sessions as rs, _session_score as score, _utilization as util
+from . import _read_log, _review_sessions as rs, _session_score as score, _utilization as util
 
 TITLE = "复盘"
 ORDER = 10
@@ -215,6 +215,7 @@ def day_data(date: str) -> dict:
     return {
         "date": date,
         "tasks": _tree(work), "learning": _tree(learning), "learning_extra": learning_extra(date),
+        "reads": _read_log.day(date),
         "stats": {"work": _stats(work), "learning": _stats(learning)},
         "record": get_record(date),
         "notes": list_notes(date=date, author="system"),
@@ -239,6 +240,11 @@ class DateIn(BaseModel):
 @router.get("/day")
 def api_day(date: str = ""):
     return day_data(_day(date))
+
+
+@router.get("/reads")
+def api_reads(start: str = "", end: str = ""):
+    return _read_log.days(_day(start), _day(end))
 
 
 @router.put("/day/{date}")
