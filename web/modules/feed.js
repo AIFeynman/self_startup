@@ -72,6 +72,10 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-acts button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .fd-acts .fd-deep { border-color: var(--accent); color: var(--accent); background: transparent; padding: 5px 16px; }
 .fd-acts .fd-deep:hover { background: var(--accent-soft); }
+.fd-acts .fd-deep.busy { border-color: var(--line-2); color: var(--muted); cursor: default; }
+.fd-acts .fd-deep.busy:hover { background: transparent; }
+.fd-acts .fd-deep.done { border-color: var(--ok); color: var(--ok); }
+.fd-acts .fd-deep.failed { border-color: var(--err); color: var(--err); }
 .fd-acts .fd-more { opacity: 0; transition: opacity .12s; }
 .fd-row:hover .fd-more, .fd-item:hover .fd-more, .fd-sel .fd-more, .fd-acts .fd-more.on { opacity: 1; }
 .fd-sel { box-shadow: 0 0 0 2px var(--accent-ring); border-color: var(--accent) !important; }
@@ -290,8 +294,8 @@ export default {
     const hnBar = h('div.fd-hnbar');
     const libBox = h('div.fd-lib');
     const sentinel = h('div.fd-sentinel');
-    const kbd = h('span.fd-kbd', { title: 'j/k 移动 · l 赞 · s 收藏 · o 打开 · d 深读 · / 输入' }, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 移动 · ', h('kbd', {}, 'l'), ' 赞 · ',
-      h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, 'o'), ' 打开 · ', h('kbd', {}, 'd'), ' 深读 · ', h('kbd', {}, '/'), ' 输入']);
+    const kbd = h('span.fd-kbd', { title: 'j/k 选择 · Enter 或 d 详情（没解析过就开始深读）· o 原文 · l 赞 · s 收藏 · / 输入' }, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 选择 · ', h('kbd', {}, 'Enter'), ' 详情 · ',
+      h('kbd', {}, 'o'), ' 原文 · ', h('kbd', {}, 'l'), ' 赞 · ', h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, '/'), ' 输入']);
 
     // 时间筛选 + 排序：只作用于下面的列表（今日精选固定按综合分）
     const optSel = (opts, key, title) => {
@@ -636,6 +640,13 @@ export default {
       ...Object.entries((x.also || []).reduce((m, a) => { const k = a.source_label || a.source || a; m[k] = (m[k] || 0) + 1; return m; }, {}))
         .slice(0, 2).map(([k, n]) => h('span.fd-chip', {}, `也见 ${k}${n > 1 ? '×' + n : ''}`)),
     ];
+    const deepBtn = (entry) => {
+      const s = entry.x.deep?.status;
+      if (s === 'done') return h('button.fd-deep.done', { title: '打开解析结果 (d / Enter)', onclick: () => deep(entry) }, ['深度完成', ui.icon('arrow')]);
+      if (s === 'failed') return h('button.fd-deep.failed', { title: '上次解析失败，点击重试 (d / Enter)', onclick: () => deep(entry) }, '解析失败，重试');
+      if (s) return h('button.fd-deep.busy', { disabled: true, title: '后台解析中，完成后会提醒，可以继续看别的' }, '解析中');
+      return h('button.fd-deep', { title: '后台开始深度解析，不离开当前页 (d / Enter)', onclick: () => deep(entry) }, '深读');
+    };
     const actions = (entry) => {
       const { x } = entry;
       const f = x.feedback || {};
@@ -645,7 +656,7 @@ export default {
         h('button' + (f.vote > 0 ? '.on' : ''), { title: '赞 (l)', onclick: () => fb(entry, { vote: f.vote > 0 ? 0 : 1 }) }, '👍'),
         h('button' + (f.saved ? '.on' : ''), { title: '收藏 (s)', onclick: () => fb(entry, { saved: !f.saved }) }, f.saved ? '★' : '☆'),
         h('button' + (f.verdict ? '.on' : ''), { title: '读完写一句话判断（进知识库的论文笔记）', onclick: () => { entry.judging = !entry.judging; mount(entry); entry.el.querySelector('.fd-verdict input')?.focus(); } }, ui.icon('edit')),
-        h('button.fd-deep', { title: '深读 (d)', onclick: () => deep(x) }, ['深读', ui.icon('arrow')]),
+        deepBtn(entry),
       ]);
     };
     const unreadOnly = () => !st.q && st.tab !== 'saved' && st.read === 'unread';
@@ -814,13 +825,33 @@ export default {
         if ('vote' in patch) toast({ 1: '已赞，下次加载列表时这条和相似内容排前；再点取消', '-1': '已踩，下次加载列表时这条和相似内容排后；再点取消', 0: '已取消' }[r.vote]);
       } catch (e) { toast('操作失败：' + e.message, true); }
     }
-    // 深读 = 深度学习里的一个条目：Agent 写成本地文档（可划线评论、追问），追问对话绑在条目上，关掉再开能续上；同一链接已读过就直接打开
-    const deep = async (x) => {
+    // 深读 = 深度学习里的一个条目：Agent 写成本地文档（可划线评论、追问），追问对话绑在条目上，关掉再开能续上；
+    // 点了不跳转，按钮显示进度，人继续往下看；解析完 job-done 触发提醒（app.js）和这里的状态更新，再点才打开
+    const setDeep = (id, state) => { for (const e of entries) if (e.x.id === id) { e.x.deep = state; mount(e); } };
+    const deep = async ({ x }) => {
+      const old = x.deep;
+      if (old?.status === 'done') { location.hash = `#learn/item/${old.id}`; return; }
+      if (old && old.status !== 'failed') { toast('正在解析，完成后会提醒'); return; }
+      setDeep(x.id, { status: 'queued' });
       try {
         const it = await api.post('/api/learn/items', { url: x.url, reuse: true });
-        location.hash = `#learn/item/${it.id}`;
-      } catch (e) { toast('开始深读失败：' + e.message, true); }
+        setDeep(x.id, { id: it.id, status: it.status });
+        if (it.status !== 'done') toast('已开始深度解析，完成后会提醒');
+      } catch (e) { setDeep(x.id, old); toast('开始深读失败：' + e.message, true); }
     };
+    const onDeepDone = async ({ detail: j }) => {
+      if (!el.isConnected) return document.removeEventListener('job-done', onDeepDone);
+      const iid = +/^learn:item:(\d+)$/.exec(j.ref || '')?.[1];
+      const hit = iid && entries.find((e) => e.x.deep?.id === iid);
+      if (!hit) return;
+      // 任务标记结束后，条目状态还要等收尾写回
+      for (let tries = 0; tries < 10; tries++) {
+        const it = await api.get(`/api/learn/items/${iid}`);
+        if (it.status === 'done' || it.status === 'failed') return setDeep(hit.x.id, { id: iid, status: it.status });
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    };
+    document.addEventListener('job-done', onDeepDone);
 
     // ---------- 选择与键盘 ----------
     const visible = () => entries.map((e, i) => [e, i]).filter(([e]) => e.el.isConnected && !e.el.classList.contains('fd-hidden')).map(([, i]) => i);
@@ -845,6 +876,7 @@ export default {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement?.isContentEditable) return;
+      if (e.key === 'Enter' && document.activeElement?.closest('button, a, summary')) return;
       const cur = entries[sel];
       const f = cur?.x.feedback || {};
       const act = {
@@ -852,7 +884,8 @@ export default {
         l: () => cur && fb(cur, { vote: f.vote > 0 ? 0 : 1 }),
         s: () => cur && fb(cur, { saved: !f.saved }),
         o: () => { if (cur) { markRead(cur); window.open(cur.x.url, '_blank', 'noopener'); } },
-        d: () => cur && deep(cur.x),
+        d: () => cur && deep(cur),
+        Enter: () => cur && deep(cur),
         x: () => cur && fb(cur, { hidden: !f.hidden }),
       }[e.key];
       if (act) { e.preventDefault(); act(); }
