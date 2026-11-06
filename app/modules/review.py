@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS review_agent_stats (
 router = APIRouter()
 
 NOTE_KINDS = ("problem", "lesson", "insight", "idea")  # 系统记录用这几种
-KIND_LABEL = {"spark": "灵感", "feeling": "感想", "idea": "想法", "problem": "问题", "lesson": "经验", "insight": "洞察"}  # 便签的内置类型
+KIND_LABEL = {"spark": "灵感", "feeling": "感想", "idea": "想法", "problem": "问题", "lesson": "经验", "insight": "洞察", "review": "复盘"}  # 便签的内置类型
 STATUSES = ("todo", "doing", "done", "partial", "dropped")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -607,7 +607,7 @@ def api_add_note(body: NoteIn):
 
 
 _KIND_PREFIX = {"问题": "problem", "坑": "problem", "经验": "lesson", "教训": "lesson", "洞察": "insight",
-                "发现": "insight", "想法": "idea", "点子": "idea", "灵感": "spark", "感想": "feeling", "idea": "idea", "problem": "problem",
+                "发现": "insight", "想法": "idea", "点子": "idea", "灵感": "spark", "感想": "feeling", "复盘": "review", "idea": "idea", "problem": "problem",
                 "lesson": "lesson", "insight": "insight"}
 
 

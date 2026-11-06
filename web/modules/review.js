@@ -87,18 +87,30 @@ const CSS = `
 .rv-tl .tl-item:hover .card { border-color: var(--accent); }
 .rv-tl .day { display: flex; align-items: baseline; gap: 10px; }
 .rv-tl .day b { font: 700 16px var(--serif); }
+.rv-areas { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px; }
+@media (max-width: 760px) { .rv-areas { grid-template-columns: 1fr; } }
+.rv-area { min-width: 0; }
+.rv-area label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.rv-area input { width: 100%; box-sizing: border-box; }
+.rv-area-past { margin-top: 8px; max-height: 200px; overflow-y: auto; border-left: 2px solid var(--note-teal); padding-left: 10px; }
+.rv-area-past > div { display: grid; grid-template-columns: 44px 1fr; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 13px; }
+.rv-area-past .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-area-past .x { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rv-area-save { display: flex; justify-content: flex-end; margin-top: 14px; }
 .rv-tl .notes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .rv-msg { font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
 table.rv { border-collapse: collapse; width: 100%; font-size: 12px; } table.rv td, table.rv th { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; }
 .rv-status { font-size: 12px; color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
 `;
 const STATUS = { todo: '待办', doing: '进行中', done: '完成', partial: '部分', dropped: '放弃' };
-const NOTE_KIND = { problem: '问题', lesson: '经验', insight: '洞察', idea: '想法', spark: '灵感', feeling: '感想' };
+const NOTE_KIND = { problem: '问题', lesson: '经验', insight: '洞察', idea: '想法', spark: '灵感', feeling: '感想', review: '复盘' };
 const SYS_KINDS = ['problem', 'lesson', 'insight', 'idea']; // 系统记录用的类型；灵感、感想只在便签里
 const NOTE_CLS = { problem: 'err', lesson: 'ok', insight: '', idea: 'warn' };
 const REC_FIELD = { summary: '总结', wins: '收获', problems: '问题', next_actions: '下一步' };
 const MSG_KIND = { new_task: '新任务/追加', correct: '纠正/转向', approve: '确认/继续', interrupt: '中断', answer: '回答提问', check: '询问进度' };
 const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn', answer: '', new_task: 'ok' };
+const REVIEW_AREAS = ['产品迭代', '个人效率', 'AI协作', '学习提升'];
+const reviewDraft = {};
 const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史', agent: 'Agent 效率' };
 const WEEK = '日一二三四五六';
 const dayLabel = (s) => { const d = new Date(s + 'T12:00:00'); return `${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]}`; };
@@ -343,6 +355,30 @@ export default {
       return h('div.card', {}, [h('div', { style: { float: 'right' } }, editBtn), view, formBox]);
     }
 
+    function templateCard(history) {
+      const area = (name) => {
+        const prefix = `${name}：`;
+        const past = history.filter((n) => n.title.startsWith(prefix));
+        return h('div.rv-area', { 'data-area': name }, [
+          h('label', {}, [name, h('input', { value: reviewDraft[name] || '', placeholder: '总结、收获、问题、下一步，写在这一行',
+            oninput: (e) => { reviewDraft[name] = e.target.value; } })]),
+          past.length ? h('div.rv-area-past', {}, past.map((n) => h('div', {}, [h('span.t', {}, n.date.slice(5)),
+            h('span.x', {}, [n.title.slice(prefix.length), n.content].filter(Boolean).join('\n'))])))
+            : h('div.muted', { style: { marginTop: '6px', fontSize: '13px' } }, '这一栏还没写过'),
+        ]);
+      };
+      const save = async () => {
+        try {
+          const made = await api.post('/api/notes/review', { date: state.date, entries: reviewDraft });
+          REVIEW_AREAS.forEach((name) => delete reviewDraft[name]);
+          toast(`已贴到便签：${made.length} 张「复盘」`);
+          show();
+        } catch (e) { toast(e.message, true); }
+      };
+      return h('div.card', {}, [h('div.rv-areas', {}, REVIEW_AREAS.map(area)),
+        h('div.rv-area-save', {}, h('button.primary', { onclick: save }, [ui.icon('check'), '保存到便签']))]);
+    }
+
     function improveCard(d) {
       const rec = d.record;
       const status = h('div.rv-status');
@@ -384,7 +420,9 @@ export default {
       const d = await loadDay();
       const rec = d.record;
       const lx = d.learning_extra;
+      const reviewHistory = await api.get(`/api/review/notes?author=me&kind=review&end=${state.date}`);
       const nodes = [
+        ui.section('复盘模板', '填几栏算几栏，每栏贴一张「复盘」便签 · 下面是这一栏过去写的，方便对比'), templateCard(reviewHistory),
         ui.section('我的复盘', '按写下的时间排列 · 用上方「写复盘」一句句追加'), recordCard(rec), improveCard(d),
         ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
         h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),

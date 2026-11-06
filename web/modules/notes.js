@@ -246,7 +246,7 @@ function injectStyle() {
   .sn-note .meta em { font-style: normal; font-weight: 600; }
   .sn-note .meta .grow { flex: 1; }
   .sn-c0 { background: var(--note-yellow); } .sn-c1 { background: var(--note-pink); } .sn-c2 { background: var(--note-blue); }
-  .sn-c3 { background: var(--note-green); } .sn-c4 { background: var(--note-purple); } .sn-c5 { background: var(--note-sand); }
+  .sn-c3 { background: var(--note-green); } .sn-c4 { background: var(--note-purple); } .sn-c5 { background: var(--note-sand); } .sn-c6 { background: var(--note-teal); }
   .sn-side { position: sticky; top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
   .sn-side h2 { font-size: 15px; margin: 0; }
   .sn-side textarea { width: 100%; resize: vertical; }

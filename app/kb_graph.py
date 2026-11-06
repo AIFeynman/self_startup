@@ -108,7 +108,7 @@ def _all_signals() -> list[dict]:
 def _s_notes() -> list[dict]:
     if not _has("review_notes"):
         return []
-    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想"}
+    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想", "review": "复盘"}
     return [_sig(f"note:{n['id']}", "judgment", "note", n["title"] or _clip(n["content"], 30),
                  mine=f"【{kinds.get(n['kind'], n['kind'])}】{n['title']}\n{n['content']}", date=n["date"],
                  doc=f"note:{n['id']}", link=f"#review/{n['date']}", local=n.get("author") == "me")
