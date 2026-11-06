@@ -22,6 +22,9 @@ const tabs = (h, active) => h('div.tabs', {}, TABS.map(([t, href]) =>
 const CSS = `
 .it-row { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 4px 12px; padding: 12px 14px; border-radius: 10px; cursor: pointer; }
 .it-row:hover { background: var(--bg-2); }
+.it-row.read .it-t, .it-ph.read b { color: var(--muted); font-weight: 500; }
+.it-ph .it-readtag { display: none; margin-left: 6px; }
+.it-ph.read .it-readtag { display: inline-block; }
 .it-row + .it-row { border-top: 1px solid var(--line); }
 .it-lv { font: 700 18px/1 var(--serif); text-align: center; padding-top: 3px; }
 .it-lv.S { color: var(--err); } .it-lv.A { color: var(--warn); } .it-lv.B { color: var(--ok); } .it-lv.C { color: var(--muted); }
@@ -173,13 +176,13 @@ function startupTable(h, rows, { showTrack = true } = {}) {
 
 function eventRow(h, e, { showCompany = true } = {}) {
   const card = CARD[e.card_status];
-  return h('div.it-row', { onclick: () => { location.hash = `#intel/e/${e.id}`; } }, [
+  return h('div.it-row' + (e.read ? '.read' : ''), { onclick: () => { location.hash = `#intel/e/${e.id}`; } }, [
     h('div.it-lv.' + e.level, {}, e.level),
     h('div', {}, [
       h('div.it-t', {}, e.title),
       h('div.it-meta', {}, [showCompany ? h('b', {}, e.company_name) : null, e.product ? h('span', {}, e.product) : null,
         h('span', {}, e.type_name || e.type), h('span', {}, `${e.sources.length} 个来源`),
-        e.sources.some((s) => s.official) ? null : tag(h, ['无官方源', 'warn']), card ? tag(h, card) : null]),
+        e.sources.some((s) => s.official) ? null : tag(h, ['无官方源', 'warn']), card ? tag(h, card) : null, e.read ? tag(h, ['已读', 'gray']) : null]),
       e.summary ? h('div.it-sum', {}, e.summary) : null,
     ]),
     h('div.muted', { style: { fontSize: '12px' } }, e.date),
@@ -236,6 +239,7 @@ async function renderStream(el, ctx) {
 async function renderEvent(el, ctx, id) {
   const { api, h, md, ui, toast } = ctx;
   const e = await api.get(`/api/intel/events/${id}`);
+  api.post(`/api/intel/events/${id}/read`).catch(() => {});
   el.append(h('div.muted', { style: { marginBottom: '8px' } }, [h('a', { href: '#intel' }, '← 变化流'), ' · ',
     h('a', { href: `#intel/c/${e.company_slug}` }, `${e.company_name} 时间线`)]));
   const lvSel = h('select', { onchange: async (ev) => {
@@ -499,13 +503,18 @@ async function renderTrack(el, ctx, slug) {
   el.append(ui.section('公司', '按 MRR'), t.startups.length ? h('div.card', { style: { overflowX: 'auto' } }, startupTable(h, t.startups, { showTrack: false })) : ui.empty('这个赛道还没有公司'));
   el.append(ui.section('收入事件', '近 60 天'), ...(t.events.length ? groupByDay(h, t.events) : [ui.empty('近 60 天没有收入异动')]));
   if (t.ph.length) {
-    el.append(ui.section('Product Hunt 上的同赛道产品', '近 14 天日榜'), h('div.card', {}, t.ph.map((p) => phRow(h, p, p.date))));
+    el.append(ui.section('Product Hunt 上的同赛道产品', '近 14 天日榜'), h('div.card', {}, t.ph.map((p) => phRow(ctx, p, p.date))));
   }
 }
 
-function phRow(h, p, day = '') {
-  return h('div.it-ph', {}, [h('div.rk', {}, p.rank), h('div', {}, [
-    h('a', { href: p.url, target: '_blank' }, h('b', {}, p.title)),
+function phRow({ api, h }, p, day = '') {
+  const onOpen = (e) => {
+    if (e.button > 1 || !e.target.closest('a[target=_blank]')) return;
+    api.post('/api/feed/click', { id: p.id }).catch(() => {});
+    e.currentTarget.classList.add('read');
+  };
+  return h('div.it-ph' + (p.read ? '.read' : ''), { onclick: onOpen, onauxclick: onOpen }, [h('div.rk', {}, p.rank), h('div', {}, [
+    h('a', { href: p.url, target: '_blank' }, h('b', {}, p.title)), h('span.tag.gray.it-readtag', {}, '已读'),
     p.why ? h('div', { style: { opacity: '.85' } }, p.why) : null,
     h('div.it-meta', {}, [day ? h('span', {}, day) : null, p.track ? h('a', { href: `#intel/t/${p.track}` }, p.track_name || p.track) : h('span', {}, '未归赛道'),
       ...(p.topics || []).slice(0, 3).map((x) => h('span', {}, x)), p.website ? h('a', { href: p.website, target: '_blank' }, '官网') : null]),
@@ -523,7 +532,7 @@ async function renderPh(el, ctx) {
   for (const d of days) {
     el.append(ui.section(d.date, `${d.items.length} 个产品`));
     if (d.summary) el.append(h('div.card', { style: { marginBottom: '8px' } }, d.summary));
-    el.append(h('div.card', {}, d.items.map((p) => phRow(h, p))));
+    el.append(h('div.card', {}, d.items.map((p) => phRow(ctx, p))));
   }
 }
 
@@ -544,10 +553,10 @@ async function renderGrowth(el, ctx) {
   el.append(ui.section('每日 Case', '同一素材重写过只显示最新一版'));
   el.append(d.cases.length ? h('div.card', {}, d.cases.map((g) => {
     const s = GCASE[g.status] || [g.status, 'gray'];
-    return h('div.it-row', { onclick: () => { location.hash = `#intel/g/${g.id}`; } }, [
+    return h('div.it-row' + (g.read ? '.read' : ''), { onclick: () => { location.hash = `#intel/g/${g.id}`; } }, [
       h('div.it-lv', {}, g.auto ? '日' : '选'),
       h('div', {}, [h('div.it-t', {}, `${g.company || '?'} · ${g.item?.title || ''}`),
-        h('div.it-meta', {}, [tag(h, s), h('span', {}, g.day), h('span', {}, g.item?.source || ''), h('span', {}, `素材 ${g.item?.date || '-'}`)]),
+        h('div.it-meta', {}, [tag(h, s), h('span', {}, g.day), h('span', {}, g.item?.source || ''), h('span', {}, `素材 ${g.item?.date || '-'}`), g.read ? tag(h, ['已读', 'gray']) : null]),
         g.item?.one_line ? h('div.it-sum', {}, g.item.one_line) : null]),
       h('div.muted', { style: { fontSize: '12px' } }, `${g.item?.total ?? '-'} 分`)]);
   })) : ui.empty('还没有增长 Case', '后台每 10 分钟一轮；素材 12 小时采一次，打完分后每天自动选 1 条写卡'));
@@ -558,7 +567,11 @@ async function renderGrowth(el, ctx) {
       const r = await api.post('/api/intel/growth/pick', { item_id: it.id });
       toast('已提交写卡任务'); location.hash = `#intel/g/${r.id}`;
     } }, '选这个');
-    return h('div.it-row', { onclick: () => window.open(it.url, '_blank') }, [
+    return h('div.it-row' + (it.read ? '.read' : ''), { onclick: (ev) => {
+      api.post('/api/intel/growth/read', { item_id: it.id }).catch(() => {});
+      ev.currentTarget.classList.add('read');
+      window.open(it.url, '_blank');
+    } }, [
       h('div.it-lv', {}, String(it.total)),
       h('div', {}, [h('div.it-t', {}, `${it.company || '?'} · ${it.title}`),
         h('div.it-meta', {}, [tag(h, [`${it.tier} 档`, it.tier === 'A' ? 'ok' : 'gray']), h('span', {}, it.source), h('span', {}, it.date || ''), h('span', {}, gScores(it.scores))]),
@@ -573,6 +586,7 @@ async function renderGrowth(el, ctx) {
 async function renderGrowthCase(el, ctx, id) {
   const { api, h, md, ui, toast } = ctx;
   const g = await api.get(`/api/intel/growth/${id}`);
+  api.post('/api/intel/growth/read', { item_id: g.item_id }).catch(() => {});
   const it = g.item || {};
   el.append(h('div.muted', { style: { marginBottom: '8px' } }, h('a', { href: '#intel/growth' }, '← 增长 Case')));
   const regen = h('button.ghost', { onclick: async () => {

@@ -33,6 +33,7 @@ from . import _intel_growth as gr
 from . import _intel_snap as snap
 from . import _intel_startup as st
 from . import _intel_watch as watch
+from . import _read_log
 from . import _oss_radar as oss
 
 log = logging.getLogger(__name__)
@@ -1284,7 +1285,8 @@ def on_growth_done(job: dict) -> None:
 
 def _growth_case(r: dict, full: bool = False) -> dict:
     it = db.row("SELECT * FROM intel_growth_item WHERE id=?", [r["item_id"]]) or {}
-    out = {**r, "sections": None, "missing": _j(r.get("missing"), []), "item": _growth_item(it) if it else None}
+    out = {**r, "sections": None, "missing": _j(r.get("missing"), []), "item": _growth_item(it) if it else None,
+           "read": _read_log.has("growth", r["item_id"])}
     if not full:
         out["content"] = None
     return out
@@ -1354,7 +1356,7 @@ router = APIRouter()
 
 def _with_card(e: dict, full: bool = False) -> dict:
     a = db.row("SELECT * FROM intel_analysis WHERE event_id=? ORDER BY id DESC LIMIT 1", [e["id"]])
-    e = _event(e)
+    e = {**_event(e), "read": _read_log.has("intel_event", e["id"])}
     if a:
         e["card"] = {"id": a["id"], "complete": bool(a["complete"]), "missing": _j(a["missing"], []), "created_at": a["created_at"],
                      "content": a["content"] if full else None}
@@ -1402,6 +1404,15 @@ def get_event(eid: int):
     out["level_log"] = db.rows("SELECT * FROM intel_level_log WHERE event_id=? ORDER BY id", [eid])
     out["versions"] = db.rows("SELECT id, complete, created_at, job_id FROM intel_analysis WHERE event_id=? ORDER BY id DESC", [eid])
     return out
+
+
+@router.post("/events/{eid}/read")
+def read_event(eid: int):
+    e = db.row("SELECT title FROM intel_event WHERE id=?", [eid])
+    if not e:
+        raise HTTPException(404, "事件不存在")
+    _read_log.log("intel_event", eid, e["title"], f"#intel/e/{eid}", "产品雷达")
+    return {"ok": True}
 
 
 class LevelIn(BaseModel):
@@ -1544,14 +1555,18 @@ def get_track(slug: str):
     t["events"] = list_events(company="", days=60, limit=100, type="revenue", kind="startup")["events"]
     ids = {c["id"] for c in t["startups"]}
     t["events"] = [e for e in t["events"] if e["company_id"] in ids]
-    t["ph"] = [{**it, "date": d["date"], "track_name": t["name"]} for d in db.rows("SELECT * FROM intel_ph_day ORDER BY date DESC LIMIT 14")
+    read_ids = _read_log.refs("feed")
+    t["ph"] = [{**it, "date": d["date"], "track_name": t["name"], "read": it.get("id") in read_ids}
+               for d in db.rows("SELECT * FROM intel_ph_day ORDER BY date DESC LIMIT 14")
                for it in _j(d["items"], []) if it.get("track") == slug]
     return t
 
 
 @router.get("/ph")
 def list_ph(days: int = 7):
-    return [{**d, "items": [{**it, "track_name": st.TRACK_NAMES.get(it.get("track") or "", "")} for it in _j(d["items"], [])]}
+    read_ids = _read_log.refs("feed")
+    return [{**d, "items": [{**it, "track_name": st.TRACK_NAMES.get(it.get("track") or "", ""), "read": it.get("id") in read_ids}
+                            for it in _j(d["items"], [])]}
             for d in db.rows("SELECT * FROM intel_ph_day ORDER BY date DESC LIMIT ?", [days])]
 
 
@@ -1580,7 +1595,7 @@ def list_growth(limit: int = 30):
     rows = db.rows("SELECT * FROM intel_growth_case WHERE id IN (SELECT max(id) FROM intel_growth_case GROUP BY item_id) "
                    "ORDER BY day DESC, id DESC LIMIT ?", [limit])
     counts = {r["status"]: r["n"] for r in db.rows("SELECT status, count(*) AS n FROM intel_growth_item GROUP BY status")}
-    return {"cases": [_growth_case(r) for r in rows], "pool": growth_pool(10), "counts": counts, "last": _state("growth_last"),
+    return {"cases": [_growth_case(r) for r in rows], "pool": [{**it, "read": _read_log.has("growth", it["id"])} for it in growth_pool(10)], "counts": counts, "last": _state("growth_last"),
             "sources": [{"name": s["name"], "url": s["url"], "tier": s["tier"]} for s in gr.SOURCES],
             "x_accounts": cfg("growth_x_accounts") or []}
 
@@ -1596,6 +1611,16 @@ def get_growth(cid: int):
 
 class GrowthPickIn(BaseModel):
     item_id: str
+
+
+@router.post("/growth/read")
+def read_growth(body: GrowthPickIn):
+    it = db.row("SELECT title, url, company FROM intel_growth_item WHERE id=?", [body.item_id])
+    if not it:
+        raise HTTPException(404, "素材不存在")
+    case = db.row("SELECT max(id) id FROM intel_growth_case WHERE item_id=?", [body.item_id])
+    _read_log.log("growth", body.item_id, f"{it['company'] or '?'} · {it['title']}", f"#intel/g/{case['id']}" if case["id"] else it["url"], "增长 Case")
+    return {"ok": True}
 
 
 @router.post("/growth/pick")
@@ -1708,4 +1733,16 @@ def agent_context(ref: str) -> str:
 
 
 router.include_router(oss.router)   # 开源雷达：/api/intel/oss/...
+def feed_covered() -> tuple[set[str], set[str]]:
+    """雷达默认能看到的内容（信息推荐不再重复展示）→ (feed id, 原文链接)。C 级事件默认筛掉、增长候选池没成 Case，不算。"""
+    urls = {s.get("url") or "" for r in db.rows("SELECT sources FROM intel_event WHERE merged_into IS NULL AND level IN ('S','A','B')")
+            for s in _j(r["sources"], [])}
+    urls |= {r["url"] for r in db.rows("SELECT DISTINCT i.url FROM intel_growth_case c JOIN intel_growth_item i ON i.id=c.item_id "
+                                       "WHERE c.status IN ('done','incomplete')")}
+    ids = {it.get("id") or "" for r in db.rows("SELECT items FROM intel_ph_day") for it in _j(r["items"], [])}
+    ids |= {f"trustmrr:{r['slug']}" for r in db.rows("SELECT json_extract(ext, '$.trustmrr') AS slug FROM intel_company "
+                                                     "WHERE kind='startup' AND enabled=1 AND json_extract(ext, '$.trustmrr') IS NOT NULL")}
+    return ids - {""}, urls - {""}
+
+
 labels_for = oss.labels_for        # 信息推荐给 GitHub 条目挂雷达标签用

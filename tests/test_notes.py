@@ -94,11 +94,31 @@ def test_comment_becomes_note(client):
     assert src == {"doc": "research_doc:9", "title": "某调研", "link": "#research/docs/9", "type": "调研", "quote": "划的这句", "annotation_id": t["id"]}
     client.post(f"/api/annotations/{t['id']}/msgs", json={"text": "回复也算", "note_kind": "读书"})
     assert client.get("/api/notes?kind=读书").json()["notes"][0]["sources"][0]["annotation_id"] == t["id"]
-    # 不进便签：没选类型、问 Claude 的问题
+    # 没选类型不进便签
     client.post("/api/annotations", json={**base, "text": "不贴"})
     assert len(client.get("/api/notes").json()["notes"]) == 2
     # 删评论不删便签
     client.delete(f"/api/annotations/{t['id']}")
+    assert len(client.get("/api/notes").json()["notes"]) == 2
+
+
+def test_question_to_claude_becomes_note(client, monkeypatch):
+    from app import annotations
+    monkeypatch.setattr(annotations, "_answer", lambda *a: None)
+    _clean()
+    base = {"doc": "research_doc:9", "title": "某调研", "link": "#research/docs/9", "quote": "划的这句"}
+    t = client.post("/api/annotations", json={**base, "text": "这句怎么理解", "ask": True, "note_kind": "经验"}).json()
+    notes = client.get("/api/notes").json()["notes"]
+    assert [n["title"] for n in notes] == ["这句怎么理解"]
+    assert notes[0]["sources"][0]["quote"] == "划的这句" and notes[0]["sources"][0]["annotation_id"] == t["id"]
+    a = t["id"]
+    from app import db
+    db.execute("UPDATE annotation_msgs SET status='done' WHERE annotation_id=?", [a])
+    client.post(f"/api/annotations/{a}/msgs", json={"text": "再追问一句", "ask": True, "note_kind": "经验"})
+    assert {n["title"] for n in client.get("/api/notes").json()["notes"]} == {"这句怎么理解", "再追问一句"}
+    # 只点「问 Claude」没写字、或选了不进便签：没有便签
+    client.post("/api/annotations", json={**base, "ask": True, "note_kind": "经验"})
+    client.post("/api/annotations", json={**base, "text": "不贴", "ask": True})
     assert len(client.get("/api/notes").json()["notes"]) == 2
 
 
