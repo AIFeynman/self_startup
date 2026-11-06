@@ -86,10 +86,12 @@ const CSS = `
 .rv-tl .tl-item:hover .card { border-color: var(--accent); }
 .rv-tl .day { display: flex; align-items: baseline; gap: 10px; }
 .rv-tl .day b { font: 700 16px var(--serif); }
-.rv-areas { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px; }
-@media (max-width: 760px) { .rv-areas { grid-template-columns: 1fr; } }
-.rv-area { min-width: 0; }
-.rv-area label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.rv-areas { display: flex; flex-direction: column; gap: 18px; }
+.rv-area-name { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.rv-aspects { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+@media (max-width: 760px) { .rv-aspects { grid-template-columns: 1fr; } }
+.rv-aspect { min-width: 0; }
+.rv-aspect label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .rv-area input { width: 100%; box-sizing: border-box; }
 .rv-area-past { margin-top: 8px; max-height: 200px; overflow-y: auto; border-left: 2px solid var(--note-teal); padding-left: 10px; }
 .rv-area-past > div { display: grid; grid-template-columns: 44px 1fr; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 13px; }
@@ -109,6 +111,7 @@ const REC_FIELD = { summary: '总结', wins: '收获', problems: '问题', next_
 const MSG_KIND = { new_task: '新任务/追加', correct: '纠正/转向', approve: '确认/继续', interrupt: '中断', answer: '回答提问', check: '询问进度' };
 const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn', answer: '', new_task: 'ok' };
 const REVIEW_AREAS = ['产品迭代', '个人效率', 'AI协作', '学习提升'];
+const REVIEW_ASPECTS = { 做得好的: '做成了什么、有什么收获，写在这一行', 有问题的: '哪里有问题、下一步怎么办，写在这一行' };
 const reviewDraft = {};
 const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史', agent: 'Agent 效率' };
 const WEEK = '日一二三四五六';
@@ -331,21 +334,24 @@ export default {
     }
 
     function templateCard(history) {
-      const area = (name) => {
-        const prefix = `${name}：`;
+      const aspect = (name, label, placeholder) => {
+        const key = `${name}·${label}`;
+        const prefix = `${key}：`;
         const past = history.filter((n) => n.title.startsWith(prefix));
-        return h('div.rv-area', { 'data-area': name }, [
-          h('label', {}, [name, h('input', { value: reviewDraft[name] || '', placeholder: '总结、收获、问题、下一步，写在这一行',
-            oninput: (e) => { reviewDraft[name] = e.target.value; } })]),
+        return h('div.rv-aspect', { 'data-key': key }, [
+          h('label', {}, [label, h('input', { value: reviewDraft[key] || '', placeholder,
+            oninput: (e) => { reviewDraft[key] = e.target.value; } })]),
           past.length ? h('div.rv-area-past', {}, past.map((n) => h('div', {}, [h('span.t', {}, n.date.slice(5)),
             h('span.x', {}, [n.title.slice(prefix.length), n.content].filter(Boolean).join('\n'))])))
             : h('div.muted', { style: { marginTop: '6px', fontSize: '13px' } }, '这一栏还没写过'),
         ]);
       };
+      const area = (name) => h('div.rv-area', {}, [h('div.rv-area-name', {}, name),
+        h('div.rv-aspects', {}, Object.entries(REVIEW_ASPECTS).map(([label, placeholder]) => aspect(name, label, placeholder)))]);
       const save = async () => {
         try {
           const made = await api.post('/api/notes/review', { date: state.date, entries: reviewDraft });
-          REVIEW_AREAS.forEach((name) => delete reviewDraft[name]);
+          Object.keys(reviewDraft).forEach((key) => delete reviewDraft[key]);
           toast(`已贴到便签：${made.length} 张「复盘」`);
           show();
         } catch (e) { toast(e.message, true); }
