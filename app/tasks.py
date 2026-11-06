@@ -10,6 +10,8 @@ from . import db
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
+ISSUE_KIND = "issue"
+
 FIELDS = ["date", "parent_id", "title", "goal", "kind", "priority", "human_level", "executor", "est_minutes",
           "parallel_group", "depends_on", "start_time", "end_time", "status", "progress", "repo", "notes"]
 
@@ -43,7 +45,19 @@ def decode(t: dict) -> dict:
 
 
 def list_for(date: str) -> list[dict]:
-    return [decode(t) for t in db.rows("SELECT * FROM tasks WHERE date=? ORDER BY COALESCE(start_time,''), priority, id", [date])]
+    return [decode(t) for t in db.rows("SELECT * FROM tasks WHERE date=? AND kind IS NOT ? ORDER BY COALESCE(start_time,''), priority, id",
+                                       [date, ISSUE_KIND])]
+
+
+def issues_for(date: str) -> list[dict]:
+    return [decode(t) for t in db.rows("SELECT * FROM tasks WHERE kind=? AND date<=? AND (status!='done' OR substr(updated_at,1,10)=?) "
+                                       "ORDER BY created_at, id", [ISSUE_KIND, date, date])]
+
+
+def add_issue(title: str, date: str) -> dict | None:
+    if db.row("SELECT id FROM tasks WHERE kind=? AND title=? AND status!='done'", [ISSUE_KIND, title]):
+        return None
+    return create({"title": title, "date": date, "kind": ISSUE_KIND, "notes": f"来自 {date} 的复盘"})
 
 
 def create(data: dict) -> dict:
@@ -74,8 +88,8 @@ def patch(tid: int, data: dict) -> dict:
 @router.get("")
 def list_tasks(date: str = "", start: str = "", end: str = ""):
     if start or end:
-        rs = db.rows("SELECT * FROM tasks WHERE date BETWEEN ? AND ? ORDER BY date, start_time, priority",
-                     [start or "0000", end or "9999"])
+        rs = db.rows("SELECT * FROM tasks WHERE date BETWEEN ? AND ? AND kind IS NOT ? ORDER BY date, start_time, priority",
+                     [start or "0000", end or "9999", ISSUE_KIND])
         return [decode(t) for t in rs]
     return list_for(date or db.today())
 

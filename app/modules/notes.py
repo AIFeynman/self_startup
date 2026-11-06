@@ -13,7 +13,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db, kb
+from .. import db, kb, tasks
 from . import review
 
 log = logging.getLogger(__name__)
@@ -115,6 +115,9 @@ def api_add(body: AddIn):
     return add(body.text, body.kind, body.sources, body.date)
 
 
+ISSUE_ASPECT = "有问题的"
+
+
 class ReviewIn(BaseModel):
     entries: dict[str, str]
     date: str | None = None
@@ -125,7 +128,11 @@ def api_review(body: ReviewIn):
     filled = {area: text.strip() for area, text in body.entries.items() if text.strip()}
     if not filled:
         raise HTTPException(400, "至少填一栏")
-    return [add(f"{area}：{text}", "review", date=body.date) for area, text in filled.items()]
+    date = body.date or db.today()
+    note = add("\n".join([f"复盘 {date[5:]}", *(f"{key}：{text}" for key, text in filled.items())]), "review", date=date)
+    issues = [tasks.add_issue(f"{key.split('·')[0]}：{review.parse_quick_note(text)['title']}", date)
+              for key, text in filled.items() if key.endswith(f"·{ISSUE_ASPECT}")]
+    return {"note": note, "issues": [i for i in issues if i]}
 
 
 class PatchIn(BaseModel):

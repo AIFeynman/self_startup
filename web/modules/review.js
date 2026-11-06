@@ -337,12 +337,13 @@ export default {
       const aspect = (name, label, placeholder) => {
         const key = `${name}·${label}`;
         const prefix = `${key}：`;
-        const past = history.filter((n) => n.title.startsWith(prefix));
+        const past = history.flatMap((n) => [n.title, ...n.content.split('\n')].filter((line) => line.startsWith(prefix))
+          .map((line) => ({ date: n.date, text: line.slice(prefix.length) })));
         return h('div.rv-aspect', { 'data-key': key }, [
           h('label', {}, [label, h('input', { value: reviewDraft[key] || '', placeholder,
             oninput: (e) => { reviewDraft[key] = e.target.value; } })]),
           past.length ? h('div.rv-area-past', {}, past.map((n) => h('div', {}, [h('span.t', {}, n.date.slice(5)),
-            h('span.x', {}, [n.title.slice(prefix.length), n.content].filter(Boolean).join('\n'))])))
+            h('span.x', {}, n.text)])))
             : h('div.muted', { style: { marginTop: '6px', fontSize: '13px' } }, '这一栏还没写过'),
         ]);
       };
@@ -350,9 +351,11 @@ export default {
         h('div.rv-aspects', {}, Object.entries(REVIEW_ASPECTS).map(([label, placeholder]) => aspect(name, label, placeholder)))]);
       const save = async () => {
         try {
-          const made = await api.post('/api/notes/review', { date: state.date, entries: reviewDraft });
+          const entries = Object.fromEntries(REVIEW_AREAS.flatMap((name) => Object.keys(REVIEW_ASPECTS)
+            .map((label) => `${name}·${label}`).map((key) => [key, reviewDraft[key] || ''])));
+          const made = await api.post('/api/notes/review', { date: state.date, entries });
           Object.keys(reviewDraft).forEach((key) => delete reviewDraft[key]);
-          toast(`已贴到便签：${made.length} 张「复盘」`);
+          toast(`已贴一张「复盘」便签${made.issues.length ? `，${made.issues.length} 个问题进了规划事项` : ''}`);
           show();
         } catch (e) { toast(e.message, true); }
       };
@@ -364,16 +367,16 @@ export default {
       const rec = d.record;
       const status = h('div.rv-status');
       const running = d.jobs.find((j) => j.ref.startsWith('improve:') && ['queued', 'running'].includes(j.status));
-      if (running) { status.textContent = 'AI 正在结合当天会话和学习反馈分析…'; watch(running.id, '改进分析', status); }
+      if (running) { status.textContent = 'Agent 正在结合复盘、当天会话和学习反馈给建议…'; watch(running.id, 'Agent 改善', status); }
       const run = async () => {
-        try { await api.post('/api/review/improve', { date: state.date }); toast('改进分析已开始'); show(); } catch (e) { toast(e.message, true); }
+        try { await api.post('/api/review/improve', { date: state.date }); toast('Agent 改善已开始'); show(); } catch (e) { toast(e.message, true); }
       };
       const btn = h('button' + (rec.improve_md ? '.ghost.sm' : '.dark'), { disabled: !!running, onclick: run },
-        [ui.icon('spark'), running ? '分析中' : rec.improve_md ? '重新分析' : '分析怎么改进']);
+        [ui.icon('spark'), running ? '分析中' : rec.improve_md ? '重新给建议' : 'Agent 改善']);
       return h('div.card.rv-improve', {}, [
-        h('div.row.between', {}, [h('span.card-label', {}, 'AI 改进分析 · 结合当天会话与学习反馈'), rec.improve_md ? btn : null]),
-        rec.improve_md ? annotate(ctx, h('div.md', {}, md(rec.improve_md)), { doc: `review:${state.date}:improve`, title: `${state.date} · AI 改进分析`, link: `#review/${state.date}`, source: rec.improve_md })
-          : h('div', {}, [h('div.muted', { style: { margin: '2px 0 12px' } }, 'AI 会把每条放回当天时间线，对照会话和学习记录找根因、给改进。'),
+        h('div.row.between', {}, [h('span.card-label', {}, 'Agent 改善 · 结合复盘、当天会话与学习反馈'), rec.improve_md ? btn : null]),
+        rec.improve_md ? annotate(ctx, h('div.md', {}, md(rec.improve_md)), { doc: `review:${state.date}:improve`, title: `${state.date} · Agent 改善`, link: `#review/${state.date}`, source: rec.improve_md })
+          : h('div', {}, [h('div.muted', { style: { margin: '2px 0 12px' } }, '点击后才把这天的复盘便签和未解决的问题发给 Agent，对照会话和学习记录找根因、给建议。'),
           running ? null : btn]),
         status,
       ]);
@@ -402,8 +405,9 @@ export default {
       const lx = d.learning_extra;
       const reviewHistory = await api.get(`/api/review/notes?author=me&kind=review&end=${state.date}`);
       const nodes = [
-        ui.section('复盘模板', '填几栏算几栏，每栏贴一张「复盘」便签 · 下面是这一栏过去写的，方便对比'), templateCard(reviewHistory),
-        ...(rec.entries?.length || rec.improve_md ? [ui.section('我的复盘', '这一天之前写下的记录'), rec.entries?.length ? recordCard(rec.entries) : null, improveCard(d)] : []),
+        ui.section('复盘模板', '填几栏算几栏，保存成一张「复盘」便签，有问题的进规划事项 · 下面是这一栏过去写的，方便对比'), templateCard(reviewHistory),
+        improveCard(d),
+        ...(rec.entries?.length ? [ui.section('我的复盘', '这一天之前写下的记录'), recordCard(rec.entries)] : []),
         ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
         h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
         await deliveries({ api, h, ui }, { date: state.date }),

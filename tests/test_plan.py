@@ -289,3 +289,56 @@ def test_code_state_reads_branches_and_guesses_repo(tmp_path, monkeypatch):
     assert str(repo) in one and "按标题猜的" in one and "1 个未提交改动" in one
     assert "feat/demo-login" in one and "领先 main 1 个提交" in one and "登录页做了一半" in one
     assert "没找到对应仓库" in two and repos == [str(repo)]
+
+
+def _issues(client, d):
+    return client.get(f"/api/plan/day?date={d}").json()["issues"]
+
+
+def _clean_issues():
+    from app import db
+    db.execute("DELETE FROM tasks WHERE kind='issue'")
+
+
+def test_review_problem_stays_in_plan_until_resolved(client):
+    _clean_issues()
+    client.post("/api/notes/review", json={"date": "2026-04-01", "entries": {
+        "产品迭代·做得好的": "模板上线了", "产品迭代·有问题的": "排期总是写不清 #流程", "AI协作·有问题的": " "}})
+
+    added = _issues(client, "2026-04-01")
+    assert [i["title"] for i in added] == ["产品迭代：排期总是写不清"]
+    assert added[0]["created_at"] and added[0]["status"] == "todo"
+    later = _issues(client, "2026-04-20")
+    assert [i["id"] for i in later] == [added[0]["id"]]
+    assert _issues(client, "2026-03-31") == []
+
+    client.patch(f"/api/tasks/{added[0]['id']}", json={"status": "done"})
+    from app import db
+    resolved_on = db.row("SELECT updated_at FROM tasks WHERE id=?", [added[0]["id"]])["updated_at"][:10]
+    assert [i["status"] for i in _issues(client, resolved_on)] == ["done"]
+    assert _issues(client, "2099-01-01") == []
+
+
+def test_same_open_problem_is_not_added_twice(client):
+    _clean_issues()
+    body = {"date": "2026-04-02", "entries": {"个人效率·有问题的": "总被打断"}}
+    client.post("/api/notes/review", json=body)
+    client.post("/api/notes/review", json={**body, "date": "2026-04-03"})
+    assert len(_issues(client, "2026-04-03")) == 1
+
+
+def test_review_problem_stays_out_of_carry_and_day_tasks(client):
+    _clean_issues()
+    client.post("/api/tasks", json={"title": "昨天没做完", "date": "1999-04-04"})
+    client.post("/api/notes/review", json={"date": "1999-04-05", "entries": {"学习提升·有问题的": "论文读不完"}})
+    day = client.get("/api/plan/day?date=1999-04-05").json()
+    assert all(t["kind"] != "issue" for t in day["tasks"])
+    assert client.get("/api/tasks?start=1999-04-05&end=1999-04-05").json() == []
+    client.post("/api/plan/carry", json={"date": "1999-04-06"})
+    assert [t["title"] for t in client.get("/api/tasks?date=1999-04-06").json()] == ["昨天没做完"]
+
+
+def test_plan_agent_knows_open_problems(client):
+    _clean_issues()
+    client.post("/api/notes/review", json={"date": "2026-04-07", "entries": {"产品迭代·有问题的": "发布总要返工"}})
+    assert "产品迭代：发布总要返工" in plan.agent_context("2026-04-08")
