@@ -1029,3 +1029,72 @@ def test_priority_account_is_collected_even_if_not_followed(monkeypatch):
     monkeypatch.setattr(feed, "cfg", lambda k: ["Star", "karpathy"] if k == "x_priority" else [])
     monkeypatch.setattr(feed, "src_list", lambda lst: ["karpathy", "AnthropicAI"])
     assert feed.x_accounts_to_fetch() == ["karpathy", "AnthropicAI", "Star"]
+
+
+def _paper(id_, *, source="hf", hours=24, extra=None):
+    return {**_it(id_, f"zz {id_}", source=source, hours=hours, pop=5, extra=extra), "type": "paper"}
+
+
+def test_famous_institution_paper_ranks_higher_and_says_why():
+    filler = [_paper(f"hf:f{i}", hours=500 + i) for i in range(3)]
+    out = rk.rank([_paper("hf:plain", extra={"affil": "KAIST"}),
+                   _paper("hf:top", extra={"affil": "Kwan Yun Affiliation: Google DeepMind; Stanford University"}), *filler], now=NOW)
+    by_id = {x["id"]: x for x in out}
+    assert by_id["hf:top"]["score"] > by_id["hf:plain"]["score"] + 0.5
+    assert "Google、Stanford 论文" in by_id["hf:top"]["why"]
+    assert "论文" not in by_id["hf:plain"]["why"]
+
+
+def test_institution_weight_counts_once_and_only_for_papers():
+    many = rk.rank([_paper("hf:a", extra={"affil": "Google, Meta, Stanford, MIT"})], now=NOW)[0]["score"]
+    one = rk.rank([_paper("hf:a", extra={"affil": "MIT"})], now=NOW)[0]["score"]
+    assert many == one
+    assert "论文" not in rk.rank([_it("hn:a", "zz", extra={"affil": "Google"})], now=NOW)[0]["why"]
+
+
+def test_institution_match_ignores_lookalikes():
+    for affil in ("Smith University", "permit Lab", "Mila Novak, KAIST", "metadata research", "Lawrence Berkeley National Laboratory",
+                  "Washington University in St. Louis", "Cambridge, MA startup"):
+        assert "论文" not in rk.rank([_paper("hf:a", extra={"affil": affil})], now=NOW)[0]["why"], affil
+    for affil, label in (("MIT CSAIL", "MIT"), ("Massachusetts Institute of Technology", "MIT"), ("a@mit.edu", "MIT"),
+                         ("{a, b}@google.com", "Google"), ("Meta AI", "Meta"), ("UC Berkeley", "Berkeley"),
+                         ("University of Cambridge", "Cambridge"), ("Carnegie Mellon University", "CMU")):
+        assert f"{label} 论文" in rk.rank([_paper("hf:a", extra={"orgs": affil})], now=NOW)[0]["why"], affil
+
+
+def test_hf_and_alphaxiv_keep_institutions(monkeypatch):
+    def handler(r):
+        if "huggingface" in r.url.host:
+            return httpx.Response(200, json=[{"paper": {"id": "2611.00001", "title": "T", "organization": {"fullname": "Microsoft Research"}}}])
+        return httpx.Response(200, json={"papers": [{"universal_paper_id": "2611.00002", "title": "T",
+                                                     "organization_info": [{"name": "Stanford University"}, {"name": "NVIDIA"}]}]})
+
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    assert src.fetch_hf_papers()[0]["extra"]["orgs"] == "Microsoft Research"
+    assert src.fetch_alphaxiv()[0]["extra"]["orgs"] == "Stanford University, NVIDIA"
+
+
+def test_refresh_fills_institutions_from_arxiv_page(client, monkeypatch):
+    from app.modules import feed
+    fresh = NOW.isoformat()
+    for id_, extra in (("hf:2611.00001", {"arxiv_url": "https://arxiv.org/abs/2611.00001"}),
+                       ("arxiv:2611.00001", {}),
+                       ("hf:2611.00404", {"arxiv_url": "https://arxiv.org/abs/2611.00404"})):
+        feed.upsert([{"id": id_, "source": id_.split(":")[0], "type": "paper", "title": f"zz {id_}",
+                      "url": f"https://arxiv.org/abs/{id_.split(':')[1]}", "date": fresh, "extra": extra}])
+    calls = []
+
+    def handler(r):
+        calls.append(r.url.path)
+        if r.url.path.endswith("00404"):
+            return httpx.Response(404)
+        return httpx.Response(200, text='<div class="ltx_authors"><span>Ann</span> <span>Stanford University</span></div>'
+                                        '<div class="ltx_abstract">We use Google data</div>')
+
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    assert feed.run_paper_affil(now=NOW)["count"] == 2
+    assert sorted(calls) == ["/html/2611.00001", "/html/2611.00404"]
+    assert any("Stanford 论文" in x["why"] and "2611.00001" in x["id"] for x in feed.ranked(now=NOW))
+    calls.clear()
+    feed.run_paper_affil(now=NOW)
+    assert calls == []

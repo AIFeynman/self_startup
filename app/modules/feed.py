@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -153,6 +154,11 @@ TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "�
 router = APIRouter()
 _state: dict = {"running": False, "started_at": "", "started_utc": "", "finished_at": "", "results": {}, "scope": ""}
 _state_lock = threading.Lock()
+
+
+PAPER_AFFIL_DAYS = 14
+PAPER_AFFIL_MAX = 60
+ARXIV_ID = re.compile(r"\b\d{4}\.\d{4,5}\b")
 
 
 def cfg(key: str):
@@ -478,6 +484,8 @@ def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> di
     with ThreadPoolExecutor(max_workers=6) as ex:
         for name, res in ex.map(run, names):
             results[name] = res
+    if {"hf", "alphaxiv"} & set(names):
+        results["paper_affil"] = run_paper_affil()
     if "hn" in names and cfg("hn_digest_enabled"):   # 刷了 HN 就补评论区提炼（只做新的 / 评论明显变多的）
         results["hn_digest"] = run_hn_digest()
     if cfg("judge_enabled"):    # 判断决定过滤和置顶，刷了哪个来源都跑；只问新的或内容变了的，量很小
@@ -486,6 +494,23 @@ def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> di
         results["gist"] = run_gists()
         results["product_analysis"] = run_product_analysis()
     return results
+
+
+def run_paper_affil(now: datetime | None = None) -> dict:
+    """给最近的论文补作者单位，写回 extra.affil；AlphaXiv 自带机构的不用读。一篇只读一次，每次最多 PAPER_AFFIL_MAX 篇、新的优先。"""
+    now = now or datetime.now(timezone.utc)
+    todo: dict[str, list[str]] = {}
+    papers = [x for x in _load_items() if x["type"] == "paper" and not x["extra"].get("affil_checked")
+              and not (x["source"] == "arxiv" and x["extra"].get("orgs"))]
+    for it in sorted(rk.within_days(papers, PAPER_AFFIL_DAYS, now), key=lambda x: x["date"], reverse=True):
+        if m := ARXIV_ID.search(it["url"] + " " + str(it["extra"].get("arxiv_url") or "")):
+            todo.setdefault(m[0], []).append(it["id"])
+    pids = list(todo)[:PAPER_AFFIL_MAX]
+    got, errors = src.fetch_paper_authors(pids)
+    for pid, text in got.items():
+        for item_id in todo[pid]:
+            _patch_extra(item_id, {"affil": text, "affil_checked": True})
+    return {"count": len(got), "errors": errors}
 
 
 def run_judge(now: datetime | None = None) -> dict:

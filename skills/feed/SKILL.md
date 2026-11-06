@@ -38,6 +38,7 @@ score = 热度（同源最近 30 天条目里的百分位，0–1；整源无热
       + 1.2 官方博客（链接域名是 anthropic.com / claude.com / claude.dev / openai.com / deepmind.google / blog.google / research.google）
       + 0.8 代码和博客一起发布（同一机构的官方博客和新仓库，博客提到仓库链接或足够特别的仓库名，或有推文同时链接两者；两条都标重要更新置顶，仓库按博客时间算新鲜度）
       + 0.4 X 长文（引用长文 +0.2；自己发的 ≥5000 赞再 +0.5，新鲜度按博客的半衰期算）+ 0.3 关注账号（X 名单里的账号，搜索来的不加）+ 1.2 重点关注（`feed.x_priority` 里的账号，取代关注账号的 0.3，搜索来的也算，没在名单里也会抓）
+      + 0.6 知名机构的论文（`_feed_rank.PAPER_ORGS`：Google、Meta、OpenAI、Stanford、MIT 等；作者单位来自 AlphaXiv / Hugging Face 自带的机构，和 arXiv 论文页的作者块，每次刷新最多读 60 篇；读不到单位的论文不加分）
       + 0.25 × 其它来源也收了同一条（最多 2 个，「也见于」）
       + 本条自己被赞 +1 / 被踩 −2；隐藏的条目不出现
 同一 URL（arXiv/HF 论文统一按 arXiv id）、同一标题，或「同一件事」（标题词重合 ≥3 个、Jaccard ≥0.5、发布相差 ≤4 天）
