@@ -200,6 +200,8 @@ DEFAULTS: dict = {
             "(\"AI agent\" OR \"coding agent\" OR \"agent harness\") min_faves:300 -filter:replies lang:en",
             # 专搜 X 长文（补完标题后再按 AI 词过滤）
             "url:\"x.com/i/article\" (Claude OR Codex OR LLM OR \"AI agent\" OR \"coding agent\") min_faves:200",
+            # 只说 agents 的长文标题搜不进上一条；词更泛，门槛提高，也不和上一条抢同一页结果
+            "url:\"x.com/i/article\" (agent OR agents) min_faves:1000",
         ],
     },
     # 深度学习：已有的 codex 解析 skill

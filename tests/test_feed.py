@@ -949,3 +949,45 @@ def test_profile_due_rules(client, monkeypatch):
     feed._profile_state["last_try"] = dt.now().timestamp()
     assert feed.profile_due() is False     # 刚失败过，隔一天再试
     _reset_profile()
+
+
+def test_search_keeps_article_whose_title_only_says_agents(monkeypatch):
+    monkeypatch.setenv("GETXAPI_KEY", "k1")
+    monkeypatch.setenv("TWITTER_API_KEY", "k2")
+    recent = datetime.now(timezone.utc).strftime("%a %b %d %H:%M:%S +0000 %Y")
+    articles = {"1": "Critical thinking when agents do the work", "2": "How I learned to bake sourdough"}
+    tweets = [_tw(id=i, createdAt=recent, text="https://t.co/abc", entities={"urls": []}) for i in articles]
+
+    def handler(r):
+        if r.url.path == "/twitter/article":
+            return httpx.Response(200, json={"article": {"title": articles[r.url.params["tweet_id"]], "preview_text": "opening"}})
+        return httpx.Response(200, json={"tweets": tweets})
+
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    items, _ = src.fetch_x([], ["q"])
+    assert [i["id"] for i in items] == ["twitter:1"]
+
+
+def test_interest_matches_plural():
+    out = rk.rank([_it("a", "Critical thinking when agents do the work")], now=NOW, interests=["agent"])
+    assert "命中 agent" in out[0]["why"]
+
+
+def _article(id_, pop, hours=53, kind="own"):
+    return _it(id_, f"zz {id_}", source="twitter", pop=pop, hours=hours, extra={"x_article": kind})
+
+
+def test_viral_article_outranks_recent_plain_post_days_later():
+    pop_filler = [_it(f"twitter:f{i}", f"zz filler {i}", source="twitter", pop=100 + i * 50, hours=200) for i in range(20)]
+    out = rk.rank([_article("twitter:viral", 8500), _article("twitter:normal", 4000),
+                   _article("twitter:quoted", 8500, kind="quoted"), *pop_filler], now=NOW)
+    by_id = {x["id"]: x for x in out}
+    assert by_id["twitter:viral"]["score"] - by_id["twitter:normal"]["score"] > 0.5
+    assert by_id["twitter:viral"]["score"] > by_id["twitter:quoted"]["score"] + 0.5
+    assert "高赞 X 长文" in by_id["twitter:viral"]["why"] and "高赞" not in by_id["twitter:normal"]["why"]
+
+
+def test_viral_article_still_fades():
+    fresh = rk.rank([_article("twitter:v", 8500, hours=2)], now=NOW)[0]["score"]
+    old = rk.rank([_article("twitter:v", 8500, hours=24 * 7)], now=NOW)[0]["score"]
+    assert fresh - old > 1.0
