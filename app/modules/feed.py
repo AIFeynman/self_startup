@@ -295,22 +295,87 @@ def _without_radar(items: list[dict]) -> list[dict]:
         log.debug("radar coverage unavailable: %s", e)
         return items
     urls = {rk.norm_url(u) for u in urls}
-    return [x for x in items if x["id"] not in ids and rk.norm_url(x["url"]) not in urls]
+    return [x for x in items if x["id"] not in ids and x["norm_url"] not in urls]
+
+
+# 全量算分要近 1 秒，翻页和切分类只是在结果上筛选：算好的结果留一份，排序用到的数据变了才重算
+RANK_MAX_AGE_S = 600   # 分数随时间衰减：放久了也要重算
+_rank_snaps: dict[bool, dict] = {}
+_rank_lock = threading.Lock()
+
+
+def _items_version() -> int:
+    r = db.row("SELECT group_concat(id || coalesce(fetched_at,'') || coalesce(popularity,'') || coalesce(date,'') || coalesce(url,'') || "
+               "coalesce(title,'') || coalesce(summary,'') || coalesce(extra,'') || source || type) v FROM feed_items")
+    return hash(r["v"] if r else None)
+
+
+def _rank_inputs() -> dict:
+    return {"half_life_h": float(cfg("half_life_hours")), "interests": list(cfg("interests") or []), "feedback": _feedback(),
+            "deep_urls": _deep_urls(), "profile": active_profile(), "priority": list(cfg("x_priority") or [])}
+
+
+def _compute_rank(inputs: dict, include_hidden: bool, now: datetime) -> list[dict]:
+    items = _load_items()
+    _mark_gone(items)
+    fb = inputs["feedback"]
+    out = rk.rank(items, now=now, half_life_h=inputs["half_life_h"], interests=inputs["interests"], feedback=fb,
+                  examples=_examples(items, fb, inputs["deep_urls"]), include_hidden=include_hidden,
+                  profile=inputs["profile"], priority=inputs["priority"])
+    for x in out:
+        x["norm_url"] = rk.norm_url(x["url"])
+    return out
+
+
+def _rebuild_rank(include_hidden: bool, version: int, inputs: dict) -> list[dict]:
+    out = _compute_rank(inputs, include_hidden, datetime.now(timezone.utc))
+    _rank_snaps[include_hidden] = {"version": version, "inputs": inputs, "items": out, "at": time.monotonic()}
+    return out
+
+
+def _warm_rank() -> None:
+    """后台把排序算好，下一次打开不用等；已有别的线程在算就不重复。"""
+    if not _rank_lock.acquire(blocking=False):
+        return
+    try:
+        _rebuild_rank(False, _items_version(), _rank_inputs())
+    except Exception as e:  # noqa: BLE001
+        log.warning("feed rank warm failed: %s", e)
+    finally:
+        _rank_lock.release()
+
+
+def _warm_rank_bg() -> None:
+    threading.Thread(target=_warm_rank, daemon=True, name="feed-rank-warm").start()
+
+
+def _scored(include_hidden: bool, stale_ok: bool) -> list[dict]:
+    """stale_ok：页面请求可以先拿上一份结果（刷新中数据一直在变、或分数放久了），后台再算新的；反馈和设置变了一定重算。"""
+    version, inputs = _items_version(), _rank_inputs()
+    snap = _rank_snaps.get(include_hidden)
+    if snap and snap["inputs"] == inputs:
+        same_items, young = snap["version"] == version, time.monotonic() - snap["at"] < RANK_MAX_AGE_S
+        if same_items and young:
+            return snap["items"]
+        if stale_ok and (not same_items and _state["running"] or same_items and not young):
+            if not include_hidden:
+                _warm_rank_bg()
+            return snap["items"]
+    with _rank_lock:
+        snap = _rank_snaps.get(include_hidden)   # 排队等锁时别的请求可能已经算好
+        if snap and snap["inputs"] == inputs and snap["version"] == version and time.monotonic() - snap["at"] < RANK_MAX_AGE_S:
+            return snap["items"]
+        return _rebuild_rank(include_hidden, version, inputs)
 
 
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
-           sort: str = "score", read: str = "") -> list[dict]:
+           sort: str = "score", read: str = "", stale_ok: bool = False) -> list[dict]:
     """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合 / new 最新 / hot 最热（同源热度百分位）；
     read: unread 只要没读过的 / read 只要读过的（打开过原文或进过深读），收藏夹不按这个筛。
     产品雷达已有的内容不重复展示；收藏、搜索、已读里仍能找到。
     只有「全部 + 综合 + 不限时间 + 无筛选」时做类型 / 来源多样化（今日精选就取这个列表的前 5 条）。"""
+    out = _compute_rank(_rank_inputs(), saved, now) if now else _scored(saved, stale_ok)
     now = now or datetime.now(timezone.utc)
-    items = _load_items()
-    _mark_gone(items)
-    fb = _feedback()
-    out = rk.rank(items, now=now, half_life_h=float(cfg("half_life_hours")),
-                  interests=list(cfg("interests") or []), feedback=fb, examples=_examples(items, fb, _deep_urls()),
-                  include_hidden=saved, profile=active_profile(), priority=list(cfg("x_priority") or []))
     if saved:
         out = [x for x in out if x["feedback"].get("saved")]
     if type_ == "x_article":  # 「X 长文」标签页：自己发的长文 + 引用了长文的推文
@@ -331,10 +396,9 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     read_urls = _read_log.urls("feed") | {u for u, d in deeps.items() if d.get("opened_at")}
     # 深读结果还没看过的留在列表里，哪怕已经点开过原文
     pending = {u for u, d in deeps.items() if d["status"] != "failed" and not d.get("opened_at")}
-    for x in out:
-        u = rk.norm_url(x["url"])
-        x["read"] = u in read_urls and u not in pending
-        x["deep"] = {"id": deeps[u]["id"], "status": deeps[u]["status"]} if u in deeps else None
+    out = [{**x, "read": x["norm_url"] in read_urls and x["norm_url"] not in pending,
+            "deep": {"id": deeps[x["norm_url"]]["id"], "status": deeps[x["norm_url"]]["status"]} if x["norm_url"] in deeps else None}
+           for x in out]
     if read and not saved:
         out = [x for x in out if x["read"] == (read == "read")]
     if sort in ("new", "hot"):
@@ -651,6 +715,7 @@ def _bg(only, gists=None):
         res = refresh_sync(only, gists)
     except Exception as e:  # noqa: BLE001
         res = {"_": {"count": 0, "errors": [str(e)]}}
+    _warm_rank()   # 算好再报「刷新完成」，页面一重载就是新结果
     with _state_lock:
         _state.update(running=False, finished_at=db.now(), results=res)
     if only is None or {"hf", "alphaxiv"} & set(only):
@@ -855,7 +920,7 @@ def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, off
         raise HTTPException(400, "sort 只能是 score / new / hot")
     if read not in ("", "unread", "read"):
         raise HTTPException(400, "read 只能是 unread / read")
-    out = ranked(type, saved, q, days=days, sort=sort, read=read)
+    out = ranked(type, saved, q, days=days, sort=sort, read=read, stale_ok=True)
     if t0 := rk._parse_dt(since):
         fresh = lambda x: (rk._parse_dt((x.get("extra") or {}).get("first_seen") or "") or datetime.min.replace(tzinfo=timezone.utc)) >= t0
         out = [x for x in out if fresh(x)] + [x for x in out if not fresh(x)]
@@ -882,6 +947,7 @@ def feedback(body: FeedbackIn):
     db.execute("INSERT INTO feed_feedback (item_id, vote, saved, hidden, updated_at) VALUES (?,?,?,?,?) "
                "ON CONFLICT(item_id) DO UPDATE SET vote=excluded.vote, saved=excluded.saved, hidden=excluded.hidden, "
                "updated_at=excluded.updated_at", [body.id, new["vote"], new["saved"], new["hidden"], db.now()])
+    _warm_rank_bg()
     return {"id": body.id, **new}
 
 
@@ -908,6 +974,7 @@ def verdict(body: VerdictIn):
         kb.schedule_sync()
     except Exception:  # noqa: BLE001
         pass
+    _warm_rank_bg()
     return {"id": body.id, "verdict": text, "verdict_at": at}
 
 
@@ -948,7 +1015,7 @@ def feedback_stats() -> dict:
 def _deep_latest() -> dict[str, dict]:
     """每个链接最新一次深读。点了深读但还没打开看结果的不算已读，留在列表里显示进度。"""
     try:
-        rows = db.rows("SELECT * FROM learn_items ORDER BY id")
+        rows = db.rows("SELECT id, url, status, opened_at FROM learn_items ORDER BY id")
     except Exception:  # noqa: BLE001  学习模块不存在
         return {}
     latest = {rk.norm_url(r["url"]): r for r in rows}
@@ -1212,6 +1279,7 @@ def profile_toggle(body: ProfileToggleIn):
 def _auto_loop():
     time.sleep(90)  # 启动后先等一会儿，别和服务启动抢资源
     while True:
+        _warm_rank()
         try:
             maybe_auto_refresh()
         except Exception as e:  # noqa: BLE001
@@ -1232,6 +1300,7 @@ def _auto_loop():
 def on_startup():
     if os.environ.get("SELF_STARTUP_NO_AUTOREFRESH"):
         return
+    _warm_rank_bg()
     threading.Thread(target=_auto_loop, daemon=True, name="feed-auto-refresh").start()
 
 
