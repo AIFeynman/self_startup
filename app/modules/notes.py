@@ -115,6 +115,19 @@ def api_add(body: AddIn):
     return add(body.text, body.kind, body.sources, body.date)
 
 
+class ReviewIn(BaseModel):
+    entries: dict[str, str]
+    date: str | None = None
+
+
+@router.post("/review")
+def api_review(body: ReviewIn):
+    filled = {area: text.strip() for area, text in body.entries.items() if text.strip()}
+    if not filled:
+        raise HTTPException(400, "至少填一栏")
+    return [add(f"{area}：{text}", "review", date=body.date) for area, text in filled.items()]
+
+
 class PatchIn(BaseModel):
     text: str | None = None
     kind: str | None = None

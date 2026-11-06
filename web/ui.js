@@ -159,7 +159,7 @@ document.addEventListener('keydown', (e) => {
 // 便签的类型选择（便签页和 ⌘K 共用）：kinds 来自 /api/notes/kinds；颜色按内置顺序，自定义类型按名字散列
 export function kindColor(key, kinds = []) {
   const i = kinds.filter((k) => k.builtin).findIndex((k) => k.key === key);
-  return i >= 0 ? i % 6 : [...String(key)].reduce((a, c) => a + c.codePointAt(0), 0) % 6;
+  return i >= 0 ? i : [...String(key)].reduce((a, c) => a + c.codePointAt(0), 0) % 6;
 }
 export function kindChips(kinds, current, onPick) {
   const box = h('div.kind-chips');
@@ -236,7 +236,7 @@ function readingSource() {
 // 全局：任何页面按 ⌘K / Ctrl+K 弹出快记，灵感不用离开当前页，进「便签」。Enter 存，Esc 关闭，没存的草稿留着
 let quickDraft = '';
 let closeQuick = null;
-const BUILTIN_KINDS = [['spark', '灵感'], ['feeling', '感想'], ['idea', '想法'], ['problem', '问题'], ['lesson', '经验'], ['insight', '洞察']]
+const BUILTIN_KINDS = [['spark', '灵感'], ['feeling', '感想'], ['idea', '想法'], ['problem', '问题'], ['lesson', '经验'], ['insight', '洞察'], ['review', '复盘']]
   .map(([key, label]) => ({ key, label, builtin: true }));
 function openQuick({ text: preset = '', source = readingSource() } = {}) { // readingSource 要在输入框拿走焦点之前取，不然选区没了
   let kind = (() => { try { return localStorage.getItem('note-kind') || 'spark'; } catch { return 'spark'; } })();

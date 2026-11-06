@@ -157,7 +157,7 @@ def _note_sources(n: dict) -> str:
 def _notes() -> list[dict]:
     if not _has("review_notes"):
         return []
-    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想"}
+    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想", "review": "复盘"}
     return [_doc("note", n["id"], n["title"] or _first_lines(n["content"], 1)[:40],
                  f"类型：{kinds.get(n['kind'], n['kind'])} · 日期：{n['date']}{' · 我写的便签' if n.get('author') == 'me' else ''}\n\n{n['content']}{_note_sources(n)}",
                  date=n["date"], updated=n.get("updated_at") or "", tags=_tags(n["tags"]) + [kinds.get(n["kind"], n["kind"])],

@@ -157,3 +157,33 @@ def test_old_db_migration(tmp_path, monkeypatch):
     assert r["author"] == "system" and r["sources"] == "[]" and r["title"] == "老记录" and r["content"] == "正文"
     db.init()  # 再跑一次不报错
     db.conn().close()
+
+
+def test_review_template_posts_one_note_per_filled_area(client):
+    _clean()
+    r = client.post("/api/notes/review", json={"date": "2026-03-01", "entries": {
+        "产品迭代": "问题：验收标准没写清，下一步先写标准",
+        "个人效率": "   ",
+        "AI协作": "",
+        "学习提升": "收获：读完一篇论文 #论文",
+    }})
+    assert r.status_code == 200
+    wall = client.get("/api/notes?kind=review").json()
+    assert sorted(n["title"] for n in wall["notes"]) == ["产品迭代：问题：验收标准没写清，下一步先写标准", "学习提升：收获：读完一篇论文"]
+    assert all(n["kind"] == "review" and n["author"] == "me" and n["date"] == "2026-03-01" for n in wall["notes"])
+    assert {n["tags"] for n in wall["notes"]} == {"", "论文"}
+    review_kind = next(k for k in wall["kinds"] if k["key"] == "review")
+    assert review_kind["label"] == "复盘" and review_kind["builtin"] and review_kind["count"] == 2
+
+
+def test_review_template_needs_at_least_one_area(client):
+    _clean()
+    assert client.post("/api/notes/review", json={"entries": {"产品迭代": " ", "AI协作": ""}}).status_code == 400
+    assert client.get("/api/notes").json()["notes"] == []
+
+
+def test_review_is_a_builtin_kind_by_name_and_prefix(client):
+    _clean()
+    assert client.post("/api/notes", json={"text": "选的类型", "kind": "复盘"}).json()["kind"] == "review"
+    prefixed = client.post("/api/notes", json={"text": "复盘：写了前缀"}).json()
+    assert prefixed["kind"] == "review" and prefixed["title"] == "写了前缀"
