@@ -162,18 +162,20 @@ def test_old_db_migration(tmp_path, monkeypatch):
 def test_review_template_posts_one_note_per_filled_area(client):
     _clean()
     r = client.post("/api/notes/review", json={"date": "2026-03-01", "entries": {
-        "产品迭代": "问题：验收标准没写清，下一步先写标准",
-        "个人效率": "   ",
-        "AI协作": "",
-        "学习提升": "收获：读完一篇论文 #论文",
+        "产品迭代·做得好的": "模板上线了",
+        "产品迭代·有问题的": "验收标准没写清，下一步先写标准",
+        "个人效率·做得好的": "   ",
+        "AI协作·有问题的": "",
+        "学习提升·做得好的": "读完一篇论文 #论文",
     }})
     assert r.status_code == 200
     wall = client.get("/api/notes?kind=review").json()
-    assert sorted(n["title"] for n in wall["notes"]) == ["产品迭代：问题：验收标准没写清，下一步先写标准", "学习提升：收获：读完一篇论文"]
+    assert sorted(n["title"] for n in wall["notes"]) == [
+        "产品迭代·做得好的：模板上线了", "产品迭代·有问题的：验收标准没写清，下一步先写标准", "学习提升·做得好的：读完一篇论文"]
     assert all(n["kind"] == "review" and n["author"] == "me" and n["date"] == "2026-03-01" for n in wall["notes"])
     assert {n["tags"] for n in wall["notes"]} == {"", "论文"}
     review_kind = next(k for k in wall["kinds"] if k["key"] == "review")
-    assert review_kind["label"] == "复盘" and review_kind["builtin"] and review_kind["count"] == 2
+    assert review_kind["label"] == "复盘" and review_kind["builtin"] and review_kind["count"] == 3
 
 
 def test_review_template_needs_at_least_one_area(client):

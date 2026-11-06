@@ -1,4 +1,4 @@
-// 复盘（首页）：问候 + 一句话状态 + 大输入框（记一条 / 写复盘 / 问 Agent）+ 今日三卡（事项 / AI 建议 / Agent 效率）
+// 复盘（首页）：问候 + 一句话状态 + 大输入框（记一条 / 问 Agent）+ 今日三卡（事项 / AI 建议 / Agent 效率）
 // 标签页：当日复盘 / 时间线 / 问题与经验 / 已读历史 / Agent 效率。路由：#review/<YYYY-MM-DD>/<tab>
 import { today } from '../api.js';
 import { utilization } from './_utilchart.js';
@@ -64,8 +64,7 @@ const CSS = `
 .rv-entry .f { font-size: 12px; color: var(--accent); }
 .rv-entry .x { white-space: pre-wrap; font-size: 14px; overflow-wrap: anywhere; }
 .rv-improve .md { font-size: 14px; }
-.rv-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line-2); }
-@media (max-width: 760px) { .rv-rec, .rv-form { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .rv-rec { grid-template-columns: 1fr; } }
 .rv-notes { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-items: start; }
 .rv-agent .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 900px) { .rv-agent .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -87,10 +86,12 @@ const CSS = `
 .rv-tl .tl-item:hover .card { border-color: var(--accent); }
 .rv-tl .day { display: flex; align-items: baseline; gap: 10px; }
 .rv-tl .day b { font: 700 16px var(--serif); }
-.rv-areas { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px; }
-@media (max-width: 760px) { .rv-areas { grid-template-columns: 1fr; } }
-.rv-area { min-width: 0; }
-.rv-area label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.rv-areas { display: flex; flex-direction: column; gap: 18px; }
+.rv-area-name { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.rv-aspects { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+@media (max-width: 760px) { .rv-aspects { grid-template-columns: 1fr; } }
+.rv-aspect { min-width: 0; }
+.rv-aspect label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .rv-area input { width: 100%; box-sizing: border-box; }
 .rv-area-past { margin-top: 8px; max-height: 200px; overflow-y: auto; border-left: 2px solid var(--note-teal); padding-left: 10px; }
 .rv-area-past > div { display: grid; grid-template-columns: 44px 1fr; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 13px; }
@@ -110,6 +111,7 @@ const REC_FIELD = { summary: '总结', wins: '收获', problems: '问题', next_
 const MSG_KIND = { new_task: '新任务/追加', correct: '纠正/转向', approve: '确认/继续', interrupt: '中断', answer: '回答提问', check: '询问进度' };
 const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn', answer: '', new_task: 'ok' };
 const REVIEW_AREAS = ['产品迭代', '个人效率', 'AI协作', '学习提升'];
+const REVIEW_ASPECTS = { 做得好的: '做成了什么、有什么收获，写在这一行', 有问题的: '哪里有问题、下一步怎么办，写在这一行' };
 const reviewDraft = {};
 const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史', agent: 'Agent 效率' };
 const WEEK = '日一二三四五六';
@@ -120,7 +122,7 @@ let onQuickNote;
 
 export default {
   async render(el, ctx) {
-    const { api, h, md, toast, openChat, field, ui, sub } = ctx;
+    const { api, h, md, toast, openChat, ui, sub } = ctx;
     let css = document.getElementById('rv-css');
     if (!css) { css = h('style', { id: 'rv-css' }); document.head.append(css); }
     css.textContent = CSS;
@@ -154,7 +156,6 @@ export default {
     // ---------- 大输入框 ----------
     const HINTS = {
       note: '贴到「便签」页 · 前缀「问题: 经验: 灵感: 感想:」定类型 · #标签 · Enter 即存 · 任何页面 ⌘K 随手记',
-      record: '前缀「总结: 收获: 问题: 明天:」选栏目，默认追加到总结',
       ask: '带上这一天的事项、复盘和效率数据问复盘 Agent',
     };
     const comp = ui.composer({
@@ -162,25 +163,18 @@ export default {
       autofocus: true, hint: HINTS.note,
       modes: [
         { id: 'note', label: '记一条', placeholder: '记一条，会贴到便签，比如：问题：需求没写验收标准导致返工 #流程' },
-        { id: 'record', label: '写复盘', placeholder: '一句一句写今天的复盘，比如：收获：集成测试脚本跑通了' },
         { id: 'ask', label: '问 Agent', placeholder: '比如：今天哪件事拖得最久，为什么？' },
       ],
       onSubmit: async (text, mode) => {
         try {
           if (mode === 'ask') { askAgent(text); return; }
-          if (mode === 'record') {
-            const r = await api.post(`/api/review/day/${state.date}/append`, { text });
-            toast(`已追加到「${REC_FIELD[r.field] || r.field}」，AI 正在分析怎么改进`);
-            if (state.tab !== 'day') go(null, 'day');
-          } else {
-            const n = await api.post('/api/review/notes/quick', { text, date: state.date });
-            toast(`已贴到便签「${NOTE_KIND[n.kind] || n.kind}」${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
-          }
+          const n = await api.post('/api/review/notes/quick', { text, date: state.date });
+          toast(`已贴到便签「${NOTE_KIND[n.kind] || n.kind}」${n.tags ? ' · ' + n.tags.split(',').map((t) => '#' + t).join(' ') : ''}`);
           show();
         } catch (e) { toast(e.message, true); return false; }
       },
     });
-    comp.querySelectorAll('.modes button').forEach((b, i) => b.addEventListener('click', () => comp.setHint(HINTS[['note', 'record', 'ask'][i]])));
+    comp.querySelectorAll('.modes button').forEach((b, i) => b.addEventListener('click', () => comp.setHint(HINTS[['note', 'ask'][i]])));
 
     const chipRow = ui.chips([
       { label: '检查今天完成情况', icon: 'check', onClick: () => startCheck() },
@@ -333,44 +327,31 @@ export default {
       ]);
     }
 
-    function recordCard(rec) {
-      const entries = rec.entries || [];
-      const view = entries.length ? h('div.rv-entries', {}, entries.map((e) => h('div.rv-entry', {}, [
+    function recordCard(entries) {
+      return h('div.card', {}, h('div.rv-entries', {}, entries.map((e) => h('div.rv-entry', {}, [
         h('span.t', { title: e.at ? e.at.replace('T', ' ') : '没记时间（老记录或手动编辑）' }, e.time ? (e.next_day ? `次日 ${e.time}` : e.time) : '—'),
-        h('span.f', {}, REC_FIELD[e.field] || e.field), h('span.x', {}, e.text)])))
-        : h('div.muted', {}, '还没写复盘。用上方「写复盘」一句句追加，每条会记下时间，按时间线排在这里。');
-      const formBox = h('div');
-      const editBtn = h('button.ghost.sm', { onclick: () => {
-        if (formBox.firstChild) { formBox.replaceChildren(); editBtn.lastChild.textContent = '展开详细'; return; }
-        const ta = (k) => h('textarea', { rows: 3, value: rec[k] || '', placeholder: REC_FIELD[k] });
-        const fs = Object.fromEntries(Object.keys(REC_FIELD).map((k) => [k, ta(k)]));
-        formBox.replaceChildren(h('div.rv-form', {}, [...Object.entries(fs).map(([k, t]) => field(REC_FIELD[k], t)),
-          h('div', {}, h('button.primary', { onclick: async () => {
-            await api.put(`/api/review/day/${state.date}`, Object.fromEntries(Object.entries(fs).map(([k, v]) => [k, v.value])));
-            toast('已保存'); show();
-          } }, [ui.icon('check'), '保存复盘']))]));
-        fs.summary.focus();
-        editBtn.lastChild.textContent = '收起';
-      } }, [ui.icon('edit'), h('span', {}, '展开详细')]);
-      return h('div.card', {}, [h('div', { style: { float: 'right' } }, editBtn), view, formBox]);
+        h('span.f', {}, REC_FIELD[e.field] || e.field), h('span.x', {}, e.text)]))));
     }
 
     function templateCard(history) {
-      const area = (name) => {
-        const prefix = `${name}：`;
+      const aspect = (name, label, placeholder) => {
+        const key = `${name}·${label}`;
+        const prefix = `${key}：`;
         const past = history.filter((n) => n.title.startsWith(prefix));
-        return h('div.rv-area', { 'data-area': name }, [
-          h('label', {}, [name, h('input', { value: reviewDraft[name] || '', placeholder: '总结、收获、问题、下一步，写在这一行',
-            oninput: (e) => { reviewDraft[name] = e.target.value; } })]),
+        return h('div.rv-aspect', { 'data-key': key }, [
+          h('label', {}, [label, h('input', { value: reviewDraft[key] || '', placeholder,
+            oninput: (e) => { reviewDraft[key] = e.target.value; } })]),
           past.length ? h('div.rv-area-past', {}, past.map((n) => h('div', {}, [h('span.t', {}, n.date.slice(5)),
             h('span.x', {}, [n.title.slice(prefix.length), n.content].filter(Boolean).join('\n'))])))
             : h('div.muted', { style: { marginTop: '6px', fontSize: '13px' } }, '这一栏还没写过'),
         ]);
       };
+      const area = (name) => h('div.rv-area', {}, [h('div.rv-area-name', {}, name),
+        h('div.rv-aspects', {}, Object.entries(REVIEW_ASPECTS).map(([label, placeholder]) => aspect(name, label, placeholder)))]);
       const save = async () => {
         try {
           const made = await api.post('/api/notes/review', { date: state.date, entries: reviewDraft });
-          REVIEW_AREAS.forEach((name) => delete reviewDraft[name]);
+          Object.keys(reviewDraft).forEach((key) => delete reviewDraft[key]);
           toast(`已贴到便签：${made.length} 张「复盘」`);
           show();
         } catch (e) { toast(e.message, true); }
@@ -392,9 +373,8 @@ export default {
       return h('div.card.rv-improve', {}, [
         h('div.row.between', {}, [h('span.card-label', {}, 'AI 改进分析 · 结合当天会话与学习反馈'), rec.improve_md ? btn : null]),
         rec.improve_md ? annotate(ctx, h('div.md', {}, md(rec.improve_md)), { doc: `review:${state.date}:improve`, title: `${state.date} · AI 改进分析`, link: `#review/${state.date}`, source: rec.improve_md })
-          : h('div', {}, [h('div.muted', { style: { margin: '2px 0 12px' } },
-            (rec.entries || []).length ? '每次写复盘后会自动分析；也可以手动开始。' : '写下复盘后，AI 会把每条放回当天时间线，对照会话和学习记录找根因、给改进。'),
-          (rec.entries || []).length && !running ? btn : null]),
+          : h('div', {}, [h('div.muted', { style: { margin: '2px 0 12px' } }, 'AI 会把每条放回当天时间线，对照会话和学习记录找根因、给改进。'),
+          running ? null : btn]),
         status,
       ]);
     }
@@ -423,7 +403,7 @@ export default {
       const reviewHistory = await api.get(`/api/review/notes?author=me&kind=review&end=${state.date}`);
       const nodes = [
         ui.section('复盘模板', '填几栏算几栏，每栏贴一张「复盘」便签 · 下面是这一栏过去写的，方便对比'), templateCard(reviewHistory),
-        ui.section('我的复盘', '按写下的时间排列 · 用上方「写复盘」一句句追加'), recordCard(rec), improveCard(d),
+        ...(rec.entries?.length || rec.improve_md ? [ui.section('我的复盘', '这一天之前写下的记录'), rec.entries?.length ? recordCard(rec.entries) : null, improveCard(d)] : []),
         ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
         h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
         await deliveries({ api, h, ui }, { date: state.date }),

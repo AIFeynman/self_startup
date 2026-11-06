@@ -125,13 +125,8 @@ def get_record(date: str) -> dict:
     return r
 
 
-# 「写复盘」逐条追加时每行带时间：同一天「[HH:MM] 」，第二天补写「[MM-DD HH:MM] 」
+# 老复盘的行带时间：同一天「[HH:MM] 」，第二天补写「[MM-DD HH:MM] 」
 _STAMP = re.compile(r"^\[(?:(\d{2}-\d{2}) )?(\d{2}:\d{2})\]\s*")
-
-
-def stamp(date: str, at: str | None = None) -> str:
-    at = at or db.now()
-    return f"[{at[11:16]}] " if at[:10] == date else f"[{at[5:10]} {at[11:16]}] "
 
 
 def record_entries(rec: dict) -> list[dict]:
@@ -258,36 +253,8 @@ def api_put_day(date: str, body: RecordIn):
     return rec
 
 
-class AppendIn(BaseModel):
-    field: str = "summary"
-    text: str
-
-
 RECORD_FIELDS = ("summary", "wins", "problems", "next_actions")
 REC_LABEL = {"summary": "总结", "wins": "收获", "problems": "问题", "next_actions": "下一步"}
-_REC_PREFIX = {"总结": "summary", "收获": "wins", "做成": "wins", "问题": "problems", "下一步": "next_actions",
-               "明天": "next_actions", "next": "next_actions"}
-
-
-def parse_record_line(text: str, default: str = "summary") -> tuple[str, str]:
-    """「问题：xxx」→ (problems, xxx)；无前缀 → (default, 原文)。"""
-    m = re.match(r"\s*([^\s:：]{1,4})\s*[:：]\s*(.+)", text or "", re.S)
-    if m and m.group(1).lower() in _REC_PREFIX:
-        return _REC_PREFIX[m.group(1).lower()], m.group(2).strip()
-    return (default if default in RECORD_FIELDS else "summary"), (text or "").strip()
-
-
-@router.post("/day/{date}/append")
-def api_append_day(date: str, body: AppendIn):
-    """往当天复盘的某一栏追加一行（快捷输入用，可带「问题：」等前缀自动分栏）。"""
-    date = _day(date)
-    field, text = parse_record_line(body.text, body.field)
-    if not text:
-        raise HTTPException(400, "text required")
-    cur = (get_record(date).get(field) or "").rstrip()
-    upsert_record(date, {field: (cur + "\n" + stamp(date) + text).strip()})
-    jid = submit_improve(date)
-    return {"field": field, "text": text, "record": get_record(date), "improve_job_id": jid}
 
 
 # ---------- 证据包：git / 文档 ----------

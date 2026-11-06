@@ -189,7 +189,7 @@ def test_record_notes_timeline(client):
 
 
 def test_parse_quick_note():
-    from app.modules.review import parse_quick_note, parse_record_line
+    from app.modules.review import parse_quick_note
     assert parse_quick_note("问题：需求没写验收标准 #流程 #plan") == {
         "kind": "problem", "title": "需求没写验收标准", "content": "", "tags": "流程,plan"}
     n = parse_quick_note("先写测试再改代码\n细节在这里")
@@ -200,8 +200,6 @@ def test_parse_quick_note():
     assert parse_quick_note("没写前缀", "idea")["kind"] == "idea"
     assert parse_quick_note("问题：前缀优先于默认", "idea")["kind"] == "problem"
     assert parse_quick_note("C#语言很好")["tags"] == ""
-    assert parse_record_line("明天：先修 bug") == ("next_actions", "先修 bug")
-    assert parse_record_line("今天还行") == ("summary", "今天还行")
 
 
 def test_quick_capture_api(client):
@@ -210,15 +208,11 @@ def test_quick_capture_api(client):
     assert n["kind"] == "insight" and n["tags"] == "agent" and n["date"] == d
     assert client.post("/api/review/notes/quick", json={"text": "突然想到", "date": d, "default_kind": "idea"}).json()["kind"] == "idea"
     assert client.post("/api/review/notes/quick", json={"text": "没写前缀", "date": d}).json()["kind"] == "spark"
-    client.post(f"/api/review/day/{d}/append", json={"text": "问题：等太久"})
-    r = client.post(f"/api/review/day/{d}/append", json={"text": "又一条", "field": "problems"}).json()
-    assert [e["text"] for e in r["record"]["entries"]] == ["等太久", "又一条"]
-    assert r["improve_job_id"]
     assert client.post(f"/api/review/suggestions/{d}/0/dismiss").status_code == 404
 
 
 def test_record_entries_timeline_and_improve(client):
-    """写复盘每条带时间，按时间线排；提交后派改进分析，排队中的那次被最新内容替换，只认最新一次的输出。"""
+    """老复盘每条带时间，按时间线排；提交后派改进分析，排队中的那次被最新内容替换，只认最新一次的输出。"""
     from app import db
     from app.modules import review
     d = "2001-02-03"
@@ -229,10 +223,10 @@ def test_record_entries_timeline_and_improve(client):
         ("", "summary", "老的一条没时间"), ("09:15", "problems", "早上的问题"),
         ("21:30", "summary", "晚上写的"), ("07:10", "wins", "第二天补的")]
     assert es[-1]["next_day"] and not es[1]["next_day"]
-    assert review.stamp(d, f"{d}T08:05:09") == "[08:05] " and review.stamp(d, "2001-02-04T07:10:00") == "[02-04 07:10] "
 
-    r1 = client.post(f"/api/review/day/{d}/append", json={"text": "学习：测试题太难"}).json()
-    r2 = client.post(f"/api/review/day/{d}/append", json={"text": "问题：后台任务失败"}).json()
+    assert client.post(f"/api/review/day/{d}/append", json={"text": "问题：等太久"}).status_code in (404, 405)
+    r1 = client.put(f"/api/review/day/{d}", json={"summary": "测试题太难"}).json()
+    r2 = client.put(f"/api/review/day/{d}", json={"problems": "后台任务失败"}).json()
     assert r1["improve_job_id"] == r2["improve_job_id"]           # 还在排队：换成最新内容，不重复排
     job = db.row("SELECT * FROM jobs WHERE id=?", [r2["improve_job_id"]])
     assert job["ref"] == f"improve:{d}" and "后台任务失败" in job["prompt"] and "学习平台反馈" in job["prompt"]
