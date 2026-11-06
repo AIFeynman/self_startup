@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
-     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "trending": 0.8,
+     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "viral_article": 0.5, "trending": 0.8,
      "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3,
      "pref": 0.3, "pref_max": 3, "avoid": -0.4, "avoid_max": 3}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
@@ -29,6 +29,7 @@ GITHUB_ORGS = {"deepseek-ai": "DeepSeek", "openai": "OpenAI", "anthropics": "Ant
 # 讨论 / 产品一两天就过气；论文、项目、播客的价值衰减慢，且论文日期只精确到天
 TYPE_HALF_LIFE = {"discussion": 0.5, "product": 0.67, "blog": 1.0, "news": 1.0, "repo": 1.67, "paper": 1.67,
                   "podcast": 2.33, "video": 2.33}
+VIRAL_ARTICLE_LIKES = 5000  # 热度百分位封顶 1 分，分不出 1k 和 2 万赞：自己发的长文到这个赞数加分，并按博客的半衰期衰减
 POP_WINDOW_DAYS = 30        # 热度百分位只和同源最近 30 天的条目比，避免历史爆款把新条目都压成低热度
 SRC_MIN_EXAMPLES = 5        # 某来源的反馈样本少于这个数时不算「你常赞 X」
 PICKS_N, PICKS_PER_SOURCE, PICKS_PER_TYPE = 5, 1, 2     # 今日精选：每个来源最多 1 条、每类最多 2 条
@@ -159,7 +160,7 @@ def _parse_dt(s: str) -> datetime | None:
 def _interest_re(term: str) -> re.Pattern:
     t = re.escape(term.lower().strip())
     # 英文词按词边界匹配（避免 rl 命中 world），中文直接子串
-    return re.compile(rf"(?<![a-z0-9]){t}(?![a-z0-9])" if re.match(r"^[\x00-\x7f]+$", term) else t)
+    return re.compile(rf"(?<![a-z0-9]){t}s?(?![a-z0-9])" if re.match(r"^[\x00-\x7f]+$", term) else t)
 
 
 def fmt_pop(source: str, pop: float) -> str:
@@ -217,7 +218,10 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
         why.append(pl)
     # 同一次发布的仓库按博客发布的时间算新鲜度：仓库的创建时间常常早于公开
     fresh_h = min(age_h, max(0.0, (now - release).total_seconds() / 3600)) if release else age_h
-    fresh = 0.5 ** (fresh_h / max(half_life_h * TYPE_HALF_LIFE.get(it.get("type", ""), 1.0), 1))
+    xa = ex.get("x_article")
+    viral = xa == "own" and (it.get("popularity") or 0) >= VIRAL_ARTICLE_LIKES
+    fresh_type = "blog" if viral else it.get("type", "")
+    fresh = 0.5 ** (fresh_h / max(half_life_h * TYPE_HALF_LIFE.get(fresh_type, 1.0), 1))
     s += W["fresh"] * fresh
     if age_h < 24:
         why.append("24 小时内")
@@ -243,10 +247,11 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
             s += W["trending"]
             v = f"{per_day / 1000:.1f}k" if per_day >= 1000 else str(int(per_day))
             lead.append(f"新仓库涨星快 ≈{v}★/天")
-    xa = (it.get("extra") or {}).get("x_article")
     if xa:
         s += W["x_article"] if xa == "own" else W["x_article"] / 2
-        lead.append("X 长文" if xa == "own" else "引用了 X 长文")
+        if viral:
+            s += W["viral_article"]
+        lead.append("高赞 X 长文" if viral else "X 长文" if xa == "own" else "引用了 X 长文")
     via = str((it.get("extra") or {}).get("via") or "")
     if via.startswith("@"):
         s += W["follow"]

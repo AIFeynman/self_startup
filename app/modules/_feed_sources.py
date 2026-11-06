@@ -603,7 +603,7 @@ def fetch_x(accounts: list[str], queries: list[str], days: int = 3, min_likes: i
     # 搜索来的长文：没补到标题，或补到了但与 AI 无关的，丢掉；名单账号发的保留
     out = {k: g for k, g in out.items() if not (
         g["extra"].get("x_article") == "own" and not g["extra"]["via"].startswith("@") and k not in known_articles
-        and not (g["extra"].get("article_title") and X_SEARCH_RE.search(f"{g['title']} {g['summary']}")))}
+        and not (g["extra"].get("article_title") and AI_HINT_RE.search(f"{g['title']} {g['summary']}")))}
     if errors and not out:
         raise RuntimeError(errors[0])
     return list(out.values()), errors
