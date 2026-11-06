@@ -202,6 +202,7 @@ const CSS = `
 .ln-chap .md .dg-card i { display: inline-block; font-style: normal; font-size: 11px; padding: 0 7px; margin: 0 0 4px 6px; border-radius: 5px; background: var(--bg-2); color: var(--muted); }
 .ln-chap .md .dg-card p, .ln-chap .md .dg-side p { margin: 4px 0 0; color: var(--muted); }
 .ln-chap .md .dg-vs { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.ln-chap .md img { display: block; max-width: 100%; height: auto; margin: 8px 0; border-radius: var(--radius-sm); cursor: zoom-in; }
 .ln-chap .md .dg-side { padding: 12px 16px; background: var(--panel); } .ln-chap .md .dg-side + .dg-side { border-left: 1px solid var(--line); background: var(--bg); }
 /* 体系架构图：从上到下分层，右侧一列贯穿各层的关注点 */
 .ln-chap .md .dg-arch { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 22%); gap: 10px; margin: 16px 0 20px; font-size: 13px; line-height: 1.5; }
@@ -469,7 +470,7 @@ async function renderHome(el, ctx, scrollToPlans) {
   const latestPlan = [...plans].filter((p) => !['failed', 'archived'].includes(p.status)).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0];
 
   const defs = loadDefaults();
-  const opt = { background: defs.background, goal: '', hours: defs.hours, focus: '', kind: '', depth: 'quick' };
+  const opt = { background: defs.background, goal: '', hours: defs.hours, focus: '', kind: '', depth: 'quick', method: '' };
   let intent = 'plan';
   let target = null; // 识别出的链接
   const optsRow = h('div.ln-opts');
@@ -507,7 +508,7 @@ async function renderHome(el, ctx, scrollToPlans) {
           location.hash = `#learn/plan/${c.id}`;
           return;
         }
-        const p = await api.post('/api/learn/plans', { topic: text, background: opt.background, goal: opt.goal, hours_per_week: +opt.hours || 5 });
+        const p = await api.post('/api/learn/plans', { topic: text, background: opt.background, goal: opt.goal, hours_per_week: +opt.hours || 5, method: opt.method });
         toast('Agent 正在检索资料生成计划（几分钟）');
         location.hash = `#learn/plan/${p.id}`;
       } catch (e) { toast('提交失败：' + e.message, true); return false; }
@@ -530,6 +531,10 @@ async function renderHome(el, ctx, scrollToPlans) {
         onkeydown: (e) => { if (e.key === 'Enter') { opt.hours = +e.target.value || 5; saveDefaults({ background: opt.background, hours: opt.hours }); editing = null; update(); ta.focus(); } } })]);
     }
     if (editing === 'kind') return null;
+    if (editing === 'method') {
+      return h('div.ln-edit', {}, [h('span.muted', {}, '学法'), ...Object.entries(PLAN_METHODS).map(([k, name]) => h('button.sm' + (opt.method === k ? '.primary' : ''), {
+        onclick: () => { opt.method = k; editing = null; update(); ta.focus(); } }, name))]);
+    }
     const inp = h('input', { value: opt[editing], placeholder: cfg[1],
       onkeydown: (e) => {
         if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); commit(); }
@@ -570,6 +575,7 @@ async function renderHome(el, ctx, scrollToPlans) {
     const kindTxt = { '': '自动识别', paper: '论文', github: 'GitHub 项目' };
     optsRow.replaceChildren(...(['plan', 'course'].includes(intent) ? [h('span.lbl', {}, '计划选项'),
       pill('background', 'user', '背景', opt.background, '我的背景'), pill('goal', 'bulb', '目标', opt.goal, '学习目标'),
+      intent === 'plan' ? pill('method', 'bulb', '学法', PLAN_METHODS[opt.method], '默认由 Agent 按主题和目标选') : null,
       h('button.ln-pill' + (editing === 'hours' ? '.on' : ''), { onclick: () => { editing = editing === 'hours' ? null : 'hours'; update(); } }, [ui.icon('clock'), h('span', {}, `每周 ${opt.hours}h`)])]
       : intent === 'item' ? [h('span.lbl', {}, '深读选项'), pill('focus', 'search', '关注点', opt.focus, '关注点'),
         h('button.ln-pill', { title: '点击切换类型', onclick: () => { opt.kind = { '': 'paper', paper: 'github', github: '' }[opt.kind]; update(); } },
@@ -860,6 +866,7 @@ async function deepDivePane(ctx, it) {
 
 // ---------- 追问清单：逐题作答，提交后 Agent 对照笔记 / 原文 / 源码点评 ----------
 // 笔记里的相对路径图片（figs/fig1.png）指向条目输出目录；点图在新标签页看原尺寸
+const PLAN_METHODS = { '': 'Agent 选', tech: '技术研究', design: '设计与体验', business: '商业与增长' };
 function localImgs(el, base) {
   for (const img of el.querySelectorAll('img')) {
     const src = img.getAttribute('src') || '';
@@ -1048,6 +1055,12 @@ async function renderPlan(el, ctx, pid) {
   el.append(back(h, ui), h('div.ln-head', {}, ui.pageHead(p.topic,
     [p.background ? `背景：${p.background}` : '', p.goal ? `目标：${p.goal}` : ''].filter(Boolean).join(' · '), [
       tag(h, p.status),
+      p.layout === 'rounds' && p.method ? h('select', { style: { width: 'auto', flex: 'none' }, title: '换学法会另生成一份新计划，这份和学习记录都保留', onchange: async (e) => {
+        const name = p.methods[e.target.value];
+        if (!confirm(`按「${name}」另生成一份新计划？这份计划和学习记录都保留。`)) { e.target.value = p.method; return; }
+        const n = await api.post(`/api/learn/plans/${pid}/method`, { method: e.target.value });
+        toast('Agent 正在生成新计划（几分钟）'); location.hash = `#learn/plan/${n.id}`;
+      } }, Object.entries(p.methods).map(([k, name]) => h('option', { value: k, selected: k === p.method }, `学法：${name}`))) : null,
       h('button.primary', { onclick: () => openChat({ module: 'learn', ref, title: chatTitle }) }, [ui.icon('chat'), '讨论 / 改计划']),
     ])));
   if (p.status === 'archived' && p.rounds_plan) {
@@ -1278,7 +1291,7 @@ async function renderChapter(el, ctx, pid, sid) {
   }
 
   // 正文 + 目录
-  const body = md(s.chapter_md);
+  const body = localImgs(md(s.chapter_md), `/api/learn/steps/${sid}/out/`);
   enhance(ctx, body, s, { p, extra });
   const heads = [...body.querySelectorAll('h2')];
   heads.forEach((hd, i) => { hd.id = `ln-h-${i}`; hd.style.scrollMarginTop = '16px'; });

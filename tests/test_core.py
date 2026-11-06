@@ -203,3 +203,19 @@ def test_claude_non_transient_error_falls_back_immediately(monkeypatch):
     ok = [{"type": "done", "text": "codex 完成", "engine": "codex", "errored": False}]
     calls = _fake_runs(monkeypatch, [bad, ok])
     assert agent.run_once("p", engine="claude")["engine"] == "codex" and calls == ["claude", "codex"]
+
+
+def test_answer_survives_a_later_background_task_note():
+    import json
+    from types import SimpleNamespace
+
+    from app import agent
+    lines = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "```json\n{\"steps\": []}\n```"}]}},
+        {"type": "result", "result": "```json\n{\"steps\": []}\n```", "session_id": "s"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "后台核对跑完了，JSON 不用改"}]}},
+        {"type": "result", "result": "后台核对跑完了，JSON 不用改", "session_id": "s"},
+    ]
+    proc = SimpleNamespace(stdout=[json.dumps(x) + "\n" for x in lines], returncode=0, stderr=None, wait=lambda: 0)
+    done = next(e for e in agent._read("claude", proc, agent._parse_claude) if e["type"] == "done")
+    assert '{"steps": []}' in done["text"] and "后台核对跑完了" in done["text"]

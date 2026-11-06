@@ -309,7 +309,7 @@ def stop(proc) -> None:
 
 def _read(engine: str, proc, parse) -> Iterator[dict]:
     texts: list[str] = []
-    final = ""  # Claude 的 result 只含最终回答，不含过程中的旁白
+    final = ""  # Claude 的 result 只含最终回答，不含过程中的旁白；开过后台任务时 CLI 会多发一个 result，正式回答在前面那个
     errored = False
     assert proc.stdout
     for line in proc.stdout:
@@ -326,7 +326,7 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
             if ev["type"] == "error":
                 errored = True
             if ev["type"] == "result":
-                final = ev["text"]
+                final = f"{final}\n\n{ev['text']}" if final and ev["text"] else final or ev["text"]
                 continue
             yield ev
             if ev.get("gateway"):

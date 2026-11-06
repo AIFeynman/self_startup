@@ -780,3 +780,74 @@ def test_unread_backfill_keeps_touched_as_read(client):
     rows = {r["id"]: r for r in client.get("/api/learn/items").json()}
     assert rows[rated]["opened_at"] == "backfill"
     assert rows[plain]["opened_at"] == ""
+
+
+def _plan_out(method=None):
+    head = f'"method": "{method}", ' if method else ""
+    return ('```json\n{' + head + '"overview_md": "学法：…", "steps": ['
+            '{"stage": 1, "title": "作品地图", "goal": "g"}, {"stage": 2, "title": "第二步", "goal": "g"}]}\n```')
+
+
+def test_agent_picks_method_and_rounds_follow_it(client, fake_submit):
+    p = client.post("/api/learn/plans", json={"topic": "AI 产品 UX 全貌"}).json()
+    prompt = fake_submit[-1]["prompt"]
+    assert all(name in prompt for name in ("技术研究", "设计与体验", "商业与增长"))
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out("design")))
+    p = client.get(f"/api/learn/plans/{p['id']}").json()
+    assert p["method"] == "design" and p["method_name"] == "设计与体验"
+    assert p["unit"] == "轮" and p["stages"]["1"].startswith("看够") and p["stages"]["3"].startswith("上手")
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_unknown_method_from_agent_falls_to_tech(client, fake_submit):
+    p = client.post("/api/learn/plans", json={"topic": "世界模型"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out("poetry")))
+    assert client.get(f"/api/learn/plans/{p['id']}").json()["method"] == "tech"
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_user_chosen_method_is_kept(client, fake_submit):
+    assert client.post("/api/learn/plans", json={"topic": "x", "method": "poetry"}).status_code == 400
+    p = client.post("/api/learn/plans", json={"topic": "GEO", "method": "business"}).json()
+    prompt = fake_submit[-1]["prompt"]
+    assert "商业与增长" in prompt and "先看先选" not in prompt and "GitHub" not in prompt
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out("design")))
+    p = client.get(f"/api/learn/plans/{p['id']}").json()
+    assert p["method"] == "business" and p["stages"]["1"].startswith("看局面")
+    client.post(f"/api/learn/plans/{p['id']}/adapt", json={})
+    assert "商业与增长" in fake_submit[-1]["prompt"]
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_design_chapter_uses_design_method_not_architecture(client, fake_submit):
+    p = client.post("/api/learn/plans", json={"topic": "UX", "method": "design"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out()))
+    s1, s2 = client.get(f"/api/learn/plans/{p['id']}").json()["steps"]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    first = fake_submit[-1]["prompt"]
+    assert "作品地图" in first and "先看先选" in first and "figs/" in first and "版本" in first
+    assert "dg-arch" not in first and "体系架构图" not in first and "推导" not in first
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_design_answers_are_judged_on_reasons(client, fake_submit):
+    p = client.post("/api/learn/plans", json={"topic": "UX", "method": "design"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out()))
+    s = learn.steps_of(p["id"])[0]
+    prompt = learn.check_prompt(s, {"q": "哪个好", "points": "", "answer": "左边"})
+    assert "不判对错" in prompt
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
+def test_changing_method_makes_a_new_plan_and_keeps_the_old(client, fake_submit):
+    old = client.post("/api/learn/plans", json={"topic": "UX", "background": "b", "goal": "g"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out("tech")))
+    n = client.post(f"/api/learn/plans/{old['id']}/method", json={"method": "design"}).json()
+    assert n["id"] != old["id"] and n["method"] == "design" and n["topic"] == "UX" and n["goal"] == "g"
+    assert fake_submit[-1]["ref"] == f"learn:plan:{n['id']}"
+    kept = client.get(f"/api/learn/plans/{old['id']}").json()
+    assert kept["method"] == "tech" and kept["status"] == "active" and len(kept["steps"]) == 2
+    assert client.post(f"/api/learn/plans/{old['id']}/method", json={"method": "poetry"}).status_code == 400
+    assert client.post(f"/api/learn/plans/{old['id']}/method", json={"method": "tech"}).status_code == 400
+    for pid in (old["id"], n["id"]):
+        client.delete(f"/api/learn/plans/{pid}")

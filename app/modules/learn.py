@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS learn_plans (
     from_plan      INTEGER,                    -- 由哪个老计划「精简成三轮」而来（老计划保留，状态 archived）
     units          TEXT DEFAULT '[]',          -- 课程计划（layout=course）的单元 JSON [{name,goal}]，步骤的 stage = 单元序号
     source_url     TEXT DEFAULT '',            -- 课程计划：课程官网
-    synced_at      TEXT DEFAULT ''             -- 课程计划：上次同步课表的时间
+    synced_at      TEXT DEFAULT '',            -- 课程计划：上次同步课表的时间
+    method         TEXT DEFAULT 'tech'         -- 学法：tech / design / business；'' 表示等 Agent 按主题选
 );
 CREATE TABLE IF NOT EXISTS learn_steps (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,15 +158,34 @@ CREATE TABLE IF NOT EXISTS learn_book_chapters (
 CREATE INDEX IF NOT EXISTS idx_learn_book_ch ON learn_book_chapters(book_id, idx);
 """
 
-# 三轮由浅入深（新计划默认）：先拿到最新全貌和主干，再学会判断，最后跟前沿、用项目和产品实践检验；每轮结束都可以停
-ROUNDS = {1: "看懂：最新全貌与主干机制", 2: "会判断：经典与一线人物", 3: "跟前沿、做出来"}
-ROUND_GOALS = {
-    1: "拿到最新的领域地图（以近 12 个月的综述 / 书为主读物），吃透撑起它的 2–3 个核心机制；能把任意新论文或新产品定位到地图上、讲清它靠什么工作",
-    2: "一篇经典讲透一个机制，知道主干怎么来的、为什么有效；看懂一线人物的判断和依据，能对新方案做出有依据的判断",
-    3: "消化最新论文并判断价值；读懂代表性开源项目怎么落地，亲手用对标产品 / 工具并写出有依据的使用评估",
+# 三轮由浅入深（新计划默认）：不同领域学法不同，每轮学什么、怎么考按学法来（细则见 skills/learn/domains/）；每轮结束都可以停
+METHODS = {
+    "tech": {"name": "技术研究", "first": "体系架构图", "judge": "",
+             "rounds": {1: "看懂：最新全貌与主干机制", 2: "会判断：经典与一线人物", 3: "跟前沿、做出来"},
+             "goals": {
+                1: "拿到最新的领域地图（以近 12 个月的综述 / 书为主读物），吃透撑起它的 2–3 个核心机制；能把任意新论文或新产品定位到地图上、讲清它靠什么工作",
+                2: "一篇经典讲透一个机制，知道主干怎么来的、为什么有效；看懂一线人物的判断和依据，能对新方案做出有依据的判断",
+                3: "消化最新论文并判断价值；读懂代表性开源项目怎么落地，亲手用对标产品 / 工具并写出有依据的使用评估",
+             }},
+    "design": {"name": "设计与体验", "first": "作品地图",
+               "judge": "这是审美和取舍题，不判对错：只看理由是否基于界面上看得到的东西、是否说出取舍、改法是否具体；高手怎么想要对照设计师公开说过的观点并写出处，不当唯一答案。",
+               "rounds": {1: "看够：好作品与坏作品", 2: "说得出：设计理念与取舍", 3: "上手：评审真实产品，改自己的界面"},
+               "goals": {
+                   1: "并排看够同一体验问题下的好坏作品，建立语感；看到新界面能说出它接近哪种设计理念、和谁是一类",
+                   2: "知道设计师主张什么、放弃了什么、后来改了什么；能说清一个设计的取舍，而不只是好不好看",
+                   3: "能完整评审一个真实产品，并给自己的界面写出具体改法",
+               }},
+    "business": {"name": "商业与增长", "first": "案例地图",
+                 "judge": "决策题没有唯一答案：看依据是否来自数字和案例、算账是否正确、是否说清代价和什么情况下会改主意；算错要明确指出；高手怎么想要对照操盘人公开的做法并写出处。",
+                 "rounds": {1: "看局面：真实案例和账", 2: "会判断：策略分歧与事后验证", 3: "做一次：在自己项目上跑实验"},
+                 "goals": {
+                     1: "看懂真实案例的局面、选择和结果，会算这门生意的账；能把一家新公司归到一种打法上",
+                     2: "知道操盘人的分歧，事后验证了什么；能识别不可复制的成功，并做出有依据的决策",
+                     3: "在自己项目上设计并跑一个小实验，用真实数字复盘",
+                 }},
 }
 PLAN_COLS = {"layout": "TEXT DEFAULT ''", "from_plan": "INTEGER", "units": "TEXT DEFAULT '[]'",
-             "source_url": "TEXT DEFAULT ''", "synced_at": "TEXT DEFAULT ''"}
+             "source_url": "TEXT DEFAULT ''", "synced_at": "TEXT DEFAULT ''", "method": "TEXT DEFAULT 'tech'"}
 COURSE_MAX_UNITS = 40  # 课程计划的单元数上限（一门课 15 讲左右，按主题合并后十几个单元）
 # 老计划的六个阶段（2026-10-31 之前生成的计划）
 STAGES = {1: "领域综述", 2: "核心人物与观点", 3: "关键书籍 / 经典论文",
@@ -322,13 +342,20 @@ class ItemIn(BaseModel):
     reuse: bool = False  # 同一链接已有条目就直接用（信息推荐里点「深读」）
 
 
+def method_of(p: dict | None) -> str:
+    return (p or {}).get("method") if (p or {}).get("method") in METHODS else "tech"
+
+
 def layout_of(p: dict | None) -> tuple[dict, dict, str]:
     """计划用哪套结构：(各轮 / 阶段 / 单元名, 目的, 单位)。"""
     if (p or {}).get("layout") == "course":
         units = [u for u in _loads(p.get("units"), []) if isinstance(u, dict)]
         return ({i: str(u.get("name") or "") for i, u in enumerate(units, 1)},
                 {i: str(u.get("goal") or "") for i, u in enumerate(units, 1)}, "单元")
-    return (ROUNDS, ROUND_GOALS, "轮") if (p or {}).get("layout") == "rounds" else (STAGES, STAGE_GOALS, "阶段")
+    if (p or {}).get("layout") == "rounds":
+        m = METHODS[method_of(p)]
+        return m["rounds"], m["goals"], "轮"
+    return STAGES, STAGE_GOALS, "阶段"
 
 
 def stage_label(p: dict | None, no: int, with_goal: bool = False) -> str:
@@ -1150,6 +1177,11 @@ class PlanIn(BaseModel):
     background: str = ""
     goal: str = ""
     hours_per_week: float = 5
+    method: str = ""
+
+
+class MethodIn(BaseModel):
+    method: str
 
 
 class PlanPatch(BaseModel):
@@ -1271,9 +1303,7 @@ def _step_fields(d: dict) -> dict:
 def _stage_max(pid: int) -> int:
     """stage 上限：三轮 3、老计划 6、课程按单元数。"""
     p = db.row("SELECT layout, units FROM learn_plans WHERE id=?", [pid]) or {}
-    if p.get("layout") == "course":
-        return max(1, len(layout_of(p)[0]))
-    return len(ROUNDS) if p.get("layout") == "rounds" else len(STAGES)
+    return max(1, len(layout_of(p)[0]))
 
 
 def add_step(pid: int, d: dict, after_step_id: int | None = None) -> int:
@@ -1293,7 +1323,7 @@ def add_step(pid: int, d: dict, after_step_id: int | None = None) -> int:
     return db.insert("learn_steps", f)
 
 
-def parse_plan(text: str) -> tuple[str, list[dict]]:
+def parse_plan(text: str) -> tuple[str, list[dict], str]:
     """解析生成计划的输出：支持 {overview_md, steps:[...]} 或 {stages:[{stage,name,steps:[...]}]}。"""
     o = extract_json(text, "steps") or extract_json(text, "stages")
     if not o:
@@ -1312,15 +1342,16 @@ def parse_plan(text: str) -> tuple[str, list[dict]]:
     steps = [s for s in steps if s.get("title")]
     if not steps:
         raise ValueError("计划 JSON 中没有步骤")
-    return str(o.get("overview_md") or o.get("overview") or ""), steps
+    return str(o.get("overview_md") or o.get("overview") or ""), steps, str(o.get("method") or "")
 
 
 def apply_plan(pid: int, text: str) -> int:
-    overview, steps = parse_plan(text)
+    overview, steps, method = parse_plan(text)
     db.execute("DELETE FROM learn_steps WHERE plan_id=?", [pid])
     for s in steps:
         add_step(pid, {k: v for k, v in s.items() if k not in ("status", "ord")})
-    db.update("learn_plans", pid, {"overview_md": overview, "status": "active", "updated_at": db.now()})
+    db.update("learn_plans", pid, {"overview_md": overview, "status": "active", "updated_at": db.now(),
+                                   "method": _plan(pid)["method"] or (method if method in METHODS else "tech")})
     return len(steps)
 
 
@@ -1374,6 +1405,15 @@ def _from_old_block(p: dict) -> str:
             f"{_plan_snapshot(p['from_plan'])[:6000]}\n")
 
 
+def _method_block(p: dict) -> str:
+    if p.get("method"):
+        return f"本计划的学法已定：{METHODS[method_of(p)]['name']}（method 填 {method_of(p)}），每轮怎么排按它来。\n\n{_ref_text(f'domains/{method_of(p)}.plan.md')}"
+    docs = "\n\n".join(_ref_text(f"domains/{k}.plan.md") for k in METHODS)
+    return ("先选学法：看用户学成后要做什么，而不是主题听起来像什么。要能推导、实现、判断论文 → tech；"
+            "要能看界面说出好坏和改法 → design；要能面对真实局面做决策 → business。选一套，填进 JSON 的 method，"
+            f"理由写在 overview_md 第一行。选定后只按那一套排，其他学法的内容不要混进来。\n\n{docs}")
+
+
 def plan_prompt(p: dict) -> str:
     return f"""任务：为下面的主题生成一份专业级、循序渐进的三轮学习计划。今天是 {db.today()}。
 主题：{p['topic']}
@@ -1382,12 +1422,13 @@ def plan_prompt(p: dict) -> str:
 每周可投入：{p['hours_per_week']} 小时
 
 要求：
-- 第 1 轮全貌的写法参考 {Path(settings.get('learn.paper_skill', '')).expanduser().parent.parent / 'domain-landscape' / 'SKILL.md'}（如能读取）。
-- 联网检索真实资源，尽量用 WebFetch/curl 核对链接可访问。全貌必须以最新的综述 / 书为主读物，前沿只用近 6–12 个月的材料，都写日期；
-  项目实践选活跃的 GitHub 仓库（写 star 和最近提交），产品实践选真实可上手的对标产品 / 工具。{_from_old_block(p)}
+- 联网检索真实资源，尽量用 WebFetch/curl 核对链接可访问。{_from_old_block(p)}
 - 用户已学过的内容（避免重复、可做衔接）：
 {_known_knowledge(exclude_plan=p['id'])}
 - 不要写任何文件，也不要调用平台 API 写数据；只在最终回复中给出 JSON（一个 ```json 代码块），平台会自动导入。
+
+---- 学法 ----
+{_method_block(p)}
 
 ---- 方法论与 JSON 格式 ----
 {_ref_text('plan.md')}
@@ -1398,7 +1439,7 @@ def _adapt_layout(p: dict) -> str:
     if p.get("layout") == "course":
         return (f"课程计划（按课程的 {len(layout_of(p)[0])} 个单元组织，stage 填单元序号；步骤来自课程的讲次和作业，"
                 "不要跳过或改写讲次本身，调整只加补课 / 补资源步骤、修改说明和资源）")
-    return '三轮（stage 填 1–3）' if p.get('layout') == 'rounds' else '老计划的六阶段（stage 仍按六阶段填 1–6，见方法论末尾「老计划」）'
+    return f"三轮（stage 填 1–3），学法：{METHODS[method_of(p)]['name']}" if p.get('layout') == 'rounds' else '老计划的六阶段（stage 仍按六阶段填 1–6，见方法论末尾「老计划」）'
 
 
 def adapt_prompt(p: dict, note: str = "") -> str:
@@ -1411,6 +1452,9 @@ def adapt_prompt(p: dict, note: str = "") -> str:
 
 要求：只做有依据的少量修改；补救资源要真实（尽量核对链接）；不要修改已 done 的步骤；不要调用平台 API 写数据，
 只在最终回复给出「根据反馈调整时输出的 JSON」（一个 ```json 代码块），平台会自动应用。
+
+---- 本计划的学法 ----
+{_ref_text(f'domains/{method_of(p)}.plan.md')}
 
 ---- 方法论与 JSON 格式 ----
 {_ref_text('plan.md')}
@@ -1434,10 +1478,12 @@ def list_plans():
 def create_plan(body: PlanIn):
     if not body.topic.strip():
         raise HTTPException(400, "topic required")
+    if body.method and body.method not in METHODS:
+        raise HTTPException(400, "unknown method")
     _ensure_plan_cols()
     pid = db.insert("learn_plans", {"topic": body.topic.strip(), "background": body.background, "goal": body.goal,
                                     "hours_per_week": body.hours_per_week, "status": "generating", "layout": "rounds",
-                                    "created_at": db.now(), "updated_at": db.now()})
+                                    "method": body.method, "created_at": db.now(), "updated_at": db.now()})
     jid = jobs.submit("learn", plan_prompt(_plan(pid)), ref=f"learn:plan:{pid}", add_dirs=_plan_dirs())
     db.update("learn_plans", pid, {"job_id": jid})
     return get_plan(pid)
@@ -1450,6 +1496,8 @@ def get_plan(pid: int):
     p["progress"] = _progress(steps)
     p["steps"] = [public_step(s) for s in steps]
     p["stages"], p["stage_goals"], p["unit"] = layout_of(p)
+    p["method_name"] = METHODS[method_of(p)]["name"]
+    p["methods"] = {k: m["name"] for k, m in METHODS.items()}
     if p.get("from_plan"):
         p["from_topic"] = (db.row("SELECT topic FROM learn_plans WHERE id=?", [p["from_plan"]]) or {}).get("topic", "")
     p["rounds_plan"] = (db.row("SELECT id FROM learn_plans WHERE from_plan=? AND status!='failed' ORDER BY id DESC", [pid]) or {}).get("id")
@@ -1498,7 +1546,23 @@ def plan_to_rounds(pid: int):
         return get_plan(cur["id"])
     nid = db.insert("learn_plans", {"topic": old["topic"], "background": old["background"], "goal": old["goal"],
                                     "hours_per_week": old["hours_per_week"], "status": "generating", "layout": "rounds",
-                                    "from_plan": pid, "created_at": db.now(), "updated_at": db.now()})
+                                    "method": "", "from_plan": pid, "created_at": db.now(), "updated_at": db.now()})
+    jid = jobs.submit("learn", plan_prompt(_plan(nid)), ref=f"learn:plan:{nid}", add_dirs=_plan_dirs())
+    db.update("learn_plans", nid, {"job_id": jid})
+    return get_plan(nid)
+
+
+@router.post("/plans/{pid}/method")
+def change_method(pid: int, body: MethodIn):
+    """换学法：另生成一份新计划，这份连同学习记录原样保留。"""
+    old = _plan(pid)
+    if body.method not in METHODS or body.method == old.get("method"):
+        raise HTTPException(400, "unknown or unchanged method")
+    if old.get("layout") == "course":
+        raise HTTPException(400, "课程计划按课程单元组织，不换学法")
+    nid = db.insert("learn_plans", {"topic": old["topic"], "background": old["background"], "goal": old["goal"],
+                                    "hours_per_week": old["hours_per_week"], "status": "generating", "layout": "rounds",
+                                    "method": body.method, "created_at": db.now(), "updated_at": db.now()})
     jid = jobs.submit("learn", plan_prompt(_plan(nid)), ref=f"learn:plan:{nid}", add_dirs=_plan_dirs())
     db.update("learn_plans", nid, {"job_id": jid})
     return get_plan(nid)
@@ -2072,12 +2136,14 @@ def _recent_context() -> str:
     return "\n".join(out) or "（暂无记录）"
 
 
-def _arch_block(p: dict, s: dict, steps: list[dict]) -> str:
-    """计划的第一步（全貌章）必须画体系架构图，模块能点击跳到计划里讲它的那一章 / 本章小节。"""
+def _first_chapter_block(p: dict, s: dict, steps: list[dict]) -> str:
+    """计划的第一步按学法写首章：技术类画体系架构图，模块能点击跳到计划里讲它的那一章 / 本章小节；其他学法写作品 / 案例地图。"""
     main = [x for x in steps if not x.get("origin") and x["status"] != "skipped"]
     if not main or main[0]["id"] != s["id"]:
         return ""
     lst = "\n".join(f"- step_id={x['id']} {stage_label(p, x['stage'])} ·「{x['title']}」" for x in main[1:])
+    if method_of(p) != "tech":
+        return (f"\n---- 本章是计划的第一步：必须写「## {METHODS[method_of(p)]['first']}」（见学法的「首章」）。计划里后面的各步：\n{lst or '（无）'}\n")
     return (f"\n---- 本章是计划的第一步（全貌章）：必须画「## 体系架构图」（dg-arch 组件，见规范），放在资料时效之后 ----\n"
             f"架构图要能点击跳转：模块对应计划里后面某一步时加 data-step=\"<step_id>\"，对应本章某个小节时加 data-section=\"<小节标题>\"，"
             f"都不对应就不加（平台会让用户点它按需生成一节）。计划里后面的各步：\n{lst or '（无）'}\n")
@@ -2116,18 +2182,22 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 用户最近在读 / 在做（章末测试至少 1 题从中挑和本章相关的论文或项目出题，学以致用）：
 {_recent_context()}
 {('用户对本章的要求：' + note) if note else ''}
-{_extra_block(s)}{_course_block(s)}{_arch_block(p, s, steps)}
+{_extra_block(s)}{_course_block(s)}{_first_chapter_block(p, s, steps)}
 做法：
-1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；全貌、前沿章节（老计划的阶段 1、3、5）必须核对资料时效，优先用最新的综述 / 书 / 论文。
+1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；资料时效按学法的要求核对。
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
    - {out / 'chapter.md'}
    - {out / 'quiz.json'}（测试题 + 知识卡）
    - 需要交互小组件时：{out / 'widgets'}/<名字>.html（可选，最多 2 个）
+   - 需要图片时：下载到 {out / 'figs'}/<名字>.png（目录要自己建），正文用相对路径 figs/<名字>.png 引用
    目录里的 history/ 是旧版本归档：不要读、不要沿用，按本次要求从头写。
 3. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了，以及资料时效结论。
 
 ---- 章节教程规范 ----
 {_ref_text('chapter.md')}
+
+---- 本计划的学法 ----
+{_ref_text(f'domains/{method_of(p)}.chapter.md')}
 """
 
 
@@ -2354,6 +2424,7 @@ def grade_prompt(s: dict, r: dict) -> str:
 
 {body}
 
+{METHODS[method_of(p)]['judge']}
 评分：每题 score 取 0 / 0.25 / 0.5 / 0.75 / 1。核心是检查理解和判断力，不要逐字逐句对评分要点：
 - 核心判断对、理由大体成立 → 0.75–1（表述不同、举了别的例子、只缺次要细节都不扣成 0.5）；
 - 方向对但依据薄弱或缺一个关键点 → 0.5；只复述概念、没有自己的判断 → 0.25；答非所问或明显错误 → 0。
@@ -2481,6 +2552,7 @@ def check_prompt(s: dict, c: dict) -> str:
 
 作答提示里给过可以想的维度：结论 / 为什么 / 例子 / 用到自己的项目，但不要求逐项都写，没写某一项不扣分。
 
+{METHODS[method_of(p)]['judge']}
 要求：短、具体、鼓励为主，不要逐字逐句对要点。看的是理解和判断力：意思对、抓住了核心判断就算抓到，换了说法、举了别的例子都算；
 要点之外说得有道理的也算抓到（要点不是唯一答案）。只指出真正影响理解的缺口或想偏处，细枝末节不提。
 不要写文件、不要调用平台 API。最终回复只给一个 ```json 代码块：
