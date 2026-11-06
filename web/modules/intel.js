@@ -18,10 +18,27 @@ const TABS = [['变化流', '#intel'], ['总览', '#intel/overview'], ['创业�
   ['增长 Case', '#intel/growth'], ['开源雷达', '#intel/oss'], ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
 const tabs = (h, active) => h('div.tabs', {}, TABS.map(([t, href]) =>
   h('button' + (href === active ? '.active' : ''), { onclick: () => { location.hash = href; } }, t)));
+const LIST_KEYS = (h) => h('div.it-keys', {}, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 选择 · ', h('kbd', {}, 'Enter'), ' 详情 · ', h('kbd', {}, 'o'), ' 原文']);
 
 const CSS = `
 .it-row { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 4px 12px; padding: 12px 14px; border-radius: 10px; cursor: pointer; }
 .it-row:hover { background: var(--bg-2); }
+.it-row.it-sel { box-shadow: 0 0 0 2px var(--accent-ring); }
+.it-keys { font-size: 12px; color: var(--muted); margin: 8px 0; }
+.it-split { display: grid; grid-template-columns: 270px minmax(0,1fr); gap: 20px; align-items: start; }
+.it-nav { position: sticky; top: 12px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.it-nav-head { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.it-nav-list { overflow-y: auto; flex: 1; }
+.it-nav-i { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 2px 6px; padding: 8px 12px; color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.4; border-left: 3px solid transparent; }
+.it-nav-i + .it-nav-i { border-top: 1px solid var(--line); }
+.it-nav-i:hover { background: var(--bg-2); }
+.it-nav-i.active { background: var(--accent-soft); border-left-color: var(--accent); }
+.it-nav-i .it-lv { font-size: 13px; padding: 0; }
+.it-nav-i .t { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 500; }
+.it-nav-i.read .t { color: var(--muted); font-weight: 400; }
+.it-nav-i .s { grid-column: 2; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.it-nav-foot { padding: 6px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+@media (max-width: 900px) { .it-split { grid-template-columns: minmax(0,1fr); } .it-nav { display: none; } }
 .it-row.read .it-t, .it-ph.read b { color: var(--muted); font-weight: 500; }
 .it-ph .it-readtag { display: none; margin-left: 6px; }
 .it-ph.read .it-readtag { display: inline-block; }
@@ -174,9 +191,118 @@ function startupTable(h, rows, { showTrack = true } = {}) {
     ].filter((x) => x !== null)))]);
 }
 
+// 逐条浏览：列表页记下这组条目，详情页左侧按它导航、j/k 切换。app.js 每次路由都重新加载模块，所以存在 window 上。
+const eventNav = (api, e) => ({ id: e.id, href: `#intel/e/${e.id}`, mark: e.level, title: e.title, sub: [e.company_name, e.date].filter(Boolean).join(' · '), read: e.read,
+  url: (e.sources.find((s) => s.official) || e.sources[0])?.url, markRead: () => api.post(`/api/intel/events/${e.id}/read`).catch(() => {}) });
+const caseNav = (api, g) => ({ id: g.id, href: `#intel/g/${g.id}`, mark: g.auto ? '日' : '选', title: `${g.company || '?'} · ${g.item?.title || ''}`, sub: g.day, read: g.read,
+  url: g.item?.url, markRead: () => api.post('/api/intel/growth/read', { item_id: g.item_id }).catch(() => {}) });
+
+function setKeys(el, keys) {
+  document.removeEventListener('keydown', window.__itKey);
+  window.__itKey = (e) => {
+    if (!el.isConnected) return document.removeEventListener('keydown', window.__itKey);
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const a = document.activeElement;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(a?.tagName) || a?.isContentEditable) return;
+    if (e.key === 'Enter' && a?.closest('button, a, summary')) return;
+    if (keys[e.key]) { e.preventDefault(); keys[e.key](); }
+  };
+  document.addEventListener('keydown', window.__itKey);
+}
+
+const openOriginal = (it, toast) => {
+  if (!it?.url) return toast('这条没有原文链接', true);
+  window.open(it.url, '_blank', 'noopener');
+};
+
+function browseList(el, ctx, kind, items, label) {
+  const sel = window.__itNav?.kind === kind ? window.__itNav.sel : null;
+  const nav = window.__itNav = { kind, items, label, sel };
+  const rows = [...el.querySelectorAll('[data-nav]')];
+  let i = rows.findIndex((r) => +r.dataset.nav === sel);
+  if (i >= 0) { rows[i].classList.add('it-sel'); rows[i].scrollIntoView({ block: 'center' }); }
+  const pick = (n) => {
+    if (!rows.length) return;
+    rows[i]?.classList.remove('it-sel');
+    i = Math.max(0, Math.min(rows.length - 1, n));
+    rows[i].classList.add('it-sel');
+    rows[i].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    nav.sel = +rows[i].dataset.nav;
+  };
+  const cur = () => (i >= 0 ? items.find((x) => x.id === nav.sel) : null);
+  const open = () => { if (cur()) location.hash = cur().href; };
+  setKeys(el, {
+    j: () => pick(i + 1), k: () => pick(i < 0 ? 0 : i - 1), Enter: open, d: open,
+    o: () => { const it = cur(); if (!it) return; openOriginal(it, ctx.toast); it.markRead(); rows[i].classList.add('read'); },
+  });
+}
+
+// 直接打开详情链接、或从别处点进来（总览等）时没有对应的列表，就用默认的变化流 / Case 列表
+async function fallbackNav(ctx, kind, id) {
+  const { api } = ctx;
+  if (kind === 'e') {
+    const d = await api.get('/api/intel/events?' + new URLSearchParams({ level: st.level, days: st.days, company: '', q: '', type: '', limit: 300 }));
+    const items = d.events.map((e) => eventNav(api, e));
+    if (!items.some((x) => x.id === id)) items.unshift(eventNav(api, await api.get(`/api/intel/events/${id}`)));
+    return { kind, items, label: '变化流', sel: id };
+  }
+  const d = await api.get('/api/intel/growth');
+  const items = d.cases.map((g) => caseNav(api, g));
+  if (!items.some((x) => x.id === id)) items.unshift(caseNav(api, await api.get(`/api/intel/growth/${id}`)));
+  return { kind, items, label: '增长 Case', sel: id };
+}
+
+async function browseDetail(el, ctx, kind, id, renderBody) {
+  const { h, toast } = ctx;
+  let nav = window.__itNav;
+  if (nav?.kind !== kind || !nav.items.some((x) => x.id === id)) nav = window.__itNav = await fallbackNav(ctx, kind, id);
+  const pane = h('div', { style: { minWidth: 0 } });
+  const count = h('span');
+  let seq = 0;
+  const pos = () => nav.items.findIndex((x) => x.id === nav.sel);
+  // 切换只换右侧，左侧列表和滚动位置不动；连按 j/k 时跳过的条目不请求，也不算已读
+  const show = async (it, switching) => {
+    const mine = ++seq;
+    links.get(nav.sel)?.classList.remove('active');
+    nav.sel = it.id;
+    const link = links.get(it.id);
+    link.classList.add('active');
+    link.scrollIntoView({ block: 'nearest' });
+    count.textContent = `${pos() + 1} / ${nav.items.length}`;
+    if (switching) {
+      history.pushState(null, '', it.href);
+      ctx.sub = [kind, String(it.id)];
+      await new Promise((r) => setTimeout(r, 150));
+      if (mine !== seq) return;
+    }
+    const body = h('div');
+    try {
+      await renderBody(body, ctx, it.id);
+    } catch (e) { if (mine === seq) toast('加载失败：' + e.message, true); return; }
+    if (mine !== seq) return;
+    it.read = true;
+    link.classList.add('read');
+    pane.replaceChildren(body);
+    if (switching) document.getElementById('page').scrollTop = 0;
+  };
+  const links = new Map(nav.items.map((it) => [it.id, h('a.it-nav-i' + (it.read ? '.read' : ''), { href: it.href, title: it.title, onclick: (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault();
+    if (it.id !== nav.sel) show(it, true);
+  } }, [h('div.it-lv.' + it.mark, {}, it.mark), h('div.t', {}, it.title), it.sub ? h('div.s', {}, it.sub) : null])]));
+  el.append(h('div.it-split', {}, [
+    h('nav.it-nav', {}, [h('div.it-nav-head', {}, [h('b', {}, nav.label), count]), h('div.it-nav-list', {}, [...links.values()]),
+      h('div.it-nav-foot', {}, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 切换 · ', h('kbd', {}, 'o'), ' 原文'])]),
+    pane]));
+  const step = (d) => { const it = nav.items[pos() + d]; if (it) show(it, true); };
+  setKeys(el, { j: () => step(1), k: () => step(-1), o: () => openOriginal(nav.items[pos()], toast) });
+  nav.sel = id;
+  await show(nav.items[pos()], false);
+}
+
 function eventRow(h, e, { showCompany = true } = {}) {
   const card = CARD[e.card_status];
-  return h('div.it-row' + (e.read ? '.read' : ''), { onclick: () => { location.hash = `#intel/e/${e.id}`; } }, [
+  return h('div.it-row' + (e.read ? '.read' : ''), { 'data-nav': e.id, onclick: () => { location.hash = `#intel/e/${e.id}`; } }, [
     h('div.it-lv.' + e.level, {}, e.level),
     h('div', {}, [
       h('div.it-t', {}, e.title),
@@ -228,12 +354,13 @@ async function renderStream(el, ctx) {
   const tySel = h('select', { onchange: (e) => { st.type = e.target.value; ctx.refresh(); } },
     [['', '全部类型'], ['revenue', '收入 / 挂牌'], ...Object.entries(d.types).filter(([k]) => !['revenue', 'listing'].includes(k))]
       .map(([v, t]) => h('option', { value: v, selected: st.type === v }, t)));
-  el.append(tabs(h, '#intel'), h('div.it-filters', {}, [lvSel, daySel, tySel, coSel, q]));
+  el.append(tabs(h, '#intel'), h('div.it-filters', {}, [lvSel, daySel, tySel, coSel, q]), LIST_KEYS(h));
   if (!d.events.length) {
     el.append(ui.empty('这段时间还没有事件', status.events ? '换个级别或时间范围看看' : '后台每 10 分钟跑一轮；也可以点「立即抓取」'));
     return;
   }
   el.append(...groupByDay(h, d.events));
+  browseList(el, ctx, 'e', d.events.map((e) => eventNav(api, e)), '变化流');
 }
 
 async function renderEvent(el, ctx, id) {
@@ -291,6 +418,7 @@ async function renderCompany(el, ctx, slug) {
   }
   el.append(ui.section('时间线'));
   el.append(...(c.events.length ? groupByDay(h, c.events, { showCompany: false }) : [ui.empty('还没有事件')]));
+  browseList(el, ctx, 'e', c.events.map((e) => eventNav(api, e)), `${c.name} 时间线`);
 }
 
 async function renderStartup(el, ctx, c) {
@@ -356,6 +484,7 @@ async function renderStartup(el, ctx, c) {
     } }, '保存'))]));
   el.append(ui.section('收入事件'));
   el.append(...(c.events.length ? groupByDay(h, c.events, { showCompany: false }) : [ui.empty('还没有收入异动', '第一天只记基线，之后过里程碑 / 暴涨 / 下滑 / 挂牌才会记')]));
+  browseList(el, ctx, 'e', c.events.map((e) => eventNav(api, e)), `${c.name} 收入事件`);
 }
 
 async function renderStartups(el, ctx) {
@@ -550,10 +679,10 @@ async function renderGrowth(el, ctx) {
     [run]), tabs(h, '#intel/growth'));
   el.append(ui.stats([{ k: 'Case 卡', v: d.cases.length }, { k: '已打分', v: c.scored || 0 }, { k: '合格候选', v: d.pool.length }, { k: '待打分', v: c.new || 0 }]));
   if (d.last?.picked_reason) el.append(h('div.card', { style: { borderColor: 'var(--warn)', marginTop: '8px' } }, `上一轮（${(d.last.at || '').slice(0, 16)}）没选出：${d.last.picked_reason}`));
-  el.append(ui.section('每日 Case', '同一素材重写过只显示最新一版'));
+  el.append(ui.section('每日 Case', '同一素材重写过只显示最新一版'), LIST_KEYS(h));
   el.append(d.cases.length ? h('div.card', {}, d.cases.map((g) => {
     const s = GCASE[g.status] || [g.status, 'gray'];
-    return h('div.it-row' + (g.read ? '.read' : ''), { onclick: () => { location.hash = `#intel/g/${g.id}`; } }, [
+    return h('div.it-row' + (g.read ? '.read' : ''), { 'data-nav': g.id, onclick: () => { location.hash = `#intel/g/${g.id}`; } }, [
       h('div.it-lv', {}, g.auto ? '日' : '选'),
       h('div', {}, [h('div.it-t', {}, `${g.company || '?'} · ${g.item?.title || ''}`),
         h('div.it-meta', {}, [tag(h, s), h('span', {}, g.day), h('span', {}, g.item?.source || ''), h('span', {}, `素材 ${g.item?.date || '-'}`), g.read ? tag(h, ['已读', 'gray']) : null]),
@@ -581,6 +710,7 @@ async function renderGrowth(el, ctx) {
   el.append(ui.section('素材来源', 'A 档一手带数字，B 档补充；X 只当线索'), h('div.card', {}, [
     ...d.sources.map((s) => h('div.it-src', {}, [tag(h, [`${s.tier} 档`, s.tier === 'A' ? 'ok' : 'gray']), ' ', h('a', { href: s.url, target: '_blank' }, s.name)])),
     h('div.it-src', {}, [tag(h, ['B 档', 'gray']), ` X 名单账号（近 3 天 ≥100 赞原创）：${d.x_accounts.map((a) => '@' + a).join(' ')}`])]));
+  browseList(el, ctx, 'g', d.cases.map((g) => caseNav(api, g)), '增长 Case');
 }
 
 async function renderGrowthCase(el, ctx, id) {
@@ -668,7 +798,7 @@ export default {
   async render(el, ctx) {
     if (!document.getElementById('it-css')) document.head.append(ctx.h('style#it-css', {}, CSS));
     const [view, arg] = ctx.sub;
-    if (view === 'e' && arg) return renderEvent(el, ctx, arg);
+    if (view === 'e' && arg) return browseDetail(el, ctx, 'e', +arg, renderEvent);
     if (view === 'c' && arg) return renderCompany(el, ctx, decodeURIComponent(arg));
     if (view === 'companies') return renderCompanies(el, ctx);
     if (view === 'sources') return renderSources(el, ctx);
@@ -678,7 +808,7 @@ export default {
     if (view === 't' && arg) return renderTrack(el, ctx, arg);
     if (view === 'ph') return renderPh(el, ctx);
     if (view === 'growth') return renderGrowth(el, ctx);
-    if (view === 'g' && arg) return renderGrowthCase(el, ctx, arg);
+    if (view === 'g' && arg) return browseDetail(el, ctx, 'g', +arg, renderGrowthCase);
     if (view === 'oss') return oss.render(el, ctx, tabs(ctx.h, '#intel/oss'));
     return renderStream(el, ctx);
   },

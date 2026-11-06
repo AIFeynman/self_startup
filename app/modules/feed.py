@@ -392,8 +392,13 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     out = rk.within_days(out, days, now)
     if not (saved or q or read == "read"):
         out = _without_radar(out)
-    read_urls = _read_log.urls("feed") | _deep_urls()
-    out = [{**x, "read": x["norm_url"] in read_urls} for x in out]
+    deeps = _deep_latest()
+    read_urls = _read_log.urls("feed") | {u for u, d in deeps.items() if d.get("opened_at")}
+    # 深读结果还没看过的留在列表里，哪怕已经点开过原文
+    pending = {u for u, d in deeps.items() if d["status"] != "failed" and not d.get("opened_at")}
+    out = [{**x, "read": x["norm_url"] in read_urls and x["norm_url"] not in pending,
+            "deep": {"id": deeps[x["norm_url"]]["id"], "status": deeps[x["norm_url"]]["status"]} if x["norm_url"] in deeps else None}
+           for x in out]
     if read and not saved:
         out = [x for x in out if x["read"] == (read == "read")]
     if sort in ("new", "hot"):
@@ -901,7 +906,7 @@ def source_health() -> dict:
 
 def _public(x: dict) -> dict:
     return {k: x[k] for k in ("id", "source", "type", "title", "url", "date", "popularity", "score",
-                              "why", "feedback", "also", "read")} | {k: x.get(k) for k in ("new", "seen_days")} | {"summary": rk.display_summary(x["title"], x["summary"]),
+                              "why", "feedback", "also", "read", "deep")} | {k: x.get(k) for k in ("new", "seen_days")} | {"summary": rk.display_summary(x["title"], x["summary"]),
                                                               "gist": (x.get("extra") or {}).get("gist", ""),
                                                               "extra": x.get("extra", {}),
                                                               "source_label": rk.SOURCE_LABEL.get(x["source"], x["source"])}
@@ -1005,6 +1010,17 @@ def feedback_stats() -> dict:
     out = {k: int(r.get(k) or 0) for k in ("likes", "dislikes", "saved", "hidden", "clicks", "clicked_items")}
     out["deep_reads"] = deep_reads()
     return out
+
+
+def _deep_latest() -> dict[str, dict]:
+    """每个链接最新一次深读。点了深读但还没打开看结果的不算已读，留在列表里显示进度。"""
+    try:
+        rows = db.rows("SELECT id, url, status, opened_at FROM learn_items ORDER BY id")
+    except Exception:  # noqa: BLE001  学习模块不存在
+        return {}
+    latest = {rk.norm_url(r["url"]): r for r in rows}
+    latest.pop("", None)
+    return latest
 
 
 def _deep_urls() -> set[str]:
