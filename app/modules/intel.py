@@ -1733,4 +1733,16 @@ def agent_context(ref: str) -> str:
 
 
 router.include_router(oss.router)   # 开源雷达：/api/intel/oss/...
+def feed_covered() -> tuple[set[str], set[str]]:
+    """雷达默认能看到的内容（信息推荐不再重复展示）→ (feed id, 原文链接)。C 级事件默认筛掉、增长候选池没成 Case，不算。"""
+    urls = {s.get("url") or "" for r in db.rows("SELECT sources FROM intel_event WHERE merged_into IS NULL AND level IN ('S','A','B')")
+            for s in _j(r["sources"], [])}
+    urls |= {r["url"] for r in db.rows("SELECT DISTINCT i.url FROM intel_growth_case c JOIN intel_growth_item i ON i.id=c.item_id "
+                                       "WHERE c.status IN ('done','incomplete')")}
+    ids = {it.get("id") or "" for r in db.rows("SELECT items FROM intel_ph_day") for it in _j(r["items"], [])}
+    ids |= {f"trustmrr:{r['slug']}" for r in db.rows("SELECT json_extract(ext, '$.trustmrr') AS slug FROM intel_company "
+                                                     "WHERE kind='startup' AND enabled=1 AND json_extract(ext, '$.trustmrr') IS NOT NULL")}
+    return ids - {""}, urls - {""}
+
+
 labels_for = oss.labels_for        # 信息推荐给 GitHub 条目挂雷达标签用

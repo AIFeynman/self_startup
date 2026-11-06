@@ -280,10 +280,22 @@ def _mark_gone(items: list[dict]) -> None:
             it["extra"]["gone"] = True
 
 
+def _without_radar(items: list[dict]) -> list[dict]:
+    try:
+        from . import intel
+        ids, urls = intel.feed_covered()
+    except Exception as e:  # noqa: BLE001  雷达表还没建 / 板块没加载，不影响信息推荐
+        log.debug("radar coverage unavailable: %s", e)
+        return items
+    urls = {rk.norm_url(u) for u in urls}
+    return [x for x in items if x["id"] not in ids and rk.norm_url(x["url"]) not in urls]
+
+
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
            sort: str = "score", read: str = "") -> list[dict]:
     """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合 / new 最新 / hot 最热（同源热度百分位）；
     read: unread 只要没读过的 / read 只要读过的（打开过原文或进过深读），收藏夹不按这个筛。
+    产品雷达已有的内容不重复展示；收藏、搜索、已读里仍能找到。
     只有「全部 + 综合 + 不限时间 + 无筛选」时做类型 / 来源多样化（今日精选就取这个列表的前 5 条）。"""
     now = now or datetime.now(timezone.utc)
     items = _load_items()
@@ -306,6 +318,8 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         ql = q.lower()
         out = [x for x in out if ql in f"{x['title']} {x['summary']} {x['extra'].get('gist', '')}".lower()]
     out = rk.within_days(out, days, now)
+    if not (saved or q or read == "read"):
+        out = _without_radar(out)
     read_urls = _read_log.urls("feed") | _deep_urls()
     for x in out:
         x["read"] = rk.norm_url(x["url"]) in read_urls
