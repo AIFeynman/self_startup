@@ -127,6 +127,7 @@ CFG_DEFAULTS = {
     "x_days": 3,                  # X：只要最近几天的推文
     "x_min_likes": 100,           # X 名单账号：低于这个赞数的推文不收
     "x_per_account": 2,           # X 名单账号：每人每次最多收几条
+    "x_priority": ["thedankoe"],  # X 重点关注：加分比普通名单高，前 30 不占 X 配额；不在名单里也会抓
     "producthunt_days": 2,
     "yc_days": 3,                 # Launch YC：只要最近几天的产品发布（只留 AI 相关）
     "gist_enabled": True,         # 完整刷新后给排序前列生成中文一句话（DeepSeek，.env 的 DEEPSEEK_API_KEY）
@@ -303,7 +304,7 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     fb = _feedback()
     out = rk.rank(items, now=now, half_life_h=float(cfg("half_life_hours")),
                   interests=list(cfg("interests") or []), feedback=fb, examples=_examples(items, fb, _deep_urls()),
-                  include_hidden=saved, profile=active_profile())
+                  include_hidden=saved, profile=active_profile(), priority=list(cfg("x_priority") or []))
     if saved:
         out = [x for x in out if x["feedback"].get("saved")]
     if type_ == "x_article":  # 「X 长文」标签页：自己发的长文 + 引用了长文的推文
@@ -341,6 +342,12 @@ def follow_cfg() -> dict:
 def src_list(lst: str) -> list:
     """某个关注列表的实际内容：默认名单 + 用户加的 − 用户删的。"""
     return follow.effective(list(cfg(lst) or []), follow_cfg(), lst)
+
+
+def x_accounts_to_fetch() -> list[str]:
+    accounts = src_list("x_accounts")
+    known = {a.lower() for a in accounts}
+    return accounts + [a for a in cfg("x_priority") or [] if a.lower() not in known]
 
 
 def queries(source: str, stats: dict | None = None, auto: bool = True) -> list[str]:
@@ -411,7 +418,7 @@ def _collectors(stats: dict | None = None) -> dict:
                                          queries=q("zhihu"),
                                          days=int(cfg("zhihu_days")),
                                          rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
-        "x": lambda: src.fetch_x(src_list("x_accounts"), q("x"),
+        "x": lambda: src.fetch_x(x_accounts_to_fetch(), q("x"),
                                  days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
                                  per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
@@ -928,7 +935,7 @@ def deep_reads() -> int:
 @router.get("/config")
 def config():
     return {k: cfg(k) for k in ("interests", "half_life_hours", "topics", "topic_caps", "reddit", "x_days",
-                                "x_min_likes", "x_per_account", "producthunt_days", "yc_days", "trustmrr_days", "sources", "github_min_stars",
+                                "x_min_likes", "x_per_account", "x_priority", "producthunt_days", "yc_days", "trustmrr_days", "sources", "github_min_stars",
                                 "github_trending_languages", "github_watch_orgs", "github_watch_min_stars",
                                 "youtube_channels", "bilibili", "video_days", "video_langs",
                                 "youtube_trending", "youtube_region", "bilibili_ranking",

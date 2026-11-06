@@ -991,3 +991,41 @@ def test_viral_article_still_fades():
     fresh = rk.rank([_article("twitter:v", 8500, hours=2)], now=NOW)[0]["score"]
     old = rk.rank([_article("twitter:v", 8500, hours=24 * 7)], now=NOW)[0]["score"]
     assert fresh - old > 1.0
+
+
+def _x_post(id_, author, hours=60, pop=1000, via=None):
+    return _it(id_, f"zz {id_}", source="twitter", pop=pop, hours=hours,
+               extra={"author": author, "via": via or f"@{author}"})
+
+
+def test_priority_account_outranks_ordinary_follow():
+    filler = [_x_post(f"twitter:f{i}", f"f{i}", pop=100 + i, hours=300) for i in range(5)]
+    items = [_x_post("twitter:star", "TheDanKoe"), _x_post("twitter:plain", "someone"), *filler]
+    by_id = {x["id"]: x for x in rk.rank(items, now=NOW, priority=["thedankoe"])}
+    assert round(by_id["twitter:star"]["score"] - by_id["twitter:plain"]["score"], 3) == 0.9
+    assert "重点关注 @TheDanKoe" in by_id["twitter:star"]["why"]
+    assert "关注账号" not in by_id["twitter:star"]["why"]
+    assert "重点关注" not in by_id["twitter:plain"]["why"]
+
+
+def test_priority_account_found_by_search_still_counts():
+    out = rk.rank([_x_post("twitter:star", "thedankoe", via="search")], now=NOW, priority=["thedankoe"])
+    assert "重点关注 @thedankoe" in out[0]["why"]
+
+
+def test_priority_post_enters_top_despite_full_x_quota():
+    x_posts = [_x_post(f"twitter:x{i}", f"x{i}", hours=1, pop=9000 - i) for i in range(10)]
+    others = [_it(f"hn:{i}", f"zz other {i}", source=f"s{i}", hours=100, pop=1) for i in range(40)]
+    star = _x_post("twitter:star", "thedankoe", hours=30, pop=5000)
+    ranked = rk.rank([*x_posts, *others, star], now=NOW, priority=["thedankoe"])
+    top = rk.diversify(ranked, top=30, max_share=1.0)[:30]
+    ids = [x["id"] for x in top]
+    assert "twitter:star" in ids
+    assert sum(x["source"] == "twitter" and x["id"] != "twitter:star" for x in top) == 6
+
+
+def test_priority_account_is_collected_even_if_not_followed(monkeypatch):
+    from app.modules import feed
+    monkeypatch.setattr(feed, "cfg", lambda k: ["Star", "karpathy"] if k == "x_priority" else [])
+    monkeypatch.setattr(feed, "src_list", lambda lst: ["karpathy", "AnthropicAI"])
+    assert feed.x_accounts_to_fetch() == ["karpathy", "AnthropicAI", "Star"]

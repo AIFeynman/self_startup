@@ -9,12 +9,13 @@ from __future__ import annotations
 import bisect
 import re
 from collections import Counter
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2, "token_cap": 4,
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
-     "follow": 0.3, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "viral_article": 0.5, "trending": 0.8,
+     "follow": 0.3, "priority": 1.2, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "viral_article": 0.5, "trending": 0.8,
      "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3,
      "pref": 0.3, "pref_max": 3, "avoid": -0.4, "avoid_max": 3}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
@@ -203,7 +204,7 @@ def _leave_one_out(aff: dict, it: dict) -> dict:
 
 def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, interests: list[str],
                aff: dict | None = None, fb: dict | None = None, release: datetime | None = None,
-               pref: dict | None = None) -> tuple[float, list[str]]:
+               pref: dict | None = None, priority: bool = False) -> tuple[float, list[str]]:
     # why 的顺序 = 读者判断「值不值得看」的顺序：硬信号（官方 / 长文 / 关注 / 多源）→ 热度 → 新鲜 → 兴趣 → 偏好
     lead: list[str] = []
     why: list[str] = []
@@ -253,7 +254,10 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
             s += W["viral_article"]
         lead.append("高赞 X 长文" if viral else "X 长文" if xa == "own" else "引用了 X 长文")
     via = str((it.get("extra") or {}).get("via") or "")
-    if via.startswith("@"):
+    if priority:
+        s += W["priority"]
+        lead.append(f"重点关注 @{ex.get('author')}")
+    elif via.startswith("@"):
         s += W["follow"]
         lead.append(f"关注账号 {via}")
     if needs_value(it):
@@ -317,9 +321,10 @@ def score_item(it: dict, *, pop_norm: float, now: datetime, half_life_h: float, 
 
 def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float = 72, interests: list[str] = (),
          feedback: dict[str, dict] | None = None, examples: list[dict] | None = None,
-         include_hidden: bool = False, profile: dict | None = None) -> list[dict]:
+         include_hidden: bool = False, profile: dict | None = None, priority: Iterable[str] = ()) -> list[dict]:
     """items: feed_items 行（extra 已解析成 dict）。feedback: {item_id: {vote, saved, hidden}}。
     examples: 训练亲和度的样本（赞/踩/收藏 + learn_evolve 评分）。profile: 每周提炼的偏好（boost / penalize 词）。
+    priority: 重点关注的 X 账号（不分大小写），不管推文是名单还是搜索抓到的都算。
     返回去重后按分数降序的新列表。"""
     now = now or datetime.now(timezone.utc)
     feedback = feedback or {}
@@ -327,6 +332,7 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
     pref = {k: [(t, _interest_re(t)) for t in profile.get(k) or []] for k in ("boost", "penalize")} if profile else None
     pops = pop_index(items, now)
     releases = release_pairs(items, now)
+    priority_authors = {a.lower() for a in priority}
 
     scored = []
     for it in items:
@@ -339,14 +345,15 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
             continue    # Reddit / 视频搜索里 Jev 判为没干货的（梗、求助、吐槽）
         pn = pop_norm(pops, it)
         rel_t, rel_key = releases.get(it["id"], (None, ""))
+        starred = it.get("source") == "twitter" and str((it.get("extra") or {}).get("author") or "").lower() in priority_authors
         s, why = score_item(it, pop_norm=pn, now=now, half_life_h=half_life_h, interests=list(interests),
-                            aff=aff, fb=fb, release=rel_t, pref=pref)
+                            aff=aff, fb=fb, release=rel_t, pref=pref, priority=starred)
         pin = important_official(it, now) or bool(rel_t and (now - rel_t).total_seconds() <= PIN_DAYS * 86400)
         if pin:
             why.insert(1, "重要更新")    # 紧跟在「X 官方」后面
         new, days = seen_age(it, now)
         scored.append({**it, "score": round(s, 3), "pop_norm": round(pn, 3), "why": " · ".join(why), "feedback": fb,
-                       "pinned": pin, "release": rel_key, "new": new, "seen_days": days})
+                       "pinned": pin, "priority": starred, "release": rel_key, "new": new, "seen_days": days})
     scored.sort(key=lambda x: (-x["score"], x["id"]))
 
     out, seen_url, seen_title = [], {}, {}
@@ -591,15 +598,18 @@ def within_days(items: list[dict], days: float, now: datetime) -> list[dict]:
 
 
 def _take(items: list[dict], k: int, type_cap: int, src_cap: int, nt: Counter | None = None,
-          ns: Counter | None = None) -> tuple[list[dict], list[dict]]:
-    """按顺序取至多 k 条，每类 / 每个来源不超过上限（nt / ns 是已占用的计数，会被更新）；其余原序放进 rest。"""
+          ns: Counter | None = None, priority_free: bool = False) -> tuple[list[dict], list[dict]]:
+    """按顺序取至多 k 条，每类 / 每个来源不超过上限（nt / ns 是已占用的计数，会被更新）；其余原序放进 rest。
+    priority_free：重点关注的条目不受上限、也不占名额。"""
     nt, ns = (nt if nt is not None else Counter()), (ns if ns is not None else Counter())
     head, rest = [], []
     for it in items:
-        if len(head) < k and nt[it.get("type")] < type_cap and ns[it.get("source")] < src_cap:
+        free = priority_free and it.get("priority")
+        if len(head) < k and (free or (nt[it.get("type")] < type_cap and ns[it.get("source")] < src_cap)):
             head.append(it)
-            nt[it.get("type")] += 1
-            ns[it.get("source")] += 1
+            if not free:
+                nt[it.get("type")] += 1
+                ns[it.get("source")] += 1
         else:
             rest.append(it)
     return head, rest
@@ -608,7 +618,7 @@ def _take(items: list[dict], k: int, type_cap: int, src_cap: int, nt: Counter | 
 def diversify(items: list[dict], top: int = 30, max_share: float = TYPE_SHARE,
               src_share: float = SOURCE_SHARE) -> list[dict]:
     """前 PICKS_N 条（今日精选）每个来源最多 1 条、每类最多 2 条；前 top 条里同一类型不超过 max_share、
-    同一来源不超过 src_share（各至少 2 条）。超出的顺延到后面，相对顺序不变；凑不满就放宽，不丢条目。
+    同一来源不超过 src_share（各至少 2 条，重点关注的条目不受限也不占名额）。超出的顺延到后面，相对顺序不变；凑不满就放宽，不丢条目。
     重要官方更新（rank 标的 pinned）优先：前 PICKS_OFFICIAL 条进精选，其余紧接在精选后，合计至多 PIN_MAX 条。"""
     nt, ns = Counter(), Counter()
     pins = [x for x in items if x.get("pinned")][:PIN_MAX]
@@ -632,5 +642,5 @@ def diversify(items: list[dict], top: int = 30, max_share: float = TYPE_SHARE,
         more, rest = _take(rest, PICKS_N - len(picks), PICKS_N, PICKS_N, nt, ns)
         picks += more
     body, tail = _take(rest, max(0, top - len(picks) - len(pinned_rest)), max(2, int(top * max_share)),
-                       max(2, int(top * src_share)), nt, ns)
+                       max(2, int(top * src_share)), nt, ns, priority_free=True)
     return picks + pinned_rest + body + tail
