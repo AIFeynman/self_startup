@@ -1,5 +1,5 @@
 // 复盘（首页）：问候 + 一句话状态 + 大输入框（记一条 / 写复盘 / 问 Agent）+ 今日三卡（事项 / AI 建议 / Agent 效率）
-// 标签页：当日复盘 / 时间线 / 问题与经验 / Agent 效率。路由：#review/<YYYY-MM-DD>/<tab>
+// 标签页：当日复盘 / 时间线 / 问题与经验 / 已读历史 / Agent 效率。路由：#review/<YYYY-MM-DD>/<tab>
 import { today } from '../api.js';
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
@@ -99,7 +99,7 @@ const NOTE_CLS = { problem: 'err', lesson: 'ok', insight: '', idea: 'warn' };
 const REC_FIELD = { summary: '总结', wins: '收获', problems: '问题', next_actions: '下一步' };
 const MSG_KIND = { new_task: '新任务/追加', correct: '纠正/转向', approve: '确认/继续', interrupt: '中断', answer: '回答提问', check: '询问进度' };
 const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn', answer: '', new_task: 'ok' };
-const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', agent: 'Agent 效率' };
+const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史', agent: 'Agent 效率' };
 const WEEK = '日一二三四五六';
 const dayLabel = (s) => { const d = new Date(s + 'T12:00:00'); return `${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]}`; };
 const hours = (min) => ((min || 0) / 60).toFixed(1) + 'h';
@@ -375,6 +375,11 @@ export default {
       ]);
     }
 
+    const readRow = (x) => h('div.item', { style: { fontSize: '13.5px' } }, [
+      h('span.tag.gray', {}, x.source || x.kind), ' ',
+      h('a', x.url.startsWith('#') ? { href: x.url } : { href: x.url, target: '_blank', rel: 'noopener' }, x.title || x.url),
+      h('span.muted', {}, ` · ${x.at.slice(11, 16)}${x.times > 1 ? ` · 打开 ${x.times} 次` : ''}`)]);
+
     async function renderDay() {
       const d = await loadDay();
       const rec = d.record;
@@ -402,6 +407,7 @@ export default {
             ...lx.events.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
         ]));
       }
+      if (d.reads.length) nodes.push(ui.section('已读', `${d.reads.length} 篇 · 信息推荐 / 产品雷达里打开过的`), h('div.card', {}, h('div.list', {}, d.reads.map(readRow))));
       if (rec.ai_analysis) nodes.push(h('details.card.flat', {}, [h('summary', {}, 'AI 检查完整分析'), annotate(ctx, md(rec.ai_analysis), { doc: `review:${state.date}:check`, title: `${state.date} · AI 检查分析`, link: `#review/${state.date}`, source: rec.ai_analysis })]));
       nodes.push(ui.section('问题与经验', d.notes.length ? `${d.notes.length} 条` : ''),
         d.notes.length ? h('div.rv-notes', {}, d.notes.map((n) => noteCard(n, show)))
@@ -436,6 +442,24 @@ export default {
       };
       startIn.onchange = endIn.onchange = load;
       body.replaceChildren(ui.section('时间线', '点某一天进入当日复盘'), h('div.rv-range', {}, [startIn, '—', endIn]), list);
+      await load();
+    }
+
+    // ---------- 已读历史 ----------
+    async function renderReads() {
+      loadDay();
+      const s = new Date(state.date + 'T12:00:00'); s.setDate(s.getDate() - 29);
+      const startIn = h('input', { type: 'date', value: s.toLocaleDateString('sv-SE') });
+      const endIn = h('input', { type: 'date', value: state.date });
+      const list = h('div');
+      const load = async () => {
+        const days = await api.get(`/api/review/reads?start=${startIn.value}&end=${endIn.value}`);
+        list.replaceChildren(...(days.length ? days.flatMap((x) => [
+          ui.section(dayLabel(x.date), `${x.items.length} 篇`), h('div.card', {}, h('div.list', {}, x.items.map(readRow)))])
+          : [ui.empty('这段时间没有已读记录', '在信息推荐或产品雷达里打开文章后会记到这里')]));
+      };
+      startIn.onchange = endIn.onchange = load;
+      body.replaceChildren(ui.section('已读历史', '信息推荐 / 产品雷达里打开过的，按天排列'), h('div.rv-range', {}, [startIn, '—', endIn]), list);
       await load();
     }
 
@@ -520,6 +544,7 @@ export default {
         if (state.tab === 'day') await renderDay();
         else if (state.tab === 'timeline') await renderTimeline();
         else if (state.tab === 'notes') await renderNotes();
+        else if (state.tab === 'reads') await renderReads();
         else await renderAgent();
       } catch (e) {
         body.replaceChildren(h('pre.error', {}, e.message));
