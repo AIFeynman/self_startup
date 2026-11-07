@@ -41,6 +41,18 @@ const CSS = `
 .pl-row.p1 .pl-num { color: var(--accent); }
 .pl-title { font: 700 17px/1.4 var(--serif); }
 .pl-title .meta { font: 400 12px var(--font); color: var(--muted); margin-left: 8px; }
+.pl-open { all: unset; font: inherit; color: inherit; text-decoration: inherit; cursor: pointer; }
+.pl-open:hover { color: var(--accent); }
+.pl-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pl-edit { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.pl-edit[open] { display: grid; gap: 12px; }
+.pl-edit::backdrop { background: rgba(0, 0, 0, .35); }
+.pl-edit label { display: grid; gap: 4px; }
+.pl-edit label > span { color: var(--muted); font-size: 12px; }
+.pl-edit textarea { width: 100%; resize: none; overflow: hidden; }
+.pl-edit select { justify-self: start; }
+.pl-edit-source { color: var(--accent); font-size: 13px; }
+.pl-edit-acts { display: flex; justify-content: flex-end; gap: 8px; }
 .pl-goal { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .pl-goal b { font-weight: 500; color: var(--text); opacity: .7; }
 .pl-pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
@@ -148,6 +160,21 @@ const LEVEL = { heavy: '重度', medium: '中度', light: '轻度', auto: '自�
 const EXEC = { human: '人', claude: 'Claude', codex: 'Codex', mixed: '混合' };
 const STATUS = { todo: '待办', doing: '进行中', done: '完成', partial: '部分', dropped: '放弃' };
 const KIND = { work: '工作', learning: '学习', life: '生活' };
+const ISSUE_KIND = 'issue';
+const ISSUE_STATUS = { todo: '未解决', doing: '处理中', done: '已解决' };
+const SOURCE_LINES = [
+  [/^deepread:item:\d+ #learn\/item\/(\d+)/, ([, id]) => ({ href: `#learn/item/${id}`, label: '打开深读' })],
+  [/^learn:plan:(\d+) step:(\d+)/, ([, plan, step]) => ({ href: `#learn/plan/${plan}/step/${step}`, label: '打开学习步骤' })],
+  [/^来自 (\d{4}-\d{2}-\d{2}) 的复盘/, ([, date]) => ({ href: `#review/${date}`, label: `打开 ${date} 的复盘` })],
+];
+const splitNotes = (notes) => {
+  const [first, ...rest] = (notes || '').split('\n');
+  for (const [re, link] of SOURCE_LINES) {
+    const m = re.exec(first);
+    if (m) return { sourceLine: first, source: link(m), text: rest.join('\n') };
+  }
+  return { sourceLine: '', source: null, text: notes || '' };
+};
 const PRIO = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
 const PX = 1.8; // 每分钟像素
 const KIND_ALIAS = { 学习: 'learning', learn: 'learning', learning: 'learning', 生活: 'life', life: 'life', 工作: 'work', work: 'work' };
@@ -575,7 +602,48 @@ export default {
       ]);
     }
 
-    const notes = (t) => (t.notes ? h('details.pl-notes', {}, [h('summary', {}, '备注 / Agent 结果'), h('pre', {}, t.notes)]) : null);
+    function openEditor(t) {
+      const isIssue = t.kind === ISSUE_KIND;
+      const { sourceLine, source, text } = splitNotes(t.notes);
+      const grown = (props) => {
+        const ta = h('textarea', props);
+        const fit = () => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight + ta.offsetHeight - ta.clientHeight}px`; };
+        new ResizeObserver(fit).observe(ta);
+        ta.addEventListener('input', fit);
+        return ta;
+      };
+      const title = grown({ rows: 1, value: t.title, 'aria-label': '标题' });
+      const goalBox = isIssue ? null : grown({ rows: 2, value: t.goal || '', 'aria-label': '目标' });
+      const status = pill(isIssue ? ISSUE_STATUS : STATUS, t.status, () => {});
+      const noteBox = grown({ rows: 3, value: text, 'aria-label': '备注', placeholder: '进展、卡点、下一步…' });
+      const box = h('dialog.pl-edit');
+      const close = () => { box.close(); box.remove(); };
+      const save = async () => {
+        if (!title.value.trim()) return toast('标题不能为空', true);
+        const body = { title: title.value.trim(), status: status.value, notes: [sourceLine, noteBox.value.trim()].filter(Boolean).join('\n') };
+        if (goalBox) body.goal = goalBox.value.trim();
+        if (status.value === 'done' && !isIssue) body.progress = 100;
+        try { await patch(t.id, body); close(); } catch (e) { toast(e.message, true); }
+      };
+      const labeled = (label, control) => h('label', {}, [h('span', {}, label), control]);
+      box.append(
+        labeled('标题', title),
+        goalBox ? labeled('目标', goalBox) : '',
+        labeled('状态', status),
+        labeled('备注', noteBox),
+        source ? h('a.pl-edit-source', { href: source.href, onclick: close }, `${source.label} →`) : '',
+        h('div.pl-edit-acts', {}, [h('button.ghost', { onclick: close }, '取消'), h('button.primary', { onclick: save }, '保存')]),
+      );
+      box.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+      document.body.append(box);
+      box.showModal();
+    }
+
+    const openable = (t) => h('button.pl-open', { title: '点开查看和编辑', onclick: () => openEditor(t) }, t.title);
+    const notes = (t) => {
+      const { text } = splitNotes(t.notes);
+      return text ? h('details.pl-notes', {}, [h('summary', {}, '备注 / Agent 结果'), h('pre', {}, text)]) : null;
+    };
     const goal = (t) => (t.goal ? h('div.pl-goal', {}, [h('b', {}, '目标 '), t.goal]) : null);
 
     function items(d) {
@@ -586,7 +654,7 @@ export default {
         const isCol = collapsed.has(p.id);
         const kidBox = leaf ? null : h('div.pl-kids', { style: { display: isCol ? 'none' : '' } }, kids.map((c, j) => h(`div.pl-kid${c.human_level === 'auto' ? '.auto' : ''}${c.status === 'done' ? '.done' : ''}`, {}, [
           h('div.pl-num', {}, `${i + 1}.${j + 1}`),
-          h('div', {}, [h('div.pl-title', {}, [c.title, h('span.meta', {}, `#${c.id}`)]), goal(c), controls(c, true), notes(c)]),
+          h('div', {}, [h('div.pl-title', {}, [openable(c), h('span.meta', {}, `#${c.id}`)]), goal(c), controls(c, true), notes(c)]),
           side(c, true),
         ])));
         const toggle = leaf ? null : h('button.ghost.pl-kids-t', { onclick: () => {
@@ -598,7 +666,7 @@ export default {
         return h(`div.pl-row${p.priority === 1 ? '.p1' : ''}${p.status === 'done' ? '.done' : ''}`, {}, [
           h('div.pl-num', {}, pad2(i + 1)),
           h('div', {}, [
-            h('div.pl-title', {}, [p.title, h('span.meta', {}, [`#${p.id}`, ' · ', KIND[p.kind] || p.kind, p.repo ? ` · ${p.repo}` : ''].join(''))]),
+            h('div.pl-title', {}, [openable(p), h('span.meta', {}, [`#${p.id}`, ' · ', KIND[p.kind] || p.kind, p.repo ? ` · ${p.repo}` : ''].join(''))]),
             goal(p), controls(p, leaf), notes(p),
             leaf ? null : h('div.row', {}, [toggle, h('button.ghost.sm', { onclick: () => decompose([p.id]) }, [ui.icon('spark'), '重新拆解'])]),
             kidBox,
@@ -616,8 +684,9 @@ export default {
         const days = Math.max(0, Math.round((new Date(state.date) - new Date(t.created_at.slice(0, 10))) / 864e5)) + 1;
         return h(`div.pl-row${done ? '.done' : ''}`, {}, [
           h('div.pl-num', {}, pad2(i + 1)),
-          h('div', {}, [h('div.pl-title', {}, t.title),
-            h('div.meta', {}, `加入于 ${t.created_at.slice(0, 16).replace('T', ' ')} · ${done ? `解决于 ${t.updated_at.slice(0, 16).replace('T', ' ')}` : `第 ${days} 天`}`)]),
+          h('div', {}, [h('div.pl-title', {}, [openable(t), t.status === 'doing' ? h('span.meta', {}, ISSUE_STATUS.doing) : '']),
+            h('div.meta', {}, `加入于 ${t.created_at.slice(0, 16).replace('T', ' ')} · ${done ? `解决于 ${t.updated_at.slice(0, 16).replace('T', ' ')}` : `第 ${days} 天`}`),
+            notes(t)]),
           h('button.sm' + (done ? '.ghost' : ''), { onclick: () => patch(t.id, { status: done ? 'todo' : 'done' }) }, done ? '撤销' : '解决'),
         ]);
       };
