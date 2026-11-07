@@ -1,4 +1,4 @@
-// 时间利用图（Agent 看板 / 复盘共用）：一天的时间轴上画
+// 时间利用图（复盘 · Agent 效率）：一天的时间轴上画
 //   ① 专注时间窗（暖色底）② 每 10 分钟有几个 Agent 在真正干活（交互 / 脚本，堆叠柱，虚线 = 并发上限）
 //   ③ Agent 在等你（灰柱）④ 人工交互（点：专注内绿色、专注外橙色）⑤ 空档（斜纹）
 // 用法：import { utilization } from './_utilchart.js'; el.append(await utilization(ctx, { date }))

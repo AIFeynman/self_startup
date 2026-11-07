@@ -1,19 +1,17 @@
-// Agent 核心指标（Agent 看板 / 复盘共用）：结果分、吞吐、杠杆、可避免交互占比，口径同 session-report 技能。
+// Agent 核心指标（复盘 · Agent 效率）：结果分、吞吐、杠杆、可避免交互占比，口径同 session-report 技能。
 // 杠杆直接由日志算；其余三项要点「AI 评分」跑一次后台评分任务。
 // 用法：import { coreMetrics } from './_coremetrics.js'; el.append(await coreMetrics(ctx, { date }))
-import { today } from '../api.js';
-
 const fmt = (key, v) => v == null ? '—' : key === 'avoidable_pct' ? `${v}%` : key === 'leverage' ? `${v} 分` : String(v);
 
-export async function coreMetrics(ctx, { date = '' } = {}) {
+export async function coreMetrics(ctx, { date }) {
   const { api, h, toast } = ctx;
   injectStyle();
   const box = h('div');
-  let day = date || today(), polling = false;
+  let polling = false;
 
   const load = async () => {
     try {
-      const d = await api.get(`/api/agents/core?date=${day}`);
+      const d = await api.get(`/api/agents/core?date=${date}`);
       box.replaceChildren(view(d));
       if (d.job && ['queued', 'running'].includes(d.job.status)) poll(d.job.id);
     } catch (e) { box.replaceChildren(h('div.card.flat.cm-card.muted', {}, '读取核心指标失败：' + e.message)); }
@@ -29,7 +27,7 @@ export async function coreMetrics(ctx, { date = '' } = {}) {
   }
 
   async function score() {
-    try { const r = await api.post('/api/agents/core/score', { date: day }); toast('已开始 AI 评分，约 1–3 分钟'); await load(); poll(r.job_id); }
+    try { const r = await api.post('/api/agents/core/score', { date }); toast('已开始 AI 评分，约 1–3 分钟'); await load(); poll(r.job_id); }
     catch (e) { toast('评分启动失败：' + e.message, true); }
   }
 
@@ -79,9 +77,8 @@ export async function coreMetrics(ctx, { date = '' } = {}) {
       : running ? 'AI 评分进行中…'
       : d.scored_at ? `已评分 ${d.scored}/${d.scorable} 个会话 · ${d.scored_at.slice(5, 16)}${d.new_turns ? ` · 之后新增 ${d.new_turns} 次交互` : ''}${d.unscored?.length ? ` · ${d.unscored.length} 个会话未评` : ''}`
       : `${d.scorable} 个交互会话，尚未评分（杠杆已按日志算出）`;
-    const dateIn = h('input', { type: 'date', value: day, style: { width: 'auto' }, onchange: (e) => { day = e.target.value || today(); load(); } });
     const top = h('div.cm-top', {}, [
-      h('b.cm-h', {}, '核心指标'), dateIn, h('span.muted.cm-status', {}, status), h('span.grow'),
+      h('b.cm-h', {}, '核心指标'), h('span.muted.cm-status', {}, status), h('span.grow'),
       h('button.sm' + (d.scored_at && !d.new_turns && !d.unscored?.length ? '.outline' : '.dark'),
         { onclick: score, disabled: running || !d.scorable, title: '后台让 Agent 读当天交互会话，按任务难度、结果、可避免交互打分' },
         running ? '评分中…' : d.scored_at ? '重新评分' : 'AI 评分'),

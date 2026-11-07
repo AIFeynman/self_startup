@@ -1,4 +1,4 @@
-// 待你审批 / 决策（规划、Agent 看板共用）：每条可 批准 / 不批准 / 忽略，或写一句指令再发。
+// 待你审批 / 决策（规划、复盘共用）：每条可 批准 / 不批准 / 忽略，或写一句指令再发。
 // 一个任务的事项都决定完后，平台续接那个 Agent 会话把决定发过去（后端 /api/jobs/approvals）。
 // 用法：import { approvals } from './_approvals.js'; el.append(approvals(ctx, { fallback }))
 //   fallback(): 后端还没提供审批接口（平台待重启）时，返回 [[来源标题, 事项]] 只读展示。

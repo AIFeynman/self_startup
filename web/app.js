@@ -22,7 +22,7 @@ async function boot() {
   nav.append(
     h('div.brand', {}, [ui.icon('leaf'), '学习平台']),
     h('button.new-chat', { onclick: () => openChat({ module: currentId(), title: titleOf(currentId()), fresh: true }) }, [ui.icon('plus'), '新对话']),
-    h('nav#nav-links', {}, meta.modules.map((m) => h('a', { href: '#' + m.id, 'data-id': m.id }, [ui.icon(ICONS[m.id] || 'spark'), h('span', {}, m.title)]))),
+    h('nav#nav-links', {}, meta.modules.filter((m) => !m.page).map((m) => h('a', { href: '#' + m.id, 'data-id': m.id }, [ui.icon(ICONS[m.id] || 'spark'), h('span', {}, m.title)]))),
     h('div.nav-sec#recent'),
     h('div.nav-foot', {}, [h('a', { href: '#settings' }, [ui.icon('settings'), h('span', {}, '设置')]),
       h('span#engine-status', {}, Object.entries(meta.engines).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' '))]),
@@ -95,13 +95,13 @@ function watchJobs() {
   }, 6000);
 }
 
-// 侧栏「规划」「Agent 看板」上的待审批数
+// 侧栏「规划」「复盘」上的待审批数
 function watchApprovals() {
   const paint = async () => {
     if (document.hidden) return;
     const list = await api.get('/api/jobs/approvals').catch(() => null);
     if (!list) return;
-    for (const id of ['plan', 'agents']) {
+    for (const id of ['plan', 'review']) {
       const a = document.querySelector(`#nav-links a[data-id="${id}"]`);
       if (!a) continue;
       a.querySelector('.nav-badge')?.remove();
@@ -192,6 +192,7 @@ async function route() {
   if (id === 'settings') return renderSettings(wrap);
   const m = meta.modules.find((x) => x.id === id);
   if (!m) { wrap.append(ui.empty('未知页面')); return; }
+  if (m.page) { location.replace('#' + m.page); return; }
   let mod;
   const ask = (text) => openChat({ module: id, title: m.title, send: text });
   // 只重绘页面主体，不重置右侧（可能绑定了某个对象的）对话

@@ -79,3 +79,9 @@ def test_board_marks_expire_on_new_activity(client):
     assert find(client.get("/api/agents/board").json())["column"] == "done"
     db.execute("UPDATE agent_board SET updated_at='2000-01-01' WHERE key=?", [key])  # 标记早于最近活动 → 失效
     assert find(client.get("/api/agents/board").json())["column"] == "review"
+
+
+def test_board_is_opened_from_review_not_sidebar(client):
+    modules = {m["id"]: m for m in client.get("/api/meta").json()["modules"]}
+    assert modules["agents"]["page"] == "review//day/agent"
+    assert "page" not in modules["review"]
