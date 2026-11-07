@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import agent, chat, db, jobs, settings, tasks
-from . import _read_log, _review_sessions as rs, _session_score as score, _utilization as util
+from . import _human_time as human, _read_log, _review_sessions as rs, _session_score as score, _utilization as util
 
 TITLE = "复盘"
 ORDER = 10
@@ -57,6 +57,18 @@ CREATE TABLE IF NOT EXISTS review_agent_stats (
     scores         TEXT DEFAULT '{}',          -- JSON AI 评分 {by_session:{id:{tasks,avoidable,...}}, turns_at:{id:n}, scored_at}
     score_job_id   INTEGER
 );
+CREATE TABLE IF NOT EXISTS review_time_entries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    date        TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    start       TEXT NOT NULL,
+    end         TEXT NOT NULL,
+    output      TEXT DEFAULT '',
+    replaces    INTEGER,
+    retired_at  TEXT,
+    created_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_review_time_entries_date ON review_time_entries(date);
 """
 router = APIRouter()
 
@@ -762,6 +774,95 @@ def get_efficiency(date: str, scan_if_missing: bool = True) -> dict | None:
     r["scores"] = _loads(r.get("scores"), {})
     r["kind_labels"] = rs.KIND_LABELS
     return r
+
+
+# ---------- 人工效率 ----------
+
+_CLOCK = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+class TimeEntryIn(BaseModel):
+    date: str
+    category: str
+    start: str
+    end: str
+    output: str = ""
+
+
+def _time_entry_row(body: TimeEntryIn, replaces: int | None = None) -> dict:
+    if body.category not in human.CATEGORIES:
+        raise HTTPException(400, f"类别只能是：{'、'.join(human.CATEGORIES)}")
+    if not (_CLOCK.fullmatch(body.start) and _CLOCK.fullmatch(body.end)) or body.start == body.end:
+        raise HTTPException(400, "起止时间要写成 HH:MM，且不能相同")
+    return {"date": _day(body.date), "category": body.category, "start": body.start, "end": body.end,
+            "output": body.output.strip(), "replaces": replaces, "created_at": db.now()}
+
+
+def _retire_time_entry(eid: int) -> None:
+    if not db.row("SELECT id FROM review_time_entries WHERE id=? AND retired_at IS NULL", [eid]):
+        raise HTTPException(404)
+    db.update("review_time_entries", eid, {"retired_at": db.now()})
+
+
+def _time_entries(date: str) -> list[dict]:
+    return db.rows("SELECT id, date, category, start, end, output FROM review_time_entries "
+                   "WHERE date=? AND retired_at IS NULL ORDER BY start, id", [date])
+
+
+def _platform_events(date: str) -> list[tuple[int, int, str]]:
+    def at(project: str, sql: str):
+        return [(human.minute(r["x"][11:16]), human.minute(r["x"][11:16]), project) for r in db.rows(sql, [date])]
+    events = []
+    if _has_table("learn_events"):
+        events += at("学习", "SELECT created_at x FROM learn_events WHERE kind NOT LIKE '%review' AND substr(created_at,1,10)=?")
+    if _has_table("read_log"):
+        events += at("阅读", "SELECT at x FROM read_log WHERE substr(at,1,10)=?")
+    if _has_table("voice_calls"):
+        for r in db.rows("SELECT started_at x, duration_s y FROM voice_calls WHERE substr(started_at,1,10)=?", [date]):
+            start = human.minute(r["x"][11:16])
+            events.append((start, start + int((r["y"] or 0) // 60), "语音"))
+    return events
+
+
+def human_day(date: str, scan: bool = True) -> dict | None:
+    eff = get_efficiency(date, scan_if_missing=scan)
+    entries = _time_entries(date)
+    if not eff and not entries:
+        return None
+    sessions = eff["sessions"] if eff else []
+    return {**human.metrics([*human.session_events(sessions), *_platform_events(date)], entries), "entries": entries}
+
+
+@router.get("/human")
+def api_human(date: str = ""):
+    date = _day(date)
+    day = human_day(date)
+    d = Date.fromisoformat(date)
+    trend = []
+    for n in range(6, 0, -1):
+        past = (d - timedelta(days=n)).isoformat()
+        x = human_day(past, scan=False)
+        trend.append({"date": past, "minutes": x["minutes"] if x else None, "fragment_pct": x["fragment_pct"] if x else None})
+    trend.append({"date": date, "minutes": day["minutes"], "fragment_pct": day["fragment_pct"]})
+    return {**day, "date": date, "trend": trend, "categories": human.CATEGORIES, "work_categories": human.WORK_CATEGORIES}
+
+
+@router.post("/time-entries")
+def api_add_time_entry(body: TimeEntryIn):
+    return {"id": db.insert("review_time_entries", _time_entry_row(body))}
+
+
+@router.put("/time-entries/{eid}")
+def api_edit_time_entry(eid: int, body: TimeEntryIn):
+    row = _time_entry_row(body, replaces=eid)
+    _retire_time_entry(eid)
+    return {"id": db.insert("review_time_entries", row)}
+
+
+@router.delete("/time-entries/{eid}")
+def api_del_time_entry(eid: int):
+    _retire_time_entry(eid)
+    return {"ok": True}
 
 
 # ---------- 核心指标（结果分 / 吞吐 / 杠杆 / 可避免交互占比，AI 评分 + 日志统计） ----------

@@ -1,5 +1,5 @@
 // 复盘（首页）：问候 + 一句话状态 + 大输入框（记一条 / 问 Agent）+ 今日三卡（事项 / AI 建议 / Agent 效率）
-// 标签页：当日复盘 / 时间线 / 问题与经验 / 已读历史 / Agent 效率。路由：#review/<YYYY-MM-DD>/<tab>
+// 标签页：当日复盘（复盘 / Agent 效率 / 人工效率）/ 时间线 / 问题与经验 / 已读历史。路由：#review/<YYYY-MM-DD>/<tab>/<view>
 import { today } from '../api.js';
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
@@ -102,6 +102,33 @@ const CSS = `
 .rv-msg { font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
 table.rv { border-collapse: collapse; width: 100%; font-size: 12px; } table.rv td, table.rv th { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; }
 .rv-status { font-size: 12px; color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
+.rv-views { justify-content: center; margin: 12px 0 0; }
+.rv-fold > summary { display: flex; align-items: baseline; gap: 10px; list-style: none; }
+.rv-fold > summary::-webkit-details-marker { display: none; }
+.rv-fold > summary::before { content: '▸'; color: var(--muted); font-size: 12px; }
+.rv-fold[open] > summary::before { content: '▾'; }
+.rv-fold > summary .card-label { margin: 0; flex: none; }
+.rv-fold > summary .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-fold[open] > summary { margin-bottom: 12px; }
+.rv-fold[open] > summary .muted { white-space: normal; }
+.rv-fold-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.rv-human .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .rv-human .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rv-trend { display: flex; flex-direction: column; gap: 6px; }
+.rv-trend-row { display: grid; grid-template-columns: 96px 1fr 104px; gap: 10px; align-items: center; font-size: 13px; cursor: pointer; }
+.rv-trend-row.on { font-weight: 600; }
+.rv-trend-bar { height: 10px; background: var(--bg-2); border-radius: 999px; overflow: hidden; }
+.rv-trend-fill { height: 100%; background: var(--line-2); border-radius: 999px; overflow: hidden; }
+.rv-trend-whole { height: 100%; background: var(--accent); }
+.rv-trend-row .n { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-time-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.rv-time-form select, .rv-time-form input[type=time] { width: auto; }
+.rv-time-form .out { flex: 1; min-width: 200px; }
+.rv-time-row { display: grid; grid-template-columns: 124px 72px 1fr auto; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px dashed var(--line); font-size: 14px; }
+.rv-time-row .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rv-time-row .x { overflow-wrap: anywhere; }
+.rv-time-row .ops { display: flex; gap: 4px; }
+@media (max-width: 760px) { .rv-time-row { grid-template-columns: 1fr auto; } .rv-time-row .x { grid-column: 1 / -1; } }
 `;
 const STATUS = { todo: '待办', doing: '进行中', done: '完成', partial: '部分', dropped: '放弃' };
 const NOTE_KIND = { problem: '问题', lesson: '经验', insight: '洞察', idea: '想法', spark: '灵感', feeling: '感想', review: '复盘' };
@@ -113,7 +140,11 @@ const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn',
 const REVIEW_AREAS = ['产品迭代', '个人效率', 'AI协作', '学习提升'];
 const REVIEW_ASPECTS = { 做得好的: '做成了什么、有什么收获，写在这一行', 有问题的: '哪里有问题、下一步怎么办，写在这一行' };
 const reviewDraft = {};
-const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史', agent: 'Agent 效率' };
+const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史' };
+const DAY_VIEWS = { review: '复盘', agent: 'Agent 效率', human: '人工效率' };
+const FRAGMENT_TARGET = 70;
+const foldOverride = {};
+const firstLine = (text) => (text || '').replace(/[#*`>_-]/g, '').trim().split('\n')[0].slice(0, 80);
 const WEEK = '日一二三四五六';
 const dayLabel = (s) => { const d = new Date(s + 'T12:00:00'); return `${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]}`; };
 const hours = (min) => ((min || 0) / 60).toFixed(1) + 'h';
@@ -129,16 +160,26 @@ export default {
     el.classList.add('rv-wrap');
 
     const isToday = (d) => d === today();
-    const state = { date: /^\d{4}-\d{2}-\d{2}$/.test(sub[0] || '') ? sub[0] : today(), tab: TABS[sub[1]] ? sub[1] : 'day', day: null, noteKind: '' };
-    const go = (date, tab) => { location.hash = `#review/${date || state.date}/${tab || state.tab}`; };
+    const state = { date: /^\d{4}-\d{2}-\d{2}$/.test(sub[0] || '') ? sub[0] : today(), tab: TABS[sub[1]] ? sub[1] : 'day', view: sub[1] === 'day' && DAY_VIEWS[sub[2]] ? sub[2] : 'review', day: null, noteKind: '' };
+    const go = (date, tab, view) => {
+      const t = tab || state.tab, v = t === 'day' ? view || (tab ? 'review' : state.view) : 'review';
+      location.hash = `#review/${date || state.date}/${t}${v === 'review' ? '' : `/${v}`}`;
+    };
+    const foldCard = (key, label, note, defaultOpen, content, cls = '') => {
+      const id = `${state.date}:${key}`;
+      return h('details.card.rv-fold' + cls, { open: foldOverride[id] ?? defaultOpen, ontoggle: (e) => {
+        if (e.currentTarget.open === defaultOpen) delete foldOverride[id];
+        else foldOverride[id] = e.currentTarget.open;
+      } }, [h('summary', {}, [h('span.card-label', {}, label), note ? h('span.muted', {}, note) : null]), ...content]);
+    };
     const chatRef = () => ({ module: 'review', ref: state.date, title: `复盘 ${state.date}` });
     const askAgent = (text) => openChat({ ...chatRef(), send: text });
 
     if (onAgentDone) document.removeEventListener('agent-done', onAgentDone);
-    onAgentDone = () => el.isConnected && (state.tab === 'day' || state.tab === 'notes') && show();
+    onAgentDone = () => el.isConnected && (state.tab === 'notes' || (state.tab === 'day' && state.view === 'review')) && show();
     document.addEventListener('agent-done', onAgentDone);
     if (onQuickNote) document.removeEventListener('quick-note', onQuickNote);
-    onQuickNote = () => el.isConnected && !el.querySelector('.composer textarea')?.value.trim() && show();
+    onQuickNote = () => el.isConnected && state.view !== 'human' && !el.querySelector('.composer textarea')?.value.trim() && show();
     document.addEventListener('quick-note', onQuickNote);
 
     // ---------- 顶部：日期 + 问候 + 状态 ----------
@@ -184,8 +225,10 @@ export default {
     ]);
     const tabs = h('div.rv-tabs', {}, h('div.tabs', {}, Object.entries(TABS).map(([k, v]) =>
       h('button' + (k === state.tab ? '.active' : ''), { onclick: () => go(null, k) }, v))));
+    const views = state.tab === 'day' ? [h('div.tabs.rv-views', {}, Object.entries(DAY_VIEWS).map(([k, v]) =>
+      h('button' + (k === state.view ? '.active' : ''), { onclick: () => go(null, 'day', k) }, v)))] : [];
     const body = h('div');
-    el.append(h('div.rv-top', {}, dateBox), h('div.hero.rv-hero', {}, [h('h1', {}, heroTitle), statusLine]), comp, chipRow, tabs, body);
+    el.append(h('div.rv-top', {}, dateBox), h('div.hero.rv-hero', {}, [h('h1', {}, heroTitle), statusLine]), comp, chipRow, tabs, ...views, body);
 
     // ---------- 后台任务 ----------
     const watching = new Set();
@@ -202,7 +245,7 @@ export default {
       if (el.isConnected) show();
     }
     async function startCheck() {
-      if (state.tab !== 'day') { go(null, 'day'); setTimeout(() => toast('在「AI 检查建议」卡片里点「开始检查」'), 300); return; }
+      if (state.tab !== 'day' || state.view !== 'review') { go(null, 'day', 'review'); setTimeout(() => toast('在「AI 检查建议」卡片里点「开始检查」'), 300); return; }
       try {
         const r = await api.post('/api/review/check', { date: state.date });
         toast('AI 检查已开始，完成后会更新建议');
@@ -289,8 +332,9 @@ export default {
       const runBtn = h('button' + (sugg.length || rec.ai_analysis ? '.ghost.sm' : '.dark'), { disabled: !!running, onclick: startCheck },
         [ui.icon('spark'), running ? '检查中' : sugg.length || rec.ai_analysis ? '重新检查' : '开始检查']);
       const desc = (s) => [s.status ? STATUS[s.status] || s.status : null, s.progress != null ? s.progress + '%' : null].filter(Boolean).join(' · ');
-      return h('div.card', {}, [
-        h('div.row.between', {}, [h('span.card-label', {}, 'AI 检查建议'), sugg.length || rec.ai_analysis ? runBtn : null]),
+      const checked = sugg.length || rec.ai_analysis;
+      const note = pending.length ? `${pending.length} 条待处理` : running ? '检查中' : checked ? '已处理完' : '';
+      return foldCard('sugg', 'AI 检查建议', note, !checked || !!running || pending.length > 0, [
         pending.length ? h('div', {}, [
           ...pending.slice(0, 3).map((s) => h('div.rv-sugg', {}, [
             h('div.ttl', {}, [titleOf(s.task_id) || `#${s.task_id}`, desc(s) ? h('span.tag', { style: { marginLeft: '6px' } }, '→ ' + desc(s)) : null]),
@@ -308,6 +352,7 @@ export default {
             h('div.muted', {}, `采纳 ${sugg.filter((s) => s.applied).length} 条（其中有证据、自动写回 ${sugg.filter((s) => s.auto).length} 条）· 忽略 ${sugg.filter((s) => s.dismissed).length} 条`)])
           : h('div', {}, [h('h3', {}, '今天做完了吗？让 AI 对照证据看看'),
             h('div.muted', { style: { margin: '-2px 0 12px' } }, '对照目标看当天 git 提交、改动文件和文档，给出每件事的完成度建议。'), runBtn]),
+        checked ? h('div.rv-fold-actions', {}, runBtn) : null,
         status,
       ]);
     }
@@ -315,7 +360,7 @@ export default {
     function effCard(d) {
       const e = d.efficiency?.summary;
       return h('div.card', {}, [
-        h('div.row.between', {}, [h('span.card-label', {}, 'Agent 效率'), h('a.muted', { href: `#review/${state.date}/agent` }, '详情 →')]),
+        h('div.row.between', {}, [h('span.card-label', {}, 'Agent 效率'), h('a.muted', { href: `#review/${state.date}/day/agent` }, '详情 →')]),
         e && e.sessions ? h('div.rv-tiles', {}, [
           ['人工介入', `${e.human_turns}次`], ['Agent 活跃', hours(e.active_min_interactive ?? e.active_min)],
           ['等待中位', `${e.wait_median_min}分`], ['峰值并行', e.peak_parallel],
@@ -323,7 +368,7 @@ export default {
           : h('div', {}, [h('h3', {}, e ? '这一天没有 Agent 会话' : '还没扫描 Agent 会话'),
             h('div.muted', { style: { margin: '-2px 0 12px' } }, '统计 Claude Code / Codex 的人工介入、等待与并行。')]),
         e && e.sessions ? h('div.muted', {}, `纠正 ${e.kinds?.correct || 0} · 中断 ${e.kinds?.interrupt || 0} · 工具错误 ${e.tool_errors}/${e.tool_calls}`)
-          : h('button.dark', { onclick: () => go(null, 'agent') }, [ui.icon('refresh'), '扫描会话']),
+          : h('button.dark', { onclick: () => go(null, 'day', 'agent') }, [ui.icon('refresh'), '扫描会话']),
       ]);
     }
 
@@ -355,11 +400,15 @@ export default {
             .map((label) => `${name}·${label}`).map((key) => [key, reviewDraft[key] || ''])));
           const made = await api.post('/api/notes/review', { date: state.date, entries });
           Object.keys(reviewDraft).forEach((key) => delete reviewDraft[key]);
+          delete foldOverride[`${state.date}:template`];
           toast(`已贴一张「复盘」便签${made.issues.length ? `，${made.issues.length} 个问题进了规划事项` : ''}`);
           show();
         } catch (e) { toast(e.message, true); }
       };
-      return h('div.card', {}, [h('div.rv-areas', {}, REVIEW_AREAS.map(area)),
+      const filled = history.filter((n) => n.date === state.date).length;
+      const note = filled ? `这天已填 ${filled} 张便签 · 点开可以再写一张或看过去写的` : '填几栏算几栏，保存成一张「复盘」便签，有问题的进规划事项 · 每栏下面是过去写的，方便对比';
+      const drafting = Object.values(reviewDraft).some((v) => v.trim());
+      return foldCard('template', '复盘模板', note, !filled || drafting, [h('div.rv-areas', {}, REVIEW_AREAS.map(area)),
         h('div.rv-area-save', {}, h('button.primary', { onclick: save }, [ui.icon('check'), '保存到便签']))]);
     }
 
@@ -373,13 +422,14 @@ export default {
       };
       const btn = h('button' + (rec.improve_md ? '.ghost.sm' : '.dark'), { disabled: !!running, onclick: run },
         [ui.icon('spark'), running ? '分析中' : rec.improve_md ? '重新给建议' : 'Agent 改善']);
-      return h('div.card.rv-improve', {}, [
-        h('div.row.between', {}, [h('span.card-label', {}, 'Agent 改善 · 结合复盘、当天会话与学习反馈'), rec.improve_md ? btn : null]),
+      const note = running ? '分析中' : rec.improve_md ? firstLine(rec.improve_md) : '';
+      return foldCard('improve', 'Agent 改善 · 结合复盘、当天会话与学习反馈', note, !rec.improve_md || !!running, [
         rec.improve_md ? annotate(ctx, h('div.md', {}, md(rec.improve_md)), { doc: `review:${state.date}:improve`, title: `${state.date} · Agent 改善`, link: `#review/${state.date}`, source: rec.improve_md })
           : h('div', {}, [h('div.muted', { style: { margin: '2px 0 12px' } }, '点击后才把这天的复盘便签和未解决的问题发给 Agent，对照会话和学习记录找根因、给建议。'),
           running ? null : btn]),
+        rec.improve_md ? h('div.rv-fold-actions', {}, btn) : null,
         status,
-      ]);
+      ], '.rv-improve');
     }
 
     function noteCard(n, after) {
@@ -405,7 +455,7 @@ export default {
       const lx = d.learning_extra;
       const reviewHistory = await api.get(`/api/review/notes?author=me&kind=review&end=${state.date}`);
       const nodes = [
-        ui.section('复盘模板', '填几栏算几栏，保存成一张「复盘」便签，有问题的进规划事项 · 下面是这一栏过去写的，方便对比'), templateCard(reviewHistory),
+        templateCard(reviewHistory),
         improveCard(d),
         ...(rec.entries?.length ? [ui.section('我的复盘', '这一天之前写下的记录'), recordCard(rec.entries)] : []),
         ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
@@ -530,7 +580,7 @@ export default {
         ]),
         h('div', { style: { marginBottom: '14px' } }, Object.entries(a.kinds || {}).map(([k, v]) => h('span.tag.' + (MSG_CLS[k] || ''), {}, `${MSG_KIND[k] || k} ${v}`))),
         status,
-        e.reflection ? h('div.card', {}, [h('span.card-label', {}, 'AI 反思'), annotate(ctx, md(e.reflection), { doc: `review:${state.date}:reflection`, title: `${state.date} · Agent 效率 AI 反思`, link: `#review/${state.date}`, source: e.reflection })])
+        e.reflection ? foldCard('reflection', 'AI 反思', firstLine(e.reflection), false, [annotate(ctx, md(e.reflection), { doc: `review:${state.date}:reflection`, title: `${state.date} · Agent 效率 AI 反思`, link: `#review/${state.date}`, source: e.reflection })])
           : h('div.card.flat', {}, [h('span.card-label', {}, 'AI 反思'), h('div.muted', {}, '还没有反思。点右上「AI 反思」，让 Agent 分析人工介入是否必要、怎么减少。')]),
       ];
       const inter = e.sessions.filter((s) => !s.automated || s.human_turns);
@@ -561,13 +611,86 @@ export default {
       body.replaceChildren(h('div.rv-agent', {}, nodes));
     }
 
+    // ---------- 人工效率 ----------
+    function trendCard(trend) {
+      const longest = Math.max(1, ...trend.map((t) => t.minutes || 0));
+      return h('div.card', {}, h('div.rv-trend', {}, trend.map((t) => h('div.rv-trend-row' + (t.date === state.date ? '.on' : ''), { title: '看这一天', onclick: () => go(t.date) }, [
+        h('span', {}, dayLabel(t.date)),
+        h('div.rv-trend-bar', {}, t.minutes ? h('div.rv-trend-fill', { style: { width: `${(t.minutes / longest) * 100}%` } },
+          h('div.rv-trend-whole', { style: { width: `${100 - (t.fragment_pct ?? 100)}%` } })) : null),
+        h('span.n', {}, t.minutes == null ? '没有数据' : t.minutes ? `${hours(t.minutes)} · 碎片 ${t.fragment_pct}%` : '0h'),
+      ]))));
+    }
+
+    function timeRecordCard(x) {
+      const category = h('select', {}, x.categories.map((c) => h('option', { value: c }, c)));
+      const start = h('input', { type: 'time' });
+      const end = h('input', { type: 'time' });
+      const output = h('input.out', { placeholder: '一句产出（可不填）' });
+      let editing = null;
+      const submit = h('button.primary', { onclick: async () => {
+        const data = { date: state.date, category: category.value, start: start.value, end: end.value, output: output.value };
+        try {
+          if (editing) await api.put(`/api/review/time-entries/${editing}`, data);
+          else await api.post('/api/review/time-entries', data);
+          await renderHuman();
+        } catch (e) { toast(e.message, true); }
+      } }, '记下');
+      const fill = (e) => {
+        category.value = e.category || x.categories[0];
+        start.value = e.start; end.value = e.end; output.value = e.output || '';
+        editing = e.id || null;
+        submit.textContent = editing ? '保存修改' : '记下';
+        output.focus();
+      };
+      const span = (e) => `${e.start}–${e.end <= e.start ? '次日 ' : ''}${e.end}`;
+      const rows = [
+        ...x.entries.map((e) => ({ at: e.start, node: h('div.rv-time-row', {}, [h('span.t', {}, span(e)), h('span.tag', {}, e.category), h('span.x', {}, e.output),
+          h('div.ops', {}, [h('button.ghost.sm', { onclick: () => fill(e) }, '改'),
+            h('button.ghost.sm', { onclick: async () => { if (confirm('删除这条记录？')) { await api.del(`/api/review/time-entries/${e.id}`); await renderHuman(); } } }, '删')])]) })),
+        ...x.blanks.map((b) => ({ at: b.start, node: h('div.rv-time-row', {}, [h('span.t', {}, span(b)), h('span.tag.line', {}, '待填'), h('span.x.muted', {}, `${b.minutes} 分钟没有记录`),
+          h('div.ops', {}, h('button.ghost.sm', { onclick: () => fill(b) }, '填'))]) })),
+      ].sort((a, b) => a.at.localeCompare(b.at));
+      return h('div.card', {}, [
+        h('div.rv-time-form', {}, [category, start, '—', end, output, submit]),
+        rows.length ? h('div', {}, rows.map((r) => r.node)) : h('div.muted', {}, '这一天还没有手填记录，也没有 20 分钟以上的空白。'),
+      ]);
+    }
+
+    async function renderHuman() {
+      loadDay();
+      if (!body.firstChild) body.replaceChildren(ui.empty('统计中…', '读取当天的会话和学习记录'));
+      const x = await api.get(`/api/review/human?date=${state.date}`);
+      const whole = x.blocks.filter((b) => b.whole);
+      const pieces = x.blocks.filter((b) => !b.whole);
+      const blockRow = (b) => h('div.rv-time-row', {}, [h('span.t', {}, `${b.start}–${b.end}`), h('span.tag.line', {}, `${b.minutes} 分`), h('span.x', {}, b.project)]);
+      body.replaceChildren(h('div.rv-human', {}, [
+        ui.section('人工效率', `人工耗时 = 有活动记录的分钟（含 10 分钟内的空隙）+ 手填的${x.work_categories.join(' / ')}；碎片率 = 1 − 连续 25 分钟以上做同一项目的分钟 ÷ 人工耗时`),
+        ui.stats([
+          { k: '人工耗时', v: hours(x.minutes) },
+          { k: `碎片率（建议 ${FRAGMENT_TARGET}% 以下）`, v: x.fragment_pct == null ? '—' : `${x.fragment_pct}%` },
+          { k: '整块时间', v: hours(x.whole_min) },
+          { k: '待填空白', v: `${x.blanks.length} 段` },
+        ]),
+        h('div.muted', { style: { marginBottom: '10px' } }, '看 Agent 输出超过 10 分钟不发消息会被算成中断，碎片率会偏高；这种时段可以手填成工作。'),
+        ui.section('时间记录', '吃饭、运动、睡觉和没被采到的工作都在这里手填；没填不影响别的，修改留历史'),
+        timeRecordCard(x),
+        ui.section('整块时间', whole.length ? `${whole.length} 段 · 共 ${x.whole_min} 分钟` : ''),
+        h('div.card', {}, [
+          whole.length ? h('div', {}, whole.map(blockRow)) : h('div.muted', {}, '这一天没有连续 25 分钟以上做同一项目的时段。'),
+          pieces.length ? h('details', { style: { marginTop: '10px' } }, [h('summary', {}, `其余碎片 ${pieces.length} 段`), ...pieces.map(blockRow)]) : null,
+        ]),
+        ui.section('近 7 天', '蓝色是整块时间，灰色是碎片时间 · 点一行看那一天'),
+        trendCard(x.trend),
+      ]));
+    }
+
     async function show() {
       try {
-        if (state.tab === 'day') await renderDay();
+        if (state.tab === 'day') await (state.view === 'agent' ? renderAgent() : state.view === 'human' ? renderHuman() : renderDay());
         else if (state.tab === 'timeline') await renderTimeline();
         else if (state.tab === 'notes') await renderNotes();
-        else if (state.tab === 'reads') await renderReads();
-        else await renderAgent();
+        else await renderReads();
       } catch (e) {
         body.replaceChildren(h('pre.error', {}, e.message));
       }
