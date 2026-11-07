@@ -18,7 +18,7 @@ const TABS = [['变化流', '#intel'], ['总览', '#intel/overview'], ['创业�
   ['增长 Case', '#intel/growth'], ['开源雷达', '#intel/oss'], ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
 const tabs = (h, active) => h('div.tabs', {}, TABS.map(([t, href]) =>
   h('button' + (href === active ? '.active' : ''), { onclick: () => { location.hash = href; } }, t)));
-const LIST_KEYS = (h) => h('div.it-keys', {}, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 选择 · ', h('kbd', {}, 'Enter'), ' 详情 · ', h('kbd', {}, 'o'), ' 原文']);
+const LIST_KEYS = (h) => h('div.it-keys', {}, [h('kbd', {}, '↑'), h('kbd', {}, '↓'), ' 选择 · ', h('kbd', {}, '→'), ' 详情 · ', h('kbd', {}, '←'), ' 原文 · ', h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 切类型']);
 
 const CSS = `
 .it-row { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 4px 12px; padding: 12px 14px; border-radius: 10px; cursor: pointer; }
@@ -191,20 +191,27 @@ function startupTable(h, rows, { showTrack = true } = {}) {
     ].filter((x) => x !== null)))]);
 }
 
-// 逐条浏览：列表页记下这组条目，详情页左侧按它导航、j/k 切换。app.js 每次路由都重新加载模块，所以存在 window 上。
+// 逐条浏览：列表页记下这组条目，详情页左侧按它导航、↑↓ 切换。app.js 每次路由都重新加载模块，所以存在 window 上。
 const eventNav = (api, e) => ({ id: e.id, href: `#intel/e/${e.id}`, mark: e.level, title: e.title, sub: [e.company_name, e.date].filter(Boolean).join(' · '), read: e.read,
   url: (e.sources.find((s) => s.official) || e.sources[0])?.url, markRead: () => api.post(`/api/intel/events/${e.id}/read`).catch(() => {}) });
 const caseNav = (api, g) => ({ id: g.id, href: `#intel/g/${g.id}`, mark: g.auto ? '日' : '选', title: `${g.company || '?'} · ${g.item?.title || ''}`, sub: g.day, read: g.read,
   url: g.item?.url, markRead: () => api.post('/api/intel/growth/read', { item_id: g.item_id }).catch(() => {}) });
 
-function setKeys(el, keys) {
+function stepTab(el, d) {
+  const btns = [...(el.querySelector('.tabs')?.children || [])];
+  if (!btns.length) return;
+  const i = btns.findIndex((b) => b.classList.contains('active'));
+  btns[(i + d + btns.length) % btns.length].click();
+}
+
+function setKeys(el, pageKeys) {
+  const keys = { j: () => stepTab(el, 1), k: () => stepTab(el, -1), ...pageKeys };
   document.removeEventListener('keydown', window.__itKey);
   window.__itKey = (e) => {
     if (!el.isConnected) return document.removeEventListener('keydown', window.__itKey);
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const a = document.activeElement;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(a?.tagName) || a?.isContentEditable) return;
-    if (e.key === 'Enter' && a?.closest('button, a, summary')) return;
     if (keys[e.key]) { e.preventDefault(); keys[e.key](); }
   };
   document.addEventListener('keydown', window.__itKey);
@@ -232,8 +239,8 @@ function browseList(el, ctx, kind, items, label) {
   const cur = () => (i >= 0 ? items.find((x) => x.id === nav.sel) : null);
   const open = () => { if (cur()) location.hash = cur().href; };
   setKeys(el, {
-    j: () => pick(i + 1), k: () => pick(i < 0 ? 0 : i - 1), Enter: open, d: open,
-    o: () => { const it = cur(); if (!it) return; openOriginal(it, ctx.toast); it.markRead(); rows[i].classList.add('read'); },
+    ArrowDown: () => pick(i + 1), ArrowUp: () => pick(i < 0 ? 0 : i - 1), ArrowRight: open,
+    ArrowLeft: () => { const it = cur(); if (!it) return; openOriginal(it, ctx.toast); it.markRead(); rows[i].classList.add('read'); },
   });
 }
 
@@ -260,7 +267,7 @@ async function browseDetail(el, ctx, kind, id, renderBody) {
   const count = h('span');
   let seq = 0;
   const pos = () => nav.items.findIndex((x) => x.id === nav.sel);
-  // 切换只换右侧，左侧列表和滚动位置不动；连按 j/k 时跳过的条目不请求，也不算已读
+  // 切换只换右侧，左侧列表和滚动位置不动；连按 ↑↓ 时跳过的条目不请求，也不算已读
   const show = async (it, switching) => {
     const mine = ++seq;
     links.get(nav.sel)?.classList.remove('active');
@@ -292,10 +299,10 @@ async function browseDetail(el, ctx, kind, id, renderBody) {
   } }, [h('div.it-lv.' + it.mark, {}, it.mark), h('div.t', {}, it.title), it.sub ? h('div.s', {}, it.sub) : null])]));
   el.append(h('div.it-split', {}, [
     h('nav.it-nav', {}, [h('div.it-nav-head', {}, [h('b', {}, nav.label), count]), h('div.it-nav-list', {}, [...links.values()]),
-      h('div.it-nav-foot', {}, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 切换 · ', h('kbd', {}, 'o'), ' 原文'])]),
+      h('div.it-nav-foot', {}, [h('kbd', {}, '↑'), h('kbd', {}, '↓'), ' 切换 · ', h('kbd', {}, '←'), ' 原文'])]),
     pane]));
   const step = (d) => { const it = nav.items[pos() + d]; if (it) show(it, true); };
-  setKeys(el, { j: () => step(1), k: () => step(-1), o: () => openOriginal(nav.items[pos()], toast) });
+  setKeys(el, { ArrowDown: () => step(1), ArrowUp: () => step(-1), ArrowLeft: () => openOriginal(nav.items[pos()], toast) });
   nav.sel = id;
   await show(nav.items[pos()], false);
 }
@@ -798,6 +805,7 @@ export default {
   async render(el, ctx) {
     if (!document.getElementById('it-css')) document.head.append(ctx.h('style#it-css', {}, CSS));
     const [view, arg] = ctx.sub;
+    setKeys(el, {});
     if (view === 'e' && arg) return browseDetail(el, ctx, 'e', +arg, renderEvent);
     if (view === 'c' && arg) return renderCompany(el, ctx, decodeURIComponent(arg));
     if (view === 'companies') return renderCompanies(el, ctx);
