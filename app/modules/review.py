@@ -972,24 +972,26 @@ def _save_scores(date: str, output: str) -> None:
         _upsert_stats(date, {"scores": {**eff.get("scores", {}), "error": "评分输出里没有可用的 JSON"}})
         return
     turns = {s["session_id"]: s["human_turns"] for s in eff["sessions"] if s["session_id"] in by}
-    _upsert_stats(date, {"scores": {"by_session": by, "turns_at": turns, "scored_at": db.now()}})
+    _upsert_stats(date, {"scores": {"by_session": by, "turns_at": turns, "scored_at": db.now(), "rubric": score.RUBRIC_VERSION}})
 
 
 def core_metrics(date: str, prev: bool = True) -> dict:
     eff = get_efficiency(date) or {"summary": {}, "sessions": [], "scores": {}}
     sc = eff.get("scores") or {}
-    out = score.compute(sc.get("by_session") or {}, eff["sessions"])
-    at = sc.get("turns_at") or {}
-    out.update({"date": date, "scanned_at": eff.get("scanned_at"), "scored_at": sc.get("scored_at"), "error": sc.get("error", ""),
+    by = score.current(sc)
+    out = score.compute(by, eff["sessions"])
+    at = sc.get("turns_at") or {} if by else {}
+    out.update({"date": date, "scanned_at": eff.get("scanned_at"), "scored_at": sc.get("scored_at") if by else None, "error": sc.get("error", ""),
                 "new_turns": sum(max(0, s["human_turns"] - at[s["session_id"]]) for s in eff["sessions"] if s["session_id"] in at),
-                "unscored": [s["session_id"] for s in score.scorable(eff["sessions"]) if s["session_id"] not in (sc.get("by_session") or {})],
+                "unscored": [s["session_id"] for s in score.scorable(eff["sessions"]) if s["session_id"] not in by],
                 "nudges": eff["summary"].get("nudges", 0), "waits_over_30m": eff["summary"].get("waits_over_30m", 0),
                 "wait_p90_min": eff["summary"].get("wait_p90_min", 0), "trace_min": eff["summary"].get("trace_min", {}),
                 "defs": [{"key": k, "label": n, "unit": u, "higher_better": hb, "def": d} for k, n, u, hb, d in score.CORE]})
     jid = eff.get("score_job_id")
     out["job"] = db.row("SELECT id, status FROM jobs WHERE id=?", [jid]) if jid else None
     if prev:
-        p = db.row("SELECT date FROM review_agent_stats WHERE date<? AND scores LIKE '%by_session%' ORDER BY date DESC LIMIT 1", [date])
+        p = db.row("SELECT date FROM review_agent_stats WHERE date<? AND scores LIKE ? ORDER BY date DESC LIMIT 1",
+                   [date, f'%"rubric": {score.RUBRIC_VERSION}%'])
         out["prev"] = {"date": p["date"], "core": core_metrics(p["date"], prev=False)["core"]} if p else None
     return out
 
