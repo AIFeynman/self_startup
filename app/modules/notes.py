@@ -119,19 +119,19 @@ ISSUE_ASPECT = "有问题的"
 
 
 class ReviewIn(BaseModel):
-    entries: dict[str, str]
+    entries: dict[str, list[str]]
     date: str | None = None
 
 
 @router.post("/review")
 def api_review(body: ReviewIn):
-    filled = {area: text.strip() for area, text in body.entries.items() if text.strip()}
+    filled = [(key, text.strip()) for key, texts in body.entries.items() for text in texts if text.strip()]
     if not filled:
         raise HTTPException(400, "至少填一栏")
     date = body.date or db.today()
-    note = add("\n".join([f"复盘 {date[5:]}", *(f"{key}：{text}" for key, text in filled.items())]), "review", date=date)
+    note = add("\n".join([f"复盘 {date[5:]}", *(f"{key}：{text}" for key, text in filled)]), "review", date=date)
     issues = [tasks.add_issue(f"{key.split('·')[0]}：{review.parse_quick_note(text)['title']}", date)
-              for key, text in filled.items() if key.endswith(f"·{ISSUE_ASPECT}")]
+              for key, text in filled if key.endswith(f"·{ISSUE_ASPECT}")]
     return {"note": note, "issues": [i for i in issues if i]}
 
 

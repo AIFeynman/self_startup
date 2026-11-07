@@ -353,7 +353,7 @@ def test_agent_improve_reads_review_notes_and_open_problems_only(client):
     db.execute("DELETE FROM tasks WHERE kind='issue'")
     d = "2026-05-10"
     client.post("/api/notes/review", json={"date": d, "entries": {
-        "AI协作·做得好的": "并行开了三个会话", "AI协作·有问题的": "任务书没写完成标准"}})
+        "AI协作·做得好的": ["并行开了三个会话"], "AI协作·有问题的": ["任务书没写完成标准"]}})
     client.post("/api/notes", json={"text": "这条灵感只留本地", "kind": "spark", "date": d})
 
     job_id = client.post("/api/review/improve", json={"date": d}).json()["job_id"]

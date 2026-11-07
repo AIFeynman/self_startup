@@ -303,7 +303,7 @@ def _clean_issues():
 def test_review_problem_stays_in_plan_until_resolved(client):
     _clean_issues()
     client.post("/api/notes/review", json={"date": "2026-04-01", "entries": {
-        "产品迭代·做得好的": "模板上线了", "产品迭代·有问题的": "排期总是写不清 #流程", "AI协作·有问题的": " "}})
+        "产品迭代·做得好的": ["模板上线了"], "产品迭代·有问题的": ["排期总是写不清 #流程"], "AI协作·有问题的": [" "]}})
 
     added = _issues(client, "2026-04-01")
     assert [i["title"] for i in added] == ["产品迭代：排期总是写不清"]
@@ -321,7 +321,7 @@ def test_review_problem_stays_in_plan_until_resolved(client):
 
 def test_same_open_problem_is_not_added_twice(client):
     _clean_issues()
-    body = {"date": "2026-04-02", "entries": {"个人效率·有问题的": "总被打断"}}
+    body = {"date": "2026-04-02", "entries": {"个人效率·有问题的": ["总被打断"]}}
     client.post("/api/notes/review", json=body)
     client.post("/api/notes/review", json={**body, "date": "2026-04-03"})
     assert len(_issues(client, "2026-04-03")) == 1
@@ -330,7 +330,7 @@ def test_same_open_problem_is_not_added_twice(client):
 def test_review_problem_stays_out_of_carry_and_day_tasks(client):
     _clean_issues()
     client.post("/api/tasks", json={"title": "昨天没做完", "date": "1999-04-04"})
-    client.post("/api/notes/review", json={"date": "1999-04-05", "entries": {"学习提升·有问题的": "论文读不完"}})
+    client.post("/api/notes/review", json={"date": "1999-04-05", "entries": {"学习提升·有问题的": ["论文读不完"]}})
     day = client.get("/api/plan/day?date=1999-04-05").json()
     assert all(t["kind"] != "issue" for t in day["tasks"])
     assert client.get("/api/tasks?start=1999-04-05&end=1999-04-05").json() == []
@@ -340,7 +340,7 @@ def test_review_problem_stays_out_of_carry_and_day_tasks(client):
 
 def test_plan_agent_knows_open_problems(client):
     _clean_issues()
-    client.post("/api/notes/review", json={"date": "2026-04-07", "entries": {"产品迭代·有问题的": "发布总要返工"}})
+    client.post("/api/notes/review", json={"date": "2026-04-07", "entries": {"产品迭代·有问题的": ["发布总要返工"]}})
     assert "产品迭代：发布总要返工" in plan.agent_context("2026-04-08")
 
 

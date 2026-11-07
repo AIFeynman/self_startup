@@ -62,6 +62,25 @@ export function md(text) {
   return div;
 }
 
+const NUM_MARK = /(^|[\s，。；;：:])[（(]?(\d{1,2})(?:[.、)）]\s*|\s+)(?=\S)/g;
+const boldHead = (item) => { const i = item.search(/[，,：:]/); return i > 1 && i <= 24 ? `**${item.slice(0, i)}**${item.slice(i)}` : item; };
+
+function numberedLine(line) {
+  const cuts = [];
+  for (const m of line.matchAll(NUM_MARK)) {
+    if (Number(m[2]) === cuts.length + 1) cuts.push({ at: m.index + m[1].length, body: m.index + m[0].length });
+  }
+  if (cuts.length < 2) return line;
+  const lead = line.slice(0, cuts[0].at).trim();
+  const items = cuts.map((c, i) => `${i + 1}. ${boldHead(line.slice(c.body, cuts[i + 1]?.at ?? line.length).trim())}`);
+  return [lead, items.join('\n')].filter(Boolean).join('\n\n');
+}
+
+// 用户随手写的便签：一行里的「1 … 2 … 3 …」拆成编号列表，每条开头的短句加粗，换行保留
+export function noteHtml(text) {
+  return md((text || '').split('\n').map((line) => line.trim()).filter(Boolean).map(numberedLine).join('\n\n'));
+}
+
 export function toast(msg, isErr = false) {
   const t = h('div.toast' + (isErr ? '.err' : ''), {}, msg);
   document.body.append(t);
