@@ -23,6 +23,14 @@ const CSS = `
 .pl-preview .ln b { font-weight: 600; font-size: 13px; }
 .pl-preview .ln .goal { color: var(--muted); }
 .pl-preview .tag { margin-right: 0; }
+.pl-range { display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; margin: -4px 4px 10px; font-size: 12px; color: var(--muted); }
+.pl-range button { padding: 2px 10px; font-size: 12px; border-radius: 999px; }
+.pl-range button.on { background: var(--dark); color: var(--bg); border-color: var(--dark); }
+.pl-range input[type=date] { padding: 2px 8px; font-size: 12px; }
+.pl-span { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.pl-span.over { color: var(--warn); font-weight: 600; }
+.pl-edit-dates { display: flex; gap: 10px; }
+.pl-edit-dates label { flex: 1; }
 .pl-syntax { color: var(--muted); font-size: 12px; margin: -8px 4px 10px; }
 .pl-syntax code { background: var(--bg-2); padding: 0 4px; border-radius: 4px; font-size: 11px; }
 .pl-opts { display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 6px; font-size: 13px; color: var(--muted); }
@@ -160,8 +168,6 @@ const LEVEL = { heavy: '重度', medium: '中度', light: '轻度', auto: '自�
 const EXEC = { human: '人', claude: 'Claude', codex: 'Codex', mixed: '混合' };
 const STATUS = { todo: '待办', doing: '进行中', done: '完成', partial: '部分', dropped: '放弃' };
 const KIND = { work: '工作', learning: '学习', life: '生活' };
-const ISSUE_KIND = 'issue';
-const ISSUE_STATUS = { todo: '未解决', doing: '处理中', done: '已解决' };
 const SOURCE_LINES = [
   [/^deepread:item:\d+ #learn\/item\/(\d+)/, ([, id]) => ({ href: `#learn/item/${id}`, label: '打开深读' })],
   [/^learn:plan:(\d+) step:(\d+)/, ([, plan, step]) => ({ href: `#learn/plan/${plan}/step/${step}`, label: '打开学习步骤' })],
@@ -177,8 +183,7 @@ const splitNotes = (notes) => {
 };
 const PRIO = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
 const PX = 1.8; // 每分钟像素
-const KIND_ALIAS = { 学习: 'learning', learn: 'learning', learning: 'learning', 生活: 'life', life: 'life', 工作: 'work', work: 'work',
-  长期: ISSUE_KIND, 持续: ISSUE_KIND, 问题: ISSUE_KIND };
+const KIND_ALIAS = { 学习: 'learning', learn: 'learning', learning: 'learning', 生活: 'life', life: 'life', 工作: 'work', work: 'work' };
 const AT_ALIAS = { auto: ['human_level', 'auto'], 自动: ['human_level', 'auto'], 重: ['human_level', 'heavy'], heavy: ['human_level', 'heavy'],
   中: ['human_level', 'medium'], medium: ['human_level', 'medium'], 轻: ['human_level', 'light'], light: ['human_level', 'light'],
   claude: ['executor', 'claude'], codex: ['executor', 'codex'], 人: ['executor', 'human'], human: ['executor', 'human'], mixed: ['executor', 'mixed'] };
@@ -207,14 +212,37 @@ export function needsYou(text) {
   return [...new Set(out.filter(Boolean))].slice(0, 8);
 }
 
+const DAY = 864e5;
+const ymd = (x) => x.toLocaleDateString('sv-SE');
+const addDays = (date, n) => { const x = new Date(date + 'T00:00'); x.setDate(x.getDate() + n); return ymd(x); };
+const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00') - new Date(a + 'T00:00')) / DAY);
+const isSpan = (t) => t.end_date !== t.date;
+
+// 范围快捷项：都从当前查看的那天算起；end '' = 不设结束
+export const RANGES = {
+  day: { label: '当天', end: (d) => d },
+  week: { label: '到本周日', end: (d) => addDays(d, (7 - new Date(d + 'T00:00').getDay()) % 7) },
+  month: { label: '到月底', end: (d) => { const x = new Date(d + 'T00:00'); return ymd(new Date(x.getFullYear(), x.getMonth() + 1, 0)); } },
+  open: { label: '不设结束', end: () => '' },
+};
+
+// `11-30` / `2026-11-30` → 完整日期；没写年份的按 base 的年份，roll 时早于 base 就算明年（结束日跨年）
+function fullDate(s, base, roll = false) {
+  const m = s.match(/^(?:(\d{4})-)?(\d{1,2})-(\d{1,2})$/);
+  if (!m) return null;
+  const d = `${m[1] || base.slice(0, 4)}-${pad2(+m[2])}-${pad2(+m[3])}`;
+  return roll && !m[1] && d < base ? `${+d.slice(0, 4) + 1}${d.slice(4)}` : d;
+}
+
 const mins = (s) => { const [a, b] = (s || '0:0').split(':').map(Number); return a * 60 + b; };
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /**
  * 解析一行：`写周报 P1 60m #学习 @重 @claude >交给老板前定稿`
- * P1..P4 优先级；60m / 1.5h / 90分钟 预计时长；#学习/#生活/#工作 类别，#长期/#持续 记成长期事项 / 持续问题；@auto/@重/@中/@轻 人干预度；@claude/@codex/@人 执行者；> 之后是目标。
+ * P1..P4 优先级；60m / 1.5h / 90分钟 预计时长；#学习/#生活/#工作 类别；@auto/@重/@中/@轻 人干预度；@claude/@codex/@人 执行者；> 之后是目标。
+ * 日期范围：`~11-30` 从 base 到 11-30，`11-10~11-30` 指定起止，单独一个 `~` 不设结束。
  */
-export function parseLine(line) {
+export function parseLine(line, base = today()) {
   let s = line.replace(/^\s*(?:[-*•]|\d+[.、)])\s+/, '').trim();
   const out = {};
   const gi = s.search(/[>＞]/);
@@ -227,6 +255,10 @@ export function parseLine(line) {
     else if ((m = tok.match(/^(\d+(?:\.\d+)?)(h|hr|小时)$/i))) out.est_minutes = Math.round(+m[1] * 60);
     else if ((m = tok.match(/^[#＃](.+)$/)) && KIND_ALIAS[m[1].toLowerCase()]) out.kind = KIND_ALIAS[m[1].toLowerCase()];
     else if ((m = tok.match(/^[@＠](.+)$/)) && AT_ALIAS[m[1].toLowerCase()]) { const [k, v] = AT_ALIAS[m[1].toLowerCase()]; out[k] = v; }
+    else if ((m = tok.match(/^([\d-]*)[~～]([\d-]*)$/)) && (!m[1] || fullDate(m[1], base)) && (!m[2] || fullDate(m[2], base))) {
+      out.date = m[1] ? fullDate(m[1], base) : base;
+      out.end_date = m[2] ? fullDate(m[2], out.date, true) : '';
+    }
     else rest.push(tok);
   }
   out.title = rest.join(' ').trim();
@@ -281,14 +313,19 @@ export default {
       if (el.isConnected) load();
     }
 
-    const addLines = async (text, asIssue = false) => {
-      const items = text.split('\n').map(parseLine).filter((x) => x.title).map((it) => (asIssue ? { ...it, kind: ISSUE_KIND } : it));
+    const range = { mode: 'day', start: '', end: '' };
+    const rangeOf = (p) => ('date' in p ? { date: p.date, end_date: p.end_date }
+      : range.mode === 'custom' ? { date: range.start || state.date, end_date: range.end }
+        : { date: state.date, end_date: RANGES[range.mode].end(state.date) });
+    const parse = (text) => text.split('\n').map((l) => parseLine(l, state.date)).filter((x) => x.title).map((it) => ({ ...it, ...rangeOf(it) }));
+    const addLines = async (text) => {
+      const items = parse(text);
       if (!items.length) { toast('没有可添加的事项（标题为空）', true); return false; }
-      for (const it of items) {
-        await api.post('/api/tasks', { date: state.date, ...(it.kind === ISSUE_KIND ? {} : { priority: 2, kind: 'work', est_minutes: 60 }), ...it });
-      }
-      const n = items.filter((it) => it.kind === ISSUE_KIND).length;
-      toast(`已添加 ${items.length} 项${n ? `（${n} 项进了长期事项 / 持续问题）` : ''}`);
+      try {
+        for (const it of items) await api.post('/api/tasks', { priority: 2, kind: 'work', est_minutes: 60, ...it });
+      } catch (e) { toast(e.message, true); load(); return false; }
+      const n = items.filter(isSpan).length;
+      toast(`已添加 ${items.length} 项${n ? `（${n} 项跨日）` : ''}`);
       preview.replaceChildren();
       load();
     };
@@ -310,33 +347,47 @@ export default {
     const comp = ui.composer({
       placeholder: '每行一件事，例如：写周报 P1 60m #工作 @重 >下班前发出', autofocus: true, rows: 2,
       modes: [{ id: 'add', label: '加事项', placeholder: '每行一件事，例如：写周报 P1 60m #工作 @重 >下班前发出' },
-        { id: 'issue', label: '加长期事项 / 持续问题', placeholder: '每行一个，例如：Agent teams 如何管理、人机如何协同的框架' },
         { id: 'ask', label: '问 Agent', placeholder: '比如：把第一件事拆细一点 / 下午还能塞进什么？' }],
       hint: 'Enter 添加 · Shift+Enter 换行',
-      onSubmit: (t, mode) => (mode === 'ask' ? askDay(t) : addLines(t, mode === 'issue')),
+      onSubmit: (t, mode) => (mode === 'ask' ? askDay(t) : addLines(t)),
     });
     const ta = comp.querySelector('textarea');
     const renderPreview = () => {
       if (comp.mode === 'ask') return preview.replaceChildren();
-      const lines = ta.value.split('\n').filter((l) => l.trim()).slice(0, 8).map(parseLine);
-      preview.replaceChildren(...lines.map((p) => (comp.mode === 'issue' || p.kind === ISSUE_KIND ? h('div.ln', {}, [
-        h('b', {}, p.title || '（缺标题）'), h('span.tag.gray', {}, '长期事项 / 持续问题'), h('span.goal', {}, '每天都在，不进排程'),
-      ]) : h('div.ln', {}, [
+      const lines = ta.value.split('\n').filter((l) => l.trim()).slice(0, 8).map((l) => parseLine(l, state.date)).map((p) => ({ ...p, ...rangeOf(p) }));
+      preview.replaceChildren(...lines.map((p) => h('div.ln', {}, [
         h('b', {}, p.title || '（缺标题）'),
+        isSpan(p) ? h('span.tag.gray', {}, spanText(p)) : null,
         h('span.tag' + (p.priority === 1 ? '' : '.line'), {}, `P${p.priority || 2}`),
         h('span.tag.line', {}, `${p.est_minutes || 60}m${p.est_minutes ? '' : '·默认'}`),
         p.kind ? h('span.tag.gray', {}, KIND[p.kind]) : null,
         p.human_level ? h('span.tag' + (p.human_level === 'auto' ? '.ok' : ''), {}, LEVEL[p.human_level]) : null,
         p.executor ? h('span.tag.ok', {}, EXEC[p.executor]) : null,
         p.goal ? h('span.goal', {}, '→ ' + p.goal) : null,
-      ]))));
+      ])));
     };
+    const rangeBar = h('div.pl-range');
+    const renderRange = () => {
+      const btn = (mode, label) => h('button.ghost' + (range.mode === mode ? '.on' : ''), { onclick: () => {
+        range.mode = mode;
+        if (mode === 'custom' && !range.start) Object.assign(range, { start: state.date, end: state.date });
+        renderRange(); renderPreview();
+      } }, label);
+      const dateIn = (key, title) => {
+        const i = h('input', { type: 'date', value: range[key], title });
+        i.onchange = () => { range[key] = i.value; renderPreview(); };
+        return i;
+      };
+      rangeBar.replaceChildren('时间', ...Object.entries(RANGES).map(([k, r]) => btn(k, r.label)), btn('custom', '自定义'),
+        ...(range.mode === 'custom' ? [dateIn('start', '开始'), '→', dateIn('end', '结束（留空 = 不设结束）')] : []));
+    };
+    renderRange();
     ta.addEventListener('input', renderPreview);
     comp.querySelectorAll('.modes button').forEach((b) => b.addEventListener('click', () => setTimeout(renderPreview)));
 
-    el.append(head, comp, preview,
+    el.append(head, comp, rangeBar, preview,
       h('div.pl-syntax', {}, ['行内语法：', h('code', {}, 'P1'), ' ', h('code', {}, '60m'), ' ', h('code', {}, '1.5h'), ' ', h('code', {}, '#学习'), ' ',
-        h('code', {}, '#生活'), ' ', h('code', {}, '#长期'), ' ', h('code', {}, '@auto'), ' ', h('code', {}, '@重'), ' ', h('code', {}, '@轻'), ' ', h('code', {}, '@claude'), ' ',
+        h('code', {}, '#生活'), ' ', h('code', {}, '~11-30'), ' ', h('code', {}, '11-10~11-30'), ' ', h('code', {}, '~'), ' ', h('code', {}, '@auto'), ' ', h('code', {}, '@重'), ' ', h('code', {}, '@轻'), ' ', h('code', {}, '@claude'), ' ',
         h('code', {}, '@codex'), ' ', h('code', {}, '>目标'), '　按 ', h('kbd', {}, '/'), ' 聚焦']),
       ui.chips([
         { label: '顺延昨天未完成', icon: 'refresh', onClick: carry },
@@ -355,8 +406,8 @@ export default {
       state.runs = d.runs; state.data = d;
       head.replaceChildren(pageHead(d));
       body.replaceChildren(...(d.draft ? [draftCard(d.draft)] : []), approvals(ctx, { fallback: () => parsedNeeds(d), onChange: load }),
-        ...liveCard(d), submitted(ctx), ...summary(d), ui.section('事项', d.tree.length ? `${d.tree.length} 项 · ${d.tasks.length - d.tree.length} 个子任务` : ''),
-        items(d), ...issues(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
+        ...liveCard(d), submitted(ctx), ...summary(d), ...spans(d), ui.section(state.date === today() ? '今天' : '当天', dayCount(d)),
+        items(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
         timeline(d));
       for (const j of d.jobs) watch(j.id, 'AI 拆解');
     }
@@ -608,7 +659,6 @@ export default {
     }
 
     function openEditor(t) {
-      const isIssue = t.kind === ISSUE_KIND;
       const { sourceLine, source, text } = splitNotes(t.notes);
       const grown = (props) => {
         const ta = h('textarea', props);
@@ -618,28 +668,29 @@ export default {
         return ta;
       };
       const title = grown({ rows: 1, value: t.title, 'aria-label': '标题' });
-      const goalBox = isIssue ? null : grown({ rows: 2, value: t.goal || '', 'aria-label': '目标' });
-      const status = pill(isIssue ? ISSUE_STATUS : STATUS, t.status, () => {});
-      const canMove = !t.parent_id && !state.data.tasks.some((c) => c.parent_id === t.id);
-      const kind = canMove ? pill({ ...KIND, [ISSUE_KIND]: '长期事项 / 持续问题' }, t.kind, () => {}) : null;
+      const goalBox = grown({ rows: 2, value: t.goal || '', 'aria-label': '目标' });
+      const status = pill(STATUS, t.status, () => {});
+      const kind = t.parent_id ? null : pill(KIND, t.kind, () => {});
+      const start = h('input', { type: 'date', value: t.date, 'aria-label': '开始' });
+      const end = h('input', { type: 'date', value: t.end_date || '', 'aria-label': '结束' });
       const noteBox = grown({ rows: 3, value: text, 'aria-label': '备注', placeholder: '进展、卡点、下一步…' });
       const box = h('dialog.pl-edit');
       const close = () => { box.close(); box.remove(); };
       const save = async () => {
         if (!title.value.trim()) return toast('标题不能为空', true);
-        const body = { title: title.value.trim(), status: status.value, notes: [sourceLine, noteBox.value.trim()].filter(Boolean).join('\n') };
-        if (goalBox) body.goal = goalBox.value.trim();
-        if (kind && kind.value !== t.kind) {
-          body.kind = kind.value;
-          if (!(kind.value === ISSUE_KIND ? ISSUE_STATUS : STATUS)[body.status]) body.status = 'todo';
-        }
-        if (status.value === 'done' && !isIssue) body.progress = 100;
+        if (!start.value) return toast('开始日期不能为空', true);
+        const body = { title: title.value.trim(), goal: goalBox.value.trim(), status: status.value, notes: [sourceLine, noteBox.value.trim()].filter(Boolean).join('\n') };
+        if (kind && kind.value !== t.kind) body.kind = kind.value;
+        if (start.value !== t.date) body.date = start.value;
+        if (end.value !== (t.end_date || '')) body.end_date = end.value;
+        if (status.value === 'done') body.progress = 100;
         try { await patch(t.id, body); close(); } catch (e) { toast(e.message, true); }
       };
       const labeled = (label, control) => h('label', {}, [h('span', {}, label), control]);
       box.append(
         labeled('标题', title),
-        goalBox ? labeled('目标', goalBox) : '',
+        labeled('目标', goalBox),
+        h('div.pl-edit-dates', {}, [labeled('开始', start), labeled('结束（留空 = 不设结束）', end)]),
         kind ? labeled('类别', kind) : '',
         labeled('状态', status),
         labeled('备注', noteBox),
@@ -658,9 +709,37 @@ export default {
     };
     const goal = (t) => (t.goal ? h('div.pl-goal', {}, [h('b', {}, '目标 '), t.goal]) : null);
 
+    // 「第 3/24 天 · 剩 21 天」「逾期 2 天」「第 5 天」（不设结束）
+    function spanText(t, on) {
+      const range = `${t.date.slice(5)} → ${t.end_date ? t.end_date.slice(5) : '不设结束'}`;
+      if (!on) return range;
+      const n = daysBetween(t.date, on) + 1;
+      if (!t.end_date) return `${range} · 第 ${n} 天`;
+      const left = daysBetween(on, t.end_date);
+      return `${range} · ${left < 0 ? `逾期 ${-left} 天` : `第 ${n}/${daysBetween(t.date, t.end_date) + 1} 天 · ${left ? `剩 ${left} 天` : '今天截止'}`}`;
+    }
+    const overdue = (t) => t.end_date && t.end_date < state.date && !['done', 'dropped'].includes(t.status);
+    const dayCount = (d) => {
+      const tops = d.tree.filter((t) => !isSpan(t));
+      const kids = d.tasks.filter((t) => t.parent_id && t.date === state.date).length;
+      return tops.length || kids ? `${tops.length} 项 · ${kids} 个子任务` : '';
+    };
+
+    function spans(d) {
+      const list = d.tree.filter(isSpan);
+      if (!list.length) return [];
+      return [ui.section('跨日事项', `${list.length} 项 · 范围内每天都在，过了结束日没关就标逾期；本身不排程，当天要做的拆成子任务`),
+        rowsCard(list, (p) => h(`div.pl-span${overdue(p) ? '.over' : ''}`, {}, spanText(p, state.date)))];
+    }
+
     function items(d) {
-      if (!d.tree.length) return h('div.card', {}, ui.empty(state.date === today() ? '今天还没有事项' : '这一天还没有事项', '在上面的输入框里每行写一件事，或点「顺延昨天未完成」'));
-      const rows = d.tree.map((p, i) => {
+      const list = d.tree.filter((t) => !isSpan(t));
+      if (!list.length) return h('div.card', {}, ui.empty(state.date === today() ? '今天还没有事项' : '这一天还没有事项', '在上面的输入框里每行写一件事，或点「顺延昨天未完成」'));
+      return rowsCard(list, () => null);
+    }
+
+    function rowsCard(list, extra) {
+      const rows = list.map((p, i) => {
         const kids = p.children || [];
         const leaf = !kids.length;
         const isCol = collapsed.has(p.id);
@@ -679,7 +758,7 @@ export default {
           h('div.pl-num', {}, pad2(i + 1)),
           h('div', {}, [
             h('div.pl-title', {}, [openable(p), h('span.meta', {}, [`#${p.id}`, ' · ', KIND[p.kind] || p.kind, p.repo ? ` · ${p.repo}` : ''].join(''))]),
-            goal(p), controls(p, leaf), notes(p),
+            extra(p), goal(p), controls(p, leaf), notes(p),
             leaf ? null : h('div.row', {}, [toggle, h('button.ghost.sm', { onclick: () => decompose([p.id]) }, [ui.icon('spark'), '重新拆解'])]),
             kidBox,
           ]),
@@ -687,23 +766,6 @@ export default {
         ]);
       });
       return h('div.card.pl-list', {}, rows);
-    }
-
-    function issues(d) {
-      if (!d.issues.length) return [];
-      const row = (t, i) => {
-        const done = t.status === 'done';
-        const days = Math.max(0, Math.round((new Date(state.date) - new Date(t.created_at.slice(0, 10))) / 864e5)) + 1;
-        return h(`div.pl-row${done ? '.done' : ''}`, {}, [
-          h('div.pl-num', {}, pad2(i + 1)),
-          h('div', {}, [h('div.pl-title', {}, [openable(t), t.status === 'doing' ? h('span.meta', {}, ISSUE_STATUS.doing) : '']),
-            h('div.meta', {}, `加入于 ${t.created_at.slice(0, 16).replace('T', ' ')} · ${done ? `解决于 ${t.updated_at.slice(0, 16).replace('T', ' ')}` : `第 ${days} 天`}`),
-            notes(t)]),
-          h('button.sm' + (done ? '.ghost' : ''), { onclick: () => patch(t.id, { status: done ? 'todo' : 'done' }) }, done ? '撤销' : '解决'),
-        ]);
-      };
-      return [ui.section('长期事项 / 持续问题', `${d.issues.filter((t) => t.status !== 'done').length} 个未解决 · 手动添加或来自复盘「有问题的」，每天都在，不进排程，解决了手动点`),
-        h('div.card.pl-list', {}, d.issues.map(row))];
     }
 
     function timeline(d) {
