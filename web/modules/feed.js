@@ -1,5 +1,5 @@
 // 信息推荐：按热度/新鲜度/兴趣/反馈排序的 AI 信息流；只展示标题 + 简介 + 链接 + 推荐理由。
-// 页面：今日精选（前 5 条，编号行）+ 分类 pill + 紧凑列表（无限加载）+ 一个多模式输入框（筛选 / 加兴趣 / 问 Agent）。
+// 页面：深度完成待看 + 今日精选（前 5 条，编号行）+ 之前的精选（折叠）+ 分类 pill + 紧凑列表（无限加载）+ 一个多模式输入框（筛选 / 加兴趣 / 问 Agent）。
 // 键盘：↑↓ 移动选中，→ 详情（没解析过就开始深读），← 原文，j/k 切换类型，l 赞，s 收藏，x 隐藏。
 import { toMs } from '../api.js';
 
@@ -12,7 +12,7 @@ const PAGE = 40;
 const TOP_N = 5;
 const DAYS = [['0', '不限时间'], ['1', '24 小时内'], ['3', '3 天内'], ['7', '7 天内'], ['30', '30 天内']];
 const SORTS = [['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）']];
-const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score', hnView: 'posts', read: 'unread' };
+const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score', hnView: 'posts', read: 'unread', earlierOpen: false };
 const READS = [['unread', '未读'], ['', '含已读'], ['read', '已读']];
 const HN_ITEM = (id) => `https://news.ycombinator.com/item?id=${id}`;
 const SENT = { pos: ['好评', 'ok'], neg: ['差评', 'err'], mixed: ['褒贬不一', 'warn'], neutral: ['提及', 'gray'] };
@@ -91,6 +91,10 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-opts select { width: auto; font-size: 12px; padding: 3px 6px; border-radius: 8px; }
 .fd-opts select.on { border-color: var(--accent); color: var(--accent); }
 .fd-kbd kbd { margin: 0 1px; }
+.fd-earlier { margin-top: 10px; }
+.fd-earlier > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; padding: 4px 2px; }
+.fd-earlier > summary span { margin-left: 10px; font-weight: 400; font-size: 12px; color: var(--muted); }
+.fd-earlier > .fd-list { margin-top: 6px; }
 .fd-list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
 .fd-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 10px; border-radius: 9px; border: 1px solid transparent; }
 .fd-list .fd-item + .fd-item { border-top-color: var(--line); border-radius: 0; }
@@ -235,7 +239,7 @@ export default {
     const [settings, status0] = await Promise.all([api.get('/api/settings'), api.get('/api/feed/status')]);
     let interests = [...(settings.feed?.interests || [])];
     let status = status0;
-    let entries = []; // [{x, el, kind:'top'|'list', i}]
+    let entries = []; // [{x, el, kind:'wait'|'top'|'earlier'|'list', i}]
     let sel = -1;
     let listOffset = 0, listTotal = 0, loading = false, loadSeq = 0;
 
@@ -290,7 +294,9 @@ export default {
     ], { left: true });
 
     // ---------- 精选 + 列表 ----------
+    const waitBox = h('div');
     const topBox = h('div');
+    const earlierBox = h('div');
     const tabs = h('div.tabs');
     const listBox = h('div.fd-list');
     const hnBar = h('div.fd-hnbar');
@@ -311,8 +317,8 @@ export default {
     // 刚刷完的结果常驻在按钮旁；有新增时本次新收的排到列表最前（否则按综合分常落到几十名开外，看着像没刷）
     const freshNote = h('span.fd-fresh');
     let fresh = null;   // { since, added, label }
-    el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick,
-      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox,
+    el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick, waitBox,
+      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, earlierBox,
       h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
@@ -820,6 +826,7 @@ export default {
           entry.el.remove(); entries.splice(idx, 1);
           if (sel >= entries.length) sel = entries.length - 1;
           if (entries[sel]) entries[sel].el.classList.add('fd-sel');
+          if (entry.kind === 'wait' || entry.kind === 'earlier') loadTop();
           toast('已隐藏，可在「已收藏」或 Agent 里恢复');
           return;
         }
@@ -833,7 +840,7 @@ export default {
     const deep = async ({ x }) => {
       const old = x.deep;
       if (old?.status === 'done') {
-        const backTo = { st: { ...st }, id: x.id, index: entries.findIndex((e) => e.x.id === x.id), count: listOffset, top: document.getElementById('page').scrollTop };
+        const backTo = { st: { ...st }, id: x.id, kind: entries.find((e) => e.x === x)?.kind, index: entries.findIndex((e) => e.x.id === x.id), count: listOffset, top: document.getElementById('page').scrollTop };
         history.replaceState({ feedBack: backTo }, '', location.href);
         location.hash = `#learn/item/${old.id}`;
         return;
@@ -861,7 +868,7 @@ export default {
     document.addEventListener('job-done', onDeepDone);
 
     // ---------- 选择与键盘 ----------
-    const visible = () => entries.map((e, i) => [e, i]).filter(([e]) => e.el.isConnected && !e.el.classList.contains('fd-hidden')).map(([, i]) => i);
+    const visible = () => entries.map((e, i) => [e, i]).filter(([e]) => e.el.isConnected && !e.el.classList.contains('fd-hidden') && !e.el.closest('details.fd-earlier:not([open])')).map(([, i]) => i);
     function select(i, scroll = true) {
       entries[sel]?.el.classList.remove('fd-sel');
       sel = i;
@@ -934,13 +941,21 @@ export default {
       tabs.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
     async function loadTop() {
-      const r = await api.get(`/api/feed/items?limit=${TOP_N}&read=unread`);
-      for (const e of entries.filter((e) => e.kind === 'top')) e.el.remove();
-      entries = entries.filter((e) => e.kind !== 'top');
-      const tops = r.items.map((x, i) => ({ x, kind: 'top', i }));
-      entries = [...tops, ...entries];
+      const r = await api.get('/api/feed/picks');
+      const cur = entries[sel];
+      const picked = entries.filter((e) => e.kind !== 'list');
+      for (const e of picked) e.el.remove();
+      const row = (kind) => (x, i) => ({ x, kind, i });
+      const waits = r.waiting.map(row('wait')), tops = r.top.map(row('top')), earlier = r.earlier.map(row('earlier'));
+      entries = [...waits, ...tops, ...earlier, ...entries.filter((e) => e.kind === 'list')];
+      if (cur && cur.kind !== 'list') sel = entries.findIndex((e) => e.kind === cur.kind && e.x.id === cur.x.id);
+      else if (cur) sel = entries.indexOf(cur);
+      waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '打开后移除'), h('div.fd-list', {}, waits.map(mount))] : []));
       topBox.replaceChildren(tops.length ? h('div.fd-top', {}, tops.map(mount)) : ui.empty('还没有内容', '点右上角「刷新」抓取信息源'));
-      if (st.q) for (const e of tops) e.el.classList.toggle('fd-hidden', !matches(e.el));
+      earlierBox.replaceChildren(...(earlier.length ? [h('details.fd-earlier', {
+        open: st.earlierOpen, ontoggle: (e) => { st.earlierOpen = e.target.open; },
+      }, [h('summary', {}, [`之前的精选 ${earlier.length}`, h('span', {}, `被换下但还没处理 · 打开、深读、踩或隐藏后移除 · 7 天没处理退回列表`)]), h('div.fd-list', {}, earlier.map(mount))])] : []));
+      if (st.q) for (const e of [...waits, ...tops, ...earlier]) e.el.classList.toggle('fd-hidden', !matches(e.el));
     }
     // 「全部」、综合排序、不限时间且无筛选时，列表从第 6 条开始，避免与精选重复
     const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' && st.read === 'unread' && !fresh?.added ? TOP_N : 0);
@@ -1052,7 +1067,8 @@ export default {
     renderTabs();
     await reloadAll();
     if (backTo) {
-      const i = entries.findIndex((e) => e.x.id === backTo.id);
+      const same = (e) => e.x.id === backTo.id;
+      const i = [entries.findIndex((e) => same(e) && e.kind === backTo.kind), entries.findIndex(same)].find((n) => n >= 0) ?? -1;
       select(i >= 0 ? i : Math.min(backTo.index, entries.length - 1), false);
       document.getElementById('page').scrollTop = backTo.top;
       backTo = null;

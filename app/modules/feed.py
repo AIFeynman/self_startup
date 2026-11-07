@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS feed_feedback (
     hidden      INTEGER DEFAULT 0,
     updated_at  TEXT
 );
+CREATE TABLE IF NOT EXISTS feed_picks (         -- 进过今日精选的条目：被换下后还能在「之前的精选」里找到
+    item_id     TEXT PRIMARY KEY,
+    first_at    TEXT NOT NULL,
+    last_at     TEXT NOT NULL              -- 最后一次在精选里，UTC
+);
 CREATE TABLE IF NOT EXISTS feed_query_log (    -- 每个搜索词搜过几次：没收到条目时靠它判「没搜到」
     source      TEXT NOT NULL,             -- hn / github / reddit / youtube / zhihu / x
     query       TEXT NOT NULL,             -- 小写
@@ -299,6 +304,7 @@ def _without_radar(items: list[dict]) -> list[dict]:
 
 
 # 全量算分要近 1 秒，翻页和切分类只是在结果上筛选：算好的结果留一份，排序用到的数据变了才重算
+PICKS_KEEP_DAYS = 7   # 换下来的精选留多久，过了退回普通列表
 RANK_MAX_AGE_S = 600   # 分数随时间衰减：放久了也要重算
 _rank_snaps: dict[bool, dict] = {}
 _rank_lock = threading.Lock()
@@ -925,6 +931,29 @@ def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, off
         fresh = lambda x: (rk._parse_dt((x.get("extra") or {}).get("first_seen") or "") or datetime.min.replace(tzinfo=timezone.utc)) >= t0
         out = [x for x in out if fresh(x)] + [x for x in out if not fresh(x)]
     return {"total": len(out), "items": [_public(x) for x in out[offset: offset + limit]]}
+
+
+def _still_open(x: dict) -> bool:
+    """换下来的精选还算没处理：没发起过深读（失败的要能重试）、没踩过；打开过和隐藏的不在未读列表里。"""
+    return (not x["deep"] or x["deep"]["status"] == "failed") and x["feedback"].get("vote", 0) >= 0
+
+
+@router.get("/picks")
+def picks():
+    """页面顶部三组：waiting 深读完还没打开、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
+    out = ranked(read="unread", stale_ok=True)
+    done = lambda x: (x["deep"] or {}).get("status") == "done"
+    waiting = sorted(filter(done, out), key=lambda x: -x["deep"]["id"])
+    rest = [x for x in out if not done(x)]
+    top = rest[:rk.PICKS_N]
+    now = datetime.now(timezone.utc)
+    for x in top:
+        db.execute("INSERT INTO feed_picks (item_id, first_at, last_at) VALUES (?,?,?) "
+                   "ON CONFLICT(item_id) DO UPDATE SET last_at=excluded.last_at", [x["id"], _iso(now), _iso(now)])
+    cutoff = _iso(now - timedelta(days=PICKS_KEEP_DAYS))
+    shown = {r["item_id"]: r["last_at"] for r in db.rows("SELECT item_id, last_at FROM feed_picks WHERE last_at>=?", [cutoff])}
+    earlier = sorted((x for x in rest[rk.PICKS_N:] if x["id"] in shown and _still_open(x)), key=lambda x: shown[x["id"]], reverse=True)
+    return {k: [_public(x) for x in v] for k, v in (("waiting", waiting), ("top", top), ("earlier", earlier))}
 
 
 class FeedbackIn(BaseModel):
