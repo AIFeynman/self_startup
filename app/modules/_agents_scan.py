@@ -15,7 +15,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ._review_sessions import _SKIP_PREFIX, _asks, _claude_text, _slash, _ts
+from ._review_sessions import _SKIP_PREFIX, _asks, _claude_text, _slash, _ts, parse_cache_key
 
 FRESH = 120          # 秒：日志在这段时间内有写入，视为正在跑
 STUCK = 20 * 60      # 秒：回合未结束但这么久没动静，视为可能卡住 / 等批准
@@ -264,7 +264,7 @@ def _parse(path: Path, reader) -> dict | None:
         st = path.stat()
     except OSError:
         return None
-    key = (st.st_mtime, st.st_size)
+    key = parse_cache_key(st)
     hit = _cache.get(str(path))
     if hit and hit[0] == key:
         return hit[1]

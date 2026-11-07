@@ -17,7 +17,7 @@ from datetime import date as Date, datetime
 from pathlib import Path
 
 from ._agents_scan import _clip, _files, classify, _parse, read_claude, read_codex
-from ._review_sessions import _ts
+from ._review_sessions import _ts, parse_cache_key
 
 _GIT = r"\bgit\s+(?:-C\s+\S+\s+|-c\s+\S+\s+)*"
 KINDS = [  # (kind, 中文, 正则) —— 顺序即优先级
@@ -141,7 +141,7 @@ def _actions(path: Path, engine: str) -> list[dict]:
         st = path.stat()
     except OSError:
         return []
-    key = (st.st_mtime, st.st_size)
+    key = parse_cache_key(st)
     hit = _cache.get(str(path))
     if hit and hit[0] == key:
         return hit[1]

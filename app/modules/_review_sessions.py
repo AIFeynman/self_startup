@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import time
 from datetime import date as Date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -23,7 +24,7 @@ from typing import Iterable
 IDLE_CAP = 15 * 60      # 单段 Agent 活跃时间封顶（秒）：更长视为空闲
 WAIT_MAX = 3 * 3600     # 单段等待超过这个视为人离开，不计入「等你」（看板 · 时间利用共用）
 TEXT_MAX = 300
-VERSION = 3             # 统计口径版本：改了算法就 +1，复盘里旧的效率快照会重扫
+VERSION = 4             # 统计口径版本：改了算法就 +1，复盘里旧的效率快照会重扫
 
 KIND_LABELS = {"new_task": "新任务/追加", "correct": "纠正/转向", "approve": "确认/继续",
                "interrupt": "中断", "answer": "回答提问", "check": "询问进度"}
@@ -44,6 +45,10 @@ _CORRECT = re.compile(r"(不对|不是|错了|有误|应该|别|不要|不用|�
                       r"问题|bug|wrong|instead|don't|do not|not what|revert|撤销|回退|丢失)", re.I)
 _DENIAL = ("Permission for this", "The user doesn't want to proceed", "was rejected", "requires approval",
            "Blocked:", "permission was denied", "denied by")
+
+
+def parse_cache_key(st) -> tuple:
+    return (st.st_mtime, st.st_size, time.tzname[0])
 
 
 def _ts(s) -> datetime | None:

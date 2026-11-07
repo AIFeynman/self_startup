@@ -1,7 +1,8 @@
 import json
 from datetime import datetime, timedelta
 
-from app.modules import _deliveries as D
+from app import settings
+from app.modules import _agents_scan as S, _deliveries as D
 
 
 def _w(path, rows):
@@ -77,3 +78,20 @@ def test_scan_claude_and_codex(tmp_path):
     assert set(by) == {"proj", "notes"}
     assert by["proj"]["status"] == "delivered" and by["proj"]["labels"] == ["推送"]
     assert by["notes"]["kind"] == "doc" and by["notes"]["docs"] == [str(doc)]
+
+
+def test_changing_timezone_moves_times_of_already_read_sessions(tmp_path):
+    path = tmp_path / "s.jsonl"
+    _w(path, [{"type": "assistant", "timestamp": "2026-02-10T01:00:00Z", "cwd": "/w/p", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "git push origin main"}}]}}])
+
+    def read_hours():
+        return D._actions(path, "claude")[0]["ts"].hour, S._parse(path, S.read_claude)["start"].hour
+
+    try:
+        settings.apply_timezone("Etc/GMT-9")
+        assert read_hours() == (10, 10)
+        settings.apply_timezone("Asia/Shanghai")
+        assert read_hours() == (9, 9)
+    finally:
+        settings.apply_timezone("")
