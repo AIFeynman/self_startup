@@ -597,7 +597,7 @@ VIDEO = """任务：视频深度解读（YouTube / B 站等），重点是旁白
 
 def _takeaway_spec() -> str:
     """联系与启发的要求，带上用户手头的事和自己写过的判断：只给读过的列表，容易写成「同一主题」式的罗列。"""
-    tasks = db.rows("SELECT DISTINCT title FROM tasks WHERE title NOT LIKE '深读：%' AND kind IS NOT 'issue' ORDER BY date DESC, id DESC LIMIT 10")
+    tasks = db.rows("SELECT DISTINCT title FROM tasks WHERE title NOT LIKE '深读：%' ORDER BY date DESC, id DESC LIMIT 10")
     try:
         from .. import kb_graph
         sigs = [s for s in kb_graph.signals() if s["kind"] == "judgment" and s["mine"] and not re.match(r"[A-D]\. ", s["mine"])]  # 选择题选项不是用户的观点
@@ -2123,7 +2123,7 @@ def _recent_context() -> str:
             out.append(f"- [调研] {r['title']}（{r['created_at'][:10]}）")
     except Exception:  # noqa: BLE001  调研模块缺失时跳过
         pass
-    for tk in db.rows("SELECT title,date FROM tasks WHERE parent_id IS NULL AND date>=? AND kind IS NOT 'issue' ORDER BY date DESC, id DESC LIMIT 8", [since]):
+    for tk in db.rows("SELECT title,date FROM tasks WHERE parent_id IS NULL AND date>=? ORDER BY date DESC, id DESC LIMIT 8", [since]):
         out.append(f"- [事项 {tk['date']}] {tk['title'][:160]}")
     for repo in (settings.get("repos", []) or [])[:4]:
         try:

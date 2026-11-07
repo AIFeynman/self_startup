@@ -130,7 +130,7 @@ def api_review(body: ReviewIn):
         raise HTTPException(400, "至少填一栏")
     date = body.date or db.today()
     note = add("\n".join([f"复盘 {date[5:]}", *(f"{key}：{text}" for key, text in filled.items())]), "review", date=date)
-    issues = [tasks.add_issue(f"{key.split('·')[0]}：{review.parse_quick_note(text)['title']}", date)
+    issues = [tasks.add_open(f"{key.split('·')[0]}：{review.parse_quick_note(text)['title']}", date, f"来自 {date} 的复盘")
               for key, text in filled.items() if key.endswith(f"·{ISSUE_ASPECT}")]
     return {"note": note, "issues": [i for i in issues if i]}
 

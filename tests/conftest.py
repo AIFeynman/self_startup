@@ -46,6 +46,15 @@ def _no_graph_refresh(monkeypatch):
     monkeypatch.setattr(kb_graph, "schedule_refresh", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_span_leftovers(request):
+    """跨日 / 不设结束的事项会出现在之后每一天，测试结束就删掉，免得串到别的测试的日期里。"""
+    yield
+    if "client" in request.fixturenames:
+        from app import db
+        db.execute("DELETE FROM tasks WHERE end_date IS NULL OR end_date>date")
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_machine: 读本机真实的负载 / 内存")
     config.addinivalue_line("markers", "real_runner: 真的起 app.jobrun 进程（配合假的 claude CLI）")

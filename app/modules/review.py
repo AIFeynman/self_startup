@@ -667,7 +667,7 @@ def timeline(start: str = "", end: str = "") -> list[dict]:
                                    "learning": {"total": 0, "done": 0}, "summary": "", "notes": [],
                                    "efficiency": "", "has_ai": False})
 
-    for t in db.rows("SELECT date, kind, status, progress FROM tasks WHERE date BETWEEN ? AND ? AND kind IS NOT ?", [start, end, tasks.ISSUE_KIND]):
+    for t in db.rows("SELECT date, kind, status, progress FROM tasks WHERE date BETWEEN ? AND ? AND end_date=date", [start, end]):
         x = day(t["date"])
         key = "learning" if t["kind"] == "learning" else "tasks"
         x[key]["total"] += 1
@@ -1092,7 +1092,6 @@ def improve_prompt(date: str) -> str:
     since = (Date.fromisoformat(date) - timedelta(days=7)).isoformat()
     prev = [f"- {n['date']} [{n['kind']}] {n['title']}" for n in list_notes(start=since, end=date, limit=30, author="system")]
     written = [f"{n['title']}\n{n['content']}" for n in list_notes(date=date, kind="review", author="me")]
-    open_issues = [f"- {i['title']}（加入于 {i['created_at'][:10]}）" for i in tasks.issues_for(date) if i["status"] != "done"]
     return f"""用户刚写完 {date} 的复盘。请结合当天的 Claude Code / Codex 会话和学习平台的反馈，分析怎么改进。
 只读分析：不要修改文件或平台数据，不要运行测试、不要启动服务。
 
@@ -1101,9 +1100,6 @@ def improve_prompt(date: str) -> str:
 
 ## 用户这天的复盘便签（每行：类型·做得好的/有问题的：内容）
 {chr(10).join(written) or "（无）"}
-
-## 持续未解决的问题
-{chr(10).join(open_issues) or "（无）"}
 
 ## 当天事项
 {_task_lines(tasks.list_for(date))}
@@ -1126,7 +1122,7 @@ def improve_prompt(date: str) -> str:
 1. **时间线**：把复盘的每一条放回当天的时间线（对应哪个会话 / 学习步骤 / 后台任务、发生在几点），一条一行。
 2. **逐条诊断**：每条复盘的证据（引用上面具体的消息、测试分数、失败任务）、根因；证据不足就直说「无证据」。
 3. **改进**：分「怎么用 Agent」「怎么学习」「平台该补的能力」三类，每条写清楚做什么、怎么验证有效；已在近 7 天记过的标注「已记过，未落实 / 已落实」。
-4. **持续问题**：每条未解决的问题给一个能把它解决掉的下一步，已拖很久的说明为什么一直没解决。
+4. **持续问题**：当天事项里带【】、还没关的跨日事项，每条给一个能把它解决掉的下一步，已拖很久的说明为什么一直没解决。
 5. **明天就做的 3 条**：可执行、可检查。"""
 
 

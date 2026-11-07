@@ -305,7 +305,7 @@ def _children_map(ts: list[dict]) -> dict[int, list[dict]]:
 def run_schedule(date: str, from_time: str = "") -> dict:
     ts = tasks.list_for(date)
     ch = _children_map(ts)
-    leaves = [t for t in ts if t["id"] not in ch and t["status"] in OPEN]
+    leaves = [t for t in ts if t["id"] not in ch and t["status"] in OPEN and not tasks.is_span(t)]
     res = schedule_day(leaves, _cfg(), from_time)
     for t in leaves:
         st, en = res["placements"].get(t["id"], ("", ""))
@@ -622,7 +622,7 @@ def extract_json(text: str):
     return found
 
 
-def _norm_sub(s: dict, parent: dict) -> dict:
+def _norm_sub(s: dict, parent: dict, date: str) -> dict:
     lvl = s.get("human_level") if s.get("human_level") in LEVELS else "medium"
     ex = s.get("executor") if s.get("executor") in EXECUTORS else ("claude" if lvl == "auto" else "human")
     if lvl == "auto" and ex not in ("claude", "codex"):
@@ -635,14 +635,14 @@ def _norm_sub(s: dict, parent: dict) -> dict:
         est = max(5, int(s.get("est_minutes") or 30))
     except (TypeError, ValueError):
         est = 30
-    return {"date": parent["date"], "parent_id": parent["id"], "title": str(s.get("title") or "未命名")[:200],
+    return {"date": date, "parent_id": parent["id"], "title": str(s.get("title") or "未命名")[:200],
             "goal": str(s.get("goal") or ""), "kind": parent["kind"], "priority": pr, "human_level": lvl,
             "executor": ex, "est_minutes": est, "parallel_group": str(s.get("parallel_group") or ""),
             "repo": parent.get("repo") or ""}
 
 
-def apply_decomposition(data) -> list[int]:
-    """把拆解 JSON 写成子任务，返回新建的 id。重新拆解时替换该事项下仍是 todo 的旧子任务。"""
+def apply_decomposition(data, date: str) -> list[int]:
+    """把拆解 JSON 写成 date 当天的子任务，返回新建的 id。重新拆解时替换该事项下当天仍是 todo 的旧子任务。"""
     items = data.get("items") if isinstance(data, dict) else data
     created: list[int] = []
     for it in items or []:
@@ -655,8 +655,8 @@ def apply_decomposition(data) -> list[int]:
         subs = [s for s in it.get("subtasks") or [] if isinstance(s, dict)]
         if not subs:
             continue
-        db.execute("DELETE FROM tasks WHERE parent_id=? AND status='todo'", [parent["id"]])
-        ids = [tasks.create(_norm_sub(s, parent))["id"] for s in subs]
+        db.execute("DELETE FROM tasks WHERE parent_id=? AND date=? AND status='todo'", [parent["id"], date])
+        ids = [tasks.create(_norm_sub(s, parent, date))["id"] for s in subs]
         for s, tid in zip(subs, ids):
             dep = [ids[d] for d in (s.get("depends_on") or []) if isinstance(d, int) and 0 <= d < len(ids) and ids[d] != tid]
             if dep:
@@ -729,7 +729,7 @@ def apply_draft(did: int):
     d = get_draft(did=did)
     if not d or d["status"] != "pending":
         raise HTTPException(404, "草稿不存在或已处理")
-    ids = apply_decomposition(d["data"])
+    ids = apply_decomposition(d["data"], d["date"])
     db.update("plan_drafts", did, {"status": "applied", "updated_at": db.now()})
     return {"created": ids, "schedule": run_schedule(d["date"]) if ids else None}
 
@@ -922,7 +922,7 @@ def day(date: str = ""):
     except Exception:  # noqa: BLE001
         pass
     ts = tasks.list_for(date)
-    return {"date": date, "tasks": ts, "tree": _tree(ts), "issues": tasks.issues_for(date), "config": _cfg(), "schedule": last_schedule(date),
+    return {"date": date, "tasks": ts, "tree": _tree(ts), "config": _cfg(), "schedule": last_schedule(date),
             "runs": runs(date=date),
             "jobs": db.rows("SELECT id,ref,status,created_at FROM jobs WHERE module='plan' AND ref=? AND status IN ('queued','running')",
                             [f"plan:decompose:{date}"]),
@@ -941,9 +941,9 @@ def schedule(body: DateIn):
 
 @router.post("/carry")
 def carry(body: DateIn):
-    """把之前最近一天未完成的顶层事项（及其未完成子任务）顺延到 date。"""
+    """把之前最近一天未完成的单日顶层事项（及其未完成子任务）顺延到 date；跨日事项本来每天都在，不用顺延。"""
     date = body.date or db.today()
-    prev = db.row("SELECT MAX(date) d FROM tasks WHERE date<? AND kind IS NOT ?", [date, tasks.ISSUE_KIND])
+    prev = db.row("SELECT MAX(date) d FROM tasks WHERE date<? AND end_date=date AND parent_id IS NULL", [date])
     src = prev and prev["d"]
     if not src:
         return {"from": None, "created": []}
@@ -953,7 +953,7 @@ def carry(body: DateIn):
     keep = ("title", "goal", "kind", "priority", "human_level", "executor", "est_minutes", "parallel_group", "repo", "progress")
     created: list[int] = []
     for t in ts:
-        if t.get("parent_id") or t["status"] not in OPEN or t["title"] in existing:
+        if t.get("parent_id") or tasks.is_span(t) or t["status"] not in OPEN or t["title"] in existing:
             continue
         nt = tasks.create({**{k: t[k] for k in keep}, "date": date, "notes": f"顺延自 {src}"})
         created.append(nt["id"])
@@ -1026,17 +1026,14 @@ def agent_context(ref: str) -> str:
     cfg = _cfg()
     lines = [f"日期 {date}；专注时间窗 " + "、".join(f"{w['start']}-{w['end']}" for w in cfg["focus_windows"]) +
              f"；一天 {cfg['day_start']}-{cfg['day_end']}；Agent 并发 {cfg['max_agent_concurrency']}",
-             "任务（id|父|P|干预|执行者|预计分钟|状态|时间|依赖|并行组|标题 — 目标）："]
+             "任务（id|父|P|干预|执行者|预计分钟|状态|时间|依赖|并行组|标题 — 目标）；带【】的是跨日事项，本身不进排程，"
+             "当天要做的部分拆成当天的子任务（POST /api/tasks 带 parent_id 和当天 date）："]
     for t in ts:
         lines.append(f"- {t['id']}|{t['parent_id'] or '-'}|P{t['priority']}|{t['human_level']}|{t['executor']}|"
                      f"{t['est_minutes']}|{t['status']}|{t['start_time'] or '?'}-{t['end_time'] or '?'}|"
-                     f"{t['depends_on'] or ''}|{t['parallel_group'] or ''}|{t['title']} — {(t['goal'] or '')[:80]}")
+                     f"{t['depends_on'] or ''}|{t['parallel_group'] or ''}|{tasks.span_label(t)}{t['title']} — {(t['goal'] or '')[:80]}")
     if not ts:
         lines.append("（今天还没有事项）")
-    open_issues = [i for i in tasks.issues_for(date) if i["status"] != "done"]
-    if open_issues:
-        lines.append("长期事项 / 持续问题（手动添加或来自复盘，不进排程）：")
-        lines += [f"- {i['title']}（加入于 {i['created_at'][:10]}）" for i in open_issues]
     sch = last_schedule(date)
     if sch:
         s = sch["summary"]

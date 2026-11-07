@@ -10,14 +10,13 @@ from . import db
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
-ISSUE_KIND = "issue"
-
-FIELDS = ["date", "parent_id", "title", "goal", "kind", "priority", "human_level", "executor", "est_minutes",
+FIELDS = ["date", "end_date", "parent_id", "title", "goal", "kind", "priority", "human_level", "executor", "est_minutes",
           "parallel_group", "depends_on", "start_time", "end_time", "status", "progress", "repo", "notes"]
 
 
 class TaskIn(BaseModel):
     date: str | None = None
+    end_date: str | None = None
     parent_id: int | None = None
     title: str | None = None
     goal: str | None = None
@@ -44,27 +43,49 @@ def decode(t: dict) -> dict:
     return t
 
 
+CLOSED = ("done", "dropped")
+SPAN = "(end_date IS NULL OR end_date>date)"
+
+
+def is_span(t: dict) -> bool:
+    return t.get("end_date") != t["date"]
+
+
+def span_label(t: dict) -> str:
+    if not is_span(t):
+        return ""
+    return f"【{t['date']} 起，不设结束】" if not t.get("end_date") else f"【{t['date']} ~ {t['end_date']}】"
+
+
 def list_for(date: str) -> list[dict]:
-    return [decode(t) for t in db.rows("SELECT * FROM tasks WHERE date=? AND kind IS NOT ? ORDER BY COALESCE(start_time,''), priority, id",
-                                       [date, ISSUE_KIND])]
+    """date 当天要看的事项：当天的单日事项 + 覆盖这天的跨日事项（过了结束日还没关的算逾期，照样显示）。"""
+    return [decode(t) for t in db.rows(
+        f"SELECT * FROM tasks WHERE date=? OR (date<? AND {SPAN} AND (status NOT IN {CLOSED} OR "
+        "(substr(updated_at,1,10)>=? AND (end_date IS NULL OR end_date>=?)))) "
+        "ORDER BY COALESCE(start_time,''), priority, id", [date, date, date, date])]
 
 
-def issues_for(date: str) -> list[dict]:
-    return [decode(t) for t in db.rows("SELECT * FROM tasks WHERE kind=? AND date<=? AND (status!='done' OR substr(updated_at,1,10)=?) "
-                                       "ORDER BY created_at, id", [ISSUE_KIND, date, date])]
-
-
-def add_issue(title: str, date: str) -> dict | None:
-    if db.row("SELECT id FROM tasks WHERE kind=? AND title=? AND status!='done'", [ISSUE_KIND, title]):
+def add_open(title: str, date: str, notes: str) -> dict | None:
+    if db.row(f"SELECT id FROM tasks WHERE end_date IS NULL AND title=? AND status NOT IN {CLOSED}", [title]):
         return None
-    return create({"title": title, "date": date, "kind": ISSUE_KIND, "notes": f"来自 {date} 的复盘"})
+    return create({"title": title, "date": date, "end_date": "", "notes": notes})
+
+
+def _dates(data: dict) -> dict:
+    if data.get("end_date") == "":
+        data["end_date"] = None
+    if data.get("end_date") and data["end_date"] < data["date"]:
+        raise HTTPException(400, "结束日期早于开始日期")
+    return data
 
 
 def create(data: dict) -> dict:
     data = {k: v for k, v in data.items() if k in FIELDS and v is not None}
     data.setdefault("date", db.today())
+    data.setdefault("end_date", data["date"])
     if not data.get("title"):
         raise HTTPException(400, "title required")
+    _dates(data)
     data["created_at"] = data["updated_at"] = db.now()
     tid = db.insert("tasks", data)
     return get(tid)
@@ -78,8 +99,13 @@ def get(tid: int) -> dict:
 
 
 def patch(tid: int, data: dict) -> dict:
-    get(tid)
+    t = get(tid)
     data = {k: v for k, v in data.items() if k in FIELDS and v is not None}
+    if "date" in data and "end_date" not in data and not is_span(t):
+        data["end_date"] = data["date"]
+    _dates({"date": t["date"], "end_date": t["end_date"], **data})
+    if data.get("end_date") == "":
+        data["end_date"] = None
     data["updated_at"] = db.now()
     db.update("tasks", tid, data)
     return get(tid)
@@ -88,8 +114,8 @@ def patch(tid: int, data: dict) -> dict:
 @router.get("")
 def list_tasks(date: str = "", start: str = "", end: str = ""):
     if start or end:
-        rs = db.rows("SELECT * FROM tasks WHERE date BETWEEN ? AND ? AND kind IS NOT ? ORDER BY date, start_time, priority",
-                     [start or "0000", end or "9999", ISSUE_KIND])
+        rs = db.rows("SELECT * FROM tasks WHERE date BETWEEN ? AND ? ORDER BY date, start_time, priority",
+                     [start or "0000", end or "9999"])
         return [decode(t) for t in rs]
     return list_for(date or db.today())
 

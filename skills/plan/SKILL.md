@@ -34,9 +34,12 @@ curl -s "$API/api/plan/day?date=2026-10-29"
 # 新增顶层事项（kind: work/learning/life；priority 1-4；repo 可选）
 curl -s -X POST $API/api/tasks -H 'Content-Type: application/json' \
   -d '{"date":"2026-10-29","title":"写周报","goal":"发出给团队","priority":2,"kind":"work","est_minutes":45}'
-# 新增长期事项 / 持续问题（kind=issue）：每天都显示在「长期事项 / 持续问题」区，不进排程，解决了 PATCH status=done
+# 跨日事项：date 是开始日，end_date 是结束日（不写 = 单日；"" = 不设结束，做完或放弃前每天都在）。
+# 跨日事项本身不进排程，范围内每天都显示，过了结束日还没关就算逾期；当天要做的部分建成当天 date 的子任务再排程
 curl -s -X POST $API/api/tasks -H 'Content-Type: application/json' \
-  -d '{"date":"2026-10-29","title":"Agent teams 如何管理、人机如何协同的框架","kind":"issue"}'
+  -d '{"date":"2026-11-07","end_date":"2026-11-30","title":"上线规划日期范围","kind":"work"}'
+curl -s -X POST $API/api/tasks -H 'Content-Type: application/json' \
+  -d '{"date":"2026-10-29","end_date":"","title":"Agent teams 如何管理、人机如何协同的框架"}'
 # 新增子任务：带 parent_id；depends_on 是任务 id 列表
 curl -s -X POST $API/api/tasks -H 'Content-Type: application/json' \
   -d '{"date":"2026-10-29","parent_id":12,"title":"汇总本周 commit","human_level":"auto","executor":"claude","est_minutes":20,"parallel_group":"A"}'

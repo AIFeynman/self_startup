@@ -291,73 +291,59 @@ def test_code_state_reads_branches_and_guesses_repo(tmp_path, monkeypatch):
     assert "没找到对应仓库" in two and repos == [str(repo)]
 
 
-def _issues(client, d):
-    return client.get(f"/api/plan/day?date={d}").json()["issues"]
+def _day(client, d):
+    return client.get(f"/api/plan/day?date={d}").json()
 
 
-def _clean_issues():
-    from app import db
-    db.execute("DELETE FROM tasks WHERE kind='issue'")
+def _titles(client, d):
+    return [t["title"] for t in _day(client, d)["tasks"]]
 
 
-def test_review_problem_stays_in_plan_until_resolved(client):
-    _clean_issues()
+def test_span_task_shows_every_day_in_range_and_overdue_until_closed(client):
+    t = client.post("/api/tasks", json={"date": "2026-05-01", "end_date": "2026-05-10", "title": "写季度规划"}).json()
+    assert "写季度规划" not in _titles(client, "2026-04-30")
+    assert "写季度规划" in _titles(client, "2026-05-01") and "写季度规划" in _titles(client, "2026-05-10")
+    assert "写季度规划" in _titles(client, "2026-05-11")
+    client.patch(f"/api/tasks/{t['id']}", json={"status": "done"})
+    assert "写季度规划" not in _titles(client, "2099-01-01")
+
+
+def test_task_without_end_stays_until_closed(client):
+    t = client.post("/api/tasks", json={"date": "2026-05-01", "end_date": "", "title": "Agent teams 如何管理"}).json()
+    assert t["end_date"] is None
+    assert "Agent teams 如何管理" in _titles(client, "2099-01-01")
+    assert "Agent teams 如何管理" in plan.agent_context("2026-06-01")
+    client.patch(f"/api/tasks/{t['id']}", json={"status": "dropped"})
+    assert "Agent teams 如何管理" not in _titles(client, "2099-01-01")
+
+
+def test_single_day_task_by_default(client):
+    t = client.post("/api/tasks", json={"date": "2026-05-02", "title": "只今天"}).json()
+    assert t["end_date"] == "2026-05-02"
+    assert "只今天" not in _titles(client, "2026-05-03")
+
+
+def test_span_task_is_not_scheduled_but_its_children_today_are(client):
+    p = client.post("/api/tasks", json={"date": "1998-01-01", "end_date": "1998-01-31", "title": "跨日父", "human_level": "heavy"}).json()
+    client.post("/api/plan/schedule", json={"date": "1998-01-05"})
+    assert client.get(f"/api/tasks/{p['id']}").json()["start_time"] == ""
+    c = client.post("/api/tasks", json={"date": "1998-01-05", "parent_id": p["id"], "title": "今天的一步", "human_level": "heavy"}).json()
+    client.post("/api/plan/schedule", json={"date": "1998-01-05"})
+    assert client.get(f"/api/tasks/{c['id']}").json()["start_time"]
+    tree = _day(client, "1998-01-05")["tree"]
+    assert [[k["title"] for k in t["children"]] for t in tree if t["title"] == "跨日父"] == [["今天的一步"]]
+
+
+def test_carry_moves_single_day_tasks_only(client):
+    client.post("/api/tasks", json={"title": "昨天没做完", "date": "1999-04-04"})
+    client.post("/api/tasks", json={"title": "跨月的事", "date": "1999-04-01", "end_date": "1999-04-30"})
+    client.post("/api/plan/carry", json={"date": "1999-04-06"})
+    assert sorted(_titles(client, "1999-04-06")) == ["昨天没做完", "跨月的事"]
+
+
+def test_review_problem_becomes_task_without_end(client):
     client.post("/api/notes/review", json={"date": "2026-04-01", "entries": {
         "产品迭代·做得好的": "模板上线了", "产品迭代·有问题的": "排期总是写不清 #流程", "AI协作·有问题的": " "}})
-
-    added = _issues(client, "2026-04-01")
-    assert [i["title"] for i in added] == ["产品迭代：排期总是写不清"]
-    assert added[0]["created_at"] and added[0]["status"] == "todo"
-    later = _issues(client, "2026-04-20")
-    assert [i["id"] for i in later] == [added[0]["id"]]
-    assert _issues(client, "2026-03-31") == []
-
-    client.patch(f"/api/tasks/{added[0]['id']}", json={"status": "done"})
-    from app import db
-    resolved_on = db.row("SELECT updated_at FROM tasks WHERE id=?", [added[0]["id"]])["updated_at"][:10]
-    assert [i["status"] for i in _issues(client, resolved_on)] == ["done"]
-    assert _issues(client, "2099-01-01") == []
-
-
-def test_same_open_problem_is_not_added_twice(client):
-    _clean_issues()
-    body = {"date": "2026-04-02", "entries": {"个人效率·有问题的": "总被打断"}}
-    client.post("/api/notes/review", json=body)
-    client.post("/api/notes/review", json={**body, "date": "2026-04-03"})
-    assert len(_issues(client, "2026-04-03")) == 1
-
-
-def test_review_problem_stays_out_of_carry_and_day_tasks(client):
-    _clean_issues()
-    client.post("/api/tasks", json={"title": "昨天没做完", "date": "1999-04-04"})
-    client.post("/api/notes/review", json={"date": "1999-04-05", "entries": {"学习提升·有问题的": "论文读不完"}})
-    day = client.get("/api/plan/day?date=1999-04-05").json()
-    assert all(t["kind"] != "issue" for t in day["tasks"])
-    assert client.get("/api/tasks?start=1999-04-05&end=1999-04-05").json() == []
-    client.post("/api/plan/carry", json={"date": "1999-04-06"})
-    assert [t["title"] for t in client.get("/api/tasks?date=1999-04-06").json()] == ["昨天没做完"]
-
-
-def test_plan_agent_knows_open_problems(client):
-    _clean_issues()
-    client.post("/api/notes/review", json={"date": "2026-04-07", "entries": {"产品迭代·有问题的": "发布总要返工"}})
-    assert "产品迭代：发布总要返工" in plan.agent_context("2026-04-08")
-
-
-def test_manually_added_long_term_item_stays_every_day_and_out_of_schedule(client):
-    _clean_issues()
-    t = client.post("/api/tasks", json={"date": "2026-05-01", "title": "Agent teams 如何管理、人机如何协同的框架", "kind": "issue"}).json()
-    for d in ("2026-05-01", "2026-05-09"):
-        day = client.get(f"/api/plan/day?date={d}").json()
-        assert [i["id"] for i in day["issues"]] == [t["id"]]
-        assert all(x["id"] != t["id"] for x in day["tasks"])
-    assert "Agent teams 如何管理" in plan.agent_context("2026-05-09")
-
-
-def test_day_task_can_move_into_long_term_items(client):
-    _clean_issues()
-    t = client.post("/api/tasks", json={"date": "2026-05-02", "title": "人机协同框架", "kind": "work", "status": "partial"}).json()
-    client.patch(f"/api/tasks/{t['id']}", json={"kind": "issue", "status": "todo"})
-    day = client.get("/api/plan/day?date=2026-05-03").json()
-    assert [i["title"] for i in day["issues"]] == ["人机协同框架"]
-    assert client.get("/api/tasks?date=2026-05-02").json() == []
+    client.post("/api/notes/review", json={"date": "2026-04-02", "entries": {"产品迭代·有问题的": "排期总是写不清"}})
+    assert "产品迭代：排期总是写不清" not in _titles(client, "2026-03-31")
+    assert _titles(client, "2026-04-20").count("产品迭代：排期总是写不清") == 1

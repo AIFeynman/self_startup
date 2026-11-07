@@ -21,7 +21,8 @@ CORE_SCHEMA = """
 -- 每日目标与事项：规划写入，复盘读取/打分
 CREATE TABLE IF NOT EXISTS tasks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    date          TEXT NOT NULL,             -- YYYY-MM-DD
+    date          TEXT NOT NULL,             -- YYYY-MM-DD，开始日
+    end_date      TEXT,                      -- 结束日；单日事项 = date，NULL = 不设结束（做完 / 放弃前每天都在）
     parent_id     INTEGER,                   -- 拆解出的子任务指向父任务
     title         TEXT NOT NULL,
     goal          TEXT DEFAULT '',           -- 完成标准 / 目标
@@ -145,6 +146,11 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
                          ("model", "TEXT DEFAULT ''")):
             if col not in cols:
                 c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
+        # 事项的结束日期：老事项都是单日；原来的「持续问题」(kind=issue) 改成不设结束、从加入那天开始的工作事项
+        if "end_date" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}:
+            c.execute("ALTER TABLE tasks ADD COLUMN end_date TEXT")
+            c.execute("UPDATE tasks SET end_date=date WHERE kind IS NOT 'issue'")
+            c.execute("UPDATE tasks SET kind='work', date=substr(created_at,1,10) WHERE kind='issue'")
         # 便签：老库的 review_notes 补上「谁写的」和引用来源（已有记录都算系统记的）
         note_cols = {r[1] for r in c.execute("PRAGMA table_info(review_notes)")}
         if note_cols:
