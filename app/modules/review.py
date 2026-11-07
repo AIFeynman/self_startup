@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS review_time_entries (
     created_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_review_time_entries_date ON review_time_entries(date);
+CREATE TABLE IF NOT EXISTS review_away (
+    id          INTEGER PRIMARY KEY,
+    started_at  TEXT NOT NULL,
+    ended_at    TEXT
+);
 """
 router = APIRouter()
 
@@ -868,6 +873,80 @@ def api_edit_time_entry(eid: int, body: TimeEntryIn):
 @router.delete("/time-entries/{eid}")
 def api_del_time_entry(eid: int):
     _retire_time_entry(eid)
+    return {"ok": True}
+
+
+class AwaySubmitIn(BaseModel):
+    category: str
+    output: str = ""
+
+
+def _seconds_between(start: str, end: str) -> int:
+    return int((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds())
+
+
+def _current_away() -> dict | None:
+    a = db.row("SELECT id, started_at, ended_at FROM review_away LIMIT 1")
+    if not a:
+        return None
+    return {**a, "seconds": _seconds_between(a["started_at"], a["ended_at"] or db.now()), "categories": human.CATEGORIES}
+
+
+def _why_away_cannot_be_recorded(started_at: str, ended_at: str) -> str:
+    if _seconds_between(started_at, ended_at) >= 86400:
+        return "离开超过 24 小时，可能忘了点回来，这次没有记录；需要的话在时间记录里手填"
+    if started_at[11:16] == ended_at[11:16]:
+        return "离开不足 1 分钟，这次没有记录"
+    return ""
+
+
+def _clear_away() -> None:
+    db.execute("DELETE FROM review_away")
+
+
+@router.get("/away")
+def api_away():
+    return _current_away()
+
+
+@router.post("/away/start")
+def api_away_start():
+    if not _current_away():
+        db.insert("review_away", {"started_at": db.now()})
+    return _current_away()
+
+
+@router.post("/away/back")
+def api_away_back():
+    a = _current_away()
+    if not a:
+        raise HTTPException(404, "现在没有在记录离开")
+    if a["ended_at"]:
+        return a
+    ended_at = db.now()
+    discarded = _why_away_cannot_be_recorded(a["started_at"], ended_at)
+    if discarded:
+        _clear_away()
+        return {"discarded": discarded}
+    db.update("review_away", a["id"], {"ended_at": ended_at})
+    return _current_away()
+
+
+@router.post("/away/submit")
+def api_away_submit(body: AwaySubmitIn):
+    a = _current_away()
+    if not a or not a["ended_at"]:
+        raise HTTPException(409, "要先点「我回来了」才能提交")
+    date = a["started_at"][:10]
+    entry = TimeEntryIn(date=date, category=body.category, start=a["started_at"][11:16], end=a["ended_at"][11:16], output=body.output)
+    eid = db.insert("review_time_entries", _time_entry_row(entry))
+    _clear_away()
+    return {"id": eid, "date": date}
+
+
+@router.delete("/away")
+def api_away_cancel():
+    _clear_away()
     return {"ok": True}
 
 

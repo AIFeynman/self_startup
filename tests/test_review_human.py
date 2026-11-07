@@ -139,3 +139,103 @@ def test_overnight_sleep_shows_on_both_days(client):
     h = _human(client, morning)
     assert [(s["start"], s["end"], s["type"]) for s in h["segments"]] == [("00:00", "07:00", "睡觉")]
     assert h["by_type"]["睡觉"] == 420 and h["entries"] == [] and h["minutes"] == 0
+
+
+def _at(monkeypatch, moment):
+    monkeypatch.setattr(db, "now", lambda: moment)
+
+
+def _away(client):
+    r = client.get("/api/review/away")
+    assert r.status_code == 200
+    return r.json()
+
+
+def _leave_and_return(client, monkeypatch, left, back):
+    _at(monkeypatch, left)
+    assert client.post("/api/review/away/start").status_code == 200
+    _at(monkeypatch, back)
+    r = client.post("/api/review/away/back")
+    assert r.status_code == 200
+    return r.json()
+
+
+def _drop_entries(client, date):
+    for e in _human(client, date)["entries"]:
+        client.delete(f"/api/review/time-entries/{e['id']}")
+
+
+def test_away_button_records_the_exact_period_with_type_and_gain(client, monkeypatch):
+    day = "2026-04-01"
+    _seed(day, [])
+    assert _away(client) is None
+
+    _at(monkeypatch, f"{day}T15:04:30")
+    assert client.post("/api/review/away/start").status_code == 200
+    _at(monkeypatch, f"{day}T15:10:30")
+    a = _away(client)
+    assert a["started_at"] == f"{day}T15:04:30" and a["ended_at"] is None and a["seconds"] == 360
+
+    _at(monkeypatch, f"{day}T15:49:10")
+    assert client.post("/api/review/away/back").json()["ended_at"] == f"{day}T15:49:10"
+    _at(monkeypatch, f"{day}T18:00:00")
+    assert _away(client)["seconds"] == 2680
+
+    r = client.post("/api/review/away/submit", json={"category": "思考复盘", "output": "想清楚了指标口径"})
+    assert r.status_code == 200 and r.json()["date"] == day
+    assert _away(client) is None
+    h = _human(client, day)
+    assert [(e["category"], e["start"], e["end"], e["output"]) for e in h["entries"]] == [("思考复盘", "15:04", "15:49", "想清楚了指标口径")]
+    assert h["minutes"] == 45
+    _drop_entries(client, day)
+
+
+def test_away_survives_repeat_clicks_and_keeps_the_first_time(client, monkeypatch):
+    day = "2026-04-02"
+    _at(monkeypatch, f"{day}T09:00:00")
+    client.post("/api/review/away/start")
+    _at(monkeypatch, f"{day}T09:30:00")
+    assert client.post("/api/review/away/start").json()["started_at"] == f"{day}T09:00:00"
+    client.post("/api/review/away/back")
+    _at(monkeypatch, f"{day}T10:00:00")
+    assert client.post("/api/review/away/back").json()["ended_at"] == f"{day}T09:30:00"
+    assert client.delete("/api/review/away").status_code == 200
+    assert _away(client) is None
+
+
+def test_away_crossing_midnight_lands_on_both_days(client, monkeypatch):
+    day, next_day = "2026-04-03", "2026-04-04"
+    _seed(day, [])
+    _seed(next_day, [])
+    _leave_and_return(client, monkeypatch, f"{day}T23:50:00", f"{next_day}T00:20:00")
+    r = client.post("/api/review/away/submit", json={"category": "学习", "output": ""})
+    assert r.status_code == 200 and r.json()["date"] == day
+    assert _human(client, day)["minutes"] == 10
+    assert _human(client, next_day)["minutes"] == 20
+    _drop_entries(client, day)
+
+
+def test_away_too_short_or_forgotten_leaves_no_record(client, monkeypatch):
+    day = "2026-04-05"
+    _seed(day, [])
+    too_short = _leave_and_return(client, monkeypatch, f"{day}T09:00:05", f"{day}T09:00:50")
+    assert "不足 1 分钟" in too_short["discarded"] and _away(client) is None
+    forgotten = _leave_and_return(client, monkeypatch, f"{day}T09:00:00", "2026-04-06T09:00:00")
+    assert "超过 24 小时" in forgotten["discarded"] and _away(client) is None
+    assert _human(client, day)["entries"] == []
+
+
+def test_away_rejects_steps_out_of_order_and_unknown_type(client, monkeypatch):
+    day = "2026-04-07"
+    assert client.post("/api/review/away/back").status_code == 404
+    assert client.post("/api/review/away/submit", json={"category": "开发"}).status_code == 409
+    _at(monkeypatch, f"{day}T09:00:00")
+    client.post("/api/review/away/start")
+    assert client.post("/api/review/away/submit", json={"category": "开发"}).status_code == 409
+    _at(monkeypatch, f"{day}T10:00:00")
+    client.post("/api/review/away/back")
+    assert client.post("/api/review/away/submit", json={"category": "摸鱼"}).status_code == 400
+    assert _away(client)["ended_at"] == f"{day}T10:00:00"
+    assert client.post("/api/review/away/submit", json={"category": "开发"}).status_code == 200
+    _seed(day, [])
+    _drop_entries(client, day)
