@@ -158,7 +158,9 @@ export default {
       }
       const edit = h('textarea', { rows: 4, value: n.text, 'aria-label': '便签内容' });
       const saveBtn = h('button.primary.sm', { hidden: true, onclick: () => patch(n.id, { text: edit.value }) }, '保存');
-      edit.oninput = () => { saveBtn.hidden = edit.value.trim() === n.text; };
+      const fitContent = () => { edit.style.height = 'auto'; edit.style.height = `${edit.scrollHeight + edit.offsetHeight - edit.clientHeight}px`; };
+      new ResizeObserver(fitContent).observe(edit);
+      edit.oninput = () => { saveBtn.hidden = edit.value.trim() === n.text; fitContent(); };
       const rows = linksOf(n.id).map((l) => {
         const other = notes.find((x) => x.id === (l.a === n.id ? l.b : l.a));
         if (!other) return null;
@@ -247,9 +249,9 @@ function injectStyle() {
   .sn-note .meta .grow { flex: 1; }
   .sn-c0 { background: var(--note-yellow); } .sn-c1 { background: var(--note-pink); } .sn-c2 { background: var(--note-blue); }
   .sn-c3 { background: var(--note-green); } .sn-c4 { background: var(--note-purple); } .sn-c5 { background: var(--note-sand); } .sn-c6 { background: var(--note-teal); }
-  .sn-side { position: sticky; top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+  .sn-side { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
   .sn-side h2 { font-size: 15px; margin: 0; }
-  .sn-side textarea { width: 100%; resize: vertical; }
+  .sn-side textarea { width: 100%; resize: none; overflow: hidden; }
   .sn-side button[hidden] { display: none; }
   .sn-side .sn-row.foot { border-top: 1px solid var(--line); padding-top: 8px; }
   .sn-label { color: var(--muted); font-size: 12px; margin-bottom: 4px; letter-spacing: .04em; }
@@ -267,7 +269,7 @@ function injectStyle() {
   .sn-picker input { width: 100%; min-width: 0; }
   .sn-pick { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 400; overflow-wrap: anywhere; color: var(--text); }
   .sn-pick:hover { background: var(--accent-soft); }
-  @media (max-width: 900px) { .sn-work { grid-template-columns: minmax(0, 1fr); } .sn-side { position: static; order: -1; } .sn-side.idle { display: none; } }
+  @media (max-width: 900px) { .sn-work { grid-template-columns: minmax(0, 1fr); } .sn-side { position: static; max-height: none; order: -1; } .sn-side.idle { display: none; } }
   @media (max-width: 480px) {
     .sn-day { grid-template-columns: minmax(0, 1fr); gap: 8px; }
     .sn-day-label { text-align: left; border-right: 0; padding-right: 0; }
