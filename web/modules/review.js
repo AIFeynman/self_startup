@@ -19,6 +19,18 @@ const CSS = `
 .rv-hero h1 { font-size: 36px; }
 .rv-hero .sub b { color: var(--accent); font-weight: 600; }
 .rv-wrap .composer { margin-top: 18px; }
+.rv-away { display: flex; flex-direction: column; align-items: center; margin: 10px 0 18px; text-align: center; }
+.rv-away-go { flex: none; justify-content: center; width: 148px; height: 148px; padding: 0; border-radius: 50%; border: none; font-size: 22px; font-weight: 700; box-shadow: var(--shadow); }
+.rv-away-go.back { background: var(--ok); color: #fff; }
+.rv-away-go.back:hover { background: var(--ok); opacity: .92; }
+.rv-away-go.send { width: 96px; height: 96px; font-size: 18px; }
+.rv-away-hint { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.rv-away-timer { font-size: 36px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); margin: 2px 0 12px; }
+.rv-away-head { font-size: 15px; color: var(--muted); }
+.rv-away-sum { font-size: 22px; font-weight: 700; margin: 2px 0 12px; }
+.rv-away-kinds { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 12px; }
+.rv-away-gain { width: 100%; max-width: 420px; font-size: 16px; padding: 12px 14px; margin-bottom: 14px; box-sizing: border-box; }
+.rv-away-cancel { margin-top: 10px; }
 .rv-tabs { display: flex; justify-content: center; margin: 22px 0 4px; }
 .rv-tabs .tabs { margin: 0; padding: 4px; background: var(--bg-2); border-radius: 999px; gap: 2px; }
 .rv-tabs .tabs button { border: none; background: transparent; padding: 5px 16px; }
@@ -745,15 +757,86 @@ export default {
       ]);
     }
 
+    function awayCard(initial) {
+      const box = h('div');
+      const clock = (at) => at.slice(11, 16);
+      const elapsed = (s) => {
+        const hh = Math.floor(s / 3600), mm = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, '0');
+        return hh ? `${hh} 小时 ${mm} 分 ${ss} 秒` : `${mm} 分 ${ss} 秒`;
+      };
+      const step = async (call) => {
+        try {
+          const a = await call();
+          if (a?.discarded) toast(a.discarded);
+          draw(a?.discarded ? null : a);
+        } catch (e) {
+          toast(e.message, true);
+          draw(await api.get('/api/review/away'));
+        }
+      };
+      const cancel = (label) => h('button.ghost.sm.rv-away-cancel', { onclick: () => {
+        if (confirm('这段离开不记了？')) step(async () => { await api.del('/api/review/away'); return null; });
+      } }, label);
+      const drawAway = (a) => {
+        const openedAt = Date.now();
+        const timer = h('div.rv-away-timer', {}, elapsed(a.seconds));
+        const tick = setInterval(() => {
+          if (!timer.isConnected) return clearInterval(tick);
+          timer.textContent = elapsed(a.seconds + Math.floor((Date.now() - openedAt) / 1000));
+        }, 1000);
+        box.replaceChildren(h('div.rv-away', {}, [
+          h('div.rv-away-head', {}, `离开中 · ${clock(a.started_at)} 开始`),
+          timer,
+          h('button.rv-away-go.back', { onclick: () => step(() => api.post('/api/review/away/back')) }, '我回来了'),
+          cancel('点错了，不记'),
+        ]));
+      };
+      const drawBack = (a) => {
+        let category = '';
+        const gain = h('input.rv-away-gain', { placeholder: '这段时间的收获（可不填）' });
+        const submit = h('button.primary.rv-away-go.send', { disabled: true, onclick: async () => {
+          try {
+            const r = await api.post('/api/review/away/submit', { category, output: gain.value });
+            toast(`记下了 ${r.date} ${clock(a.started_at)}–${clock(a.ended_at)} ${category}`);
+            await renderHuman();
+          } catch (e) { toast(e.message, true); }
+        } }, '提交');
+        const kinds = a.categories.map((c) => h('button.kind-chip', { onclick: (e) => {
+          category = c;
+          kinds.forEach((k) => k.classList.toggle('on', k === e.currentTarget));
+          submit.disabled = false;
+        } }, c));
+        box.replaceChildren(h('div.rv-away', {}, [
+          h('div.rv-away-head', {}, '刚才离开了'),
+          h('div.rv-away-sum', {}, `${clock(a.started_at)}–${clock(a.ended_at)} · ${elapsed(a.seconds)}`),
+          h('div.rv-away-kinds', {}, kinds),
+          gain,
+          submit,
+          cancel('不记了'),
+        ]));
+      };
+      const draw = (a) => {
+        if (a?.ended_at) drawBack(a);
+        else if (a) drawAway(a);
+        else box.replaceChildren(h('div.rv-away', {}, [
+          h('button.primary.rv-away-go', { onclick: () => step(() => api.post('/api/review/away/start')) }, '我要离开了'),
+          h('div.rv-away-hint', {}, '离开电脑时点一下，回来再点一下'),
+        ]));
+      };
+      draw(initial);
+      return box;
+    }
+
     async function renderHuman() {
       loadDay();
-      if (!body.firstChild) body.replaceChildren(ui.empty('统计中…', '读取当天的会话和学习记录'));
+      const away = awayCard(await api.get('/api/review/away'));
+      if (!body.firstChild) body.replaceChildren(away, ui.empty('统计中…', '读取当天的会话和学习记录'));
       const x = await api.get(`/api/review/human?date=${state.date}`);
       const whole = x.segments.filter((s) => s.whole);
       const pieces = x.segments.filter((s) => !s.whole);
       const segmentRow = (s) => h('div.rv-time-row', {}, [h('span.t', {}, `${s.start}–${s.end}`),
         h('span.tag.seg', {}, [h('i.rv-tl-dot', { style: { background: `var(--t-${s.type})` } }), s.type]), h('span.x', {}, `${s.label === s.type ? '' : `${s.label} · `}${s.minutes} 分`)]);
-      body.replaceChildren(h('div.rv-human', {}, [
+      body.replaceChildren(away, h('div.rv-human', {}, [
         ui.section('人工效率'),
         ui.stats([
           { k: '人工耗时', v: hours(x.minutes) },
