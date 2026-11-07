@@ -162,11 +162,11 @@ def test_old_db_migration(tmp_path, monkeypatch):
 def test_review_template_saves_one_note_with_every_filled_area(client):
     _clean()
     r = client.post("/api/notes/review", json={"date": "2026-03-01", "entries": {
-        "产品迭代·做得好的": "模板上线了",
-        "产品迭代·有问题的": "排期写不清，下一步先写标准",
-        "个人效率·做得好的": "   ",
-        "AI协作·有问题的": "",
-        "学习提升·做得好的": "读完一篇论文 #论文",
+        "产品迭代·做得好的": ["模板上线了"],
+        "产品迭代·有问题的": ["排期写不清，下一步先写标准"],
+        "个人效率·做得好的": ["   "],
+        "AI协作·有问题的": [],
+        "学习提升·做得好的": ["读完一篇论文 #论文"],
     }})
     assert r.status_code == 200
     wall = client.get("/api/notes?kind=review").json()
@@ -179,9 +179,20 @@ def test_review_template_saves_one_note_with_every_filled_area(client):
     assert review_kind["label"] == "复盘" and review_kind["builtin"] and review_kind["count"] == 1
 
 
+def test_review_template_keeps_each_entry_of_an_aspect_as_its_own_line(client):
+    _clean()
+    r = client.post("/api/notes/review", json={"date": "2026-03-02", "entries": {
+        "个人效率·做得好的": ["找到了复盘的节奏", " ", "口播的工作方式"],
+        "个人效率·有问题的": ["单篇内容要看 5 分钟", "没想清楚就开工"],
+    }}).json()
+    assert r["note"]["text"].splitlines() == ["复盘 03-02", "个人效率·做得好的：找到了复盘的节奏", "个人效率·做得好的：口播的工作方式",
+                                              "个人效率·有问题的：单篇内容要看 5 分钟", "个人效率·有问题的：没想清楚就开工"]
+    assert len(r["issues"]) == 2
+
+
 def test_review_template_needs_at_least_one_area(client):
     _clean()
-    assert client.post("/api/notes/review", json={"entries": {"产品迭代": " ", "AI协作": ""}}).status_code == 400
+    assert client.post("/api/notes/review", json={"entries": {"产品迭代": [" "], "AI协作": [""]}}).status_code == 400
     assert client.get("/api/notes").json()["notes"] == []
 
 

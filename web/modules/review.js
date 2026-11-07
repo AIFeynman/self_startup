@@ -1,6 +1,6 @@
 // 复盘（首页）：问候 + 一句话状态 + 大输入框（记一条 / 问 Agent）+ 今日三卡（事项 / AI 建议 / Agent 效率）
 // 标签页：当日复盘（复盘 / Agent 效率 / 人工效率）/ 时间线 / 问题与经验 / 已读历史。路由：#review/<YYYY-MM-DD>/<tab>/<view>
-import { today } from '../api.js';
+import { today, noteHtml } from '../api.js';
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
 import { coreMetrics } from './_coremetrics.js';
@@ -96,10 +96,14 @@ const CSS = `
 .rv-aspect { min-width: 0; }
 .rv-aspect label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .rv-area input { width: 100%; box-sizing: border-box; }
+.rv-aspect-inputs { display: flex; flex-direction: column; gap: 6px; }
+.rv-aspect-add { align-self: flex-start; margin-top: 4px; }
 .rv-area-past { margin-top: 8px; max-height: 200px; overflow-y: auto; border-left: 2px solid var(--note-teal); padding-left: 10px; }
 .rv-area-past > div { display: grid; grid-template-columns: 44px 1fr; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 13px; }
 .rv-area-past .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.rv-area-past .x { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rv-area-past .x { overflow-wrap: anywhere; line-height: 1.6; }
+.rv-area-past .x > :first-child { margin-top: 0; } .rv-area-past .x > :last-child { margin-bottom: 0; }
+.rv-area-past .x p { margin: .2em 0; } .rv-area-past .x ol, .rv-area-past .x ul { margin: .2em 0; padding-left: 1.4em; }
 .rv-area-save { display: flex; justify-content: flex-end; margin-top: 14px; }
 .rv-tl .notes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .rv-msg { font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -160,7 +164,7 @@ const REC_FIELD = { summary: '总结', wins: '收获', problems: '问题', next_
 const MSG_KIND = { new_task: '新任务/追加', correct: '纠正/转向', approve: '确认/继续', interrupt: '中断', answer: '回答提问', check: '询问进度' };
 const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn', answer: '', new_task: 'ok' };
 const REVIEW_AREAS = ['产品迭代', '个人效率', 'AI协作', '学习提升'];
-const REVIEW_ASPECTS = { 做得好的: '做成了什么、有什么收获，写在这一行', 有问题的: '哪里有问题、下一步怎么办，写在这一行' };
+const REVIEW_ASPECTS = { 做得好的: '做成了什么、有什么收获，一行一条，回车再加一条', 有问题的: '哪里有问题、下一步怎么办，一行一条，回车再加一条' };
 const reviewDraft = {};
 const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史' };
 const DAY_VIEWS = { review: '复盘', agent: 'Agent 效率', human: '人工效率' };
@@ -415,11 +419,24 @@ export default {
         const prefix = `${key}：`;
         const past = history.flatMap((n) => [n.title, ...n.content.split('\n')].filter((line) => line.startsWith(prefix))
           .map((line) => ({ date: n.date, text: line.slice(prefix.length) })));
+        const rows = h('div.rv-aspect-inputs');
+        const paint = (focus) => {
+          const items = reviewDraft[key] ||= [''];
+          rows.replaceChildren(...items.map((text, i) => h('input', { value: text, placeholder, 'aria-label': `${key} 第 ${i + 1} 条`,
+            oninput: (e) => { items[i] = e.target.value; },
+            onkeydown: (e) => {
+              if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); items.splice(i + 1, 0, ''); paint(i + 1); }
+              if (e.key === 'Backspace' && !e.target.value && items.length > 1) { e.preventDefault(); items.splice(i, 1); paint(Math.max(0, i - 1)); }
+            } })));
+          if (focus != null) rows.children[focus].focus();
+        };
+        paint();
         return h('div.rv-aspect', { 'data-key': key }, [
-          h('label', {}, [label, h('input', { value: reviewDraft[key] || '', placeholder,
-            oninput: (e) => { reviewDraft[key] = e.target.value; } })]),
+          h('label', {}, label),
+          rows,
+          h('button.ghost.sm.rv-aspect-add', { type: 'button', onclick: () => { reviewDraft[key].push(''); paint(reviewDraft[key].length - 1); } }, '+ 再加一条'),
           past.length ? h('div.rv-area-past', {}, past.map((n) => h('div', {}, [h('span.t', {}, n.date.slice(5)),
-            h('span.x', {}, n.text)])))
+            h('div.x', {}, noteHtml(n.text))])))
             : h('div.muted', { style: { marginTop: '6px', fontSize: '13px' } }, '这一栏还没写过'),
         ]);
       };
@@ -428,7 +445,7 @@ export default {
       const save = async () => {
         try {
           const entries = Object.fromEntries(REVIEW_AREAS.flatMap((name) => Object.keys(REVIEW_ASPECTS)
-            .map((label) => `${name}·${label}`).map((key) => [key, reviewDraft[key] || ''])));
+            .map((label) => `${name}·${label}`).map((key) => [key, reviewDraft[key]])));
           const made = await api.post('/api/notes/review', { date: state.date, entries });
           Object.keys(reviewDraft).forEach((key) => delete reviewDraft[key]);
           delete foldOverride[`${state.date}:template`];
@@ -438,7 +455,7 @@ export default {
       };
       const filled = history.filter((n) => n.date === state.date).length;
       const note = filled ? `这天已填 ${filled} 张便签 · 点开可以再写一张或看过去写的` : '填几栏算几栏，保存成一张「复盘」便签，有问题的进规划事项 · 每栏下面是过去写的，方便对比';
-      const drafting = Object.values(reviewDraft).some((v) => v.trim());
+      const drafting = Object.values(reviewDraft).flat().some((v) => v.trim());
       return foldCard('template', '复盘模板', note, !filled || drafting, [h('div.rv-areas', {}, REVIEW_AREAS.map(area)),
         h('div.rv-area-save', {}, h('button.primary', { onclick: save }, [ui.icon('check'), '保存到便签']))]);
     }

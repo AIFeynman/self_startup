@@ -1,6 +1,7 @@
 // 便签：用户自己写的灵感和感想，按天贴在时间线上。类型可以自己加，便签之间可以连线，可以引用来源文章。
 // 系统记的问题与经验在「复盘」；数据都在 review_notes，靠 author 区分。
 import { kindChips, kindColor } from '../ui.js';
+import { noteHtml } from '../api.js';
 
 const KIND_KEY = 'note-kind'; // 上次选的类型
 const short = (t, n = 18) => (t.length > n ? t.slice(0, n) + '…' : t);
@@ -95,7 +96,7 @@ export default {
       const related = selected && linksOf(selected).some((l) => l.a === n.id || l.b === n.id);
       const state = n.id === selected ? '.sel' : selected && !linking ? (related ? '.rel' : '.dim') : '';
       return h(`button.sn-note.sn-c${kindColor(n.kind, kinds)}${state}`, { 'data-note': n.id, onclick: () => clickNote(n.id) }, [
-        h('span.txt', {}, n.text),
+        h('span.txt', {}, noteHtml(n.text)),
         n.sources.length ? h('span.src', {}, `出处：${short(n.sources[0].title)}${n.sources.length > 1 ? ` 等 ${n.sources.length} 篇` : ''}`) : null,
         h('span.meta', {}, [h('em', {}, labelOf(n.kind)), h('span', {}, (n.created_at || '').slice(11, 16)),
           n.tags ? h('span', {}, n.tags.split(',').filter(Boolean).map((t) => '#' + t).join(' ')) : null,
@@ -242,7 +243,8 @@ function injectStyle() {
   .sn-note.dim { opacity: .38; }
   .sn-note.rel { z-index: 2; }
   .sn-note::before { content: ""; position: absolute; top: -7px; left: 50%; width: 58px; height: 15px; margin-left: -29px; background: rgba(255,255,255,.5); box-shadow: 0 0 1px rgba(0,0,0,.2); }
-  .sn-note .txt { flex: 1; font: 500 14px/1.6 var(--serif); overflow-wrap: anywhere; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 9; -webkit-box-orient: vertical; overflow: hidden; }
+  .sn-note .txt { flex: 1; font: 500 14px/1.6 var(--serif); overflow-wrap: anywhere; max-height: 14.4em; overflow: hidden; }
+  .sn-note .txt .md { line-height: inherit; } .sn-note .txt p { margin: 0 0 .3em; } .sn-note .txt ol, .sn-note .txt ul { margin: 0 0 .3em; padding-left: 1.3em; }
   .sn-note .src { font-size: 12px; color: #5c5247; border-top: 1px dashed rgba(60,40,20,.28); padding-top: 5px; overflow-wrap: anywhere; }
   .sn-note .meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11.5px; color: #5c5247; align-items: center; font-variant-numeric: tabular-nums; }
   .sn-note .meta em { font-style: normal; font-weight: 600; }
