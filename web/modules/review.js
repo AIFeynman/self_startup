@@ -115,6 +115,25 @@ table.rv { border-collapse: collapse; width: 100%; font-size: 12px; } table.rv t
 .rv-fold[open] > summary { margin-bottom: 12px; }
 .rv-fold[open] > summary .muted { white-space: normal; }
 .rv-fold-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.rv-human { --t-开发: #2a78d6; --t-学习: #eb6834; --t-思考复盘: #1baf7a; --t-运动: #eda100; --t-吃饭: #e87ba4; --t-睡觉: #008300; --t-其他: #6250d6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rv-human { --t-开发: #3987e5; --t-学习: #d95926; --t-思考复盘: #199e70; --t-运动: #c98500; --t-吃饭: #d55181; --t-其他: #9085e9; } }
+:root[data-theme="dark"] .rv-human { --t-开发: #3987e5; --t-学习: #d95926; --t-思考复盘: #199e70; --t-运动: #c98500; --t-吃饭: #d55181; --t-其他: #9085e9; }
+.rv-tl-row { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: end; margin-bottom: 10px; }
+.rv-tl-hour { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 26px; }
+.rv-tl-track { position: relative; height: 26px; background: var(--bg-2); border-radius: 4px; overflow: hidden; }
+.rv-tl-seg { position: absolute; top: 0; bottom: 0; min-width: 3px; padding: 0; border: 0; border-radius: 0; cursor: pointer; box-shadow: inset -1px 0 0 var(--panel); }
+.rv-tl-seg:hover, .rv-tl-seg.on { top: -1px; bottom: -1px; outline: 2px solid var(--text); outline-offset: -2px; z-index: 1; }
+.rv-tl-seg.blank { background: repeating-linear-gradient(135deg, var(--line-2) 0 3px, transparent 3px 7px); }
+.rv-tl-ticks { position: relative; height: 15px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-tl-ticks span { position: absolute; transform: translateX(-50%); }
+.rv-tl-ticks span:first-child { transform: none; }
+.rv-tl-detail { min-height: 20px; margin-bottom: 12px; font-size: 13px; overflow-wrap: anywhere; }
+.rv-tl-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 4px; font-size: 13px; }
+.rv-tl-legend span { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-tl-legend b { font-weight: 500; color: var(--text); }
+.rv-tl-dot { flex: none; display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.rv-tl-dot.blank { background: repeating-linear-gradient(135deg, var(--muted) 0 2px, transparent 2px 4px); }
+.rv-time-row .tag.seg { display: inline-flex; gap: 5px; align-items: center; background: none; color: var(--text); padding: 0; white-space: nowrap; }
 .rv-human .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 900px) { .rv-human .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .rv-trend { display: flex; flex-direction: column; gap: 6px; }
@@ -656,6 +675,41 @@ export default {
       ]))));
     }
 
+    function timelineCard(x) {
+      const clockMin = (t) => +t.slice(0, 2) * 60 + +t.slice(3, 5);
+      const describe = (p) => p.blank ? `${p.start}–${p.end} · 没有记录 · ${p.minutes} 分钟 · 可在下面的时间记录里补填`
+        : `${p.start}–${p.end} · ${p.type}${p.label === p.type ? '' : ` · ${p.label}`} · ${p.minutes} 分钟${p.whole ? ' · 整块' : ''}`;
+      const detail = h('div.rv-tl-detail.muted', {}, '指向或点一段看它在做什么');
+      const periods = [...x.segments, ...x.blanks.map((b) => ({ ...b, blank: true }))];
+      let picked = null;
+      const bar = (p, from, span) => {
+        const start = Math.max(clockMin(p.start), from), end = Math.min(clockMin(p.end), from + span);
+        const node = h('button.rv-tl-seg' + (p.blank ? '.blank' : ''), { type: 'button', title: describe(p), 'aria-label': describe(p), style: {
+          left: `${(start - from) / span * 100}%`, width: `${(end - start) / span * 100}%`, background: p.blank ? null : `var(--t-${p.type})` } });
+        const show = () => { detail.textContent = describe(p); detail.classList.remove('muted'); };
+        node.onmouseenter = show;
+        node.onclick = () => { picked?.classList.remove('on'); picked = node; node.classList.add('on'); show(); };
+        return node;
+      };
+      const SPAN = 360;
+      const rows = [0, 6, 12, 18].map((hour) => {
+        const from = hour * 60;
+        return h('div.rv-tl-row', {}, [h('span.rv-tl-hour', {}, String(hour).padStart(2, '0')), h('div', {}, [
+          h('div.rv-tl-track', {}, periods.filter((p) => clockMin(p.start) < from + SPAN && clockMin(p.end) > from).map((p) => bar(p, from, SPAN))),
+          h('div.rv-tl-ticks', {}, [0, 2, 4].map((n) => h('span', { style: { left: `${n / 6 * 100}%` } }, `${hour + n}:00`))),
+        ])]);
+      });
+      const blankMin = x.blanks.reduce((sum, b) => sum + b.minutes, 0);
+      return h('div.card', {}, [
+        detail,
+        ...rows,
+        h('div.rv-tl-legend', {}, [
+          ...x.categories.map((c) => h('span', {}, [h('i.rv-tl-dot', { style: { background: `var(--t-${c})` } }), c, h('b', {}, hours(x.by_type[c]))])),
+          h('span', {}, [h('i.rv-tl-dot.blank'), '待填', h('b', {}, hours(blankMin))]),
+        ]),
+      ]);
+    }
+
     function timeRecordCard(x) {
       const category = h('select', {}, x.categories.map((c) => h('option', { value: c }, c)));
       const start = h('input', { type: 'time' });
@@ -695,25 +749,29 @@ export default {
       loadDay();
       if (!body.firstChild) body.replaceChildren(ui.empty('统计中…', '读取当天的会话和学习记录'));
       const x = await api.get(`/api/review/human?date=${state.date}`);
-      const whole = x.blocks.filter((b) => b.whole);
-      const pieces = x.blocks.filter((b) => !b.whole);
-      const blockRow = (b) => h('div.rv-time-row', {}, [h('span.t', {}, `${b.start}–${b.end}`), h('span.tag.line', {}, `${b.minutes} 分`), h('span.x', {}, b.project)]);
+      const whole = x.segments.filter((s) => s.whole);
+      const pieces = x.segments.filter((s) => !s.whole);
+      const segmentRow = (s) => h('div.rv-time-row', {}, [h('span.t', {}, `${s.start}–${s.end}`),
+        h('span.tag.seg', {}, [h('i.rv-tl-dot', { style: { background: `var(--t-${s.type})` } }), s.type]), h('span.x', {}, `${s.label === s.type ? '' : `${s.label} · `}${s.minutes} 分`)]);
       body.replaceChildren(h('div.rv-human', {}, [
-        ui.section('人工效率', `人工耗时 = 有活动记录的分钟（含 10 分钟内的空隙）+ 手填的${x.work_categories.join(' / ')}；碎片率 = 1 − 连续 25 分钟以上做同一项目的分钟 ÷ 人工耗时`),
+        ui.section('人工效率'),
         ui.stats([
           { k: '人工耗时', v: hours(x.minutes) },
-          { k: `碎片率（建议 ${FRAGMENT_TARGET}% 以下）`, v: x.fragment_pct == null ? '—' : `${x.fragment_pct}%` },
+          { k: `碎片时间（碎片率 ${x.fragment_pct ?? '—'}%，建议 ${FRAGMENT_TARGET}% 以下）`, v: hours(x.fragment_min) },
           { k: '整块时间', v: hours(x.whole_min) },
-          { k: '待填空白', v: `${x.blanks.length} 段` },
+          { k: '学习时间', v: hours(x.by_type['学习']) },
         ]),
-        h('div.muted', { style: { marginBottom: '10px' } }, '看 Agent 输出超过 10 分钟不发消息会被算成中断，碎片率会偏高；这种时段可以手填成工作。'),
+        h('div.muted', { style: { marginBottom: '10px' } }, `人工耗时 = 有活动记录的分钟（含 10 分钟内的空隙）+ 手填的${x.work_categories.join(' / ')}，手填的吃饭、运动等不算；碎片时间 = 人工耗时 − 连续 25 分钟以上做同一项目的整块时间。看 Agent 输出超过 10 分钟不发消息会被算成中断，碎片率会偏高；这种时段可以手填成工作。`),
+        ui.section('时间轴'),
+        h('div.muted', { style: { marginBottom: '10px' } }, '每行 6 小时，颜色是类型；对话算开发，学习和阅读算学习，语音通话算思考复盘；手填优先。'),
+        timelineCard(x),
+        ui.section('时间段', whole.length ? `整块 ${whole.length} 段 · 共 ${x.whole_min} 分钟` : ''),
+        h('div.card', {}, [
+          whole.length ? h('div', {}, whole.map(segmentRow)) : h('div.muted', {}, '这一天没有连续 25 分钟以上做同一项目的时段。'),
+          pieces.length ? h('details', { style: { marginTop: '10px' } }, [h('summary', {}, `其余 ${pieces.length} 段`), ...pieces.map(segmentRow)]) : null,
+        ]),
         ui.section('时间记录', '吃饭、运动、睡觉和没被采到的工作都在这里手填；没填不影响别的，修改留历史'),
         timeRecordCard(x),
-        ui.section('整块时间', whole.length ? `${whole.length} 段 · 共 ${x.whole_min} 分钟` : ''),
-        h('div.card', {}, [
-          whole.length ? h('div', {}, whole.map(blockRow)) : h('div.muted', {}, '这一天没有连续 25 分钟以上做同一项目的时段。'),
-          pieces.length ? h('details', { style: { marginTop: '10px' } }, [h('summary', {}, `其余碎片 ${pieces.length} 段`), ...pieces.map(blockRow)]) : null,
-        ]),
         ui.section('近 7 天', '蓝色是整块时间，灰色是碎片时间 · 点一行看那一天'),
         trendCard(x.trend),
       ]));
