@@ -38,6 +38,17 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .new-chat { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 9px; margin-bottom: 16px;
   border: 1.5px solid var(--accent); color: var(--accent); background: transparent; border-radius: 10px; font-size: 15px; }
 .new-chat:hover { background: var(--accent-soft); }
+.pause { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-bottom: 18px; text-align: center; }
+.pause-go { flex: none; justify-content: center; width: 76px; height: 76px; padding: 0; border-radius: 50%; border: none; font-size: 18px; font-weight: 700; box-shadow: var(--shadow); }
+.pause-go.resume { background: var(--ok); color: #fff; }
+.pause-go.resume:hover { background: var(--ok); opacity: .92; }
+.pause-go.send { width: 60px; height: 60px; font-size: 15px; }
+.pause-head { font-size: 13px; color: var(--muted); }
+.pause-timer { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
+.pause-sum { font-size: 15px; font-weight: 600; }
+.pause-kinds { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }
+.pause-kinds .kind-chip { padding: 2px 8px; font-size: 12px; }
+.pause-gain { width: 100%; font-size: 13px; padding: 8px 10px; box-sizing: border-box; }
 #nav-links { display: flex; flex-direction: column; gap: 2px; }
 #nav-links a, .nav-foot a { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; color: var(--text); font-size: 15px; }
 #nav-links a:hover, .nav-foot a:hover { background: var(--panel); text-decoration: none; }
@@ -250,7 +261,7 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-2);
   body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   #nav { flex-direction: row; align-items: center; padding: 8px 12px; overflow-x: auto; gap: 8px; }
   #nav-links { flex-direction: row; } #nav-links a span { display: none; }
-  .brand, .nav-sec, .new-chat, #engine-status { display: none; } .nav-foot { margin: 0; border: none; padding: 0; }
+  .brand, .nav-sec, .new-chat, #engine-status { display: none; } .pause { margin: 0; } .pause-go { width: 44px; height: 44px; font-size: 13px; } .nav-foot { margin: 0; border: none; padding: 0; }
   .page-wrap { padding: 18px 16px 60px; } .page-head h1 { font-size: 24px; } .hero h1 { font-size: 26px; }
   .chat { position: fixed; inset: 0; width: 100%; z-index: 50; } .chat.collapsed { width: 0; } .chat-resize, .chat-wide { display: none; }
   .chat-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .chat-head select { max-width: 92px; flex: none; } .chat-head .icon { flex: none; }
