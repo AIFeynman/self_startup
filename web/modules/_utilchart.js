@@ -201,9 +201,10 @@ function injectStyle() {
   .uc-lab b, .uc-lab span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .uc-lab b { font-weight: 500; font-size: 13px; }
   .uc-lab span { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .uc-axis { position: relative; height: 18px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .uc-axis { container-type: inline-size; position: relative; height: 18px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .uc-axis span { position: absolute; transform: translateX(-50%); }
   .uc-axis span:first-child { transform: none; } .uc-axis span:last-child { transform: translateX(-100%); }
+  @container (max-width: 420px) { .uc-axis span:nth-last-child(even) { visibility: hidden; } }
   .uc-sep { height: 1px; margin: 6px 0; background: var(--line-2); position: relative; }
   .uc-track { position: relative; height: 20px; }
   .uc-track.run { height: 48px; border-bottom: 1px solid var(--line-2); }
@@ -249,7 +250,6 @@ function injectStyle() {
     .uc { --uc-lab: 0px; --uc-gap: 0px; }
     .uc .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .uc-row { grid-template-columns: minmax(0, 1fr); padding-bottom: 4px; }
-    .uc-axis span:nth-child(even) { visibility: hidden; }
     .uc-hour { opacity: .5; }
     .uc-project { grid-template-columns: minmax(0, 1fr) auto; }
     .uc-pbar { grid-column: 1 / -1; grid-row: 2; }
