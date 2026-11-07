@@ -27,7 +27,7 @@ const CSS = `
 .pl-range button { padding: 2px 10px; font-size: 12px; border-radius: 999px; }
 .pl-range button.on { background: var(--dark); color: var(--bg); border-color: var(--dark); }
 .pl-range input[type=date] { padding: 2px 8px; font-size: 12px; }
-.pl-span { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.pl-open.pl-span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
 .pl-span.over { color: var(--warn); font-weight: 600; }
 .pl-edit-dates { display: flex; gap: 10px; }
 .pl-edit-dates label { flex: 1; }
@@ -658,7 +658,7 @@ export default {
       ]);
     }
 
-    function openEditor(t) {
+    function openEditor(t, focusEnd = false) {
       const { sourceLine, source, text } = splitNotes(t.notes);
       const grown = (props) => {
         const ta = h('textarea', props);
@@ -700,6 +700,7 @@ export default {
       box.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
       document.body.append(box);
       box.showModal();
+      if (focusEnd) end.focus();
     }
 
     const openable = (t) => h('button.pl-open', { title: '点开查看和编辑', onclick: () => openEditor(t) }, t.title);
@@ -729,7 +730,7 @@ export default {
       const list = d.tree.filter(isSpan);
       if (!list.length) return [];
       return [ui.section('跨日事项', `${list.length} 项 · 范围内每天都在，过了结束日没关就标逾期；本身不排程，当天要做的拆成子任务`),
-        rowsCard(list, (p) => h(`div.pl-span${overdue(p) ? '.over' : ''}`, {}, spanText(p, state.date)))];
+        rowsCard(list, (p) => h(`button.pl-open.pl-span${overdue(p) ? '.over' : ''}`, { title: '改开始 / 结束日期', onclick: () => openEditor(p, true) }, spanText(p, state.date)))];
     }
 
     function items(d) {
