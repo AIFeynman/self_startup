@@ -30,7 +30,7 @@ SLOT_MIN = 10
 WORK_GAP = 10 * 60
 TOOL_GAP = 45 * 60
 WAIT_MAX = rs.WAIT_MAX
-VERSION = 4               # 口径版本：改了算法就 +1，旧快照会被重算
+VERSION = 5               # 口径版本：改了算法就 +1，旧快照会被重算
 IDLE_MIN_GAP = 30          # 分钟：工作时间里连续这么久没有 Agent 在跑，算「空档」
 _cache: dict[str, tuple[tuple, tuple]] = {}
 
@@ -42,7 +42,7 @@ def _hm(s: str) -> int:
 
 def _read(path: Path, reader):
     st = path.stat()
-    key = (st.st_mtime, st.st_size)
+    key = rs.parse_cache_key(st)
     hit = _cache.get(str(path))
     if hit and hit[0] == key:
         return hit[1]

@@ -1,5 +1,7 @@
+import json
 from datetime import date, datetime, timedelta
 
+from app import settings
 from app.modules import _utilization as U
 
 
@@ -182,3 +184,23 @@ def test_time_is_totalled_by_project(monkeypatch):
     c = _tl("c", active=[(t + timedelta(hours=2), t + timedelta(hours=3))])
     r = _analyze(monkeypatch, [a, b, c], t.date())
     assert r["by_project"] == [{"project": "proj", "active_min": 100, "wait_min": 10}, {"project": "other", "active_min": 30, "wait_min": 0}]
+
+
+def test_changing_timezone_moves_times_of_an_already_read_session(tmp_path):
+    project = tmp_path / "-w-proj"
+    project.mkdir()
+    (project / "s.jsonl").write_text(json.dumps({
+        "type": "user", "sessionId": "s", "cwd": "/w/proj", "timestamp": "2026-02-10T01:00:00Z",
+        "message": {"role": "user", "content": "实现登录"}}, ensure_ascii=False, separators=(",", ":")) + "\n", "utf-8")
+
+    def first_message():
+        r = U.analyze(date(2026, 2, 10), {"claude": [str(tmp_path)]}, [], "08:30", "23:00", 3, now=datetime(2026, 2, 11))
+        return r["lanes"][0]["humans"][0]["t"]
+
+    try:
+        settings.apply_timezone("Etc/GMT-9")
+        assert first_message() == "10:00"
+        settings.apply_timezone("Asia/Shanghai")
+        assert first_message() == "09:00"
+    finally:
+        settings.apply_timezone("")
