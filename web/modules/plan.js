@@ -1,94 +1,115 @@
 // 规划：每日事项录入 → AI 拆解 → 排程（专注窗 / 人车道 / Agent 车道）→ 可选让 Agent 自动执行
-// 输入：一个大 composer，每行一个顶层事项，支持轻量行内语法（见 parseLine）。
+// 列表按状态分组（参考 Linear）：C 新建弹窗写标题 + 长描述 + 属性，点行开右侧详情直接编辑，自动保存。
 import { today, nowLocal, toMs } from '../api.js';
 import { approvals } from './_approvals.js';
 import { submitted } from './_submitted.js';
 
 const CSS = `
-.pl-head { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
-.pl-steps { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; }
-.pl-steps .st { display: inline-flex; align-items: center; gap: 6px; }
-.pl-steps .n { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line-2); display: grid; place-items: center;
-  font: 600 12px var(--serif); color: var(--muted); background: var(--panel); }
-.pl-steps .st.done .n { border-color: var(--accent); color: var(--accent); }
-.pl-steps .st.done { color: var(--text); }
-.pl-steps .st.cur .n { background: var(--accent); border-color: var(--accent); color: #fff; }
-.pl-steps .st.cur { color: var(--accent); font-weight: 600; }
-.pl-steps .sep { width: 18px; border-top: 1px dashed var(--line-2); }
 .pl-date { display: flex; align-items: center; gap: 4px; }
 .pl-date input { width: auto; padding: 3px 8px; border-radius: 999px; font-size: 13px; background: transparent; }
 .pl-date button { padding: 3px 10px; font-size: 13px; }
-.pl-preview { display: flex; flex-direction: column; gap: 4px; margin: -6px 4px 10px; font-size: 12px; }
-.pl-preview .ln { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pl-preview .ln b { font-weight: 600; font-size: 13px; }
-.pl-preview .ln .goal { color: var(--muted); }
-.pl-preview .tag { margin-right: 0; }
-.pl-range { display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; margin: -4px 4px 10px; font-size: 12px; color: var(--muted); }
-.pl-range button { padding: 2px 10px; font-size: 12px; border-radius: 999px; }
-.pl-range button.on { background: var(--dark); color: var(--bg); border-color: var(--dark); }
-.pl-range input[type=date] { padding: 2px 8px; font-size: 12px; }
-.pl-open.pl-span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
-.pl-span.over { color: var(--warn); font-weight: 600; }
-.pl-edit-dates { display: flex; gap: 10px; }
-.pl-edit-dates label { flex: 1; }
-.pl-syntax { color: var(--muted); font-size: 12px; margin: -8px 4px 10px; }
-.pl-syntax code { background: var(--bg-2); padding: 0 4px; border-radius: 4px; font-size: 11px; }
-.pl-opts { display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 6px; font-size: 13px; color: var(--muted); }
-.pl-opts input[type=text] { width: 240px; padding: 3px 12px; border-radius: 999px; font-size: 12px; background: transparent; }
-.pl-opts label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
-.pl-job { text-align: center; color: var(--muted); font-size: 12px; min-height: 18px; }
+.pl-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.pl-bar .sp { flex: 1; }
+.pl-bar button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; font-size: 13px; }
+.pl-bar button svg { width: 14px; height: 14px; }
+.pl-search { width: 200px; padding: 5px 12px; border-radius: 8px; font-size: 13px; }
+.pl-k { font: 11px var(--mono); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; opacity: .6; }
+.pl-more { margin: -4px 0 10px; font-size: 12px; color: var(--muted); }
+.pl-more summary { cursor: pointer; width: max-content; }
+.pl-more > div { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 8px; }
+.pl-more input[type=text] { width: 260px; padding: 3px 12px; border-radius: 999px; font-size: 12px; background: transparent; }
+.pl-more label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.pl-job { color: var(--muted); font-size: 12px; min-height: 18px; margin-bottom: 6px; }
 .pl-job:empty { display: none; }
 .pl-warn { margin-top: -4px; margin-bottom: 14px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
-.pl-list { padding: 6px 8px; }
-.pl-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 14px; padding: 14px 12px; border-radius: 12px; position: relative; }
-.pl-list > .pl-row + .pl-row { border-top: 1px solid var(--line); }
-.pl-row.p1 { background: linear-gradient(90deg, var(--accent-soft), transparent 70%); }
-.pl-row.p1::before { content: ''; position: absolute; left: 0; top: 14px; height: 48px; width: 3px; border-radius: 3px; background: var(--accent); }
-.pl-row.done .pl-title { text-decoration: line-through; color: var(--muted); }
-.pl-num { font: 400 30px/1.1 var(--serif); color: var(--muted); padding-top: 2px; }
-.pl-row.p1 .pl-num { color: var(--accent); }
-.pl-title { font: 700 17px/1.4 var(--serif); }
-.pl-title .meta { font: 400 12px var(--font); color: var(--muted); margin-left: 8px; }
-.pl-open { all: unset; font: inherit; color: inherit; text-decoration: inherit; cursor: pointer; }
-.pl-open:hover { color: var(--accent); }
-.pl-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.pl-edit { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
-.pl-edit[open] { display: grid; gap: 12px; }
-.pl-edit::backdrop { background: rgba(0, 0, 0, .35); }
-.pl-edit label { display: grid; gap: 4px; }
-.pl-edit label > span { color: var(--muted); font-size: 12px; }
-.pl-edit textarea { width: 100%; resize: none; overflow: hidden; }
-.pl-edit select { justify-self: start; }
-.pl-edit-source { color: var(--accent); font-size: 13px; }
-.pl-edit-acts { display: flex; justify-content: flex-end; gap: 8px; }
-.pl-goal { color: var(--muted); font-size: 13px; margin-top: 2px; }
-.pl-goal b { font-weight: 500; color: var(--text); opacity: .7; }
-.pl-pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
-.pl-pill { appearance: none; -webkit-appearance: none; width: auto; border: 1px solid var(--line-2); border-radius: 999px; background: var(--panel);
-  padding: 1px 10px; font-size: 12px; line-height: 20px; color: var(--muted); cursor: pointer; }
-.pl-pill:hover { border-color: var(--accent); }
-select.pl-pill.hot { background: var(--accent); border-color: var(--accent); color: #fff; }
-select.pl-pill.heavy { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
-select.pl-pill.auto { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
-select.pl-pill.agent { border-color: var(--ok); color: var(--ok); }
-select.pl-pill.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
-input.pl-pill { width: 64px; cursor: text; text-align: center; }
-.pl-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.pl-time { font: 600 13px var(--serif); color: var(--text); white-space: nowrap; }
-.pl-time.none { color: var(--muted); font: 400 12px var(--font); }
-.pl-acts { display: flex; gap: 4px; align-items: center; }
-.pl-acts button.launch { background: var(--dark); color: var(--bg); border-color: var(--dark); padding: 4px 14px; font-size: 13px; }
-.pl-kids-t { margin-top: 8px; padding: 2px 8px; font-size: 12px; }
-.pl-kids { margin-top: 8px; display: flex; flex-direction: column; border-left: 1.5px solid var(--line-2); margin-left: 4px; }
-.pl-kid { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 10px; padding: 8px 6px 8px 12px; border-radius: 10px; }
-.pl-kid + .pl-kid { border-top: 1px dashed var(--line); }
-.pl-kid.auto { background: var(--auto); }
-.pl-kid .pl-num { font-size: 15px; padding-top: 1px; }
-.pl-kid .pl-title { font: 600 14px var(--font); }
-.pl-kid .pl-pills { margin-top: 4px; }
-.pl-notes { margin-top: 6px; font-size: 12px; }
-.pl-notes pre { margin: 4px 0 0; }
 
+.pl-issues { padding: 0; overflow: hidden; }
+.pl-group { display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: var(--bg-2); font-size: 13px; font-weight: 600; cursor: pointer; user-select: none; }
+.pl-issues > .pl-group + .pl-group, .pl-issues > div + .pl-group { border-top: 1px solid var(--line); }
+.pl-group svg { width: 15px; height: 15px; }
+.pl-group .n { color: var(--muted); font-weight: 400; }
+.pl-group .sp { flex: 1; }
+.pl-group .fold { color: var(--muted); font-size: 10px; width: 10px; }
+.pl-group button { padding: 0 6px; line-height: 20px; border: 0; background: transparent; color: var(--muted); }
+.pl-group button:hover { color: var(--accent); }
+.pl-irow { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border-top: 1px solid var(--line); cursor: pointer; font-size: 14px; }
+.pl-group + .pl-irow { border-top: 0; }
+.pl-irow:hover { background: var(--bg); }
+.pl-irow.sel { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.pl-irow.kid { padding-left: 46px; font-size: 13px; min-height: 34px; }
+.pl-irow.closed .ttl { color: var(--muted); }
+.pl-ico { all: unset; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; flex: none; cursor: pointer; }
+.pl-ico:hover { background: var(--bg-2); }
+.pl-ico:focus-visible { outline: 2px solid var(--accent); }
+.pl-ico svg, .pl-menu svg, .pl-prop svg { width: 16px; height: 16px; flex: none; }
+.pl-id { color: var(--muted); font-size: 12px; width: 42px; flex: none; font-variant-numeric: tabular-nums; }
+.pl-irow .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-irow .sub { color: var(--muted); font-size: 12px; flex: none; }
+.pl-caret { all: unset; width: 14px; flex: none; text-align: center; color: var(--muted); font-size: 10px; cursor: pointer; }
+.pl-lbls { display: flex; gap: 4px; flex: none; align-items: center; }
+.pl-lbl { font-size: 12px; line-height: 20px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 999px; color: var(--muted); white-space: nowrap; }
+.pl-lbl.agent { border-color: var(--ok); color: var(--ok); }
+.pl-lbl.over { border-color: var(--warn); color: var(--warn); font-weight: 600; }
+.pl-lbl.time { border-color: transparent; color: var(--text); font-variant-numeric: tabular-nums; }
+.pl-irow button.run { padding: 1px 10px; font-size: 12px; background: var(--dark); color: var(--bg); border-color: var(--dark); }
+@media (max-width: 760px) { .pl-lbl.opt, .pl-id { display: none; } .pl-search { width: 100%; } }
+
+.pl-menu { position: fixed; z-index: 1000; min-width: 170px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .16); padding: 4px; }
+.pl-menu button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; color: var(--text); }
+.pl-menu button:hover, .pl-menu button.cur { background: var(--bg-2); }
+.pl-menu .k { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: 11px; }
+.pl-prop { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; min-height: 28px; border: 1px solid var(--line-2);
+  border-radius: 8px; font-size: 13px; cursor: pointer; color: var(--text); white-space: nowrap; }
+.pl-prop:hover { background: var(--bg-2); }
+.pl-prop:focus-visible { outline: 2px solid var(--accent); }
+.pl-prop input { all: unset; font-size: 13px; color: var(--text); }
+.pl-prop input[type=number] { width: 3em; text-align: right; }
+.pl-prop.muted { color: var(--muted); }
+.pl-bare { display: block; width: 100%; border: 0; padding: 0; margin: 0; background: transparent; color: var(--text); resize: none; overflow: hidden; outline: 0; box-shadow: none; }
+.pl-bare:focus { outline: 0; box-shadow: none; border: 0; }
+.pl-bare[hidden] { display: none; }
+
+.pl-new { width: min(720px, calc(100vw - 32px)); margin: 10vh auto auto; padding: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .25); }
+.pl-new::backdrop { background: rgba(0, 0, 0, .35); }
+.pl-new-h { display: flex; align-items: center; gap: 8px; padding: 14px 18px 4px; font-size: 12px; color: var(--muted); }
+.pl-new-h .sp { flex: 1; }
+.pl-new-b { display: grid; gap: 8px; padding: 6px 18px 10px; }
+.pl-new .t { font: 700 20px/1.4 var(--serif); }
+.pl-new .d { font-size: 14px; line-height: 1.65; min-height: 96px; }
+.pl-new .d.bulk { font: 13px/1.7 var(--mono); min-height: 140px; }
+.pl-props { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 18px 14px; }
+.pl-new-f { display: flex; align-items: center; gap: 14px; padding: 10px 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.pl-new-f .sp { flex: 1; }
+.pl-new-f label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+
+.pl-detail { position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 100vw); z-index: 900; display: flex; flex-direction: column;
+  background: var(--panel); border-left: 1px solid var(--line); box-shadow: -14px 0 36px rgba(0, 0, 0, .14); }
+.pl-detail-h { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.pl-detail-h .sp { flex: 1; }
+.pl-detail-h button { padding: 3px 10px; font-size: 13px; }
+.pl-detail-h a { cursor: pointer; }
+.pl-detail-b { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 250px; }
+.pl-main { overflow: auto; padding: 26px 30px 48px; }
+.pl-main .t { font: 700 24px/1.35 var(--serif); }
+.pl-main .d { margin-top: 14px; font-size: 15px; line-height: 1.75; min-height: 180px; }
+.pl-main h5 { display: flex; align-items: center; gap: 8px; margin: 26px 0 6px; font: 600 13px var(--font); color: var(--muted); }
+.pl-main .pl-irow { border: 0; border-radius: 8px; min-height: 34px; padding: 0 6px; }
+.pl-main .pl-irow.kid { padding-left: 6px; }
+.pl-addsub { display: block; width: 100%; padding: 6px 8px; border: 1px dashed var(--line-2); border-radius: 8px; background: transparent; font-size: 13px; margin-top: 4px; }
+.pl-source { display: inline-block; margin-top: 10px; font-size: 13px; }
+.pl-run { margin-top: 6px; font-size: 13px; }
+.pl-run pre { margin: 4px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; font: 12px/1.6 var(--mono); background: var(--bg-2); border-radius: 8px; padding: 8px 10px; }
+.pl-side { display: grid; align-content: start; gap: 14px; padding: 18px 16px; overflow: auto; border-left: 1px solid var(--line); background: var(--bg); }
+.pl-side > label, .pl-side > div { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+.pl-side .pl-prop { justify-self: start; }
+.pl-side .val { font-size: 13px; color: var(--text); }
+.pl-side textarea { font-size: 13px; resize: vertical; min-height: 64px; }
+.pl-side .dates { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-saved { font-size: 12px; color: var(--muted); }
+@media (max-width: 760px) { .pl-detail-b { grid-template-columns: 1fr; overflow: auto; } .pl-main { overflow: visible; padding: 18px 16px; }
+  .pl-side { border-left: 0; border-top: 1px solid var(--line); overflow: visible; } }
 .pl-draft { padding: 16px 18px; margin-bottom: 14px; border: 1.5px dashed var(--accent); }
 .pl-draft-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .pl-draft-h b { font: 700 17px var(--serif); }
@@ -267,37 +288,107 @@ export function parseLine(line, base = today()) {
 }
 
 let onAgentDone;
+let onKey;
 let liveTimer; // 「正在执行」面板的轮询
+let closeMenu = () => {};
+let closeDetail = () => {};
 const collapsed = new Set(); // 折叠的父事项 id（跨重绘保留）
+const foldedGroups = new Set(['done', 'dropped']);
 const watching = new Set(); // 已在轮询的 job id
+
+const svg = (body, color) => {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '0 0 16 16');
+  s.style.color = color;
+  s.innerHTML = body;
+  return s;
+};
+const RING = '<circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/>';
+export function statusIcon(s) {
+  return {
+    todo: () => svg(RING, 'var(--muted)'),
+    doing: () => svg(`${RING}<path d="M8 4a4 4 0 0 1 0 8z" fill="currentColor"/>`, 'var(--warn)'),
+    partial: () => svg(`${RING}<path d="M8 4a4 4 0 1 1-4 4h4z" fill="currentColor"/>`, 'var(--warn)'),
+    done: () => svg('<circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M5 8.3l2 2 4-4.3" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>', 'var(--ok)'),
+    dropped: () => svg('<circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>', 'var(--muted)'),
+  }[s]?.() || svg(RING, 'var(--muted)');
+}
+export function prioIcon(p) {
+  if (+p === 1) return svg('<rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="currentColor"/><path d="M8 4.5v4.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/><circle cx="8" cy="11.4" r="1" fill="#fff"/>', 'var(--accent)');
+  const on = 5 - +p;
+  return svg([[2, 8], [6.5, 5], [11, 2]].map(([x, y], i) => `<rect x="${x}" y="${y}" width="3" height="${13 - y}" rx="1" fill="currentColor" opacity="${i < on ? 1 : 0.25}"/>`).join(''), 'var(--text)');
+}
+const PRIO_LABEL = { 1: '紧急', 2: '高', 3: '中', 4: '低' };
+const statusOpts = () => Object.entries(STATUS).map(([v, label]) => ({ v, label, icon: statusIcon(v) }));
+const prioOpts = () => [1, 2, 3, 4].map((v) => ({ v, label: `${PRIO_LABEL[v]} P${v}`, icon: prioIcon(v) }));
+const opts = (map) => Object.entries(map).map(([v, label]) => ({ v, label }));
+
+// 下拉菜单：数字键直接选，Esc 关；在弹窗里打开时挂进弹窗，否则会被弹窗的顶层盖住
+function menu(anchor, items, cur, onPick) {
+  closeMenu();
+  const r = anchor.getBoundingClientRect();
+  const pick = (v) => { closeMenu(); onPick(v); };
+  const box = document.createElement('div');
+  box.className = 'pl-menu';
+  for (const [i, o] of items.entries()) {
+    const b = document.createElement('button');
+    if (String(o.v) === String(cur)) b.className = 'cur';
+    if (o.icon) b.append(o.icon.cloneNode(true));
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = i < 9 ? String(i + 1) : '';
+    b.append(o.label, k);
+    b.onclick = (e) => { e.stopPropagation(); pick(o.v); };
+    box.append(b);
+  }
+  const key = (e) => {
+    const n = +e.key;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(); } else if (n >= 1 && n <= items.length) { e.preventDefault(); e.stopPropagation(); pick(items[n - 1].v); }
+  };
+  const away = (e) => { if (!box.contains(e.target)) closeMenu(); };
+  document.addEventListener('keydown', key, true);
+  setTimeout(() => document.addEventListener('mousedown', away));
+  (anchor.closest('dialog') || document.body).append(box);
+  box.style.left = `${Math.max(8, Math.min(r.left, innerWidth - box.offsetWidth - 8))}px`;
+  box.style.top = `${r.bottom + box.offsetHeight + 8 > innerHeight ? r.top - box.offsetHeight - 4 : r.bottom + 4}px`;
+  closeMenu = () => { box.remove(); document.removeEventListener('keydown', key, true); document.removeEventListener('mousedown', away); closeMenu = () => {}; };
+}
+
+const grown = (cls, props) => {
+  const ta = document.createElement('textarea');
+  ta.className = cls;
+  Object.assign(ta, props);
+  const fit = () => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight}px`; };
+  new ResizeObserver(fit).observe(ta);
+  ta.addEventListener('input', fit);
+  return ta;
+};
 
 export default {
   async render(el, ctx) {
     const { api, h, toast, openChat, ui } = ctx;
     if (!document.getElementById('pl-css')) document.head.append(h('style', { id: 'pl-css' }, CSS));
     document.getElementById('plan-css')?.remove();
-    const state = { date: today(), runs: [], data: null };
+    const state = { date: today(), runs: [], data: null, sel: null, q: '' };
+    closeDetail();
 
     if (onAgentDone) document.removeEventListener('agent-done', onAgentDone);
     onAgentDone = () => el.isConnected && load();
     document.addEventListener('agent-done', onAgentDone);
 
-    const askDay = (text) => (state.date === today() ? ctx.ask(text)
-      : openChat({ module: 'plan', ref: `plan:${state.date}`, title: ctx.title || '规划', send: text }));
-    const patch = async (id, body) => { await api.patch(`/api/tasks/${id}`, body); load(); };
-    const pill = (map, cur, onchange, cls = '') => {
-      const s = h('select.pl-pill' + (cls ? '.' + cls : ''), {}, Object.entries(map).map(([v, t]) => h('option', { value: v, selected: String(v) === String(cur) }, t)));
-      s.onchange = () => onchange(s.value);
-      return s;
-    };
+    const patch = async (id, body) => { const t = await api.patch(`/api/tasks/${id}`, body); await load(); return t; };
+    const setStatus = (t, v) => patch(t.id, { status: v, ...(v === 'done' ? { progress: 100 } : {}) });
 
-    // ---------- 静态骨架：页头 / 输入 / 快捷操作只建一次，load() 只换动态区，草稿不丢 ----------
+    // ---------- 静态骨架：页头 / 工具条只建一次，load() 只换动态区 ----------
     const head = h('div');
     const jobEl = h('div.pl-job');
+    const listBox = h('div');
     const body = h('div');
-    const preview = h('div.pl-preview');
     const hint = h('input', { type: 'text', placeholder: 'AI 拆解补充要求（可选）' });
     const fromNow = h('input', { type: 'checkbox' });
+    const search = h('input.pl-search', { type: 'search', placeholder: '筛选任务  /' });
+    search.oninput = () => { state.q = search.value; paintList(); };
+    search.onkeydown = (e) => { if (e.key === 'Escape') { search.value = ''; state.q = ''; paintList(); search.blur(); } };
 
     async function watch(jobId, label) {
       if (watching.has(jobId)) return;
@@ -313,22 +404,6 @@ export default {
       if (el.isConnected) load();
     }
 
-    const range = { mode: 'day', start: '', end: '' };
-    const rangeOf = (p) => ('date' in p ? { date: p.date, end_date: p.end_date }
-      : range.mode === 'custom' ? { date: range.start || state.date, end_date: range.end }
-        : { date: state.date, end_date: RANGES[range.mode].end(state.date) });
-    const parse = (text) => text.split('\n').map((l) => parseLine(l, state.date)).filter((x) => x.title).map((it) => ({ ...it, ...rangeOf(it) }));
-    const addLines = async (text) => {
-      const items = parse(text);
-      if (!items.length) { toast('没有可添加的事项（标题为空）', true); return false; }
-      try {
-        for (const it of items) await api.post('/api/tasks', { priority: 2, kind: 'work', est_minutes: 60, ...it });
-      } catch (e) { toast(e.message, true); load(); return false; }
-      const n = items.filter(isSpan).length;
-      toast(`已添加 ${items.length} 项${n ? `（${n} 项跨日）` : ''}`);
-      preview.replaceChildren();
-      load();
-    };
     const decompose = async (taskIds) => {
       try {
         const r = await api.post('/api/plan/decompose', { date: state.date, hint: hint.value, ...(taskIds ? { task_ids: taskIds } : {}) });
@@ -343,71 +418,41 @@ export default {
       const r = await api.post('/api/plan/carry', { date: state.date });
       toast(r.from ? `从 ${r.from} 顺延 ${r.created.length} 项` : '没有可顺延的事项'); load();
     };
-
-    const comp = ui.composer({
-      placeholder: '每行一件事，例如：写周报 P1 60m #工作 @重 >下班前发出', autofocus: true, rows: 2,
-      modes: [{ id: 'add', label: '加事项', placeholder: '每行一件事，例如：写周报 P1 60m #工作 @重 >下班前发出' },
-        { id: 'ask', label: '问 Agent', placeholder: '比如：把第一件事拆细一点 / 下午还能塞进什么？' }],
-      hint: 'Enter 添加 · Shift+Enter 换行',
-      onSubmit: (t, mode) => (mode === 'ask' ? askDay(t) : addLines(t)),
-    });
-    const ta = comp.querySelector('textarea');
-    const renderPreview = () => {
-      if (comp.mode === 'ask') return preview.replaceChildren();
-      const lines = ta.value.split('\n').filter((l) => l.trim()).slice(0, 8).map((l) => parseLine(l, state.date)).map((p) => ({ ...p, ...rangeOf(p) }));
-      preview.replaceChildren(...lines.map((p) => h('div.ln', {}, [
-        h('b', {}, p.title || '（缺标题）'),
-        isSpan(p) ? h('span.tag.gray', {}, spanText(p)) : null,
-        h('span.tag' + (p.priority === 1 ? '' : '.line'), {}, `P${p.priority || 2}`),
-        h('span.tag.line', {}, `${p.est_minutes || 60}m${p.est_minutes ? '' : '·默认'}`),
-        p.kind ? h('span.tag.gray', {}, KIND[p.kind]) : null,
-        p.human_level ? h('span.tag' + (p.human_level === 'auto' ? '.ok' : ''), {}, LEVEL[p.human_level]) : null,
-        p.executor ? h('span.tag.ok', {}, EXEC[p.executor]) : null,
-        p.goal ? h('span.goal', {}, '→ ' + p.goal) : null,
-      ])));
+    const launch = async (t) => {
+      try {
+        const r = await api.post(`/api/plan/tasks/${t.id}/launch`, {});
+        toast(`已派发给 Agent（job ${r.job_id}）`);
+        load();
+        watch(r.job_id, `执行「${t.title}」`);
+      } catch (e) { toast(e.message, true); }
     };
-    const rangeBar = h('div.pl-range');
-    const renderRange = () => {
-      const btn = (mode, label) => h('button.ghost' + (range.mode === mode ? '.on' : ''), { onclick: () => {
-        range.mode = mode;
-        if (mode === 'custom' && !range.start) Object.assign(range, { start: state.date, end: state.date });
-        renderRange(); renderPreview();
-      } }, label);
-      const dateIn = (key, title) => {
-        const i = h('input', { type: 'date', value: range[key], title });
-        i.onchange = () => { range[key] = i.value; renderPreview(); };
-        return i;
-      };
-      rangeBar.replaceChildren('时间', ...Object.entries(RANGES).map(([k, r]) => btn(k, r.label)), btn('custom', '自定义'),
-        ...(range.mode === 'custom' ? [dateIn('start', '开始'), '→', dateIn('end', '结束（留空 = 不设结束）')] : []));
-    };
-    renderRange();
-    ta.addEventListener('input', renderPreview);
-    comp.querySelectorAll('.modes button').forEach((b) => b.addEventListener('click', () => setTimeout(renderPreview)));
+    const canRun = (t, leaf) => leaf && (t.human_level === 'auto' || ['claude', 'codex'].includes(t.executor)) && t.status !== 'done';
+    const discuss = () => openChat({ module: 'plan', ref: `plan:${state.date}`, title: ctx.title || '规划',
+      prefill: '帮我看看这一天的安排：优先级是否合理？哪些可以交给 Agent 并行？' });
 
-    el.append(head, comp, rangeBar, preview,
-      h('div.pl-syntax', {}, ['行内语法：', h('code', {}, 'P1'), ' ', h('code', {}, '60m'), ' ', h('code', {}, '1.5h'), ' ', h('code', {}, '#学习'), ' ',
-        h('code', {}, '#生活'), ' ', h('code', {}, '~11-30'), ' ', h('code', {}, '11-10~11-30'), ' ', h('code', {}, '~'), ' ', h('code', {}, '@auto'), ' ', h('code', {}, '@重'), ' ', h('code', {}, '@轻'), ' ', h('code', {}, '@claude'), ' ',
-        h('code', {}, '@codex'), ' ', h('code', {}, '>目标'), '　按 ', h('kbd', {}, '/'), ' 聚焦']),
-      ui.chips([
-        { label: '顺延昨天未完成', icon: 'refresh', onClick: carry },
-        { label: 'AI 拆解全部', icon: 'spark', onClick: () => decompose() },
-        { label: '一键排程', icon: 'clock', onClick: schedule },
-        { label: '哪些能交给 Agent?', icon: 'robot', onClick: () => askDay('哪些事可以交给 Agent 自动跑？请按并行/依赖给出建议，并直接帮我改执行者和干预度。') },
+    el.append(head,
+      h('div.pl-bar', {}, [
+        h('button.primary', { onclick: () => openNew(), title: '新建任务（C）' }, [ui.icon('plus'), '新建任务', h('span.pl-k', {}, 'C')]),
+        search, h('span.sp'),
+        h('button.ghost', { onclick: carry, title: '把上一天没做完的事项顺延到这一天' }, [ui.icon('refresh'), '顺延未完成']),
+        h('button.ghost', { onclick: () => decompose() }, [ui.icon('spark'), 'AI 拆解']),
+        h('button.ghost', { onclick: schedule }, [ui.icon('clock'), '排程']),
+        h('button.ghost', { onclick: discuss }, [ui.icon('chat'), '问 Agent']),
       ]),
-      h('div.pl-opts', {}, [hint, h('label', { title: '中途重排：只排当前时间之后' }, [fromNow, '排程从现在起']),
-        h('button.ghost.sm', { onclick: () => openChat({ module: 'plan', ref: `plan:${state.date}`, title: ctx.title || '规划',
-          prefill: '帮我看看今天的安排：优先级是否合理？哪些可以交给 Agent 并行？' }) }, [ui.icon('chat'), '讨论这一天'])]),
-      jobEl, body);
+      h('details.pl-more', {}, [h('summary', {}, 'AI 拆解 / 排程选项 · 快捷键'), h('div', {}, [hint,
+        h('label', { title: '中途重排：只排当前时间之后' }, [fromNow, '排程从现在起']),
+        h('span', {}, 'C 新建 · J/K 上下 · Enter 打开 · 1-4 优先级 · S 状态 · / 筛选 · Esc 关闭')])]),
+      jobEl, listBox, body);
 
     // ---------- 动态区 ----------
     async function load() {
       const d = await api.get(`/api/plan/day?date=${state.date}`);
       state.runs = d.runs; state.data = d;
       head.replaceChildren(pageHead(d));
+      paintList();
       body.replaceChildren(...(d.draft ? [draftCard(d.draft)] : []), approvals(ctx, { fallback: () => parsedNeeds(d), onChange: load }),
-        ...liveCard(d), submitted(ctx), ...summary(d), ...spans(d), ui.section(state.date === today() ? '今天' : '当天', dayCount(d)),
-        items(d), ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
+        ...liveCard(d), submitted(ctx), ...summary(d),
+        ui.section('时间线', d.schedule ? `排程于 ${d.schedule.created_at.slice(11, 16) || d.schedule.created_at}（从 ${d.schedule.summary.from_time} 起）· 改了事项请重新排程` : ''),
         timeline(d));
       for (const j of d.jobs) watch(j.id, 'AI 拆解');
     }
@@ -415,23 +460,16 @@ export default {
     function pageHead(d) {
       const isToday = state.date === today();
       const date = h('input', { type: 'date', value: state.date });
-      const setDate = (v) => { state.date = v; load(); };
-      const shift = (n) => { const x = new Date(state.date + 'T00:00'); x.setDate(x.getDate() + n); setDate(x.toLocaleDateString('sv-SE')); };
+      const setDate = (v) => { state.date = v; state.sel = null; closeDetail(); load(); };
+      const shift = (n) => setDate(addDays(state.date, n));
       date.onchange = () => date.value && setDate(date.value);
-      const done = [d.tasks.length > 0, d.tasks.some((t) => t.parent_id), !!d.schedule];
-      const cur = done.indexOf(false);
-      const step = (i, label) => h('span.st' + (done[i] ? '.done' : '') + (i === cur ? '.cur' : ''), {},
-        [h('span.n', {}, done[i] && i !== cur ? '✓' : String(i + 1)), label]);
       const fw = d.config.focus_windows.map((w) => `${w.start}-${w.end}`).join('、');
       const wd = '日一二三四五六'[new Date(state.date + 'T00:00').getDay()];
       return ui.pageHead(isToday ? '今天做什么' : `${state.date.slice(5).replace('-', '月')}日做什么`,
         `周${wd} · 专注时间 ${fw} · 一天 ${d.config.day_start}-${d.config.day_end} · Agent 并发 ${d.config.max_agent_concurrency}（在「设置」修改）`,
-        h('div.pl-head', {}, [
-          h('div.pl-steps', {}, [step(0, '列事项'), h('span.sep'), step(1, 'AI 拆解'), h('span.sep'), step(2, '排程')]),
-          h('div.pl-date', {}, [h('button.ghost', { onclick: () => shift(-1), title: '前一天' }, '‹'), date,
-            h('button.ghost', { onclick: () => shift(1), title: '后一天' }, '›'),
-            isToday ? null : h('button.outline', { onclick: () => setDate(today()) }, '回到今天')]),
-        ]));
+        h('div.pl-date', {}, [h('button.ghost', { onclick: () => shift(-1), title: '前一天' }, '‹'), date,
+          h('button.ghost', { onclick: () => shift(1), title: '后一天' }, '›'),
+          isToday ? null : h('button.outline', { onclick: () => setDate(today()) }, '回到今天')]));
     }
 
     // 审批接口还没上线（平台还没重启）时，从今天结束的执行结果里解析出来只读展示
@@ -623,92 +661,286 @@ export default {
       ].filter(Boolean);
     }
 
-    function controls(t, isLeaf) {
-      const est = h('input.pl-pill', { type: 'number', value: t.est_minutes, min: 5, step: 5, title: '预计分钟' });
-      est.onchange = () => patch(t.id, { est_minutes: +est.value });
-      const runs = state.runs.filter((r) => r.task_id === t.id);
-      return h('div.pl-pills', {}, [
-        pill(PRIO, t.priority, (v) => patch(t.id, { priority: +v }), t.priority === 1 ? 'hot' : ''),
-        pill(LEVEL, t.human_level, (v) => patch(t.id, { human_level: v }), t.human_level === 'heavy' ? 'heavy' : t.human_level === 'auto' ? 'auto' : ''),
-        pill(EXEC, t.executor, (v) => patch(t.id, { executor: v }), ['claude', 'codex'].includes(t.executor) ? 'agent' : ''),
-        est, h('span.muted', {}, '分'),
-        pill(STATUS, t.status, (v) => patch(t.id, { status: v, progress: v === 'done' ? 100 : t.progress }), t.status === 'done' ? 'ok' : ''),
-        t.parallel_group ? h('span.tag.gray', {}, `并行组 ${t.parallel_group}`) : null,
-        t.depends_on?.length ? h('span.tag.line', {}, `依赖 #${t.depends_on.join(',#')}`) : null,
-        ...runs.slice(0, 1).map((r) => h(`span.tag.${r.status === 'done' ? 'ok' : r.status === 'running' ? 'gray' : 'warn'}`, { title: r.result || '' }, `Agent ${r.status}`)),
-      ]);
-    }
+    // ---------- 属性控件：新建弹窗和详情面板共用 ----------
+    const pickProp = (items, cur, onPick, title) => {
+      const b = h('button.pl-prop', { type: 'button', title });
+      const paint = (v) => {
+        const o = items.find((x) => String(x.v) === String(v)) || items[0];
+        b.replaceChildren(...(o.icon ? [o.icon.cloneNode(true)] : []), o.label);
+      };
+      b.onclick = (e) => { e.stopPropagation(); menu(b, items, cur, (v) => { cur = v; paint(v); onPick(v); }); };
+      paint(cur);
+      return b;
+    };
+    const estProp = (cur, onChange) => {
+      const i = h('input', { type: 'number', value: cur, min: 5, step: 5 });
+      i.onchange = () => i.value && onChange(Math.max(5, +i.value));
+      return h('label.pl-prop', { title: '预计分钟' }, [ui.icon('clock'), i, '分钟']);
+    };
+    const dateProps = (f, onChange) => {
+      const s = h('input', { type: 'date', value: f.date });
+      const e = h('input', { type: 'date', value: f.end_date || '' });
+      s.onchange = () => {
+        if (!s.value) return;
+        const single = f.end_date === f.date;
+        f.date = s.value;
+        if (single) e.value = f.end_date = s.value;
+        onChange({ date: f.date, ...(single ? { end_date: f.end_date } : {}) });
+      };
+      e.onchange = () => { f.end_date = e.value; onChange({ end_date: e.value }); };
+      const quick = h('button.pl-prop.muted', { type: 'button', title: '快捷设置结束日' }, '范围');
+      quick.onclick = (ev) => {
+        ev.stopPropagation();
+        menu(quick, Object.entries(RANGES).map(([v, r]) => ({ v, label: r.label })), '', (k) => {
+          e.value = f.end_date = RANGES[k].end(f.date);
+          onChange({ end_date: f.end_date });
+        });
+      };
+      return [h('label.pl-prop', {}, ['开始', s]), h('label.pl-prop', { title: '留空 = 不设结束，做完前每天都在' }, ['结束', e]), quick];
+    };
 
-    function side(t, isLeaf) {
-      const launch = async () => {
+    // ---------- 新建任务：Linear 式弹窗，标题 + 长描述 + 属性；可切换成每行一件的批量模式 ----------
+    function openNew(preset = {}) {
+      const f = { status: 'todo', priority: 2, kind: 'work', executor: 'human', human_level: 'medium', est_minutes: 30,
+        date: state.date, end_date: state.date, ...preset };
+      const title = grown('pl-bare t', { rows: 1, placeholder: '任务标题' });
+      const desc = grown('pl-bare d', { rows: 4, placeholder: '添加描述…具体要做的事、背景、链接、验收标准，写多少都行' });
+      const bulk = grown('pl-bare d bulk', { rows: 6, hidden: true,
+        placeholder: '每行一件事，下面的属性是默认值，行内写了就以行内为准：\n写周报 P1 60m #工作 @重 >下班前发出\n读论文 1.5h #学习 ~11-30\n\n行内语法：P1-P4 · 60m / 1.5h · #学习 #生活 · ~11-30 / 11-10~11-30 / ~ · @auto @重 @轻 @claude @codex · >目标' });
+      const more = h('input', { type: 'checkbox' });
+      const bulkOn = h('input', { type: 'checkbox' });
+      bulkOn.onchange = () => {
+        title.hidden = desc.hidden = bulkOn.checked;
+        bulk.hidden = !bulkOn.checked;
+        (bulkOn.checked ? bulk : title).focus();
+      };
+      const box = h('dialog.pl-new');
+      const close = () => { closeMenu(); box.close(); box.remove(); };
+      const create = async () => {
+        const items = bulkOn.checked
+          ? bulk.value.split('\n').map((l) => parseLine(l, f.date)).filter((x) => x.title)
+          : [{ title: title.value.trim(), notes: desc.value.trim() }].filter((x) => x.title);
+        if (!items.length) return toast('标题不能为空', true);
         try {
-          const r = await api.post(`/api/plan/tasks/${t.id}/launch`, {});
-          toast(`已派发给 Agent（job ${r.job_id}）`);
-          load();
-          watch(r.job_id, `执行「${t.title}」`);
-        } catch (e) { toast(e.message, true); }
+          for (const it of items) await api.post('/api/tasks', { ...f, ...it });
+        } catch (e) { return toast(e.message, true); }
+        toast(items.length > 1 ? `已创建 ${items.length} 个任务` : `已创建「${items[0].title}」`);
+        load();
+        if (!more.checked) return close();
+        title.value = desc.value = bulk.value = '';
+        (bulkOn.checked ? bulk : title).focus();
       };
-      const canRun = isLeaf && (t.human_level === 'auto' || ['claude', 'codex'].includes(t.executor)) && t.status !== 'done';
-      return h('div.pl-side', {}, [
-        t.start_time ? h('span.pl-time', {}, `${t.start_time} – ${t.end_time}`) : h('span.pl-time.none', {}, '未排'),
-        h('div.pl-acts', {}, [
-          canRun ? h('button.launch', { onclick: launch, title: '让 Agent 自动执行（cwd = 代码库目录）' }, '🚀 执行') : null,
-          h('button.icon', { title: '删除', onclick: async () => { if (confirm(`删除「${t.title}」${isLeaf ? '' : '及其子任务'}？`)) { await api.del(`/api/tasks/${t.id}`); load(); } } }, ui.icon('trash')),
-        ]),
-      ]);
-    }
-
-    function openEditor(t, focusEnd = false) {
-      const { sourceLine, source, text } = splitNotes(t.notes);
-      const grown = (props) => {
-        const ta = h('textarea', props);
-        const fit = () => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight + ta.offsetHeight - ta.clientHeight}px`; };
-        new ResizeObserver(fit).observe(ta);
-        ta.addEventListener('input', fit);
-        return ta;
-      };
-      const title = grown({ rows: 1, value: t.title, 'aria-label': '标题' });
-      const goalBox = grown({ rows: 2, value: t.goal || '', 'aria-label': '目标' });
-      const status = pill(STATUS, t.status, () => {});
-      const kind = t.parent_id ? null : pill(KIND, t.kind, () => {});
-      const start = h('input', { type: 'date', value: t.date, 'aria-label': '开始' });
-      const end = h('input', { type: 'date', value: t.end_date || '', 'aria-label': '结束' });
-      const noteBox = grown({ rows: 3, value: text, 'aria-label': '备注', placeholder: '进展、卡点、下一步…' });
-      const box = h('dialog.pl-edit');
-      const close = () => { box.close(); box.remove(); };
-      const save = async () => {
-        if (!title.value.trim()) return toast('标题不能为空', true);
-        if (!start.value) return toast('开始日期不能为空', true);
-        const body = { title: title.value.trim(), goal: goalBox.value.trim(), status: status.value, notes: [sourceLine, noteBox.value.trim()].filter(Boolean).join('\n') };
-        if (kind && kind.value !== t.kind) body.kind = kind.value;
-        if (start.value !== t.date) body.date = start.value;
-        if (end.value !== (t.end_date || '')) body.end_date = end.value;
-        if (status.value === 'done') body.progress = 100;
-        try { await patch(t.id, body); close(); } catch (e) { toast(e.message, true); }
-      };
-      const labeled = (label, control) => h('label', {}, [h('span', {}, label), control]);
-      box.append(
-        labeled('标题', title),
-        labeled('目标', goalBox),
-        h('div.pl-edit-dates', {}, [labeled('开始', start), labeled('结束（留空 = 不设结束）', end)]),
-        kind ? labeled('类别', kind) : '',
-        labeled('状态', status),
-        labeled('备注', noteBox),
-        source ? h('a.pl-edit-source', { href: source.href, onclick: close }, `${source.label} →`) : '',
-        h('div.pl-edit-acts', {}, [h('button.ghost', { onclick: close }, '取消'), h('button.primary', { onclick: save }, '保存')]),
-      );
+      title.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && !e.metaKey && !e.ctrlKey) { e.preventDefault(); desc.focus(); } });
+      box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); create(); } });
       box.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+      box.append(
+        h('div.pl-new-h', {}, [h('span', {}, `新建任务 · ${f.date.slice(5)}${f.parent_id ? ` · 子任务 of #${f.parent_id}` : ''}`), h('span.sp'),
+          h('button.icon', { type: 'button', title: '关闭（Esc）', onclick: close }, ui.icon('x'))]),
+        h('div.pl-new-b', {}, [title, desc, bulk]),
+        h('div.pl-props', {}, [
+          pickProp(statusOpts(), f.status, (v) => { f.status = v; }, '状态'),
+          pickProp(prioOpts(), f.priority, (v) => { f.priority = +v; }, '优先级'),
+          f.parent_id ? null : pickProp(opts(KIND), f.kind, (v) => { f.kind = v; }, '类别'),
+          pickProp(opts(EXEC), f.executor, (v) => { f.executor = v; }, '执行者'),
+          pickProp(opts(LEVEL), f.human_level, (v) => { f.human_level = v; }, '人干预度'),
+          estProp(f.est_minutes, (v) => { f.est_minutes = v; }),
+          ...(f.parent_id ? [] : dateProps(f, () => {})),
+        ]),
+        h('div.pl-new-f', {}, [h('label', {}, [bulkOn, '批量（每行一件）']), h('span.sp'), h('label', {}, [more, '创建更多']),
+          h('button.primary', { onclick: create }, ['创建任务 ', h('span.pl-k', {}, '⌘↵')])]),
+      );
       document.body.append(box);
       box.showModal();
-      if (focusEnd) end.focus();
+      title.focus();
     }
 
-    const openable = (t) => h('button.pl-open', { title: '点开查看和编辑', onclick: () => openEditor(t) }, t.title);
-    const notes = (t) => {
-      const { text } = splitNotes(t.notes);
-      return text ? h('details.pl-notes', {}, [h('summary', {}, '备注 / Agent 结果'), h('pre', {}, text)]) : null;
+    // ---------- 详情面板：右侧滑出，标题 / 描述直接改，失焦自动保存；右栏改属性 ----------
+    async function openDetail(id) {
+      closeDetail();
+      let t = state.data.tasks.find((x) => x.id === id) || await api.get(`/api/tasks/${id}`).catch(() => null);
+      if (!t) return;
+      state.sel = id; markSel();
+      const saved = h('span.pl-saved');
+      const save = async (b) => {
+        try { t = { ...t, ...await patch(t.id, b) }; saved.textContent = '已保存'; setTimeout(() => { saved.textContent = ''; }, 1500); } catch (e) { toast(e.message, true); }
+      };
+      const { sourceLine, source, text } = splitNotes(t.notes);
+      const title = grown('pl-bare t', { rows: 1, value: t.title, placeholder: '任务标题' });
+      title.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); title.blur(); } });
+      title.onblur = () => { const v = title.value.trim(); if (!v) title.value = t.title; else if (v !== t.title) save({ title: v }); };
+      const desc = grown('pl-bare d', { rows: 6, value: text, placeholder: '添加描述…具体要做的事、进展、卡点、下一步' });
+      desc.onblur = () => { const v = [sourceLine, desc.value.trim()].filter(Boolean).join('\n'); if (v !== (t.notes || '')) save({ notes: v }); };
+      const goalBox = grown('', { rows: 2, value: t.goal || '', placeholder: '怎样算完成' });
+      goalBox.onblur = () => { if (goalBox.value.trim() !== (t.goal || '')) save({ goal: goalBox.value.trim() }); };
+
+      const kids = state.data.tasks.filter((x) => x.parent_id === t.id).sort(byPrio);
+      const parent = t.parent_id && state.data.tasks.find((x) => x.id === t.parent_id);
+      const addSub = h('input.pl-addsub', { type: 'text', placeholder: '+ 添加子任务，回车创建' });
+      addSub.onkeydown = async (e) => {
+        if (e.key !== 'Enter' || e.isComposing || !addSub.value.trim()) return;
+        try {
+          await api.post('/api/tasks', { title: addSub.value.trim(), parent_id: t.id, date: state.date, kind: t.kind, priority: t.priority, est_minutes: 30 });
+          await load(); openDetail(t.id);
+        } catch (err) { toast(err.message, true); }
+      };
+      const runs = state.runs.filter((r) => r.task_id === t.id);
+      const leaf = !kids.length;
+      const del = async () => {
+        if (!confirm(`删除「${t.title}」${leaf ? '' : '及其子任务'}？`)) return;
+        await api.del(`/api/tasks/${t.id}`); closeDetail(); load();
+      };
+      const panel = h('aside.pl-detail', { role: 'dialog', 'aria-label': '任务详情' }, [
+        h('div.pl-detail-h', {}, [
+          parent ? h('a', { onclick: () => openDetail(parent.id) }, `#${parent.id} ${parent.title.slice(0, 16)} ›`) : null,
+          h('span', {}, `#${t.id} · ${KIND[t.kind] || t.kind}`), saved, h('span.sp'),
+          canRun(t, leaf) ? h('button.primary', { onclick: () => launch(t), title: '让 Agent 自动执行（cwd = 代码库目录）' }, '🚀 执行') : null,
+          !t.parent_id && !leaf ? h('button.ghost', { onclick: () => decompose([t.id]) }, [ui.icon('spark'), '重新拆解']) : null,
+          h('button.icon', { title: '删除', onclick: del }, ui.icon('trash')),
+          h('button.icon', { title: '关闭（Esc）', onclick: () => closeDetail() }, ui.icon('x')),
+        ]),
+        h('div.pl-detail-b', {}, [
+          h('div.pl-main', {}, [title, desc,
+            source ? h('a.pl-source', { href: source.href, onclick: () => closeDetail() }, `${source.label} →`) : null,
+            t.parent_id ? null : h('h5', {}, [`子任务 ${kids.filter((k) => k.status === 'done').length}/${kids.length}`]),
+            ...(t.parent_id ? [] : [...kids.map((k) => row(k, { kid: true, inPanel: true })), addSub]),
+            runs.length ? h('h5', {}, 'Agent 执行') : null,
+            ...runs.slice(0, 3).map((r) => h('details.pl-run', {}, [h('summary', {}, `${r.status} · ${(r.started_at || r.created_at || '').slice(5, 16)}`), h('pre', {}, r.result || '（无结果）')])),
+          ]),
+          h('div.pl-side', {}, [
+            h('div', {}, ['状态', pickProp(statusOpts(), t.status, (v) => save({ status: v, ...(v === 'done' ? { progress: 100 } : {}) }), '状态')]),
+            h('div', {}, ['优先级', pickProp(prioOpts(), t.priority, (v) => save({ priority: +v }), '优先级')]),
+            t.parent_id ? null : h('div', {}, ['类别', pickProp(opts(KIND), t.kind, (v) => save({ kind: v }), '类别')]),
+            h('div', {}, ['执行者', pickProp(opts(EXEC), t.executor, (v) => save({ executor: v }), '执行者')]),
+            h('div', {}, ['人干预度', pickProp(opts(LEVEL), t.human_level, (v) => save({ human_level: v }), '人干预度')]),
+            h('div', {}, ['预计时长', estProp(t.est_minutes, (v) => save({ est_minutes: v }))]),
+            t.parent_id ? null : h('div', {}, ['日期', h('div.dates', {}, dateProps({ date: t.date, end_date: t.end_date || '' }, (b) => save(b))),
+              isSpan(t) ? h('span.val', {}, spanText(t, state.date)) : null]),
+            h('div', {}, ['排程', h('span.val', {}, t.start_time ? `${t.start_time} – ${t.end_time}` : '未排')]),
+            h('label', {}, ['完成标准', goalBox]),
+            t.depends_on?.length ? h('div', {}, ['依赖', h('span.val', {}, t.depends_on.map((x) => `#${x}`).join('、'))]) : null,
+            t.parallel_group ? h('div', {}, ['并行组', h('span.val', {}, t.parallel_group)]) : null,
+          ]),
+        ]),
+      ]);
+      const esc = (e) => {
+        if (e.key !== 'Escape' || document.querySelector('dialog[open], .pl-menu')) return;
+        if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return document.activeElement.blur();
+        closeDetail();
+      };
+      document.addEventListener('keydown', esc);
+      window.addEventListener('hashchange', closeDetail);
+      document.body.append(panel);
+      closeDetail = () => {
+        document.activeElement?.blur?.();
+        panel.remove(); document.removeEventListener('keydown', esc); window.removeEventListener('hashchange', closeDetail);
+        closeDetail = () => {};
+      };
+    }
+
+    // ---------- 任务列表：按状态分组，一行一个任务 ----------
+    const byPrio = (a, b) => a.priority - b.priority || (a.start_time || '99').localeCompare(b.start_time || '99') || a.id - b.id;
+    const GROUPS = [['doing', '进行中', ['doing', 'partial']], ['todo', '待办', ['todo']], ['done', '已完成', ['done']], ['dropped', '已放弃', ['dropped']]];
+    const overdue = (t) => t.end_date && t.end_date < state.date && !['done', 'dropped'].includes(t.status);
+    const spanShort = (t) => {
+      if (overdue(t)) return `逾期 ${daysBetween(t.end_date, state.date)} 天`;
+      if (!t.end_date) return `第 ${daysBetween(t.date, state.date) + 1} 天`;
+      const left = daysBetween(state.date, t.end_date);
+      return left ? `${t.end_date.slice(5)} 截止` : '今天截止';
     };
-    const goal = (t) => (t.goal ? h('div.pl-goal', {}, [h('b', {}, '目标 '), t.goal]) : null);
+
+    function row(t, { kid = false, kids = [], inPanel = false } = {}) {
+      const st = h('button.pl-ico', { title: `状态：${STATUS[t.status]}（S）` }, statusIcon(t.status));
+      st.onclick = (e) => { e.stopPropagation(); menu(st, statusOpts(), t.status, (v) => setStatus(t, v).then(() => inPanel && openDetail(t.parent_id))); };
+      const pr = h('button.pl-ico', { title: `优先级：${PRIO_LABEL[t.priority]}（1-4）` }, prioIcon(t.priority));
+      pr.onclick = (e) => { e.stopPropagation(); menu(pr, prioOpts(), t.priority, (v) => patch(t.id, { priority: +v })); };
+      const lbl = (cls, text, title) => h('span.pl-lbl' + cls, title ? { title } : {}, text);
+      const run = state.runs.find((r) => r.task_id === t.id);
+      const done = kids.filter((k) => k.status === 'done').length;
+      const caret = kids.length ? h('button.pl-caret', { title: '展开 / 收起子任务', onclick: (e) => {
+        e.stopPropagation(); collapsed.has(t.id) ? collapsed.delete(t.id) : collapsed.add(t.id); paintList();
+      } }, collapsed.has(t.id) ? '▸' : '▾') : null;
+      return h(`div.pl-irow${kid ? '.kid' : ''}${['done', 'dropped'].includes(t.status) ? '.closed' : ''}${state.sel === t.id && !inPanel ? '.sel' : ''}`,
+        { 'data-id': t.id, onclick: () => openDetail(t.id) }, [
+          inPanel ? null : caret, pr, h('span.pl-id', {}, `#${t.id}`), st,
+          h('span.ttl', { title: t.title }, t.title),
+          kids.length ? h('span.sub', {}, `${done}/${kids.length}`) : null,
+          h('span.pl-lbls', {}, [
+            isSpan(t) ? lbl(overdue(t) ? '.over' : '', spanShort(t), spanText(t, state.date)) : null,
+            run && ['queued', 'running'].includes(run.tip_status) ? lbl('.agent', 'Agent 执行中') : null,
+            t.executor !== 'human' ? lbl('.agent.opt', EXEC[t.executor] || t.executor) : null,
+            t.human_level === 'auto' ? lbl('.agent.opt', '自动') : null,
+            !kid && !inPanel ? lbl('.opt', KIND[t.kind] || t.kind) : null,
+            lbl('.opt', `${t.est_minutes}m`),
+            t.start_time ? lbl('.time', `${t.start_time}–${t.end_time}`) : null,
+            !inPanel && canRun(t, !kids.length) ? h('button.run', { title: '让 Agent 自动执行', onclick: (e) => { e.stopPropagation(); launch(t); } }, '执行') : null,
+          ]),
+        ]);
+    }
+
+    function paintList() {
+      const d = state.data;
+      if (!d) return;
+      const q = state.q.trim().toLowerCase();
+      const hit = (t) => !q || `#${t.id} ${t.title} ${t.notes || ''} ${t.goal || ''}`.toLowerCase().includes(q);
+      const tops = d.tree.filter((t) => hit(t) || t.children.some(hit));
+      const nSpan = d.tree.filter(isSpan).length;
+      const kidsN = d.tasks.filter((t) => t.parent_id).length;
+      const head = ui.section(state.date === today() ? '今天的任务' : '这一天的任务',
+        d.tree.length ? `${d.tree.length} 项${nSpan ? `（跨日 ${nSpan}）` : ''}${kidsN ? ` · ${kidsN} 个子任务` : ''}` : '');
+      if (!tops.length) {
+        return listBox.replaceChildren(head, h('div.card', {}, q ? ui.empty('没有匹配的任务', `筛选「${state.q}」`)
+          : ui.empty(state.date === today() ? '今天还没有任务' : '这一天还没有任务', '按 C 新建，或点「顺延未完成」把上一天没做完的带过来')));
+      }
+      const parts = [];
+      for (const [key, label, sts] of GROUPS) {
+        const list = tops.filter((t) => sts.includes(t.status)).sort(byPrio);
+        if (!list.length && key !== 'todo') continue;
+        const folded = foldedGroups.has(key) && !q;
+        parts.push(h('div.pl-group', { onclick: () => { foldedGroups.has(key) ? foldedGroups.delete(key) : foldedGroups.add(key); paintList(); } }, [
+          h('span.fold', {}, folded ? '▸' : '▾'), statusIcon(sts[0]), label, h('span.n', {}, String(list.length)), h('span.sp'),
+          h('button', { title: `新建${label}任务`, onclick: (e) => { e.stopPropagation(); openNew({ status: sts[0] }); } }, ui.icon('plus')),
+        ]));
+        if (folded) continue;
+        for (const t of list) {
+          const kids = [...t.children].sort(byPrio);
+          parts.push(row(t, { kids }));
+          if (!collapsed.has(t.id)) kids.forEach((k) => parts.push(row(k, { kid: true })));
+        }
+      }
+      listBox.replaceChildren(head, h('div.card.pl-issues', {}, parts));
+    }
+
+    const markSel = () => listBox.querySelectorAll('.pl-irow').forEach((r) => r.classList.toggle('sel', +r.dataset.id === state.sel));
+    const move = (n) => {
+      const ids = [...listBox.querySelectorAll('.pl-irow')].map((r) => +r.dataset.id);
+      if (!ids.length) return;
+      const i = ids.indexOf(state.sel);
+      state.sel = ids[i < 0 ? (n > 0 ? 0 : ids.length - 1) : Math.max(0, Math.min(ids.length - 1, i + n))];
+      markSel();
+      listBox.querySelector('.pl-irow.sel')?.scrollIntoView({ block: 'nearest' });
+      if (document.querySelector('.pl-detail')) openDetail(state.sel);
+    };
+
+    if (onKey) document.removeEventListener('keydown', onKey);
+    onKey = (e) => {
+      if (!el.isConnected) return document.removeEventListener('keydown', onKey);
+      if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.querySelector('dialog[open], .pl-menu')) return;
+      const k = e.key.toLowerCase();
+      const cur = state.sel && state.data?.tasks.find((t) => t.id === state.sel);
+      if (k === 'c') openNew();
+      else if (k === '/') search.focus();
+      else if (k === 'j') move(1);
+      else if (k === 'k') move(-1);
+      else if ((k === 'enter' || k === 'o') && cur) openDetail(cur.id);
+      else if ('1234'.includes(k) && k && cur) patch(cur.id, { priority: +k });
+      else if (k === 's' && cur) {
+        const anchor = listBox.querySelector(`.pl-irow[data-id="${cur.id}"] .pl-ico:nth-of-type(2)`) || listBox;
+        menu(anchor, statusOpts(), cur.status, (v) => setStatus(cur, v));
+      } else return;
+      e.preventDefault();
+    };
+    document.addEventListener('keydown', onKey);
 
     // 「第 3/24 天 · 剩 21 天」「逾期 2 天」「第 5 天」（不设结束）
     function spanText(t, on) {
@@ -718,55 +950,6 @@ export default {
       if (!t.end_date) return `${range} · 第 ${n} 天`;
       const left = daysBetween(on, t.end_date);
       return `${range} · ${left < 0 ? `逾期 ${-left} 天` : `第 ${n}/${daysBetween(t.date, t.end_date) + 1} 天 · ${left ? `剩 ${left} 天` : '今天截止'}`}`;
-    }
-    const overdue = (t) => t.end_date && t.end_date < state.date && !['done', 'dropped'].includes(t.status);
-    const dayCount = (d) => {
-      const tops = d.tree.filter((t) => !isSpan(t));
-      const kids = d.tasks.filter((t) => t.parent_id && t.date === state.date).length;
-      return tops.length || kids ? `${tops.length} 项 · ${kids} 个子任务` : '';
-    };
-
-    function spans(d) {
-      const list = d.tree.filter(isSpan);
-      if (!list.length) return [];
-      return [ui.section('跨日事项', `${list.length} 项 · 范围内每天都在，过了结束日没关就标逾期；本身不排程，当天要做的拆成子任务`),
-        rowsCard(list, (p) => h(`button.pl-open.pl-span${overdue(p) ? '.over' : ''}`, { title: '改开始 / 结束日期', onclick: () => openEditor(p, true) }, spanText(p, state.date)))];
-    }
-
-    function items(d) {
-      const list = d.tree.filter((t) => !isSpan(t));
-      if (!list.length) return h('div.card', {}, ui.empty(state.date === today() ? '今天还没有事项' : '这一天还没有事项', '在上面的输入框里每行写一件事，或点「顺延昨天未完成」'));
-      return rowsCard(list, () => null);
-    }
-
-    function rowsCard(list, extra) {
-      const rows = list.map((p, i) => {
-        const kids = p.children || [];
-        const leaf = !kids.length;
-        const isCol = collapsed.has(p.id);
-        const kidBox = leaf ? null : h('div.pl-kids', { style: { display: isCol ? 'none' : '' } }, kids.map((c, j) => h(`div.pl-kid${c.human_level === 'auto' ? '.auto' : ''}${c.status === 'done' ? '.done' : ''}`, {}, [
-          h('div.pl-num', {}, `${i + 1}.${j + 1}`),
-          h('div', {}, [h('div.pl-title', {}, [openable(c), h('span.meta', {}, `#${c.id}`)]), goal(c), controls(c, true), notes(c)]),
-          side(c, true),
-        ])));
-        const toggle = leaf ? null : h('button.ghost.pl-kids-t', { onclick: () => {
-          const now = !collapsed.has(p.id);
-          now ? collapsed.add(p.id) : collapsed.delete(p.id);
-          kidBox.style.display = now ? 'none' : '';
-          toggle.firstChild.textContent = `${now ? '▸' : '▾'} ${kids.length} 个子任务`;
-        } }, [h('span', {}, `${isCol ? '▸' : '▾'} ${kids.length} 个子任务`)]);
-        return h(`div.pl-row${p.priority === 1 ? '.p1' : ''}${p.status === 'done' ? '.done' : ''}`, {}, [
-          h('div.pl-num', {}, pad2(i + 1)),
-          h('div', {}, [
-            h('div.pl-title', {}, [openable(p), h('span.meta', {}, [`#${p.id}`, ' · ', KIND[p.kind] || p.kind, p.repo ? ` · ${p.repo}` : ''].join(''))]),
-            extra(p), goal(p), controls(p, leaf), notes(p),
-            leaf ? null : h('div.row', {}, [toggle, h('button.ghost.sm', { onclick: () => decompose([p.id]) }, [ui.icon('spark'), '重新拆解'])]),
-            kidBox,
-          ]),
-          side(p, leaf),
-        ]);
-      });
-      return h('div.card.pl-list', {}, rows);
     }
 
     function timeline(d) {
