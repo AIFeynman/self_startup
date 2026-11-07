@@ -1,6 +1,6 @@
 // 信息推荐：按热度/新鲜度/兴趣/反馈排序的 AI 信息流；只展示标题 + 简介 + 链接 + 推荐理由。
 // 页面：今日精选（前 5 条，编号行）+ 分类 pill + 紧凑列表（无限加载）+ 一个多模式输入框（筛选 / 加兴趣 / 问 Agent）。
-// 键盘：j/k 移动选中，l 赞，s 收藏，o 打开，d 深读，x 隐藏。
+// 键盘：↑↓ 移动选中，→ 详情（没解析过就开始深读），← 原文，j/k 切换类型，l 赞，s 收藏，x 隐藏。
 import { toMs } from '../api.js';
 
 const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['hn', 'HN 精读'], ['video', '视频'], ['x_article', 'X 长文'], ['saved', '已收藏']];
@@ -294,8 +294,8 @@ export default {
     const hnBar = h('div.fd-hnbar');
     const libBox = h('div.fd-lib');
     const sentinel = h('div.fd-sentinel');
-    const kbd = h('span.fd-kbd', { title: 'j/k 选择 · Enter 或 d 详情（没解析过就开始深读）· o 原文 · l 赞 · s 收藏 · / 输入' }, [h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 选择 · ', h('kbd', {}, 'Enter'), ' 详情 · ',
-      h('kbd', {}, 'o'), ' 原文 · ', h('kbd', {}, 'l'), ' 赞 · ', h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, '/'), ' 输入']);
+    const kbd = h('span.fd-kbd', { title: '↑↓ 选择 · → 详情（没解析过就开始深读）· ← 原文 · j/k 切换类型 · l 赞 · s 收藏 · / 输入' }, [h('kbd', {}, '↑'), h('kbd', {}, '↓'), ' 选择 · ', h('kbd', {}, '→'), ' 详情 · ',
+      h('kbd', {}, '←'), ' 原文 · ', h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 切类型 · ', h('kbd', {}, 'l'), ' 赞 · ', h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, '/'), ' 输入']);
 
     // 时间筛选 + 排序：只作用于下面的列表（今日精选固定按综合分）
     const optSel = (opts, key, title) => {
@@ -642,10 +642,10 @@ export default {
     ];
     const deepBtn = (entry) => {
       const s = entry.x.deep?.status;
-      if (s === 'done') return h('button.fd-deep.done', { title: '打开解析结果 (d / Enter)', onclick: () => deep(entry) }, ['深度完成', ui.icon('arrow')]);
-      if (s === 'failed') return h('button.fd-deep.failed', { title: '上次解析失败，点击重试 (d / Enter)', onclick: () => deep(entry) }, '解析失败，重试');
+      if (s === 'done') return h('button.fd-deep.done', { title: '打开解析结果 (→)', onclick: () => deep(entry) }, ['深度完成', ui.icon('arrow')]);
+      if (s === 'failed') return h('button.fd-deep.failed', { title: '上次解析失败，点击重试 (→)', onclick: () => deep(entry) }, '解析失败，重试');
       if (s) return h('button.fd-deep.busy', { disabled: true, title: '后台解析中，完成后会提醒，可以继续看别的' }, '解析中');
-      return h('button.fd-deep', { title: '后台开始深度解析，不离开当前页 (d / Enter)', onclick: () => deep(entry) }, '深读');
+      return h('button.fd-deep', { title: '后台开始深度解析，不离开当前页 (→)', onclick: () => deep(entry) }, '深读');
     };
     const actions = (entry) => {
       const { x } = entry;
@@ -876,16 +876,15 @@ export default {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement?.isContentEditable) return;
-      if (e.key === 'Enter' && document.activeElement?.closest('button, a, summary')) return;
       const cur = entries[sel];
       const f = cur?.x.feedback || {};
       const act = {
-        j: () => move(1), k: () => move(-1),
+        ArrowDown: () => move(1), ArrowUp: () => move(-1),
+        ArrowRight: () => cur && deep(cur),
+        ArrowLeft: () => { if (cur) { markRead(cur); window.open(cur.x.url, '_blank', 'noopener'); } },
+        j: () => stepTab(1), k: () => stepTab(-1),
         l: () => cur && fb(cur, { vote: f.vote > 0 ? 0 : 1 }),
         s: () => cur && fb(cur, { saved: !f.saved }),
-        o: () => { if (cur) { markRead(cur); window.open(cur.x.url, '_blank', 'noopener'); } },
-        d: () => cur && deep(cur),
-        Enter: () => cur && deep(cur),
         x: () => cur && fb(cur, { hidden: !f.hidden }),
       }[e.key];
       if (act) { e.preventDefault(); act(); }
@@ -911,8 +910,21 @@ export default {
     // ---------- 数据 ----------
     function renderTabs() {
       tabs.replaceChildren(...TABS.map(([id, name]) => h('button' + (st.tab === id ? '.active' : ''), {
-        onclick: () => { if (st.tab === id) return; st.tab = id; clearFresh(); renderTabs(); renderTabRefresh(); loadList(); },
+        onclick: () => switchTab(id),
       }, name)));
+      tabs.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    function switchTab(id) {
+      if (st.tab === id) return;
+      st.tab = id; clearFresh(); renderTabs(); renderTabRefresh();
+      return loadList();
+    }
+    async function stepTab(d) {
+      const id = TABS[(TABS.findIndex(([t]) => t === st.tab) + d + TABS.length) % TABS.length][0];
+      await switchTab(id);
+      if (st.tab !== id) return;
+      select(entries.findIndex((e) => e.kind === 'list'), false);
+      tabs.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
     async function loadTop() {
       const r = await api.get(`/api/feed/items?limit=${TOP_N}&read=unread`);
@@ -990,7 +1002,7 @@ export default {
       entries.push(...rows);
       listBox.replaceChildren(...(rows.length ? rows.map(mount)
         : [ui.empty(st.q ? `没有匹配「${st.q}」的内容` : st.tab === 'saved' ? '还没有收藏' : st.read === 'read' ? '这里还没有读过的内容' : st.days !== '0' ? '这段时间内没有内容' : unreadOnly() ? '这里的都读过了' : '暂无内容', st.q ? '换个词，或切到「问 Agent」' : st.tab === 'saved' ? '按 ☆ 或 s 收藏' : unreadOnly() ? '右上角选「含已读」能再看，或点「刷新」抓新的' : '点右上角「刷新」抓取')]));
-      if (selId) { const i = entries.findIndex((e) => e.kind === 'list' && e.x.id === selId); if (i >= 0) select(i, false); }
+      if (selId) { const i = entries.findIndex((e) => e.kind === 'list' && e.x.id === selId); if (i >= 0) select(i, false); else sel = -1; }
       renderSentinel();
     }
     async function loadMore() {
