@@ -230,6 +230,8 @@ const norm = (s) => String(s || '').toLowerCase();
 export default {
   async render(el, ctx) {
     const { api, h, toast, ui, ask } = ctx;
+    let backTo = history.state?.feedBack || null;
+    if (backTo) { Object.assign(st, backTo.st); history.replaceState(null, '', location.href); }
     const [settings, status0] = await Promise.all([api.get('/api/settings'), api.get('/api/feed/status')]);
     let interests = [...(settings.feed?.interests || [])];
     let status = status0;
@@ -830,7 +832,12 @@ export default {
     const setDeep = (id, state) => { for (const e of entries) if (e.x.id === id) { e.x.deep = state; mount(e); } };
     const deep = async ({ x }) => {
       const old = x.deep;
-      if (old?.status === 'done') { location.hash = `#learn/item/${old.id}`; return; }
+      if (old?.status === 'done') {
+        const backTo = { st: { ...st }, id: x.id, index: entries.findIndex((e) => e.x.id === x.id), count: listOffset, top: document.getElementById('page').scrollTop };
+        history.replaceState({ feedBack: backTo }, '', location.href);
+        location.hash = `#learn/item/${old.id}`;
+        return;
+      }
       if (old && old.status !== 'failed') { toast('正在解析，完成后会提醒'); return; }
       setDeep(x.id, { status: 'queued' });
       try {
@@ -937,8 +944,8 @@ export default {
     }
     // 「全部」、综合排序、不限时间且无筛选时，列表从第 6 条开始，避免与精选重复
     const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' && st.read === 'unread' && !fresh?.added ? TOP_N : 0);
-    function params(offset) {
-      const p = new URLSearchParams({ limit: PAGE, offset, q: st.q, days: st.days, sort: st.sort, read: st.q ? '' : st.read });
+    function params(offset, limit = PAGE) {
+      const p = new URLSearchParams({ limit, offset, q: st.q, days: st.days, sort: st.sort, read: st.q ? '' : st.read });
       if (st.tab === 'saved') p.set('saved', 'true'); else if (st.tab) p.set('type', st.tab);
       if (fresh?.added && fresh.since) p.set('since', fresh.since);
       return p;
@@ -992,7 +999,7 @@ export default {
         return loadLib(seq);
       }
       const off = baseOffset();
-      const r = await api.get('/api/feed/items?' + params(off));
+      const r = await api.get('/api/feed/items?' + params(off, Math.max(PAGE, (backTo?.count || 0) - off)));
       if (seq !== loadSeq) return;
       const selId = entries[sel]?.kind === 'list' ? entries[sel].x.id : null;
       entries = entries.filter((e) => e.kind !== 'list');
@@ -1044,6 +1051,12 @@ export default {
     renderInterests();
     renderTabs();
     await reloadAll();
+    if (backTo) {
+      const i = entries.findIndex((e) => e.x.id === backTo.id);
+      select(i >= 0 ? i : Math.min(backTo.index, entries.length - 1), false);
+      document.getElementById('page').scrollTop = backTo.top;
+      backTo = null;
+    }
     if (status.running) doRefresh();
   },
 };

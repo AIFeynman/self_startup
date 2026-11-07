@@ -673,8 +673,22 @@ function itemCard(it, ctx) {
 }
 
 // ---------- 条目阅读 ----------
+function bindBackKey(el) {
+  document.removeEventListener('keydown', window.__lnBackKey);
+  window.__lnBackKey = (e) => {
+    if (!el.isConnected) return document.removeEventListener('keydown', window.__lnBackKey);
+    if (e.key !== 'ArrowLeft' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    const a = document.activeElement;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(a?.tagName) || a?.isContentEditable) return;
+    e.preventDefault();
+    if (history.length > 1) history.back(); else location.hash = '#learn';
+  };
+  document.addEventListener('keydown', window.__lnBackKey);
+}
+
 async function renderItem(el, ctx, iid) {
   const { api, h, md, toast, ui, openChat } = ctx;
+  bindBackKey(el);
   let it;
   try { it = await api.get(`/api/learn/items/${iid}`); } catch { el.append(back(h, ui), ui.empty('条目不存在')); return; }
   watchJob(ctx, it.job_id, it.status);
