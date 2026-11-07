@@ -1035,7 +1035,7 @@ def agent_context(ref: str) -> str:
         lines.append("（今天还没有事项）")
     open_issues = [i for i in tasks.issues_for(date) if i["status"] != "done"]
     if open_issues:
-        lines.append("持续未解决的问题（来自复盘，不进排程）：")
+        lines.append("长期事项 / 持续问题（手动添加或来自复盘，不进排程）：")
         lines += [f"- {i['title']}（加入于 {i['created_at'][:10]}）" for i in open_issues]
     sch = last_schedule(date)
     if sch:

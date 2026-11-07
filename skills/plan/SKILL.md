@@ -34,6 +34,9 @@ curl -s "$API/api/plan/day?date=2026-10-29"
 # 新增顶层事项（kind: work/learning/life；priority 1-4；repo 可选）
 curl -s -X POST $API/api/tasks -H 'Content-Type: application/json' \
   -d '{"date":"2026-10-29","title":"写周报","goal":"发出给团队","priority":2,"kind":"work","est_minutes":45}'
+# 新增长期事项 / 持续问题（kind=issue）：每天都显示在「长期事项 / 持续问题」区，不进排程，解决了 PATCH status=done
+curl -s -X POST $API/api/tasks -H 'Content-Type: application/json' \
+  -d '{"date":"2026-10-29","title":"Agent teams 如何管理、人机如何协同的框架","kind":"issue"}'
 # 新增子任务：带 parent_id；depends_on 是任务 id 列表
 curl -s -X POST $API/api/tasks -H 'Content-Type: application/json' \
   -d '{"date":"2026-10-29","parent_id":12,"title":"汇总本周 commit","human_level":"auto","executor":"claude","est_minutes":20,"parallel_group":"A"}'

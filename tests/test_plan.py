@@ -342,3 +342,22 @@ def test_plan_agent_knows_open_problems(client):
     _clean_issues()
     client.post("/api/notes/review", json={"date": "2026-04-07", "entries": {"产品迭代·有问题的": "发布总要返工"}})
     assert "产品迭代：发布总要返工" in plan.agent_context("2026-04-08")
+
+
+def test_manually_added_long_term_item_stays_every_day_and_out_of_schedule(client):
+    _clean_issues()
+    t = client.post("/api/tasks", json={"date": "2026-05-01", "title": "Agent teams 如何管理、人机如何协同的框架", "kind": "issue"}).json()
+    for d in ("2026-05-01", "2026-05-09"):
+        day = client.get(f"/api/plan/day?date={d}").json()
+        assert [i["id"] for i in day["issues"]] == [t["id"]]
+        assert all(x["id"] != t["id"] for x in day["tasks"])
+    assert "Agent teams 如何管理" in plan.agent_context("2026-05-09")
+
+
+def test_day_task_can_move_into_long_term_items(client):
+    _clean_issues()
+    t = client.post("/api/tasks", json={"date": "2026-05-02", "title": "人机协同框架", "kind": "work", "status": "partial"}).json()
+    client.patch(f"/api/tasks/{t['id']}", json={"kind": "issue", "status": "todo"})
+    day = client.get("/api/plan/day?date=2026-05-03").json()
+    assert [i["title"] for i in day["issues"]] == ["人机协同框架"]
+    assert client.get("/api/tasks?date=2026-05-02").json() == []
