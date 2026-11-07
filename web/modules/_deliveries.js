@@ -1,4 +1,4 @@
-// 今日已交付（Agent 看板 / 复盘共用）：有交付物（推送、部署、PR、发布、文档材料）且之后没再改代码的事。
+// 今日已交付（复盘 · Agent 效率）：有交付物（推送、部署、PR、发布、文档材料）且之后没再改代码的事。
 // 另列「交付后仍有改动」「已提交未推送」，默认折叠。
 // 用法：import { deliveries } from './_deliveries.js'; el.append(await deliveries(ctx, { date }))
 import { today } from '../api.js';

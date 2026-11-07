@@ -23,6 +23,7 @@ from . import _agents_scan as scanner, _deliveries as deliv, _utilization as uti
 
 TITLE = "Agent 看板"
 ORDER = 8
+PAGE = "review//day/agent"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_board (
     key         TEXT PRIMARY KEY,          -- claude:<session> / codex:<session> / job:<id>

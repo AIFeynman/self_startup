@@ -3,6 +3,9 @@
 import { today } from '../api.js';
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
+import { coreMetrics } from './_coremetrics.js';
+import { approvals } from './_approvals.js';
+import { agentBoard, agentPatterns } from './_agentboard.js';
 import { annotate } from './_annotate.js';
 
 const CSS = `
@@ -217,7 +220,15 @@ export default {
     });
     comp.querySelectorAll('.modes button').forEach((b, i) => b.addEventListener('click', () => comp.setHint(HINTS[['note', 'ask'][i]])));
 
-    const chipRow = ui.chips([
+    const askBoard = (text) => openChat({ module: 'agents', title: 'Agent 看板', send: text });
+    const chipRow = ui.chips(state.tab === 'day' && state.view === 'agent' ? [
+      { label: '哪些在等我？', icon: 'bulb', onClick: () => askBoard('看一下 Agent 看板：哪些会话在等我处理？按紧急程度列出，每条一句话说明在等什么、建议怎么做。') },
+      { label: '总结各 Agent 进展', icon: 'review', onClick: () => askBoard('总结一下最近 24 小时各个 Agent 会话的进展：运行中的到哪一步了，待验收的做成了什么。') },
+      { label: '卡住的怎么处理', icon: 'bolt', onClick: () => askBoard('看板里「可能卡住」「等待批准」「已中断」的会话，分别可能是什么原因，怎么处理最快？') },
+      { label: '这天交付了什么', icon: 'check', onClick: () => askBoard(`${state.date} 已经交付了哪几件事（有推送/部署/PR/发布或文档材料，之后没再改的）？每件一句话说清交付物；再列出交付后仍在改、或只提交没推送的。`) },
+      { label: '这天哪里没利用好', icon: 'clock', onClick: () => askBoard(`结合时间利用统计，分析 ${state.date} 哪些时间没利用好、哪些人工交互不在高效时间，给出 3 条最有用的改进。`) },
+      { label: '据此优化明天的规划', icon: 'plan', onClick: () => openChat({ module: 'plan', title: '规划', send: '结合「时间利用」统计和近 7 天规律，帮我调整明天的拆解与排程：需要人来回交互的放进专注时间，能自动跑的填满空档和专注时间外。' }) },
+    ] : [
       { label: '检查今天完成情况', icon: 'check', onClick: () => startCheck() },
       { label: '复盘 Agent 效率', icon: 'robot', onClick: () => askAgent('复盘这一天我用 Claude Code / Codex 的效率：人工介入花在哪、哪些不必要、明天怎么减少？') },
       { label: '今天学到了什么', icon: 'bulb', onClick: () => askAgent('根据这一天的事项、记录和提交，总结我学到了什么，挑 1-3 条值得记成经验的。') },
@@ -227,6 +238,7 @@ export default {
       h('button' + (k === state.tab ? '.active' : ''), { onclick: () => go(null, k) }, v))));
     const views = state.tab === 'day' ? [h('div.tabs.rv-views', {}, Object.entries(DAY_VIEWS).map(([k, v]) =>
       h('button' + (k === state.view ? '.active' : ''), { onclick: () => go(null, 'day', k) }, v)))] : [];
+    if (state.tab === 'day' && state.view === 'agent') el.classList.add('ag-wide');
     const body = h('div');
     el.append(h('div.rv-top', {}, dateBox), h('div.hero.rv-hero', {}, [h('h1', {}, heroTitle), statusLine]), comp, chipRow, tabs, ...views, body);
 
@@ -373,9 +385,9 @@ export default {
     }
 
     function recordCard(entries) {
-      return h('div.card', {}, h('div.rv-entries', {}, entries.map((e) => h('div.rv-entry', {}, [
+      return h('div.rv-entries', {}, entries.map((e) => h('div.rv-entry', {}, [
         h('span.t', { title: e.at ? e.at.replace('T', ' ') : '没记时间（老记录或手动编辑）' }, e.time ? (e.next_day ? `次日 ${e.time}` : e.time) : '—'),
-        h('span.f', {}, REC_FIELD[e.field] || e.field), h('span.x', {}, e.text)]))));
+        h('span.f', {}, REC_FIELD[e.field] || e.field), h('span.x', {}, e.text)])));
     }
 
     function templateCard(history) {
@@ -454,16 +466,11 @@ export default {
       const rec = d.record;
       const lx = d.learning_extra;
       const reviewHistory = await api.get(`/api/review/notes?author=me&kind=review&end=${state.date}`);
-      const nodes = [
-        templateCard(reviewHistory),
-        improveCard(d),
-        ...(rec.entries?.length ? [ui.section('我的复盘', '这一天之前写下的记录'), recordCard(rec.entries)] : []),
-        ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
-        h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
-        await deliveries({ api, h, ui }, { date: state.date }),
-      ];
-      if (d.learning.length || lx.steps.length || lx.items.length || lx.events?.length || lx.habits?.length) {
-        nodes.push(ui.section('学习'), h('div.card', {}, [
+      const hasLearning = d.learning.length || lx.steps.length || lx.items.length || lx.events?.length || lx.habits?.length;
+      const learningNote = [d.stats.learning.total ? `事项 ${d.stats.learning.done}/${d.stats.learning.total}` : '', lx.steps.length ? `步骤 ${lx.steps.length}` : '',
+        lx.items.length ? `深读 ${lx.items.length}` : '', lx.events?.length ? `记录 ${lx.events.length}` : ''].filter(Boolean).join(' · ');
+      const records = [
+        hasLearning ? foldCard('learning', '学习', learningNote, false, [
           lx.habits?.length ? h('div', { style: { marginBottom: '8px' } }, [h('span.card-label', {}, '学习习惯（停一下 / 学完当天用到项目 / 每日论文）'),
             ...lx.habits.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
           d.learning.length ? taskList(d.learning) : null,
@@ -477,13 +484,20 @@ export default {
               ...(i.thoughts || []).map((t) => h('div.muted', { style: { fontSize: '13px', marginLeft: '8px' } }, '感想：' + t))]))]) : null,
           lx.events?.length ? h('div', { style: { marginTop: '8px' } }, [h('span.card-label', {}, '学习记录（测试 / 停一下 / 理解度）'),
             ...lx.events.map((x) => h('div.item', { style: { fontSize: '13px' } }, x))]) : null,
-        ]));
-      }
-      if (d.reads.length) nodes.push(ui.section('已读', `${d.reads.length} 篇 · 信息推荐 / 产品雷达里打开过的`), h('div.card', {}, h('div.list', {}, d.reads.map(readRow))));
-      if (rec.ai_analysis) nodes.push(h('details.card.flat', {}, [h('summary', {}, 'AI 检查完整分析'), annotate(ctx, md(rec.ai_analysis), { doc: `review:${state.date}:check`, title: `${state.date} · AI 检查分析`, link: `#review/${state.date}`, source: rec.ai_analysis })]));
-      nodes.push(ui.section('问题与经验', d.notes.length ? `${d.notes.length} 条` : ''),
-        d.notes.length ? h('div.rv-notes', {}, d.notes.map((n) => noteCard(n, show)))
-          : ui.empty('还没有记录', 'Agent 和系统复盘记下的会出现在这里；你自己写的在「便签」'));
+        ]) : null,
+        d.reads.length ? foldCard('reads', '已读', `${d.reads.length} 篇 · 信息推荐 / 产品雷达里打开过的`, false, [h('div.list', {}, d.reads.map(readRow))]) : null,
+        d.notes.length ? foldCard('notes', '问题与经验', `${d.notes.length} 条`, false, [h('div.rv-notes', {}, d.notes.map((n) => noteCard(n, show)))]) : null,
+      ].filter(Boolean);
+      const nodes = [
+        ui.section(isToday(state.date) ? '今天的进展' : '这一天的进展', dayLabel(state.date)),
+        h('div.rv-cards', {}, [tasksCard(d), suggCard(d), effCard(d)]),
+        rec.ai_analysis ? foldCard('analysis', 'AI 检查完整分析', firstLine(rec.ai_analysis), false, [annotate(ctx, md(rec.ai_analysis), { doc: `review:${state.date}:check`, title: `${state.date} · AI 检查分析`, link: `#review/${state.date}`, source: rec.ai_analysis })]) : null,
+        ui.section('我的复盘', '先写，再让 Agent 找根因'),
+        templateCard(reviewHistory),
+        improveCard(d),
+        rec.entries?.length ? foldCard('entries', '这一天之前写下的记录', `${rec.entries.length} 条`, false, [recordCard(rec.entries)]) : null,
+        ...(records.length ? [ui.section('当天记录'), ...records] : []),
+      ].filter(Boolean);
       body.replaceChildren(...nodes);
     }
 
@@ -554,9 +568,33 @@ export default {
     }
 
     // ---------- Agent 效率 ----------
-    async function renderAgent(refresh = false) {
+    async function renderAgent() {
       loadDay();
-      body.replaceChildren(ui.empty('扫描会话日志中…', '读取当天 Claude Code / Codex 会话'));
+      const processBox = h('div', {}, ui.empty('扫描会话日志中…', '读取当天 Claude Code / Codex 会话'));
+      const coreBox = h('div');
+      const deliveryBox = h('div');
+      const utilBox = h('div');
+      const patternBox = h('div');
+      body.replaceChildren(h('div.rv-agent', {}, [
+        approvals(ctx),
+        foldCard('board', '实时看板', isToday(state.date) ? '每 10 秒刷新 · 卡片拖到「已验收」' : '正在跑的会话，和所选日期无关', isToday(state.date), [agentBoard(ctx)]),
+        ui.section('结果', dayLabel(state.date)),
+        coreBox, deliveryBox,
+        ui.section('时间利用', 'Agent 是否跑满 · 人工交互是否在专注时间'),
+        utilBox, patternBox,
+        processBox,
+      ]));
+      const fill = (box, promise) => promise.then((n) => box.replaceChildren(n));
+      await Promise.all([
+        fill(coreBox, coreMetrics(ctx, { date: state.date })),
+        fill(deliveryBox, deliveries(ctx, { date: state.date })),
+        fill(utilBox, utilization(ctx, { date: state.date })),
+        fill(patternBox, agentPatterns(ctx).then(({ note, node }) => foldCard('patterns', '近 7 天规律', note, false, [node]))),
+        renderProcess(processBox),
+      ]);
+    }
+
+    async function renderProcess(box, refresh = false) {
       const e = await api.get(`/api/review/efficiency?date=${state.date}${refresh ? '&refresh=1' : ''}`);
       const a = e.summary;
       const status = h('div.rv-status');
@@ -567,14 +605,12 @@ export default {
       } }, [ui.icon('spark'), e.reflection ? '重新反思' : 'AI 反思']);
       if (e.reflect_job && ['queued', 'running'].includes(e.reflect_job.status)) { reflectBtn.disabled = true; watch(e.reflect_job.id, 'AI 反思', status); }
       const nodes = [
-        h('div.row.between', { style: { margin: '28px 0 12px' } }, [
-          h('div', {}, [h('h2', { style: { margin: 0, fontSize: '20px' } }, 'Claude Code / Codex 效率'),
-            h('div.muted', {}, '扫描于 ' + (e.scanned_at || '').slice(11, 16) + ' · 分类为启发式规则（首条=新任务；「继续/好」=确认；含「不对/应该」=纠正）')]),
-          h('div.row', {}, [h('button.ghost', { onclick: () => renderAgent(true) }, [ui.icon('refresh'), '重新扫描']), reflectBtn])]),
+        ui.section('人工介入', '扫描于 ' + (e.scanned_at || '').slice(11, 16) + ' · 分类为启发式规则（首条=新任务；「继续/好」=确认；含「不对/应该」=纠正）'),
+        h('div.row', { style: { justifyContent: 'flex-end', marginBottom: '10px' } }, [h('button.ghost', { onclick: () => renderProcess(box, true) }, [ui.icon('refresh'), '重新扫描']), reflectBtn]),
         ui.stats([
           { k: '交互 + 自动会话', v: `${a.interactive || 0}+${a.automated || 0}` }, { k: '人工介入', v: a.human_turns ?? 0 },
           { k: `Agent 活跃（含自动 ${hours(a.active_min)}）`, v: hours(a.active_min_interactive ?? a.active_min) },
-          { k: `Agent 等你（墙钟，同看板 · 各会话累加 ${a.wait_total_min ?? 0}分）`, v: `${a.wait_wall_min ?? a.wait_total_min ?? 0}分` }, { k: '等待中位', v: `${a.wait_median_min ?? 0}分` },
+          { k: '等待中位', v: `${a.wait_median_min ?? 0}分` },
           { k: '峰值并行', v: a.peak_parallel ?? 0 }, { k: `工具错误 / 调用 · 权限拒绝 ${a.denials ?? 0}`, v: `${a.tool_errors ?? 0}/${a.tool_calls ?? 0}` },
           { k: '平台任务失败 / 总', v: `${a.platform_jobs_failed || 0}/${a.platform_jobs || 0}` },
         ]),
@@ -606,9 +642,7 @@ export default {
             ...(pr.jobs || []).map((j) => h('tr', {}, [j.id, j.module, j.ref, j.engine, j.status, j.minutes ?? '-'].map((x) => h('td', {}, String(x)))))]),
           ...(pr.plan_runs || []).map((r) => h('div.item', {}, `#${r.task_id} ${r.task_title || ''} · ${r.engine} · ${r.status}`))]));
       }
-      // 时间利用：真实事件铺到时间轴上，看空档、专注外交互、等你的时间
-      nodes.splice(2, 0, ui.section('时间利用', 'Agent 是否跑满 · 人工交互是否在专注时间'), await utilization({ api, h, ui }, { date: state.date }));
-      body.replaceChildren(h('div.rv-agent', {}, nodes));
+      box.replaceChildren(...nodes);
     }
 
     // ---------- 人工效率 ----------

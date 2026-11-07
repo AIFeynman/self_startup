@@ -113,7 +113,7 @@ def _deep_reads(js: _Jobs) -> list[dict]:
         if it["status"] in _LIVE:
             j = js.status(it["job_id"])
             if j and j.get("status") not in _LIVE:
-                state, detail = "needs", "已暂停，可在 Agent 看板继续" if j["status"] == "paused" else "任务中断，打开可重新生成"
+                state, detail = "needs", "已暂停，可在复盘 · Agent 效率的看板继续" if j["status"] == "paused" else "任务中断，打开可重新生成"
             else:
                 state, detail = "running", f"生成深读笔记 · {js.brief(j)}" if j else "生成深读笔记"
         elif it["status"] == "failed":
