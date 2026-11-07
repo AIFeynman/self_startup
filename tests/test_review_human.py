@@ -1,5 +1,5 @@
 from app import db
-from app.modules import _review_sessions as rs, review
+from app.modules import _read_log, _review_sessions as rs, review
 
 DAY = "2026-03-10"
 PREV = "2026-03-09"
@@ -19,8 +19,8 @@ def _human(client, date=DAY):
     return r.json()
 
 
-def _add(client, category, start, end, output=""):
-    r = client.post("/api/review/time-entries", json={"date": DAY, "category": category, "start": start, "end": end, "output": output})
+def _add(client, category, start, end, output="", date=DAY):
+    r = client.post("/api/review/time-entries", json={"date": date, "category": category, "start": start, "end": end, "output": output})
     assert r.status_code == 200
     return r.json()["id"]
 
@@ -31,7 +31,7 @@ def test_minutes_fragment_blocks_and_blanks(client):
                 {**_session("cron", "10:30"), "automated": True}])
     h = _human(client)
     assert h["minutes"] == 37 and h["whole_min"] == 31 and h["fragment_pct"] == 16
-    assert [(b["project"], b["start"], b["end"], b["whole"]) for b in h["blocks"]] == [
+    assert [(s["label"], s["start"], s["end"], s["whole"]) for s in h["segments"]] == [
         ("proj-a", "09:00", "09:31", True), ("proj-b", "10:00", "10:06", False)]
     assert h["blanks"] == [{"start": "09:31", "end": "10:00", "minutes": 29}]
 
@@ -91,3 +91,51 @@ def test_trend_covers_seven_days_ending_on_the_date(client):
     assert (trend[-2]["minutes"], trend[-2]["fragment_pct"]) == (31, 0)
     assert (trend[-1]["minutes"], trend[-1]["fragment_pct"]) == (6, 100)
     assert trend[0]["minutes"] is None
+
+
+def test_segments_say_what_each_period_was_and_totals_by_type(client):
+    day = "2026-02-01"
+    _seed(day, [_session("proj-a", *[f"09:{m:02d}" for m in range(0, 31, 5)]), _session("proj-b", "09:40")])
+    _add(client, "学习", "14:00", "15:00", "读论文", day)
+    _add(client, "吃饭", "12:00", "12:30", "午饭", day)
+    h = _human(client, day)
+    assert [(s["start"], s["end"], s["type"], s["label"], s["whole"]) for s in h["segments"]] == [
+        ("09:00", "09:31", "开发", "proj-a", True),
+        ("09:31", "09:40", "开发", "proj-a", False),
+        ("09:40", "09:41", "开发", "proj-b", False),
+        ("12:00", "12:30", "吃饭", "午饭", False),
+        ("14:00", "15:00", "学习", "读论文", True),
+    ]
+    assert h["by_type"]["开发"] == 41 and h["by_type"]["学习"] == 60 and h["by_type"]["吃饭"] == 30
+    assert h["by_type"]["运动"] == 0
+    assert h["minutes"] == 101 and h["whole_min"] == 91 and h["fragment_min"] == 10
+
+
+def test_reading_and_learning_activity_count_as_learning(client):
+    day = "2026-02-03"
+    _seed(day, [])
+    _read_log._ensure()
+    db.insert("read_log", {"kind": "feed", "ref": "learning-activity", "title": "", "url": "", "source": "", "at": f"{day}T08:00:00"})
+    h = _human(client, day)
+    assert [(s["type"], s["label"]) for s in h["segments"]] == [("学习", "阅读")]
+    assert h["by_type"]["学习"] == 1
+
+
+def test_manual_record_wins_over_activity_in_the_same_minutes(client):
+    day = "2026-02-05"
+    _seed(day, [_session("proj-a", *[f"09:{m:02d}" for m in range(0, 31, 5)])])
+    _add(client, "运动", "09:10", "09:20", "跑步", day)
+    h = _human(client, day)
+    assert [(s["start"], s["end"], s["type"]) for s in h["segments"]] == [
+        ("09:00", "09:10", "开发"), ("09:10", "09:20", "运动"), ("09:20", "09:31", "开发")]
+    assert h["minutes"] == 21 and h["by_type"] == {**h["by_type"], "开发": 21, "运动": 10}
+
+
+def test_overnight_sleep_shows_on_both_days(client):
+    night, morning = "2026-02-07", "2026-02-08"
+    _add(client, "睡觉", "23:30", "07:00", "", night)
+    _seed(morning, [])
+    assert [(s["start"], s["end"], s["type"]) for s in _human(client, night)["segments"]] == [("23:30", "24:00", "睡觉")]
+    h = _human(client, morning)
+    assert [(s["start"], s["end"], s["type"]) for s in h["segments"]] == [("00:00", "07:00", "睡觉")]
+    assert h["by_type"]["睡觉"] == 420 and h["entries"] == [] and h["minutes"] == 0

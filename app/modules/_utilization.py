@@ -15,6 +15,8 @@
     capacity_pct       ∫min(在跑的 Agent 数, 并发上限) / (并发上限 × 统计时段)
     wait_wall_min      至少有一个 Agent 在等你的墙钟分钟（人真正拖住 Agent 的时长）
     wait_total_min     按会话累加的等待（Agent·分钟；多个会话同时等会叠加，可能超过墙钟时长）
+
+画图数据：lanes 每个交互会话一条（干活 / 等你区间 + 人工消息），脚本会话合成一条；by_project 按项目累加干活和等你的分钟。
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ SLOT_MIN = 10
 WORK_GAP = 10 * 60
 TOOL_GAP = 45 * 60
 WAIT_MAX = rs.WAIT_MAX
-VERSION = 3               # 口径版本：改了算法就 +1，旧快照会被重算
+VERSION = 4               # 口径版本：改了算法就 +1，旧快照会被重算
 IDLE_MIN_GAP = 30          # 分钟：工作时间里连续这么久没有 Agent 在跑，算「空档」
 _cache: dict[str, tuple[tuple, tuple]] = {}
 
@@ -136,6 +138,37 @@ def _sweep(per_session: list[list[tuple]], cap: int) -> tuple[float, int]:
     return used, peak
 
 
+def _spans(iv) -> list[dict]:
+    return [{"start": a.strftime("%H:%M"), "end": b.strftime("%H:%M"), "minutes": round((b - a).total_seconds() / 60)} for a, b in iv]
+
+
+def _lane(project: str, title: str, automated: bool, sessions: int, active, waits, humans, in_focus) -> dict:
+    return {"project": project, "title": title, "automated": automated, "sessions": sessions,
+            "active": _spans(active), "waits": _spans(waits),
+            "humans": [{"t": h["ts"].strftime("%H:%M"), "label": rs.KIND_LABELS.get(h["kind"], h["kind"]), "focus": in_focus(h["ts"]), "text": h["text"]} for h in humans],
+            "active_min": round(_minutes(active)), "wait_min": round(_minutes(waits))}
+
+
+def _lanes(sessions: list[dict], in_focus) -> list[dict]:
+    people = sorted((x for x in sessions if not x["automated"]),
+                    key=lambda x: min([a for a, _ in x["active"]] + [h["ts"] for h in x["humans"]]))
+    lanes = [_lane(x["project"], x["title"], False, 1, x["active"], x["waits"], x["humans"], in_focus) for x in people]
+    scripts = [x for x in sessions if x["automated"]]
+    if scripts:
+        lane = _lane("脚本任务", "脚本任务", True, len(scripts), _union(iv for x in scripts for iv in x["active"]), [], [], in_focus)
+        lanes.append({**lane, "active_min": round(sum(_minutes(x["active"]) for x in scripts))})
+    return lanes
+
+
+def _by_project(lanes: list[dict]) -> list[dict]:
+    totals: dict[str, dict] = {}
+    for x in lanes:
+        t = totals.setdefault(x["project"], {"project": x["project"], "active_min": 0, "wait_min": 0})
+        t["active_min"] += x["active_min"]
+        t["wait_min"] += x["wait_min"]
+    return sorted(totals.values(), key=lambda t: -(t["active_min"] + t["wait_min"]))
+
+
 def analyze(day: Date, session_dirs: dict, focus_windows: list[dict], day_start: str = "08:30",
             day_end: str = "23:00", concurrency: int = 3, now: datetime | None = None,
             chat_ids: set[str] = frozenset()) -> dict:
@@ -227,7 +260,9 @@ def analyze(day: Date, session_dirs: dict, focus_windows: list[dict], day_start:
         "tz": time.tzname[0], "wait_total_min": round(wait_total), "wait_wall_min": round(_minutes(wait_u)), "wait_focus_min": round(focus_wait),
         "peak_parallel": peak,
     }
+    lanes = _lanes(sessions, in_focus)
     return {"summary": summary, "slots": slots, "gaps": gaps, "focus": focus_windows,
+            "lanes": lanes, "by_project": _by_project(lanes),
             "humans": [{"t": h["ts"].strftime("%H:%M"), "kind": h["kind"], "label": rs.KIND_LABELS.get(h["kind"], h["kind"]),
                         "project": h["project"], "focus": h["focus"], "text": h["text"]} for h in humans],
             "top_waits": [{"project": w["project"], "title": w["title"], "start": w["start"].strftime("%H:%M"),

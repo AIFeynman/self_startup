@@ -142,3 +142,43 @@ def test_timezone_mismatch_advice(monkeypatch):
     monkeypatch.setattr(U, "session_timeline", lambda *a: next(it))
     r = U.analyze(t.date(), {}, [], "08:30", "23:00", 3, now=datetime(2026, 1, 6))
     assert any("时区" in a for a in r["advice"])
+
+
+def _analyze(monkeypatch, tls, day):
+    it = iter(tls)
+    monkeypatch.setattr(U, "_files", lambda *a: [("x", None)] * len(tls))
+    monkeypatch.setattr(U, "_read", lambda *a: ({}, []))
+    monkeypatch.setattr(U, "session_timeline", lambda *a: next(it))
+    return U.analyze(day, {}, [{"start": "09:00", "end": "10:00"}], "09:00", "18:00", 3, now=datetime(2026, 1, 6))
+
+
+def test_lanes_show_what_each_session_did_and_when(monkeypatch):
+    t = datetime(2026, 1, 5, 9, 0)
+    later = _tl("后开始", active=[(t + timedelta(hours=2), t + timedelta(hours=3))])
+    first = _tl("先开始", active=[(t, t + timedelta(minutes=30))], waits=[(t + timedelta(minutes=30), t + timedelta(minutes=75))],
+                humans=[t, t + timedelta(minutes=75)])
+    r = _analyze(monkeypatch, [later, first], t.date())
+    assert [x["title"] for x in r["lanes"]] == ["先开始", "后开始"]
+    lane = r["lanes"][0]
+    assert lane["active"] == [{"start": "09:00", "end": "09:30", "minutes": 30}]
+    assert lane["waits"] == [{"start": "09:30", "end": "10:15", "minutes": 45}]
+    assert [(h["t"], h["focus"]) for h in lane["humans"]] == [("09:00", True), ("10:15", False)]
+    assert (lane["active_min"], lane["wait_min"]) == (30, 45)
+
+
+def test_scripted_sessions_share_one_lane_after_interactive_ones(monkeypatch):
+    t = datetime(2026, 1, 5, 9, 0)
+    scripts = [_tl(f"cron{i}", active=[(t + timedelta(minutes=10 * i), t + timedelta(minutes=10 * i + 15))], automated=True) for i in range(2)]
+    r = _analyze(monkeypatch, [*scripts, _tl("人", active=[(t + timedelta(hours=1), t + timedelta(hours=2))])], t.date())
+    assert [(x["title"], x["automated"], x["sessions"]) for x in r["lanes"]] == [("人", False, 1), ("脚本任务", True, 2)]
+    assert r["lanes"][1]["active"] == [{"start": "09:00", "end": "09:25", "minutes": 25}]
+    assert r["lanes"][1]["active_min"] == 30
+
+
+def test_time_is_totalled_by_project(monkeypatch):
+    t = datetime(2026, 1, 5, 9, 0)
+    a = _tl("a", active=[(t, t + timedelta(minutes=40))], waits=[(t + timedelta(minutes=40), t + timedelta(minutes=50))])
+    b = {**_tl("b", active=[(t, t + timedelta(minutes=30))]), "project": "other"}
+    c = _tl("c", active=[(t + timedelta(hours=2), t + timedelta(hours=3))])
+    r = _analyze(monkeypatch, [a, b, c], t.date())
+    assert r["by_project"] == [{"project": "proj", "active_min": 100, "wait_min": 10}, {"project": "other", "active_min": 30, "wait_min": 0}]

@@ -824,13 +824,19 @@ def _platform_events(date: str) -> list[tuple[int, int, str]]:
     return events
 
 
+def _overnight_entries(date: str) -> list[dict]:
+    yesterday = (Date.fromisoformat(date) - timedelta(days=1)).isoformat()
+    return [{**e, "start": "00:00"} for e in _time_entries(yesterday) if "00:00" < e["end"] <= e["start"]]
+
+
 def human_day(date: str, scan: bool = True) -> dict | None:
     eff = get_efficiency(date, scan_if_missing=scan)
     entries = _time_entries(date)
-    if not eff and not entries:
+    overnight = _overnight_entries(date)
+    if not eff and not entries and not overnight:
         return None
     sessions = eff["sessions"] if eff else []
-    return {**human.metrics([*human.session_events(sessions), *_platform_events(date)], entries), "entries": entries}
+    return {**human.metrics([*human.session_events(sessions), *_platform_events(date)], [*overnight, *entries]), "entries": entries}
 
 
 @router.get("/human")
