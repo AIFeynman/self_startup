@@ -49,7 +49,8 @@ export async function coreMetrics(ctx, { date }) {
 
   function sessionRow(s) {
     const tasks = s.tasks.map((t) => h('div.cm-task', {}, [
-      h('span.cm-score', {}, t.score), h('span.muted', {}, `难度 ${t.difficulty} · ${t.std_h}h`), h('b', {}, t.title),
+      h('span.cm-score', { title: '交付档 × 反馈系数' }, `${t.score}（${t.tier}×${t.feedback}）`),
+      h('span.muted', {}, `价值${t.value} · 难度 ${t.difficulty} · ${t.std_h}h → 产出 ${t.output_h}h`), h('b', {}, t.title),
       t.why ? h('span.muted', {}, '— ' + t.why) : null,
     ]));
     const av = Object.entries(s.avoidable).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join('、');
@@ -63,7 +64,7 @@ export async function coreMetrics(ctx, { date }) {
         h('span.cm-num', { title: '可避免交互占比' }, s.avoidable_pct == null ? '—' : s.avoidable_pct + '%'),
       ])),
       h('div.cm-more', {}, [
-        h('div.muted', {}, `活跃 ${s.active_min} 分 · 人工交互 ${s.human_turns} 次${s.wait_p90_min != null ? ` · 等待 P90 ${s.wait_p90_min} 分` : ''} · 难度 ${s.difficulty ?? '—'} · 产出 ${s.output_h}h`),
+        h('div.muted', {}, `活跃 ${s.active_min} 分 · 人工交互 ${s.human_turns} 次${s.wait_p90_min != null ? ` · 等待 P90 ${s.wait_p90_min} 分` : ''} · 难度 ${s.difficulty ?? '—'} · 价值分 ${s.value_score ?? '—'} · 产出 ${s.output_h}h`),
         s.note ? h('div', {}, s.note) : null,
         av ? h('div.muted', {}, '可避免：' + av) : null,
         ...tasks,
@@ -80,14 +81,14 @@ export async function coreMetrics(ctx, { date }) {
     const top = h('div.cm-top', {}, [
       h('b.cm-h', {}, '核心指标'), h('span.muted.cm-status', {}, status), h('span.grow'),
       h('button.sm' + (d.scored_at && !d.new_turns && !d.unscored?.length ? '.outline' : '.dark'),
-        { onclick: score, disabled: running || !d.scorable, title: '后台让 Agent 读当天交互会话，按任务难度、结果、可避免交互打分' },
+        { onclick: score, disabled: running || !d.scorable, title: '后台让 Agent 读当天交互会话，按任务难度、交付档、反馈、价值和可避免交互打分' },
         running ? '评分中…' : d.scored_at ? '重新评分' : 'AI 评分'),
     ]);
     const tiles = h('div.cm-tiles', {}, d.defs.map((c) => tile(c, d)));
     const extra = [];
     const by = Object.entries(d.avoidable_by_type || {}).filter(([, n]) => n).sort((a, b) => b[1] - a[1]);
     const facts = [
-      d.output_h ? `产出 ${d.output_h} 标准工时 / 活跃 ${d.active_h}h` : null,
+      d.scored ? `吞吐 = 产出 ${d.output_h} 标准工时 ÷ 活跃 ${d.active_h}h · 价值分 ${d.value_score ?? '—'}` : null,
       d.counts && d.scored ? `✅ ${d.counts['✅']} · 🟡 ${d.counts['🟡']} · ❌ ${d.counts['❌']} · ⏸ ${d.counts['⏸']}` : null,
       d.nudges ? `催促 ${d.nudges} 次` : null,
       d.waits_over_30m ? `等待超 30 分 ${d.waits_over_30m} 次` : null,

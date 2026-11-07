@@ -338,7 +338,7 @@ def test_core_metrics_api_and_score_job(client, monkeypatch):
     monkeypatch.setattr(review.jobs, "submit", lambda m, p, **kw: got.append(kw["ref"]) or 4242)
     assert client.post("/api/agents/core/score", json={"date": d}).json()["job_id"] == 4242 and got == [f"score:{d}"]
     out = "```json\n" + json.dumps({"sessions": [{"id": "a", "tasks": [
-        {"scale": 2, "uncertainty": 2, "verify": 2, "cycle": 2, "done": 50, "quality": 30, "evidence": 20}],
+        {"scale": 2, "uncertainty": 2, "verify": 2, "cycle": 2, "tier": 100, "feedback": 1, "value": "中"}],
         "avoidable": {"催进度": 1}}]}, ensure_ascii=False) + "\n```"
     review.on_job_done({"id": 4242, "ref": f"score:{d}", "status": "done", "output": out})
     r = client.get(f"/api/agents/core?date={d}").json()
