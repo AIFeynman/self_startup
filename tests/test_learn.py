@@ -819,6 +819,18 @@ def test_user_chosen_method_is_kept(client, fake_submit):
     client.delete(f"/api/learn/plans/{p['id']}")
 
 
+def test_tech_chapter_asks_for_paper_figures_timeline_and_widgets(client, fake_submit):
+    p = client.post("/api/learn/plans", json={"topic": "LLM", "method": "tech"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out()))
+    s1, _ = client.get(f"/api/learn/plans/{p['id']}").json()["steps"]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    prompt = fake_submit[-1]["prompt"]
+    assert "arxiv.org/html" in prompt and "pdfimages" in prompt
+    assert "dg-timeline" in prompt and "figs/<名字>.svg" in prompt
+    assert "最多 2 个" not in prompt
+    client.delete(f"/api/learn/plans/{p['id']}")
+
+
 def test_design_chapter_uses_design_method_not_architecture(client, fake_submit):
     p = client.post("/api/learn/plans", json={"topic": "UX", "method": "design"}).json()
     learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out()))

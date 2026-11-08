@@ -2188,8 +2188,9 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
    - {out / 'chapter.md'}
    - {out / 'quiz.json'}（测试题 + 知识卡）
-   - 需要交互小组件时：{out / 'widgets'}/<名字>.html（可选，最多 2 个）
-   - 需要图片时：下载到 {out / 'figs'}/<名字>.png（目录要自己建），正文用相对路径 figs/<名字>.png 引用
+   - 交互小组件：{out / 'widgets'}/<名字>.html
+   - 图片（目录要自己建）：原文图下载到 {out / 'figs'}/，自己画的示意图写成 {out / 'figs'}/<名字>.svg；正文都用相对路径 figs/… 引用
+   {FIGS.format(out=out).replace('下载进笔记', '下载进章节').replace('在笔记正文里', '在章节正文里')}
    目录里的 history/ 是旧版本归档：不要读、不要沿用，按本次要求从头写。
 3. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了，以及资料时效结论。
 

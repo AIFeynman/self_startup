@@ -220,6 +220,13 @@ const CSS = `
 .ln-chap .md .dg-box .dg-go.more { color: var(--muted); } .ln-chap .md .dg-box .dg-go.more:hover { color: var(--accent); }
 .ln-chap .md .dg-box.dg-link { cursor: pointer; } .ln-chap .md .dg-box.dg-link:hover { border-color: var(--accent); }
 @media (max-width: 640px) { .ln-chap .md .dg-arch { grid-template-columns: 1fr; } .ln-chap .md .dg-layer { grid-template-columns: 1fr; } .ln-chap .md .dg-layer > b { border-right: 0; border-bottom: 2px solid var(--accent-ring); padding: 0 0 4px; } }
+.ln-chap .md .dg-timeline { position: relative; margin: 16px 0 20px; padding-left: 22px; font-size: 13.5px; line-height: 1.55; }
+.ln-chap .md .dg-timeline::before { content: ''; position: absolute; left: 6px; top: 6px; bottom: 6px; border-left: 2px solid var(--line-2); }
+.ln-chap .md .dg-event { position: relative; display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 10px; padding: 7px 12px; margin: 0 0 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.ln-chap .md .dg-event::before { content: ''; position: absolute; left: -21px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--accent); }
+.ln-chap .md .dg-event.hot::before { background: var(--accent); }
+.ln-chap .md .dg-event i { grid-row: span 2; font-style: normal; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 1px; }
+.ln-chap .md .dg-event span { color: var(--muted); font-size: 12.5px; } .ln-chap .md .dg-event .dg-more { grid-column: 2; }
 .ln-chap .md .hot { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 .ln-chap .md .warn { border-color: var(--warn); background: var(--warn-soft); }
 /* 交互：点开细节 / 逐步播放 / 标签页 / 翻转卡 / 小组件 */
