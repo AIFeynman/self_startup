@@ -341,9 +341,12 @@ def test_carry_moves_single_day_tasks_only(client):
     assert sorted(_titles(client, "1999-04-06")) == ["昨天没做完", "跨月的事"]
 
 
-def test_review_problem_becomes_task_without_end(client):
+def test_review_problem_lands_in_next_days_plan(client):
     client.post("/api/notes/review", json={"date": "2026-04-01", "entries": {
         "产品迭代·做得好的": ["模板上线了"], "产品迭代·有问题的": ["排期总是写不清 #流程"], "AI协作·有问题的": [" "]}})
-    client.post("/api/notes/review", json={"date": "2026-04-02", "entries": {"产品迭代·有问题的": ["排期总是写不清"]}})
-    assert "产品迭代：排期总是写不清" not in _titles(client, "2026-03-31")
-    assert _titles(client, "2026-04-20").count("产品迭代：排期总是写不清") == 1
+    client.post("/api/notes/review", json={"date": "2026-04-01", "entries": {"产品迭代·有问题的": ["排期总是写不清"]}})
+    assert "产品迭代：排期总是写不清" not in _titles(client, "2026-04-01")
+    assert _titles(client, "2026-04-02").count("产品迭代：排期总是写不清") == 1
+    assert "产品迭代：排期总是写不清" not in _titles(client, "2026-04-03")
+    t = next(t for t in client.get("/api/plan/day?date=2026-04-02").json()["tasks"] if t["title"] == "产品迭代：排期总是写不清")
+    assert t["end_date"] == "2026-04-02" and t["notes"] == "来自 2026-04-01 的复盘"

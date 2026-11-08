@@ -51,6 +51,9 @@ const CSS = `
 .pl-lbl.agent { border-color: var(--ok); color: var(--ok); }
 .pl-lbl.over { border-color: var(--warn); color: var(--warn); font-weight: 600; }
 .pl-lbl.time { border-color: transparent; color: var(--text); font-variant-numeric: tabular-nums; }
+.pl-irow .pl-del { visibility: hidden; }
+.pl-irow:hover .pl-del, .pl-irow.sel .pl-del { visibility: visible; }
+.pl-irow .pl-del:hover { color: var(--warn); }
 .pl-irow button.run { padding: 1px 10px; font-size: 12px; background: var(--dark); color: var(--bg); border-color: var(--dark); }
 @media (max-width: 760px) { .pl-lbl.opt, .pl-id { display: none; } .pl-search { width: 100%; } }
 
@@ -378,6 +381,14 @@ export default {
 
     const patch = async (id, body) => { const t = await api.patch(`/api/tasks/${id}`, body); await load(); return t; };
     const setStatus = (t, v) => patch(t.id, { status: v, ...(v === 'done' ? { progress: 100 } : {}) });
+    const remove = async (t) => {
+      const hasKids = state.data.tasks.some((x) => x.parent_id === t.id);
+      if (!confirm(`删除「${t.title}」${hasKids ? '及其子任务' : ''}？`)) return false;
+      await api.del(`/api/tasks/${t.id}`);
+      if (state.sel === t.id) state.sel = null;
+      await load();
+      return true;
+    };
 
     // ---------- 静态骨架：页头 / 工具条只建一次，load() 只换动态区 ----------
     const head = h('div');
@@ -785,10 +796,7 @@ export default {
       };
       const runs = state.runs.filter((r) => r.task_id === t.id);
       const leaf = !kids.length;
-      const del = async () => {
-        if (!confirm(`删除「${t.title}」${leaf ? '' : '及其子任务'}？`)) return;
-        await api.del(`/api/tasks/${t.id}`); closeDetail(); load();
-      };
+      const del = async () => { if (await remove(t)) closeDetail(); };
       const panel = h('aside.pl-detail', { role: 'dialog', 'aria-label': '任务详情' }, [
         h('div.pl-detail-h', {}, [
           parent ? h('a', { onclick: () => openDetail(parent.id) }, `#${parent.id} ${parent.title.slice(0, 16)} ›`) : null,
@@ -874,6 +882,7 @@ export default {
             t.start_time ? lbl('.time', `${t.start_time}–${t.end_time}`) : null,
             !inPanel && canRun(t, !kids.length) ? h('button.run', { title: '让 Agent 自动执行', onclick: (e) => { e.stopPropagation(); launch(t); } }, '执行') : null,
           ]),
+          h('button.pl-ico.pl-del', { title: '删除（Delete）', onclick: (e) => { e.stopPropagation(); remove(t).then((ok) => ok && inPanel && openDetail(t.parent_id)); } }, ui.icon('trash')),
         ]);
     }
 
@@ -934,6 +943,7 @@ export default {
       else if (k === 'k') move(-1);
       else if ((k === 'enter' || k === 'o') && cur) openDetail(cur.id);
       else if ('1234'.includes(k) && k && cur) patch(cur.id, { priority: +k });
+      else if ((k === 'delete' || k === 'backspace') && cur) remove(cur).then((ok) => ok && closeDetail());
       else if (k === 's' && cur) {
         const anchor = listBox.querySelector(`.pl-irow[data-id="${cur.id}"] .pl-ico:nth-of-type(2)`) || listBox;
         menu(anchor, statusOpts(), cur.status, (v) => setStatus(cur, v));
