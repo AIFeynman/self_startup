@@ -1,7 +1,7 @@
-// Agent 核心指标（复盘 · Agent 效率）：结果分、吞吐、杠杆、可避免交互占比，口径同 session-report 技能。
+// Agent 核心指标（复盘 · Agent 效率）：结果（交付量）、吞吐、杠杆、可避免交互占比，口径同 session-report 技能。
 // 杠杆直接由日志算；其余三项要点「AI 评分」跑一次后台评分任务。
 // 用法：import { coreMetrics } from './_coremetrics.js'; el.append(await coreMetrics(ctx, { date }))
-const fmt = (key, v) => v == null ? '—' : key === 'avoidable_pct' ? `${v}%` : key === 'leverage' ? `${v} 分` : String(v);
+const fmt = (key, v) => v == null ? '—' : key === 'avoidable_pct' ? `${v}%` : key === 'leverage' ? `${v} 分` : key === 'result' ? `${v}h` : String(v);
 
 export async function coreMetrics(ctx, { date }) {
   const { api, h, toast } = ctx;
@@ -42,6 +42,7 @@ export async function coreMetrics(ctx, { date }) {
     return h('div.cm-tile', { title: def }, [
       h('div.cm-k', {}, label),
       h('div.cm-v' + (need ? '.muted' : ''), {}, need ? '未评分' : fmt(key, v)),
+      key === 'result' && d.avg_result != null ? h('div.cm-sub-v', {}, `平均结果分 ${d.avg_result}`) : null,
       delta || (p != null ? h('span.cm-delta', {}, `上次 ${fmt(key, p)}`) : null),
       h('div.cm-def', {}, def),
     ]);
@@ -50,7 +51,7 @@ export async function coreMetrics(ctx, { date }) {
   function sessionRow(s) {
     const tasks = s.tasks.map((t) => h('div.cm-task', {}, [
       h('span.cm-score', { title: '交付档 × 反馈系数' }, `${t.score}（${t.tier}×${t.feedback}）`),
-      h('span.muted', {}, `价值${t.value} · 难度 ${t.difficulty} · ${t.std_h}h → 产出 ${t.output_h}h`), h('b', {}, t.title),
+      h('span.muted', {}, `价值${t.value} · 难度 ${t.difficulty} · ${t.std_h}h → 交付 ${t.delivered_h}h · 产出 ${t.output_h}h`), h('b', {}, t.title),
       t.why ? h('span.muted', {}, '— ' + t.why) : null,
     ]));
     const av = Object.entries(s.avoidable).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join('、');
@@ -58,7 +59,7 @@ export async function coreMetrics(ctx, { date }) {
       h('summary', {}, h('div.cm-rh', {}, [
         h('span.cm-st', {}, s.status), h('span.cm-at', {}, s.start.slice(11, 16)), h('span.cm-proj', {}, s.project),
         h('span.cm-title', {}, s.title || s.session_id.slice(0, 8)),
-        h('span.cm-num', { title: '结果分' }, s.result ?? '—'),
+        h('span.cm-num.cm-wide', { title: '结果：交付量 / 平均结果分' }, s.result == null ? '—' : `${s.delivered_h}h/${s.result}`),
         h('span.cm-num', { title: '吞吐' }, s.throughput ?? '—'),
         h('span.cm-num', { title: '杠杆（分钟/次）' }, s.leverage_min ?? '—'),
         h('span.cm-num', { title: '可避免交互占比' }, s.avoidable_pct == null ? '—' : s.avoidable_pct + '%'),
@@ -100,7 +101,7 @@ export async function coreMetrics(ctx, { date }) {
     if (trace.length) extra.push(h('div.muted.cm-facts', {}, 'Agent 时间去向：' + trace.map(([k, m]) => `${k} ${m} 分`).join(' · ')));
     if (d.sessions?.length) {
       extra.push(h('details.cm-sub', {}, [
-        h('summary', {}, `逐会话（${d.sessions.length}）· 列：结果分 / 吞吐 / 杠杆 / 可避免`),
+        h('summary', {}, `逐会话（${d.sessions.length}）· 列：结果（交付量 / 平均分） / 吞吐 / 杠杆 / 可避免`),
         h('div.cm-list', {}, d.sessions.slice().sort((a, b) => a.start.localeCompare(b.start)).map(sessionRow)),
       ]));
     }
@@ -137,6 +138,8 @@ function injectStyle() {
   .cm-proj { font-weight: 600; flex: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cm-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cm-num { flex: none; width: 44px; text-align: right; font-family: var(--mono); font-size: 12px; }
+  .cm-num.cm-wide { width: 72px; }
+  .cm-sub-v { font-size: 12px; color: var(--muted); }
   .cm-more { padding: 6px 0 2px 24px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
   .cm-task { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
   .cm-score { font: 700 12px var(--mono); color: var(--accent); }
