@@ -1,0 +1,405 @@
+<title>视野板块设计稿</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 版式：单栏长文，780px 正文宽；样例区浅底面板；AI 区占满宽，生活三栏，宏观行业压成一张紧凑表 */
+:root {
+  --bg: #ffffff; --fg: #1d2733; --muted: #5d6b7a; --line: #dde4ea; --panel: #f3f7f8;
+  --navy: #14305a; --teal: #0f8b8d; --teal-soft: #e2f3f2; --warn: #b8641b; --down: #b23a48; --up: #2e7d4f;
+  --serif: "Noto Serif SC", "Songti SC", serif; --sans: "Noto Sans SC", "PingFang SC", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f151c; --fg: #dbe3ea; --muted: #93a2b1; --line: #263240; --panel: #16202a;
+  --navy: #9cc0f0; --teal: #46c2c0; --teal-soft: #15302f; --warn: #e3a25e; --down: #ef7d8a; --up: #6cc790; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f151c; --fg: #dbe3ea; --muted: #93a2b1; --line: #263240; --panel: #16202a;
+  --navy: #9cc0f0; --teal: #46c2c0; --teal-soft: #15302f; --warn: #e3a25e; --down: #ef7d8a; --up: #6cc790; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.75 var(--sans); }
+.wrap { max-width: 780px; margin: 0 auto; padding-block: 40px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--serif); color: var(--navy); text-wrap: balance; line-height: 1.35; }
+h1 { font-size: 30px; margin: 0 0 6px; }
+h2 { font-size: 21px; margin: 44px 0 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+h3 { font-size: 16.5px; margin: 24px 0 8px; }
+p { margin: 8px 0; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+.lead { background: var(--teal-soft); border-radius: 6px; padding: 14px 18px; }
+.lead b { color: var(--teal); }
+code, .mono { font-family: var(--mono); font-size: 13px; }
+.tbl { overflow-x: auto; margin: 10px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 560px; }
+th { background: var(--navy); color: var(--bg); text-align: left; font-weight: 500; padding: 7px 10px; }
+td { border-bottom: 1px solid var(--line); padding: 7px 10px; vertical-align: top; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.grp { font-weight: 500; color: var(--navy); white-space: nowrap; }
+.ok { color: var(--up); font-weight: 500; } .todo { color: var(--warn); font-weight: 500; } .no { color: var(--down); font-weight: 500; }
+.label { font-size: 11.5px; letter-spacing: .08em; color: var(--muted); }
+.demo { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 14px 0; display: grid; gap: 14px; }
+.demo .sec { font-size: 13px; font-weight: 700; color: var(--navy); letter-spacing: .04em; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.tile { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px; min-width: 0; display: grid; gap: 4px; align-content: start; }
+.tile .name { font-weight: 500; font-size: 13.5px; }
+.tile .val { font-family: var(--mono); font-size: 22px; color: var(--navy); font-variant-numeric: tabular-nums; }
+.tile .val small { font-size: 12px; color: var(--muted); }
+.tile .meta { font-size: 12px; color: var(--muted); }
+.chip { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 10px; background: var(--teal-soft); color: var(--teal); }
+.chip.warn { background: transparent; border: 1px solid var(--warn); color: var(--warn); }
+svg.spark { width: 100%; height: 60px; display: block; }
+svg.spark .l { fill: none; stroke: var(--teal); stroke-width: 1.6; }
+svg.spark .base { stroke: var(--line); stroke-dasharray: 3 3; }
+svg.spark .t { fill: var(--muted); font: 9px var(--mono); }
+.bars { display: grid; gap: 5px; font-size: 12px; }
+.bar { display: grid; grid-template-columns: 5.5em 1fr 3.2em; gap: 6px; align-items: center; }
+.bar span.track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.bar span.fill { display: block; height: 100%; background: var(--teal); }
+.bar b { font-family: var(--mono); font-weight: 500; text-align: right; }
+.mini { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 0; }
+.mini td { padding: 5px 8px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.card { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; }
+.card h4 { margin: 0 0 6px; font-family: var(--serif); color: var(--navy); font-size: 16px; }
+.card dl { margin: 0; display: grid; grid-template-columns: 6.5em 1fr; gap: 6px 12px; font-size: 14px; }
+.card dt { color: var(--muted); } .card dd { margin: 0; min-width: 0; }
+.ph { color: var(--muted); font-style: italic; }
+ol, ul { padding-left: 1.3em; } li { margin: 4px 0; }
+.ask { border-left: 3px solid var(--teal); padding: 2px 0 2px 14px; margin: 12px 0; }
+.chg { border-left: 3px solid var(--warn); padding: 2px 0 2px 14px; margin: 12px 0; }
+.foot { margin-top: 48px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }
+a { color: var(--teal); }
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+<div class="label">设计稿 · 第 3 版 · 2026-11-08 · 待确认</div>
+<h1>视野：AI、生活与宏观的大数据变化</h1>
+<p class="sub">学习平台左侧新增板块。只出方案，确认后再写代码。</p>
+
+<div class="chg"><b>第 3 版改了什么：</b>① AI 新增「<b>AI 与就业</b>」（8 个）和「<b>AI 消费</b>」（6 个）两组，AI 一共 28 个指标；② 解读卡改成<b>面向小白、要有洞见、要下判断</b>：先用一句大白话讲清楚，再讲大多数人没注意到的一层，最后给出能验证的预测，到期自动对账、公开记分（见 1.2 节）。全部指标 60 个，今天实测能直接拿到的有 31 个。<br><b>第 2 版：</b>AI 最重，吃喝玩乐 / 生活 / 学习其次，国家宏观和行业压成一张表。</div>
+
+<div class="lead">
+<p><b>一句话：</b>每天自动抓数，新数据一出，程序先算清楚「变了多少、在历史上什么位置」；变化够大的才让 Claude 写解读卡，讲为什么、意味着什么、下次看什么。卡里的数字全部和库里对账，原因必须带来源和日期。</p>
+<p><b>P1 完成标准：</b>31 个能直接拿到的指标回填历史、每天更新，在 8780 的「视野」页按 AI → 吃喝玩乐 / 生活 / 学习 → 宏观行业的顺序展示。抽 10 张解读卡人工核对：数字全部对得上，原因链接都能打开，每张都有一条写了到期日的预测，并且找一个不懂行的人能读懂标题和「一句话」。</p>
+</div>
+
+<h2>1. 先看样子（真实数据）</h2>
+<p>首页从上到下分三层，下面每张卡都是今天实测拉到的数据。</p>
+<div class="demo">
+  <div class="sec">AI 发展 · 占首页最大的一块</div>
+  <div class="tiles">
+    <div class="tile">
+      <div class="name">最强模型能力（Epoch 能力指数）</div>
+      <div class="val">169.1 <small>2026-09</small></div>
+      <div class="bars" role="img" aria-label="闭源最强 169.1，开源最强 159.3">
+        <div class="bar"><span>闭源最强</span><span class="track"><span class="fill" style="width:100%"></span></span><b>169.1</b></div>
+        <div class="bar"><span>开源最强</span><span class="track"><span class="fill" style="width:94.2%"></span></span><b>159.3</b></div>
+        <div class="bar"><span>中国最强</span><span class="track"><span class="fill" style="width:94.2%"></span></span><b>159.3</b></div>
+      </div>
+      <div class="meta">开源和中国的最强都是同一个模型（2026-10），离闭源前沿差 9.8 分</div>
+      <div class="meta">Epoch AI · eci_scores.csv，共 253 个模型</div>
+    </div>
+    <div class="tile">
+      <div class="name">AI 数据中心当前功率</div>
+      <div class="val">15,122 <small>MW</small></div>
+      <div class="meta" style="padding:6px 0">约 1,577 万张 H100 当量。只算 Epoch 跟踪的 96 个大型数据中心，不是全行业总量。</div>
+      <div class="meta">Epoch AI · data_centers.csv</div>
+    </div>
+    <div class="tile">
+      <div class="name">招聘广告里提到 AI 的比例（美国）</div>
+      <div class="val">7.3% <small>2026-09</small></div>
+      <div class="bars" role="img" aria-label="2022-11 为 2.2%，2024-12 为 2.7%，2025-12 为 4.4%，2026-09 为 7.3%">
+        <div class="bar"><span>2022-11</span><span class="track"><span class="fill" style="width:30%"></span></span><b>2.2%</b></div>
+        <div class="bar"><span>2024-12</span><span class="track"><span class="fill" style="width:37%"></span></span><b>2.7%</b></div>
+        <div class="bar"><span>2025-12</span><span class="track"><span class="fill" style="width:60.5%"></span></span><b>4.4%</b></div>
+        <div class="bar"><span>2026-09</span><span class="track"><span class="fill" style="width:100%"></span></span><b>7.3%</b></div>
+      </div>
+      <div class="meta">ChatGPT 发布时是 2.2%。最近 9 个月涨的幅度，超过了之前 3 年的总和</div>
+      <div class="meta">Indeed Hiring Lab · ai-tracker，9 国日更</div>
+    </div>
+    <div class="tile">
+      <div class="name">哪些岗位在变少（招聘指数，2020-02 = 100）</div>
+      <div class="bars" role="img" aria-label="会计 106.8，客服 86.9，软件开发 81.6，营销 77.3，IT 运维 69.3，数学与数据 61.8">
+        <div class="bar"><span>会计</span><span class="track"><span class="fill" style="width:100%"></span></span><b>106.8</b></div>
+        <div class="bar"><span>客服</span><span class="track"><span class="fill" style="width:81.4%"></span></span><b>86.9</b></div>
+        <div class="bar"><span>软件开发</span><span class="track"><span class="fill" style="width:76.4%"></span></span><b>81.6</b></div>
+        <div class="bar"><span>营销</span><span class="track"><span class="fill" style="width:72.4%"></span></span><b>77.3</b></div>
+        <div class="bar"><span>IT 运维</span><span class="track"><span class="fill" style="width:64.9%"></span></span><b>69.3</b></div>
+        <div class="bar"><span>数学与数据</span><span class="track"><span class="fill" style="width:57.9%"></span></span><b>61.8</b></div>
+      </div>
+      <div class="meta">2026-10-30。同样是坐办公室，会计岗比疫情前还多，数据岗少了近四成</div>
+      <div class="meta">FRED · Indeed 分职业指数</div>
+    </div>
+    <div class="tile">
+      <div class="name">美国软件开发岗位招聘指数</div>
+      <div class="val">81.6 <small>2026-10-30</small></div>
+      <svg class="spark" viewBox="0 0 240 60" role="img" aria-label="2020 年 2 月以来月度走势，2022 年 2 月峰值 233.8">
+        <line class="base" x1="4" x2="236" y1="44.6" y2="44.6"/><text class="t" x="4" y="41">100 = 2020-02</text>
+        <polyline class="l" points="4.0,44.6 6.9,44.6 9.8,48.6 12.7,53.7 15.6,55.3 18.5,55.1 21.4,54.0 24.3,53.4 27.2,52.2 30.1,50.5 33.0,48.3 35.9,47.3 38.8,45.2 41.7,42.2 44.6,39.5 47.5,36.8 50.4,34.3 53.3,32.1 56.2,29.1 59.1,23.4 62.0,20.6 64.9,16.1 67.8,11.2 70.7,10.2 73.6,6.5 76.5,4.0 79.4,6.4 82.3,7.1 85.2,6.6 88.1,10.8 91.0,16.0 93.9,20.2 96.8,23.9 99.7,27.9 102.6,31.7 105.5,35.4 108.4,38.2 111.3,42.8 114.2,44.8 117.1,45.2 120.0,46.4 122.9,49.9 125.8,50.2 128.7,51.1 131.6,52.2 134.5,52.5 137.4,53.0 140.3,53.0 143.2,53.4 146.1,53.5 149.0,53.5 151.9,54.0 154.8,53.7 157.7,53.7 160.6,53.8 163.5,54.2 166.4,54.0 169.3,54.2 172.2,54.5 175.1,54.5 178.0,54.7 180.9,56.0 183.8,56.0 186.7,55.8 189.6,55.5 192.5,55.2 195.4,54.9 198.3,55.3 201.2,55.5 204.1,55.0 207.0,54.8 209.9,54.6 212.8,53.9 215.7,53.5 218.6,52.9 221.5,52.8 224.4,52.7 227.3,52.7 230.2,52.2 233.1,52.3 236.0,51.2"/>
+      </svg>
+      <div class="meta">比疫情前低 18%，比 2022-02 峰值 233.8 低 65%</div>
+      <div class="meta">FRED · Indeed，日更</div>
+    </div>
+  </div>
+
+  <div class="sec">吃喝玩乐 · 生活 · 学习</div>
+  <div class="tiles">
+    <div class="tile">
+      <div class="name">社零总额 · 同比 <span class="chip">吃喝玩乐</span></div>
+      <div class="val">+1.1% <small>2026-09</small></div>
+      <svg class="spark" viewBox="0 0 240 60" role="img" aria-label="近 36 个月社零同比，2026-05 为 -0.6%">
+        <line class="base" x1="4" x2="236" y1="54.4" y2="54.4"/><text class="t" x="200" y="52">0%</text>
+        <polyline class="l" points="4.0,4.0 10.6,19.6 17.3,45.9 23.9,47.5 30.5,41.8 37.1,39.3 43.8,33.6 50.4,26.7 57.0,34.1 63.7,45.9 70.3,48.1 76.9,44.2 83.5,48.9 90.2,47.0 96.8,48.6 103.4,45.6 110.1,41.2 116.7,46.1 123.3,44.2 129.9,38.2 136.6,40.4 143.2,36.8 149.8,41.2 156.5,44.2 163.1,45.1 169.7,46.1 176.3,46.4 183.0,50.8 189.6,51.9 196.2,49.7 202.9,53.8 209.5,56.0 216.1,51.6 222.7,52.7 229.4,53.3 236.0,51.3"/>
+      </svg>
+      <div class="meta">2026-05 为 −0.6%，近 36 期唯一为负 · 1–2 月合并发布</div>
+    </div>
+    <div class="tile">
+      <div class="name">消费者信心指数 <span class="chip">吃喝玩乐</span></div>
+      <div class="val">89.0 <small>2026-09</small></div>
+      <div class="meta">100 以上偏乐观；2007-01 是 112.4</div>
+      <div class="meta">统计局口径，经 akshare</div>
+    </div>
+    <div class="tile">
+      <div class="name">人口出生率 <span class="chip">生活</span></div>
+      <div class="val">5.63‰ <small>2025</small></div>
+      <div class="meta">2024 年 6.77‰，2023 年 6.39‰；年末总人口 140,489 万，比上年少 339 万</div>
+      <div class="meta">国家统计局年度数据，经 akshare</div>
+    </div>
+    <div class="tile">
+      <div class="name">各级学校招生数 <span class="chip">学习</span></div>
+      <div class="val" style="color:var(--muted)">— <small>待验</small></div>
+      <div class="meta" style="padding:6px 0">统计局年度目录里有「各级各类学校招生数」「研究生和留学生数」，今天测时统计局在限流，没拿到数。</div>
+    </div>
+  </div>
+
+  <div class="sec">国家宏观与行业 · 一张表，一行一个</div>
+  <table class="mini">
+    <tr><td>制造业 PMI</td><td class="num">49.3</td><td class="num">2026-10</td><td>低于 50 是收缩</td></tr>
+    <tr><td>规上工业增加值同比</td><td class="num">+5.5%</td><td class="num">2026-09</td><td></td></tr>
+    <tr><td>全社会用电量同比</td><td class="num">+3.9%</td><td class="num">2026-09</td><td>分产业、分行业都有</td></tr>
+    <tr><td>城镇调查失业率</td><td class="num">5.2%</td><td class="num">2026-09</td><td></td></tr>
+    <tr><td>北京新建住宅价格同比</td><td class="num">97.3</td><td class="num">2026-09</td><td>上年同月 = 100，即降 2.7%</td></tr>
+  </table>
+</div>
+
+<h3>1.1 解读卡长什么样</h3>
+<p>每张卡按同一个顺序写：先让外行看懂，再讲深一层，最后给出能到期核对的判断。「变了多少、历史位置、口径提醒」由程序算，不经过大模型。下面的数字是真实的；「为什么」「更深一层」「我们的判断」三栏是<b>示意写法</b>，实施时由 Agent 检索后写，并附上来源。</p>
+<div class="demo">
+<div class="card">
+  <h4>AI 没有让招聘变少，是在换人：要会 AI 的岗位多了，写代码、做数据的岗位少了</h4>
+  <dl>
+    <dt>一句话</dt><dd>美国现在每 100 条招聘广告里，有 7 条要求会用 AI；ChatGPT 刚出来时只有 2 条。同一时间，招程序员的广告比 2020 年初少了近两成。</dd>
+    <dt>打个比方</dt><dd>就像当年 Excel 普及：会计这个职业没有消失（会计岗今天比疫情前还多），但「手工算账」的活没了，招聘要求换成了「会用 Excel」。</dd>
+    <dt>变了多少</dt><dd>AI 岗位占比 2.2% → 7.3%（2022-11 → 2026-09），其中 2025-12 以来的 9 个月涨了 2.9 个百分点。软件开发招聘指数 81.6，比 2022-02 的峰值低 65%。<span class="chip">程序算</span></dd>
+    <dt>为什么</dt><dd class="ph">示意：① 编程类 AI 工具在 2025–2026 年进入企业日常使用（附来源）；② 2022 年的高点是疫情期间的超招，后来一部分下降是在回调，不全是 AI 的原因 <span class="chip warn">推测</span>。</dd>
+    <dt>更深一层</dt><dd class="ph">示意：初级岗位受冲击最大。新人原本靠做简单任务积累经验，这些任务现在 AI 先做了，以后中级人才可能会断档。所以要看 20–24 岁本科生的失业率（今天是 5.5%），不能只看总失业率（4.1%）。</dd>
+    <dt>我们的判断</dt><dd class="ph">示意：到 2027-06，美国 AI 岗位占比会超过 9%，软件开发指数不会回到 100 以上。可信度：中。<b>到期由程序自动对账</b>。</dd>
+    <dt>对你意味着</dt><dd class="ph">示意：学习计划里，「用 AI 交付一个完整项目」比「多会一门编程语言」更值得花时间。</dd>
+    <dt>口径提醒</dt><dd>Indeed 统计的是招聘广告，不是实际在职人数。一条广告里写了「AI」就算 AI 岗位。<span class="chip">口径规则库</span></dd>
+    <dt>接下来看</dt><dd>2026-12 初发布的美国 11 月就业报告；Indeed 每天更新的 AI 岗位占比。</dd>
+  </dl>
+</div>
+</div>
+
+<h3>1.2 怎么保证「小白能懂、有洞见、判断准」</h3>
+<p>这三条不能只写在提示词里，要在程序里检查，并且留下记录。</p>
+<div class="tbl"><table>
+<tr><th>要求</th><th>具体规则</th><th>怎么检查</th></tr>
+<tr><td class="grp">小白能懂</td><td>标题就是结论，不用术语；「一句话」不超过 60 字；同比、分位、‰ 这类专业词第一次出现时括号里解释；每张卡至少一个和日常生活有关的比方或例子</td><td>程序检查字数和术语表；不合格的卡打回重写</td></tr>
+<tr><td class="grp">有洞见</td><td>「更深一层」必须满足下面至少一条：<br>· 和另一个指标交叉对照得出结论（例如 AI 岗位占比↑ 同时 软件岗位↓ → 岗位在结构性替换）<br>· 找出被平均数盖住的那一部分人（年轻人、初级岗位、某个城市层级）<br>· 指出领先关系（结婚领先出生 1–2 年，招聘领先就业几个月）<br>· 和大多数人的直觉相反，并给出证据</td><td>另起一个 Claude 做审稿人，按这四条打分；只是把数字换个说法、或者说成「值得关注」这类空话的，直接打回</td></tr>
+<tr><td class="grp">判断准</td><td>每张卡至少写一条<b>能验证的预测</b>：哪个指标、到什么日期、什么方向或数值、可信度高 / 中 / 低。不写「可能」「或许」这种没法验证的话</td><td>预测单独存表，到期时程序拿真实数据自动判对错。页面上公开显示命中率，按主题和可信度分开统计</td></tr>
+</table></div>
+<p>判断写得好不好，最后看的是命中率。命中率会作为最近的历史记录，在每次写新卡时一起给到 Claude，例如「你上次判断 AI 岗位占比会涨到 6%，实际是 7.3%，低估了」。这样它能根据自己过去错在哪里来调整，而不是每次从头猜。给 Claude 的材料包括：这个指标的全部历史数据、相关指标的最新值、近 30 天的相关新闻（从现有的信息推荐板块取），以及它过去的命中记录。</p>
+
+<h2>2. 指标清单</h2>
+<p><span class="ok">✓</span> 今天用无密钥接口直接拿到了数据；<span class="todo">待验</span> 接口或目录在，还没拿到数；<span class="todo">需抽取</span> 只有公告网页，要让 Agent 抽数字再逐字核对原文；<span class="ok">已有</span> 平台其他板块已经在采。</p>
+
+<h3>AI 发展（重点，28 个）</h3>
+<div class="tbl"><table>
+<tr><th>组</th><th>指标</th><th>频率</th><th>来源</th><th>状态</th></tr>
+<tr><td class="grp" rowspan="4">能力前沿</td><td>最强模型能力分（Epoch 能力指数）</td><td>随发布</td><td>Epoch AI</td><td class="ok">✓</td></tr>
+<tr><td>开源与闭源的差距、中美最强模型的差距</td><td>随发布</td><td>Epoch AI（同一份数据，按开放程度和国家分）</td><td class="ok">✓</td></tr>
+<tr><td>关键基准最好成绩：写代码、数学、Agent 任务</td><td>随发布</td><td>Epoch AI 基准库</td><td class="ok">✓</td></tr>
+<tr><td>每年的显著模型发布数</td><td>随发布</td><td>Epoch AI</td><td class="ok">✓</td></tr>
+<tr><td class="grp" rowspan="4">算力与投入</td><td>前沿训练算力（当年最大一次训练的 FLOP）</td><td>随发布</td><td>Epoch AI</td><td class="ok">✓</td></tr>
+<tr><td>AI 数据中心功率、H100 当量</td><td>月</td><td>Epoch AI</td><td class="ok">✓</td></tr>
+<tr><td>四大云厂资本开支</td><td>季</td><td>yfinance（平台已装）</td><td class="todo">待验</td></tr>
+<tr><td>英伟达数据中心收入</td><td>季</td><td>财报</td><td class="todo">需抽取</td></tr>
+<tr><td class="grp" rowspan="2">价格与使用</td><td>主流模型每百万 token 价格、新上架模型数</td><td>日</td><td>OpenRouter 模型列表接口</td><td class="ok">✓</td></tr>
+<tr><td>各家模型的 token 使用份额</td><td>周</td><td>OpenRouter 排行页</td><td class="todo">待验</td></tr>
+<tr><td class="grp" rowspan="4">产业与资本</td><td>AI 公司公开 ARR</td><td>随事件</td><td>产品雷达的收入事件</td><td class="ok">已有</td></tr>
+<tr><td>开源项目热度、论文热度</td><td>日</td><td>开源雷达、论文库</td><td class="ok">已有</td></tr>
+<tr><td>中国集成电路产量</td><td>月</td><td>统计局「工业主要产品产量」</td><td class="todo">待验</td></tr>
+<tr><td>中国软件和信息技术服务业收入</td><td>年</td><td>统计局「运输和邮电」目录</td><td class="todo">待验</td></tr>
+<tr><td class="grp" rowspan="8">AI 与就业</td><td>招聘广告里提到 AI 的比例（美、英、德、法、加等 9 国）</td><td>日</td><td>Indeed Hiring Lab · GitHub ai-tracker</td><td class="ok">✓</td></tr>
+<tr><td>受 AI 影响较大的岗位招聘指数：软件开发、客服、营销、IT 运维、数学与数据（会计作对照）</td><td>日</td><td>FRED（Indeed）</td><td class="ok">✓</td></tr>
+<tr><td>美国计算机系统设计业就业人数（今天 235.4 万）</td><td>月</td><td>FRED（美国劳工统计局）</td><td class="ok">✓</td></tr>
+<tr><td>美国 20–24 岁失业率、其中本科学历的失业率（今天 9.0% / 5.5%）</td><td>月</td><td>FRED</td><td class="ok">✓</td></tr>
+<tr><td>各职业用 AI 做了哪些任务、AI 是在替人做还是帮人做</td><td>每几个月一版</td><td>Anthropic Economic Index（Hugging Face 公开数据集，最新一版 2026-09）</td><td class="ok">✓</td></tr>
+<tr><td>中国 16–24 岁（不含在校生）失业率</td><td>月</td><td>统计局月度新闻稿（akshare 里没有这一项）</td><td class="todo">需抽取</td></tr>
+<tr><td>中国 AI 岗位招聘数量和薪资</td><td>季</td><td>猎聘、智联、脉脉发布的报告</td><td class="todo">需抽取</td></tr>
+<tr><td>大公司因为 AI 裁员或缩招的公告</td><td>随事件</td><td>新闻（从现有的信息推荐板块取）</td><td class="todo">需抽取</td></tr>
+<tr><td class="grp" rowspan="6">AI 消费</td><td>普通人对 AI 的关注度：ChatGPT、Claude、DeepSeek 等在维基百科的月浏览量（ChatGPT 2026-10 为 252 万次）</td><td>日</td><td>Wikimedia 浏览量接口</td><td class="ok">✓</td></tr>
+<tr><td>主要 AI 应用的用户数（如 ChatGPT 周活跃用户）</td><td>随披露</td><td>公司官方披露</td><td class="todo">需抽取</td></tr>
+<tr><td>AI 应用的 C 端订阅收入</td><td>随事件</td><td>产品雷达里已有的收入事件</td><td class="ok">已有</td></tr>
+<tr><td>中国生成式 AI 用户规模</td><td>半年</td><td>中国互联网络信息中心（CNNIC）报告</td><td class="todo">需抽取</td></tr>
+<tr><td>中国每天调用 AI 模型的 token 量</td><td>随发布</td><td>国家数据局发布</td><td class="todo">需抽取</td></tr>
+<tr><td>通讯器材零售额（看 AI 手机有没有带动换机）</td><td>月</td><td>统计局「国内贸易」目录</td><td class="todo">待验</td></tr>
+</table></div>
+
+<h3>吃喝玩乐（10 个）</h3>
+<div class="tbl"><table>
+<tr><th>指标</th><th>频率</th><th>来源</th><th>状态</th></tr>
+<tr><td>社零总额及同比</td><td>月</td><td>akshare（东方财富）</td><td class="ok">✓</td></tr>
+<tr><td>消费者信心指数</td><td>月</td><td>akshare</td><td class="ok">✓</td></tr>
+<tr><td>民航客座率</td><td>月</td><td>akshare</td><td class="ok">✓</td></tr>
+<tr><td>电影票房（年度、月度、节假日档期）</td><td>月 / 日</td><td>akshare（艺恩）</td><td class="ok">✓</td></tr>
+<tr><td>餐饮收入、服务零售额、网上零售额</td><td>月</td><td>统计局「国内贸易」目录</td><td class="todo">待验</td></tr>
+<tr><td>跨区域人员流动量</td><td>月</td><td>统计局「交通运输」目录</td><td class="todo">待验</td></tr>
+<tr><td>国内旅游人次、花费</td><td>年</td><td>统计局「旅游业」目录</td><td class="todo">待验</td></tr>
+<tr><td>节假日出游人次、花费（春节 / 五一 / 国庆）</td><td>节后</td><td>文化和旅游部发布</td><td class="todo">需抽取</td></tr>
+<tr><td>食品、服务类 CPI</td><td>月</td><td>统计局「价格指数」目录</td><td class="todo">待验</td></tr>
+<tr><td>美国零售销售、密歇根消费者信心</td><td>月</td><td>FRED</td><td class="ok">✓</td></tr>
+</table></div>
+
+<h3>生活（9 个）</h3>
+<div class="tbl"><table>
+<tr><th>指标</th><th>频率</th><th>来源</th><th>状态</th></tr>
+<tr><td>人口出生率、总人口</td><td>年</td><td>akshare（统计局）</td><td class="ok">✓</td></tr>
+<tr><td>总和生育率（中 / 韩 / 日 / 美）</td><td>年</td><td>世界银行</td><td class="ok">✓</td></tr>
+<tr><td>65 岁以上人口占比</td><td>年</td><td>世界银行</td><td class="ok">✓</td></tr>
+<tr><td>结婚、离婚登记对数</td><td>年 / 季</td><td>统计局「婚姻服务」（年）；民政部季报（季）</td><td class="todo">待验 / 需抽取</td></tr>
+<tr><td>居民人均可支配收入、人均消费支出</td><td>季</td><td>统计局「人民生活」目录</td><td class="todo">待验</td></tr>
+<tr><td>恩格尔系数</td><td>年</td><td>统计局「人民生活」目录</td><td class="todo">待验</td></tr>
+<tr><td>70 城新房、二手房价格</td><td>月</td><td>akshare</td><td class="ok">✓</td></tr>
+<tr><td>城镇调查失业率</td><td>月</td><td>akshare</td><td class="ok">✓</td></tr>
+<tr><td>人口预期寿命</td><td>年</td><td>统计局「人口」目录</td><td class="todo">待验</td></tr>
+</table></div>
+
+<h3>学习（5 个）</h3>
+<div class="tbl"><table>
+<tr><th>指标</th><th>频率</th><th>来源</th><th>状态</th></tr>
+<tr><td>本科、研究生招生数和毕业生数</td><td>年</td><td>统计局「教育」目录</td><td class="todo">待验</td></tr>
+<tr><td>高考报名、考研报名人数</td><td>年</td><td>教育部发布</td><td class="todo">需抽取</td></tr>
+<tr><td>人均教育文化娱乐支出</td><td>季</td><td>统计局「人民生活」目录</td><td class="todo">待验</td></tr>
+<tr><td>图书出版种数、印数</td><td>年</td><td>统计局「文化」目录</td><td class="todo">待验</td></tr>
+<tr><td>分学科本科在校生（看计算机类占比）</td><td>年</td><td>统计局「教育」目录</td><td class="todo">待验</td></tr>
+</table></div>
+
+<h3>国家宏观与行业（简略，8 行）</h3>
+<p>首页只占一张表；阈值比其他主题高，只有创 5 年以上新高、新低或方向反转才出解读卡。</p>
+<div class="tbl"><table>
+<tr><th>指标</th><th>频率</th><th>来源</th><th>状态</th></tr>
+<tr><td>GDP 实际同比</td><td>季</td><td>统计局「国民经济核算」（akshare 里另一个 GDP 接口只更新到 2025-07，不用）</td><td class="todo">待验</td></tr>
+<tr><td>制造业、非制造业 PMI</td><td>月</td><td>akshare</td><td class="ok">✓</td></tr>
+<tr><td>规上工业增加值、分大类行业增加值</td><td>月</td><td>akshare / 统计局</td><td class="ok">✓ / 待验</td></tr>
+<tr><td>全社会用电量（含分行业）</td><td>月</td><td>akshare</td><td class="ok">✓</td></tr>
+<tr><td>CPI、PPI、M2、社融</td><td>月</td><td>akshare</td><td class="todo">待验</td></tr>
+<tr><td>新能源汽车、工业机器人产量</td><td>月</td><td>统计局「工业主要产品产量」</td><td class="todo">待验</td></tr>
+<tr><td>美国失业率、联邦基金利率</td><td>月</td><td>FRED</td><td class="ok">✓</td></tr>
+<tr><td>OECD 综合领先指标</td><td>月</td><td>OECD</td><td class="ok">✓</td></tr>
+</table></div>
+
+<h2>3. 页面结构</h2>
+<ul>
+<li><b>侧栏入口：</b>「视野」，图标 globe，排在「产品雷达」后面。</li>
+<li><b>首页 <code>#vision</code></b>，从上到下：
+  <ol>
+  <li>顶部输入框：问 Agent（「为什么结婚率一直在降」），或「加一个指标」。回答会带上本页数据。</li>
+  <li><b>最近的变化</b>：近 30 天的解读卡，按显著度排序，最多 6 张，其余折叠。</li>
+  <li><b>AI 发展</b>：5 组，每组一排卡片，宽度占满。</li>
+  <li><b>吃喝玩乐 / 生活 / 学习</b>：三个分区，每个指标一张卡。</li>
+  <li><b>国家宏观与行业</b>：一张表，一行一个，带迷你图和同比箭头。</li>
+  <li><b>接下来两周发布</b>：哪天出什么数。</li>
+  </ol></li>
+<li><b>指标详情 <code>#vision/&lt;指标&gt;</code></b>：长图（5 年 / 10 年 / 全部，可叠加其他国家或相关指标）、口径说明、修订记录、解读卡时间线、原始数据表。可以划线问 Claude，沿用现有阅读批注。</li>
+<li><b>周报</b>（P2）：每周一篇，汇总这周所有新数据，没过显著度阈值的也一句话带过。</li>
+</ul>
+
+<h2>4. 数据怎么流</h2>
+<pre class="mermaid">
+flowchart LR
+  A["定时采集<br/>每天 1 次，不用大模型"] --> B["落库，只追加<br/>保留修订版本"]
+  B --> C["程序算统计<br/>同比 · 环比 · 历史分位 · 极值 · 反转"]
+  C --> D{"显著度够吗<br/>按主题分阈值"}
+  D -- 够 --> E["Claude 写解读卡<br/>后台任务"]
+  E --> F["校验<br/>数字对账 · 链接可开 · 有日期"]
+  F -- 过 --> G["页面 + 知识库 data/kb/vision"]
+  F -- 不过 --> E
+  D -- 不够 --> H["只更新指标卡<br/>进周报一句话"]
+</pre>
+<h3>显著度（全部由程序判断）</h3>
+<ul>
+<li>创出 N 年新高或新低；</li>
+<li>和过去 5 年同期比，偏离超过 2 个标准差；</li>
+<li>方向反转：同比由正转负或反过来，连降之后首次回升；</li>
+<li>跨过关口：生育率跌破 1、失业率突破 5%、开源追平闭源这类。</li>
+</ul>
+<p>阈值按主题分：AI 任何一条命中就写；吃喝玩乐、生活、学习命中一条也写；宏观行业要「5 年以上极值」或「方向反转」才写。估计每月十几到二十张卡，AI 占一半左右。都走本机 Claude 订阅的后台任务，每张 1–2 分钟。</p>
+<h3>解读卡校验（不过就不展示）</h3>
+<ul>
+<li>第 1.2 节的三条要求：大白话、有洞见、有能验证的预测；</li>
+<li>卡里出现的每个数字，要么在库里查得到，要么出现在引用的原文里；</li>
+<li>每条原因有链接和发布日期，链接打得开；</li>
+<li>「为什么」「意味着什么」里没有来源的句子，必须标「推测」或「判断」。</li>
+</ul>
+<p>产品雷达的收入事件已经在用「数字必须在原文出现」的校验，直接复用。口径提醒（生肖年、1–2 月合并、统计口径调整）放一个小规则库，按指标挂上，不靠模型临场想。</p>
+<h3>今天实测踩到的约束</h3>
+<ul>
+<li><b>统计局会限流。</b>今天遍历目录大约一百多次请求之后，接口开始返回空内容和断连。所以目录路径要缓存在本地，每次请求之间留间隔，失败退避重试，一天只跑一轮。</li>
+<li><b>同一个指标 akshare 有多个接口，新旧不一。</b>比如 GDP 年率接口停在 2025-07。每个指标上线前都要检查最新一期的日期，过期的就换一个接口。</li>
+</ul>
+
+<h2>5. 实现落点</h2>
+<p>沿用现有板块的写法，不起新服务。</p>
+<div class="tbl"><table>
+<tr><th>文件</th><th>做什么</th></tr>
+<tr><td><code>app/modules/vision.py</code></td><td>板块入口：<code>TITLE = "视野"</code>、路由、建表、<code>agent_context</code>（给对话 Agent 当前指标快照）</td></tr>
+<tr><td><code>app/modules/vision_series.json</code></td><td>指标配置：主题、组、名称、单位、频率、来源和参数、口径规则、阈值</td></tr>
+<tr><td><code>app/modules/_vision_sources.py</code></td><td>取数：akshare（含统计局通用接口）、世界银行、FRED、OECD、Epoch、OpenRouter；平台已有的 ARR、开源、论文直接读库</td></tr>
+<tr><td><code>app/modules/_vision_stats.py</code></td><td>统计和显著度</td></tr>
+<tr><td><code>app/modules/_vision_cards.py</code></td><td>解读卡提示词、后台任务、校验</td></tr>
+<tr><td><code>web/modules/vision.js</code></td><td>首页和详情页；<code>web/app.js</code> 的 <code>ICONS</code> 加 <code>vision: 'globe'</code></td></tr>
+<tr><td><code>app/kb.py</code></td><td>同步到 <code>data/kb/vision/</code>，其他板块的 Agent 能检索到</td></tr>
+<tr><td><code>pyproject.toml</code></td><td>新增 akshare 依赖（pandas 已经随 yfinance 装着）</td></tr>
+</table></div>
+<h3>表结构</h3>
+<pre class="mono" style="overflow-x:auto;background:var(--panel);padding:12px;border-radius:6px">vision_series  (id PK, theme, grp, name, unit, freq, region, source, source_ref JSON, note, enabled)
+vision_points  (series_id, period, value, revision, fetched_at)   UNIQUE(series_id, period, revision)，只追加
+vision_cards   (id, series_id, period, score, facts JSON, body_md, sources JSON, model, created_at)  只追加
+vision_releases(series_id, expected_date, url)
+vision_predictions(id, card_id, series_id, due_date, op, target, confidence, created_at)  只追加
+vision_verdicts   (prediction_id, actual, hit, checked_at)   到期由程序写入，只追加</pre>
+<p>统计局会修订历史数据，所以数据点按修订版本追加、不覆盖，详情页能看到「这个数改过几次」。解读卡也只追加，和学习记录同一个规矩。</p>
+<h3>测试</h3>
+<ul>
+<li>每个来源一条真实取数测试：最新一期的日期不早于预期（能抓到 GDP 接口过期这种问题）；</li>
+<li>显著度：用真实历史片段验证，中国生育率 2023 年跌破 1、社零 2026-05 转负，都要过线；</li>
+<li>校验：故意塞一个库里没有的数字，卡片要被拦下。</li>
+</ul>
+
+<h2>6. 参考了什么</h2>
+<div class="tbl"><table>
+<tr><th>参考</th><th>用不用</th><th>理由</th></tr>
+<tr><td>akshare 1.20（GitHub 上最常用的中文财经数据开源库）</td><td class="ok">用</td><td>今天实测：PMI、社零、工业增加值、用电量、房价、失业率、消费者信心、客座率、票房都直接拿到；还包了统计局全国数据的通用接口，人口、教育、旅游、婚姻、文化都在目录里</td></tr>
+<tr><td>Epoch AI 公开数据（模型、能力指数、基准、数据中心、硬件）</td><td class="ok">用</td><td>AI 组的主力来源，CSV 直接下载，2026-10-28 还在更新</td></tr>
+<tr><td>FRED、世界银行、OECD、OpenRouter 模型列表</td><td class="ok">用</td><td>无密钥，今天实测都能拿到</td></tr>
+<tr><td>Our World in Data</td><td class="ok">学呈现</td><td>每张图带来源和口径说明，跨国叠加对比</td></tr>
+<tr><td>FRED / ALFRED</td><td class="ok">学做法</td><td>发布日历，保留每次修订的历史版本</td></tr>
+<tr><td>Epoch AI Data Insights</td><td class="ok">学呈现</td><td>一张图配一段话的解读卡形态</td></tr>
+<tr><td>直接请求国家统计局网页接口</td><td class="no">不用</td><td>本机直接请求返回 403；akshare 用的是统计局新版接口，能通</td></tr>
+<tr><td>Wind、CEIC、Trading Economics</td><td class="no">不用</td><td>付费</td></tr>
+</table></div>
+
+<h2>7. 分期</h2>
+<div class="tbl"><table>
+<tr><th>期</th><th>内容</th><th>怎么验</th></tr>
+<tr><td>P1</td><td>骨架；25 个 ✓ 指标回填历史；AI 区、生活三区、宏观表、详情页；显著度、解读卡和校验；知识库同步</td><td>8780 页面截图（横屏、竖屏各一）；抽 10 张卡核数字和链接</td></tr>
+<tr><td>P2</td><td>统计局目录里「待验」的 16 个；需抽取的 9 个（节假日旅游、民政部季报、高考考研、英伟达、中国青年失业率、中国 AI 招聘、AI 应用用户数、CNNIC、token 调用量）；OpenRouter 份额；云厂资本开支；发布日历；周报</td><td>国庆 2026 的旅游数字和文旅部原文逐字对上</td></tr>
+<tr><td>P3</td><td>对话里加指标（Agent 找源、出配置草稿，你确认才启用）、跨国对比视图、主题月度综述</td><td>说一句「加韩国月度出生数」能走通</td></tr>
+</table></div>
+
+<h2>8. 需要你定的</h2>
+<div class="ask"><b>① 指标清单</b>：AI 28（其中就业 8、消费 6）/ 吃喝玩乐 10 / 生活 9 / 学习 5 / 宏观行业 8，有没有要加或删的？「学习」如果你指的是 AI 对学习效果的影响（比如 AI 辅导的实验结果），告诉我，那要换一批来源。</div>
+<div class="ask"><b>② 「意味着什么」往哪联系</b>：默认联系 AI 创业方向和理财板块的大方向，不给具体买卖建议。</div>
+<div class="ask"><b>③ 要不要推通知</b>：默认只放在页面和周报里；只有 AI 组的关口事件（比如开源追平闭源）和其他主题的 5 年以上极值才发 Mac 通知。</div>
+<div class="ask"><b>④ 分支</b>：从 main 新开 <code>feat/vision</code>，不在当前的 <code>feat/learn-related-work</code> 上做。</div>
+
+<div class="foot">数据实测时间 2026-11-08。Epoch：eci_scores.csv、data_centers.csv、notable_ai_models.csv；FRED：IHLIDXUSTPSOFTDEVE（2020-02-01 = 100，曲线取每月第一个观测值）；akshare 1.20.35：macro_china_pmi、macro_china_consumer_goods_retail、macro_china_gyzjz、macro_china_society_electricity、macro_china_urban_unemployment、macro_china_new_house_price、macro_china_xfzxx、macro_china_nbs_nation（人口）。仓库副本：docs/designs/2026-11-08-vision-design.html</div>
+</div>

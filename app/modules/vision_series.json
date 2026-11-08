@@ -1,0 +1,1339 @@
+[
+ {
+  "id": "eci_closed",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "最强闭源模型能力分",
+  "unit": "分",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_eci",
+  "args": {
+   "group": "closed"
+  },
+  "status": "ok",
+  "note": "Epoch 能力指数（ECI），逐月取已发布模型里的最高分"
+ },
+ {
+  "id": "eci_open",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "最强开源模型能力分",
+  "unit": "分",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_eci",
+  "args": {
+   "group": "open"
+  },
+  "status": "ok",
+  "note": "开放权重模型里的最高分"
+ },
+ {
+  "id": "eci_china",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "中国最强模型能力分",
+  "unit": "分",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_eci",
+  "args": {
+   "group": "china"
+  },
+  "status": "ok",
+  "note": "机构所在国为中国的模型里的最高分"
+ },
+ {
+  "id": "eci_gap_open",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "开源落后闭源多少分",
+  "unit": "分",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_eci",
+  "args": {
+   "group": "gap_open"
+  },
+  "status": "ok",
+  "note": "闭源最高分减开源最高分，0 以下就是开源追平",
+  "gates": [
+   0
+  ]
+ },
+ {
+  "id": "eci_gap_china",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "中国落后美国多少分",
+  "unit": "分",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_eci",
+  "args": {
+   "group": "gap_china"
+  },
+  "status": "ok",
+  "note": "美国机构最高分减中国机构最高分",
+  "gates": [
+   0
+  ]
+ },
+ {
+  "id": "bench_swe",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "写代码基准最好成绩（SWE-bench Verified）",
+  "unit": "%",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_bench",
+  "args": {
+   "file": "swe_bench_verified.csv",
+   "col": "Best score (across scorers)",
+   "scale": 100
+  },
+  "status": "ok",
+  "note": "真实 GitHub 问题修复成功率",
+  "gates": [
+   90
+  ]
+ },
+ {
+  "id": "bench_math",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "数学基准最好成绩（FrontierMath）",
+  "unit": "%",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_bench",
+  "args": {
+   "file": "frontiermath.csv",
+   "col": "Best score (across scorers)",
+   "scale": 100
+  },
+  "status": "ok",
+  "note": "研究级数学题",
+  "gates": [
+   50
+  ]
+ },
+ {
+  "id": "bench_metr",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "AI 能独立完成的任务时长（METR）",
+  "unit": "分钟",
+  "freq": "M",
+  "region": "",
+  "source": "epoch_bench",
+  "args": {
+   "file": "metr_time_horizons_external.csv",
+   "col": "Time horizon",
+   "scale": 1
+  },
+  "status": "ok",
+  "note": "成功率 50% 时，人类专家需要的任务时长",
+  "gates": [
+   480
+  ]
+ },
+ {
+  "id": "models_year",
+  "theme": "ai",
+  "grp": "能力前沿",
+  "name": "每年显著模型发布数",
+  "unit": "个",
+  "freq": "Y",
+  "region": "",
+  "source": "epoch_models",
+  "args": {
+   "kind": "count"
+  },
+  "status": "ok",
+  "note": "Epoch 收录的显著模型，当年未完"
+ },
+ {
+  "id": "compute_frontier",
+  "theme": "ai",
+  "grp": "算力与投入",
+  "name": "前沿训练算力（当年最大一次训练）",
+  "unit": "FLOP",
+  "freq": "Y",
+  "region": "",
+  "source": "epoch_models",
+  "args": {
+   "kind": "max_compute"
+  },
+  "status": "ok",
+  "note": "科学计数法"
+ },
+ {
+  "id": "dc_power",
+  "theme": "ai",
+  "grp": "算力与投入",
+  "name": "AI 数据中心当前功率",
+  "unit": "MW",
+  "freq": "D",
+  "region": "",
+  "source": "epoch_dc",
+  "args": {
+   "col": "Current power (MW)"
+  },
+  "status": "ok",
+  "note": "只算 Epoch 跟踪的大型数据中心，不是全行业"
+ },
+ {
+  "id": "dc_h100",
+  "theme": "ai",
+  "grp": "算力与投入",
+  "name": "AI 数据中心 H100 当量",
+  "unit": "万张",
+  "freq": "D",
+  "region": "",
+  "source": "epoch_dc",
+  "args": {
+   "col": "Current H100 equivalents",
+   "scale": 0.0001
+  },
+  "status": "ok",
+  "note": "同上"
+ },
+ {
+  "id": "capex_cloud",
+  "theme": "ai",
+  "grp": "算力与投入",
+  "name": "四大云厂资本开支",
+  "unit": "亿美元",
+  "freq": "Q",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "nvda_dc",
+  "theme": "ai",
+  "grp": "算力与投入",
+  "name": "英伟达数据中心收入",
+  "unit": "亿美元",
+  "freq": "Q",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "or_new_models",
+  "theme": "ai",
+  "grp": "价格与使用",
+  "name": "OpenRouter 每月新上架模型数",
+  "unit": "个",
+  "freq": "M",
+  "region": "",
+  "source": "openrouter",
+  "args": {
+   "kind": "new"
+  },
+  "status": "ok",
+  "note": "按模型的 created 时间计数，当月未完"
+ },
+ {
+  "id": "or_price_median",
+  "theme": "ai",
+  "grp": "价格与使用",
+  "name": "新模型输出价格中位数",
+  "unit": "美元/百万 token",
+  "freq": "D",
+  "region": "",
+  "source": "openrouter",
+  "args": {
+   "kind": "price"
+  },
+  "status": "ok",
+  "note": "近 90 天上架的付费模型，输出价格中位数"
+ },
+ {
+  "id": "or_share",
+  "theme": "ai",
+  "grp": "价格与使用",
+  "name": "各家模型的 token 使用份额",
+  "unit": "%",
+  "freq": "W",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "arr",
+  "theme": "ai",
+  "grp": "产业与资本",
+  "name": "AI 公司公开 ARR",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "existing",
+  "note": "",
+  "link": "#intel"
+ },
+ {
+  "id": "oss_heat",
+  "theme": "ai",
+  "grp": "产业与资本",
+  "name": "开源项目热度、论文热度",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "existing",
+  "note": "",
+  "link": "#intel"
+ },
+ {
+  "id": "cn_ic",
+  "theme": "ai",
+  "grp": "产业与资本",
+  "name": "中国集成电路产量",
+  "unit": "亿块",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_software",
+  "theme": "ai",
+  "grp": "产业与资本",
+  "name": "中国软件和信息技术服务业收入",
+  "unit": "亿元",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "ai_jobs_us",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "招聘广告里提到 AI 的比例（美国）",
+  "unit": "%",
+  "freq": "D",
+  "region": "US",
+  "source": "indeed_ai",
+  "args": {
+   "country": "US"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告里写了 AI 相关词的占比"
+ },
+ {
+  "id": "ai_jobs_gb",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "招聘广告里提到 AI 的比例（英国）",
+  "unit": "%",
+  "freq": "D",
+  "region": "GB",
+  "source": "indeed_ai",
+  "args": {
+   "country": "GB"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告里写了 AI 相关词的占比"
+ },
+ {
+  "id": "ai_jobs_de",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "招聘广告里提到 AI 的比例（德国）",
+  "unit": "%",
+  "freq": "D",
+  "region": "DE",
+  "source": "indeed_ai",
+  "args": {
+   "country": "DE"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告里写了 AI 相关词的占比"
+ },
+ {
+  "id": "ai_jobs_ca",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "招聘广告里提到 AI 的比例（加拿大）",
+  "unit": "%",
+  "freq": "D",
+  "region": "CA",
+  "source": "indeed_ai",
+  "args": {
+   "country": "CA"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告里写了 AI 相关词的占比"
+ },
+ {
+  "id": "ai_jobs_fr",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "招聘广告里提到 AI 的比例（法国）",
+  "unit": "%",
+  "freq": "D",
+  "region": "FR",
+  "source": "indeed_ai",
+  "args": {
+   "country": "FR"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告里写了 AI 相关词的占比"
+ },
+ {
+  "id": "postings_softdeve",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国招聘指数：软件开发",
+  "unit": "2020-02=100",
+  "freq": "D",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "IHLIDXUSTPSOFTDEVE"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告数，2020-02-01 = 100"
+ },
+ {
+  "id": "postings_custserv",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国招聘指数：客服",
+  "unit": "2020-02=100",
+  "freq": "D",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "IHLIDXUSTPCUSTSERV"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告数，2020-02-01 = 100"
+ },
+ {
+  "id": "postings_mark",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国招聘指数：营销",
+  "unit": "2020-02=100",
+  "freq": "D",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "IHLIDXUSTPMARK"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告数，2020-02-01 = 100"
+ },
+ {
+  "id": "postings_itophe",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国招聘指数：IT 运维",
+  "unit": "2020-02=100",
+  "freq": "D",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "IHLIDXUSTPITOPHE"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告数，2020-02-01 = 100"
+ },
+ {
+  "id": "postings_math",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国招聘指数：数学与数据",
+  "unit": "2020-02=100",
+  "freq": "D",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "IHLIDXUSTPMATH"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告数，2020-02-01 = 100"
+ },
+ {
+  "id": "postings_acco",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国招聘指数：会计（对照）",
+  "unit": "2020-02=100",
+  "freq": "D",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "IHLIDXUSTPACCO"
+  },
+  "status": "ok",
+  "note": "Indeed 招聘广告数，2020-02-01 = 100"
+ },
+ {
+  "id": "us_csd_jobs",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国计算机系统设计业就业人数",
+  "unit": "千人",
+  "freq": "M",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "CES6054150001"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "us_unemp_2024",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国 20–24 岁失业率",
+  "unit": "%",
+  "freq": "M",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "LNU04024887"
+  },
+  "status": "ok",
+  "note": "未季调"
+ },
+ {
+  "id": "us_unemp_2024_ba",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "美国 20–24 岁本科学历失业率",
+  "unit": "%",
+  "freq": "M",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "CGBD2024"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "aei_tasks",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "各职业用 AI 做了哪些任务（Anthropic Economic Index）",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_youth_unemp",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "中国 16–24 岁（不含在校生）失业率",
+  "unit": "%",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "cn_ai_hiring",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "中国 AI 岗位招聘数量和薪资",
+  "unit": "",
+  "freq": "Q",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "ai_layoffs",
+  "theme": "ai",
+  "grp": "AI 与就业",
+  "name": "大公司因为 AI 裁员或缩招",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "wiki_chatgpt",
+  "theme": "ai",
+  "grp": "AI 消费",
+  "name": "维基百科月浏览量：ChatGPT",
+  "unit": "万次",
+  "freq": "M",
+  "region": "",
+  "source": "wiki",
+  "args": {
+   "article": "ChatGPT",
+   "scale": 0.0001
+  },
+  "status": "ok",
+  "note": "英文维基百科真人访问，粗看普通人的关注度"
+ },
+ {
+  "id": "wiki_deepseek",
+  "theme": "ai",
+  "grp": "AI 消费",
+  "name": "维基百科月浏览量：DeepSeek",
+  "unit": "万次",
+  "freq": "M",
+  "region": "",
+  "source": "wiki",
+  "args": {
+   "article": "DeepSeek",
+   "scale": 0.0001
+  },
+  "status": "ok",
+  "note": "英文维基百科真人访问，粗看普通人的关注度"
+ },
+ {
+  "id": "ai_users",
+  "theme": "ai",
+  "grp": "AI 消费",
+  "name": "主要 AI 应用的用户数",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "ai_c_revenue",
+  "theme": "ai",
+  "grp": "AI 消费",
+  "name": "AI 应用的 C 端订阅收入",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "existing",
+  "note": "",
+  "link": "#intel"
+ },
+ {
+  "id": "cn_genai_users",
+  "theme": "ai",
+  "grp": "AI 消费",
+  "name": "中国生成式 AI 用户规模（CNNIC）",
+  "unit": "亿人",
+  "freq": "H",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "cn_tokens",
+  "theme": "ai",
+  "grp": "AI 消费",
+  "name": "中国每天调用 AI 模型的 token 量",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "cn_telecom_retail",
+  "theme": "ai",
+  "grp": "AI 消费",
+  "name": "通讯器材零售额",
+  "unit": "亿元",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_retail_yoy",
+  "theme": "fun",
+  "grp": "消费",
+  "name": "社会消费品零售总额同比",
+  "unit": "%",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_retail",
+  "args": {},
+  "status": "ok",
+  "note": "1–2 月合并发布",
+  "gates": [
+   0
+  ]
+ },
+ {
+  "id": "cn_confidence",
+  "theme": "fun",
+  "grp": "消费",
+  "name": "消费者信心指数",
+  "unit": "",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_xfzxx",
+  "args": {},
+  "status": "ok",
+  "note": "100 以上偏乐观",
+  "gates": [
+   100
+  ]
+ },
+ {
+  "id": "cn_load_factor",
+  "theme": "fun",
+  "grp": "出行",
+  "name": "民航客座率",
+  "unit": "%",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_sina",
+  "args": {
+   "func": "macro_china_passenger_load_factor",
+   "col": "客座率"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "cn_boxoffice",
+  "theme": "fun",
+  "grp": "娱乐",
+  "name": "全国电影月票房",
+  "unit": "亿元",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_boxoffice",
+  "args": {},
+  "status": "ok",
+  "note": "艺恩数据，当月上映影片票房加总"
+ },
+ {
+  "id": "cn_catering",
+  "theme": "fun",
+  "grp": "消费",
+  "name": "餐饮收入、服务零售额、网上零售额",
+  "unit": "",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_mobility",
+  "theme": "fun",
+  "grp": "出行",
+  "name": "跨区域人员流动量",
+  "unit": "",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_tourism",
+  "theme": "fun",
+  "grp": "出行",
+  "name": "国内旅游人次、花费",
+  "unit": "",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_holiday_travel",
+  "theme": "fun",
+  "grp": "出行",
+  "name": "节假日出游人次、花费",
+  "unit": "",
+  "freq": "",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "cn_cpi_food",
+  "theme": "fun",
+  "grp": "消费",
+  "name": "食品、服务类 CPI",
+  "unit": "",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "us_retail",
+  "theme": "fun",
+  "grp": "消费",
+  "name": "美国零售销售",
+  "unit": "亿美元",
+  "freq": "M",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "RSAFS",
+   "scale": 0.01
+  },
+  "status": "ok",
+  "note": "季调，名义值",
+  "monotonic": true
+ },
+ {
+  "id": "us_sentiment",
+  "theme": "fun",
+  "grp": "消费",
+  "name": "美国密歇根消费者信心",
+  "unit": "",
+  "freq": "M",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "UMCSENT"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "cn_birth_rate",
+  "theme": "life",
+  "grp": "人口",
+  "name": "中国人口出生率",
+  "unit": "‰",
+  "freq": "Y",
+  "region": "CN",
+  "source": "ak_nbs",
+  "args": {
+   "path": "人口 > 人口出生率、死亡率和自然增长率",
+   "row": "人口出生率(‰)"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "cn_population",
+  "theme": "life",
+  "grp": "人口",
+  "name": "中国年末总人口",
+  "unit": "万人",
+  "freq": "Y",
+  "region": "CN",
+  "source": "ak_nbs",
+  "args": {
+   "path": "人口 > 总人口",
+   "row": "年末总人口(万人)"
+  },
+  "status": "ok",
+  "note": "",
+  "monotonic": true
+ },
+ {
+  "id": "tfr_chn",
+  "theme": "life",
+  "grp": "人口",
+  "name": "总和生育率（中国）",
+  "unit": "",
+  "freq": "Y",
+  "region": "CHN",
+  "source": "worldbank",
+  "args": {
+   "country": "CHN",
+   "indicator": "SP.DYN.TFRT.IN"
+  },
+  "status": "ok",
+  "note": "一个女性一生平均生几个孩子；2.1 才能维持人口不减",
+  "gates": [
+   1.0,
+   0.8
+  ]
+ },
+ {
+  "id": "tfr_kor",
+  "theme": "life",
+  "grp": "人口",
+  "name": "总和生育率（韩国）",
+  "unit": "",
+  "freq": "Y",
+  "region": "KOR",
+  "source": "worldbank",
+  "args": {
+   "country": "KOR",
+   "indicator": "SP.DYN.TFRT.IN"
+  },
+  "status": "ok",
+  "note": "一个女性一生平均生几个孩子；2.1 才能维持人口不减",
+  "gates": [
+   1.0,
+   0.8
+  ]
+ },
+ {
+  "id": "tfr_jpn",
+  "theme": "life",
+  "grp": "人口",
+  "name": "总和生育率（日本）",
+  "unit": "",
+  "freq": "Y",
+  "region": "JPN",
+  "source": "worldbank",
+  "args": {
+   "country": "JPN",
+   "indicator": "SP.DYN.TFRT.IN"
+  },
+  "status": "ok",
+  "note": "一个女性一生平均生几个孩子；2.1 才能维持人口不减",
+  "gates": [
+   1.5
+  ]
+ },
+ {
+  "id": "tfr_usa",
+  "theme": "life",
+  "grp": "人口",
+  "name": "总和生育率（美国）",
+  "unit": "",
+  "freq": "Y",
+  "region": "USA",
+  "source": "worldbank",
+  "args": {
+   "country": "USA",
+   "indicator": "SP.DYN.TFRT.IN"
+  },
+  "status": "ok",
+  "note": "一个女性一生平均生几个孩子；2.1 才能维持人口不减",
+  "gates": [
+   1.5
+  ]
+ },
+ {
+  "id": "aging_chn",
+  "theme": "life",
+  "grp": "人口",
+  "name": "中国 65 岁以上人口占比",
+  "unit": "%",
+  "freq": "Y",
+  "region": "CN",
+  "source": "worldbank",
+  "args": {
+   "country": "CHN",
+   "indicator": "SP.POP.65UP.TO.ZS"
+  },
+  "status": "ok",
+  "note": "",
+  "gates": [
+   14,
+   20
+  ],
+  "monotonic": true
+ },
+ {
+  "id": "cn_marriage",
+  "theme": "life",
+  "grp": "人口",
+  "name": "结婚、离婚登记对数",
+  "unit": "万对",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_income",
+  "theme": "life",
+  "grp": "收入",
+  "name": "居民人均可支配收入、人均消费支出",
+  "unit": "元",
+  "freq": "Q",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_engel",
+  "theme": "life",
+  "grp": "收入",
+  "name": "恩格尔系数",
+  "unit": "%",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "house_bj",
+  "theme": "life",
+  "grp": "住房",
+  "name": "北京新建住宅价格指数（同比）",
+  "unit": "上年同月=100",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_house",
+  "args": {
+   "city": "北京",
+   "col": "新建商品住宅价格指数-同比"
+  },
+  "status": "ok",
+  "note": "",
+  "gates": [
+   100
+  ]
+ },
+ {
+  "id": "house_sh",
+  "theme": "life",
+  "grp": "住房",
+  "name": "上海新建住宅价格指数（同比）",
+  "unit": "上年同月=100",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_house",
+  "args": {
+   "city": "上海",
+   "col": "新建商品住宅价格指数-同比"
+  },
+  "status": "ok",
+  "note": "",
+  "gates": [
+   100
+  ]
+ },
+ {
+  "id": "house_bj_2nd",
+  "theme": "life",
+  "grp": "住房",
+  "name": "北京二手住宅价格指数（同比）",
+  "unit": "上年同月=100",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_house",
+  "args": {
+   "city": "北京",
+   "col": "二手住宅价格指数-同比"
+  },
+  "status": "ok",
+  "note": "",
+  "gates": [
+   100
+  ]
+ },
+ {
+  "id": "cn_unemp",
+  "theme": "life",
+  "grp": "就业",
+  "name": "城镇调查失业率",
+  "unit": "%",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_unemp",
+  "args": {
+   "item": "全国城镇调查失业率"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "cn_life_exp",
+  "theme": "life",
+  "grp": "人口",
+  "name": "人口预期寿命",
+  "unit": "岁",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_enroll",
+  "theme": "learn",
+  "grp": "教育",
+  "name": "本科、研究生招生数和毕业生数",
+  "unit": "万人",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_exam",
+  "theme": "learn",
+  "grp": "教育",
+  "name": "高考报名、考研报名人数",
+  "unit": "万人",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "extract",
+  "note": ""
+ },
+ {
+  "id": "cn_edu_spend",
+  "theme": "learn",
+  "grp": "教育",
+  "name": "人均教育文化娱乐支出",
+  "unit": "元",
+  "freq": "Q",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_books",
+  "theme": "learn",
+  "grp": "阅读",
+  "name": "图书出版种数、印数",
+  "unit": "",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_cs_students",
+  "theme": "learn",
+  "grp": "教育",
+  "name": "分学科本科在校生（计算机类占比）",
+  "unit": "%",
+  "freq": "Y",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_pmi",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "制造业 PMI",
+  "unit": "",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_pmi",
+  "args": {
+   "col": "制造业-指数"
+  },
+  "status": "ok",
+  "note": "50 以上扩张，以下收缩",
+  "gates": [
+   50
+  ]
+ },
+ {
+  "id": "cn_pmi_non",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "非制造业 PMI",
+  "unit": "",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_pmi",
+  "args": {
+   "col": "非制造业-指数"
+  },
+  "status": "ok",
+  "note": "",
+  "gates": [
+   50
+  ]
+ },
+ {
+  "id": "cn_ip_yoy",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "规上工业增加值同比",
+  "unit": "%",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_gyzjz",
+  "args": {},
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "cn_power_yoy",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "全社会用电量同比",
+  "unit": "%",
+  "freq": "M",
+  "region": "CN",
+  "source": "ak_sina",
+  "args": {
+   "func": "macro_china_society_electricity",
+   "col": "全社会用电量同比"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "us_unrate",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "美国失业率",
+  "unit": "%",
+  "freq": "M",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "UNRATE"
+  },
+  "status": "ok",
+  "note": "",
+  "gates": [
+   5
+  ]
+ },
+ {
+  "id": "us_fedfunds",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "联邦基金利率",
+  "unit": "%",
+  "freq": "M",
+  "region": "US",
+  "source": "fred",
+  "args": {
+   "id": "FEDFUNDS"
+  },
+  "status": "ok",
+  "note": ""
+ },
+ {
+  "id": "oecd_cli_chn",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "OECD 综合领先指标（中国）",
+  "unit": "",
+  "freq": "M",
+  "region": "CN",
+  "source": "oecd_cli",
+  "args": {
+   "country": "CHN"
+  },
+  "status": "ok",
+  "note": "100 以上表示未来半年景气高于长期趋势",
+  "gates": [
+   100
+  ]
+ },
+ {
+  "id": "oecd_cli_usa",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "OECD 综合领先指标（美国）",
+  "unit": "",
+  "freq": "M",
+  "region": "US",
+  "source": "oecd_cli",
+  "args": {
+   "country": "USA"
+  },
+  "status": "ok",
+  "note": "",
+  "gates": [
+   100
+  ]
+ },
+ {
+  "id": "cn_gdp",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "GDP 实际同比",
+  "unit": "%",
+  "freq": "Q",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_cpi",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "CPI、PPI、M2、社融",
+  "unit": "%",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ },
+ {
+  "id": "cn_nev",
+  "theme": "macro",
+  "grp": "宏观",
+  "name": "新能源汽车、工业机器人产量",
+  "unit": "",
+  "freq": "M",
+  "region": "",
+  "source": "",
+  "args": {},
+  "status": "todo",
+  "note": ""
+ }
+]

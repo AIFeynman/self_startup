@@ -8,9 +8,8 @@ import { api, h, md, toast, field, setTz, nowLocal } from './api.js';
 import { initChat, openChat, chatBusy, chatSnapshot } from './chat.js';
 import * as ui from './ui.js';
 import { voiceBusy } from './voice.js';
-import { pauseButton } from './pause.js';
 
-const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar', wealth: 'wallet', talk: 'mic', notes: 'bulb' };
+const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar', vision: 'globe', wealth: 'wallet', talk: 'mic', notes: 'bulb' };
 let meta;
 const page = document.getElementById('page');
 
@@ -23,7 +22,6 @@ async function boot() {
   nav.append(
     h('div.brand', {}, [ui.icon('leaf'), '学习平台']),
     h('button.new-chat', { onclick: () => openChat({ module: currentId(), title: titleOf(currentId()), fresh: true }) }, [ui.icon('plus'), '新对话']),
-    pauseButton({ onRecorded: () => currentId() === 'review' && route() }),
     h('nav#nav-links', {}, meta.modules.filter((m) => !m.page).map((m) => h('a', { href: '#' + m.id, 'data-id': m.id }, [ui.icon(ICONS[m.id] || 'spark'), h('span', {}, m.title)]))),
     h('div.nav-sec#recent'),
     h('div.nav-foot', {}, [h('a', { href: '#settings' }, [ui.icon('settings'), h('span', {}, '设置')]),
