@@ -342,10 +342,10 @@ def test_core_metrics_api_and_score_job(client, monkeypatch):
         "avoidable": {"催进度": 1}}]}, ensure_ascii=False) + "\n```"
     review.on_job_done({"id": 4242, "ref": f"score:{d}", "status": "done", "output": out})
     r = client.get(f"/api/agents/core?date={d}").json()
-    assert r["core"]["result"] == 100 and r["core"]["avoidable_pct"] == 33 and r["scored_at"] and not r["unscored"]
+    assert (r["core"]["result"], r["avg_result"]) == (1.3, 100) and r["core"]["avoidable_pct"] == 33 and r["scored_at"] and not r["unscored"]
     review.on_job_done({"id": 4243, "ref": f"score:{d}", "status": "done", "output": "坏输出"})
     r = client.get(f"/api/agents/core?date={d}").json()
-    assert r["error"] and r["core"]["result"] == 100       # 坏输出不覆盖已有评分
+    assert r["error"] and r["core"]["result"] == 1.3       # 坏输出不覆盖已有评分
 
 
 def test_agent_improve_reads_review_notes_and_open_problems_only(client):

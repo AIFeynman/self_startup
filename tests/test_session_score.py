@@ -19,7 +19,7 @@ def _out(rows):
 def test_parse_clamps_and_caps_avoidable():
     out = _out([
         {"id": "a", "tasks": [{"title": "t", "scale": 9, "uncertainty": 0, "verify": "2", "cycle": 1,
-                               "tier": 75, "feedback": 1.4, "value": "核心", "why": "有测试"},
+                               "tier": 72, "feedback": 1.4, "value": "核心", "why": "有测试"},
                               {"title": "u", "scale": 1, "uncertainty": 1, "verify": 1, "cycle": 1,
                                "tier": 100, "feedback": 0.2, "value": "低"}],
          "avoidable": {"推进下一步": 3, "催进度": 3}, "necessary": {"定目标": 1}},
@@ -30,7 +30,7 @@ def test_parse_clamps_and_caps_avoidable():
     assert set(by) == {"a", "c"}
     t = by["a"]["tasks"][0]
     assert (t["scale"], t["uncertainty"], t["verify"]) == (3, 1, 2)
-    assert (t["tier"], t["feedback"], t["value"]) == (70, 1.0, "中")       # 档位就低取整，系数截到 0.5–1.0，不认识的价值按中
+    assert (t["tier"], t["feedback"], t["value"]) == (65, 1.0, "中")       # 档位就低取整，系数截到 0.5–1.0，不认识的价值按中
     u = by["a"]["tasks"][1]
     assert (u["tier"], u["feedback"], u["value"]) == (100, 0.5, "低")
     assert sum(by["a"]["avoidable"].values()) == 4 and by["a"]["avoidable"]["推进下一步"] == 3   # 从后往前扣
@@ -40,7 +40,7 @@ def test_parse_clamps_and_caps_avoidable():
 
 def test_compute_core_metrics():
     by = score.parse(_out([
-        {"id": "a", "tasks": [{"scale": 2, "uncertainty": 2, "verify": 2, "cycle": 2, "tier": 70, "feedback": 0.9, "value": "高"}],
+        {"id": "a", "tasks": [{"scale": 2, "uncertainty": 2, "verify": 2, "cycle": 2, "tier": 75, "feedback": 0.8, "value": "高"}],
          "avoidable": {"催进度": 1}},
         {"id": "b", "tasks": [{"scale": 1, "uncertainty": 1, "verify": 1, "cycle": 1, "tier": 100, "feedback": 1, "value": "低"},
                               {"scale": 1, "uncertainty": 1, "verify": 1, "cycle": 1, "tier": 20, "feedback": 1, "value": "中"}],
@@ -48,13 +48,14 @@ def test_compute_core_metrics():
     ]), SESS)
     r = score.compute(by, SESS)
     a, b = {x["session_id"]: x for x in r["sessions"]}.values()
-    assert (a["result"], a["difficulty"], a["output_h"], a["value_score"], a["status"]) == (63, 8, 1.23, 100, "🟡")
+    assert (a["result"], a["delivered_h"], a["difficulty"], a["output_h"], a["value_score"], a["status"]) == (60, 0.78, 8, 1.17, 100, "🟡")
     assert [t["output_h"] for t in b["tasks"]] == [0.12, 0]                 # 未提交的任务产出记 0
-    assert (b["result"], b["value_score"], b["status"], b["avoidable_pct"]) == (60, 50, "🟡", 100)
+    assert (b["result"], b["delivered_h"], b["value_score"], b["status"], b["avoidable_pct"]) == (60, 0.25, 50, "🟡", 100)
     c = r["core"]
-    out = 1.3 * 0.63 * 1.5 + 0.25 * 0.5
+    out = 1.3 * 0.6 * 1.5 + 0.25 * 0.5
     assert r["output_h"] == round(out, 2)
-    assert c["result"] == round((1.3 * 63 + 0.25 * 100 + 0.25 * 20) / 1.8)
+    assert c["result"] == round(1.3 * 0.6 + 0.25, 2)                        # 交付量：多一项产出只增不减，未提交的不计
+    assert r["avg_result"] == round((1.3 * 60 + 0.25 * 100 + 0.25 * 20) / 1.8)
     assert c["throughput"] == round(out / 1.5, 2)
     assert r["value_score"] == round((1.3 * 100 + 0.25 * 33 + 0.25 * 67) / 1.8)
     assert c["leverage"] == round(100 / 7, 1)            # 脚本会话不计，未评分的 c 也算杠杆
@@ -76,3 +77,4 @@ def test_prompt_lists_only_interactive_sessions():
     p = score.build_prompt("2026-11-01", SESS)
     assert "id=a" in p and "id=bot" not in p and "```json" in p
     assert "交付档" in p and "价值" in p and "完成度" not in p
+    assert "65 开了 PR 且 CI 通过" in p and "只部署没实测按 75" in p

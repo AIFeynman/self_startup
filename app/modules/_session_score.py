@@ -1,9 +1,9 @@
-"""Agent 核心指标：结果分、吞吐、杠杆、可避免交互占比（口径同 session-report 技能 / 飞书「日开发汇总」）。
+"""Agent 核心指标：结果（交付量）、吞吐、杠杆、可避免交互占比（口径同 session-report 技能 / 飞书「日开发汇总」）。
 
 杠杆由日志直接算（_review_sessions）；结果分、任务难度、可避免交互要读懂会话，交给一次后台 Agent 评分：
     build_prompt  → 交互会话的素材 + 评分规则，要求输出一个 JSON 块
     parse         → 校验、截断到合法范围
-    compute       → 按标准工时 × 结果分 × 价值系数折算产出、吞吐，汇总当天四个核心指标
+    compute       → 按标准工时 × 结果分累加交付量，再乘价值系数折算产出、吞吐，汇总当天四个核心指标
 """
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ import json
 import re
 
 STD_HOURS = {4: 0.25, 5: 0.4, 6: 0.6, 7: 0.9, 8: 1.3, 9: 1.8, 10: 2.5, 11: 3.5, 12: 5.0}   # 难度 → 标准工时
-TIERS = (20, 40, 60, 70, 85, 100)
+TIERS = (20, 40, 50, 60, 65, 75, 85, 100)
 VALUE = {"高": (1.5, 100), "中": (1.0, 67), "低": (0.5, 33)}   # 价值档 → (产出系数, 展示分)
-RUBRIC_VERSION = 2
+RUBRIC_VERSION = 3
 AVOIDABLE = ("推进下一步", "催进度", "形式反复", "纠偏返工", "替Agent实测")
 NECESSARY = ("定目标", "给约束", "审批", "验收", "只能人做")
 CORE = (  # (key, 名称, 单位, 越高越好, 定义)
-    ("result", "结果分", "", True, "每个任务 0–100：交付档（未提交 20 / 待合并 40 / 本地 main 60 / push main 70 / dev 85 / 线上 100）× 反馈系数（一次通过 1.0，每多一轮修改 −0.1，最低 0.7，被否定 0.5）；按标准工时加权平均。衡量做得好不好"),
+    ("result", "结果", "h", True, "交付量：各项产出的标准工时 × 结果分 / 100 累加，多一项产出只增不减，未提交的记 0；括号里是按标准工时加权的平均结果分。结果分每项 0–100 = 交付档（未提交 20 / 仅本地 40 / 本地 main 50 / 远程分支 60 / PR 待审且 CI 过 65 / 合入 main 75 / dev 实测 85 / 线上 100）× 反馈系数（一次通过 1.0，每多一轮返工 −0.1，最低 0.7，被否定 0.5；新需求不算返工）。衡量交付了多少、做得好不好"),
     ("throughput", "吞吐", "", True, "产出 ÷ Agent 活跃小时。产出 = 各任务按难度折算的标准工时 × 结果分 × 价值系数（高 1.5 / 中 1.0 / 低 0.5），未提交记 0；≈1 与基准持平"),
     ("leverage", "杠杆", "分钟", True, "Agent 活跃分钟 ÷ 人工交互次数，即人每交互一次换来 Agent 干多久。越高人越省心"),
     ("avoidable_pct", "可避免交互占比", "%", False, "人工交互中本可由 Agent 自己处理的比例（逐项指挥、催进度、输出形式反复、替 Agent 实测等）。越低越好"),
@@ -31,8 +31,9 @@ RUBRIC = """## 评分规则
 - verify 验证难度：自动测试即可 1，要实测 / 渲染 2，要真实链路、长时间运行或人的判断 3
 - cycle 运行周期（按任务性质预估，不看实际耗时）：30 分钟内 1，30 分钟–2 小时 2，2 小时以上或多轮迭代 3
 结果分 = 交付档 tier × 反馈系数 feedback。每一步都经过人审核才往下走，走得越远分越高；看东西现在落在哪，不看 Agent 说做完了，没有证据按低档。
-- tier 交付档（每个任务各判各的，多组提交取必需部分所在的最低档）：
-  - 代码任务：20 未提交或找不到产物；40 本地或功能分支提交、待合并（含已推远程分支、PR 未合）；60 合入本地 main；70 push 到远程 main（PR 合并即算）；85 发布 dev；100 发布线上
+- tier 交付档（每项产出各判各的：能独立验收的 PR 或提交组各算一个任务，分别判档，不取最低档；只为让某项产出合入而补的修复并进那一项）：
+  - 代码任务：20 未提交，或只有 Agent 自述、找不到产物；40 只在本地提交；50 合入本地 main，没推送；60 推到远程功能分支；65 开了 PR 且 CI 通过，等人审批；75 合入远程 main（PR 合并即算）；85 发布 dev 并在 dev 实测（只部署没实测按 75 算）；100 发布线上、skill 已导入生产
+  - push 到 main 和发布 dev 是两步，各要人明确授权；dev 上的服务不跑这段代码时（只改 CLI、文档或本机工具），合入 main 后在 dev 走过真实链路实测的按 85 算
   - 非代码任务（调研、测试、方案、规则）：20 未落地；40 只在本地文件；60 发了链接或进了仓库文档；100 人已据此决策或对外发出、规则已生效
   - 可以在会话 cwd 下用只读 git / gh 命令（git log、git branch -a --contains、gh pr view）查提交现在的位置，按最新状态判
   - 调研或测试的结论本身是「不可行 / 有问题」不算失败，按结论落到哪一档算
@@ -171,15 +172,17 @@ def _task_calc(t: dict) -> dict:
     diff = t["scale"] + t["uncertainty"] + t["verify"] + t["cycle"]
     score = round(t["tier"] * t["feedback"])
     std = STD_HOURS[diff]
-    out = 0 if t["tier"] == TIERS[0] else std * t["tier"] * t["feedback"] / 100 * VALUE[t["value"]][0]
-    return {**t, "difficulty": diff, "score": score, "std_h": std, "output": out, "output_h": round(out, 2),
+    delivered = 0 if t["tier"] == TIERS[0] else std * t["tier"] * t["feedback"] / 100
+    out = delivered * VALUE[t["value"]][0]
+    return {**t, "difficulty": diff, "score": score, "std_h": std, "delivered": delivered, "delivered_h": round(delivered, 2),
+            "output": out, "output_h": round(out, 2),
             "value_score": VALUE[t["value"]][1]}
 
 
 def compute(scores: dict[str, dict], sessions: list[dict]) -> dict:
-    """每个会话：结果分（标准工时加权）、难度、产出、吞吐、可避免占比；当天：四个核心指标。"""
+    """每个会话：交付量、平均结果分（标准工时加权）、难度、产出、吞吐、可避免占比；当天：四个核心指标。"""
     rows, std_sum, out_sum, active_sum, turns_sum, avoid_sum, lev_active, lev_turns = [], 0.0, 0.0, 0.0, 0, 0, 0.0, 0
-    score_sum = value_sum = 0.0
+    score_sum = value_sum = delivered_sum = 0.0
     for s in scorable(sessions):
         lev_active += s["active_min"]
         lev_turns += s["human_turns"]
@@ -189,6 +192,7 @@ def compute(scores: dict[str, dict], sessions: list[dict]) -> dict:
         tasks = [_task_calc(t) for t in sc["tasks"]] if not sc["abandoned"] else []
         std = sum(t["std_h"] for t in tasks)
         out = sum(t["output"] for t in tasks)
+        delivered = sum(t["delivered"] for t in tasks)
         weighted = sum(t["std_h"] * t["tier"] * t["feedback"] for t in tasks)
         value = sum(t["std_h"] * t["value_score"] for t in tasks)
         avoid = sum(sc["avoidable"].values())
@@ -198,7 +202,7 @@ def compute(scores: dict[str, dict], sessions: list[dict]) -> dict:
             "start": s["start"], "end": s["end"], "active_min": s["active_min"], "human_turns": s["human_turns"],
             "leverage_min": s.get("leverage_min"), "wait_p90_min": s.get("wait_p90_min"),
             "abandoned": sc["abandoned"], "tasks": tasks, "avoidable": sc["avoidable"], "necessary": sc["necessary"],
-            "note": sc["note"], "result": result,
+            "note": sc["note"], "result": result, "delivered_h": round(delivered, 2),
             "status": "⏸" if sc["abandoned"] else ("❌" if result is None or result < 50 else "🟡" if result < 80 else "✅"),
             "difficulty": round(sum(t["difficulty"] * t["std_h"] for t in tasks) / std) if std else None,
             "output_h": round(out, 2), "value_score": round(value / std) if std else None,
@@ -208,6 +212,7 @@ def compute(scores: dict[str, dict], sessions: list[dict]) -> dict:
         if not sc["abandoned"]:
             std_sum += std
             out_sum += out
+            delivered_sum += delivered
             score_sum += weighted
             value_sum += value
             active_sum += s["active_min"]
@@ -215,12 +220,12 @@ def compute(scores: dict[str, dict], sessions: list[dict]) -> dict:
         avoid_sum += avoid
     by_type = {k: sum(r["avoidable"][k] for r in rows) for k in AVOIDABLE}
     core = {
-        "result": round(score_sum / std_sum) if std_sum else None,
+        "result": round(delivered_sum, 2) if rows else None,
         "throughput": round(out_sum / (active_sum / 60), 2) if out_sum and active_sum else None,
         "leverage": round(lev_active / lev_turns, 1) if lev_turns else None,
         "avoidable_pct": round(avoid_sum / turns_sum * 100) if turns_sum else None,
     }
-    return {"core": core, "sessions": rows, "avoidable_by_type": by_type,
+    return {"core": core, "avg_result": round(score_sum / std_sum) if std_sum else None, "sessions": rows, "avoidable_by_type": by_type,
             "output_h": round(out_sum, 2), "value_score": round(value_sum / std_sum) if std_sum else None, "active_h": round(active_sum / 60, 2), "human_turns": turns_sum,
             "avoidable_n": avoid_sum, "scored": len(rows), "scorable": len(scorable(sessions)),
             "counts": {k: sum(1 for r in rows if r["status"] == k) for k in ("✅", "🟡", "❌", "⏸")}}

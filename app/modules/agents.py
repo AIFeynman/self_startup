@@ -407,7 +407,7 @@ def get_insights():
     return {"text": planning_insights()}
 
 
-# ---------- 核心指标（结果分 / 吞吐 / 杠杆 / 可避免交互占比；数据与评分在复盘模块） ----------
+# ---------- 核心指标（结果 / 吞吐 / 杠杆 / 可避免交互占比；数据与评分在复盘模块） ----------
 
 class CoreIn(BaseModel):
     date: str = ""
@@ -433,6 +433,7 @@ def core_line(date: str = "") -> str:
     k, p = c["core"], (c.get("prev") or {}).get("core") or {}
     fmt = lambda v, u="": "未评分" if v is None else f"{v}{u}"   # noqa: E731
     vs = lambda key: f"（上次 {p[key]}）" if p.get(key) is not None else ""   # noqa: E731
-    return (f"{c['date']} 核心指标：结果分 {fmt(k['result'])}{vs('result')}、吞吐 {fmt(k['throughput'])}{vs('throughput')}、"
+    avg = f"（平均结果分 {c['avg_result']}）" if c.get("avg_result") is not None else ""
+    return (f"{c['date']} 核心指标：结果 {fmt(k['result'], 'h')}{avg}{vs('result')}、吞吐 {fmt(k['throughput'])}{vs('throughput')}、"
             f"杠杆 {fmt(k['leverage'], ' 分钟')}{vs('leverage')}、可避免交互 {fmt(k['avoidable_pct'], '%')}{vs('avoidable_pct')}"
             f"（已评分 {c['scored']}/{c['scorable']} 个交互会话）")
