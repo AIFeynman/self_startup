@@ -114,12 +114,12 @@
 <div class="dg-side"><b>回归评测</b><p>通过率应接近 100%，防退化</p></div>
 </div>
 ```
-5. **时间线**（方法演进、后续改进、事件顺序）：每个事件写日期；名字链接到论文（论文库的 url 或 arXiv），没有论文的链接到技术报告、博客或仓库；说明写 1–2 句：谁做的、改了什么、关键数字或代价；更长的「为什么」「怎么推」放进 `dg-more`；加 `hot` 标本章主角。
+5. **时间线**（方法演进、后续改进、事件顺序）：每个事件写日期；名字链接到论文（论文库的 url 或 arXiv），没有论文的链接到技术报告、博客或仓库；`<span>` 写一句完整的话：谁做的、改了什么、关键数字；再用 `dg-more` 写三行字段（点开看）：`<b>背景</b>` 当时卡在哪、之前怎么做，`<b>做法</b>` 核心改动（可带公式），`<b>效果与代价</b>` 带基准的数字和它留下的问题，每行 1–2 句完整的话；加 `hot` 标本章主角。
 ```html
 <div class="dg-timeline">
-<div class="dg-event"><i>2020-06</i><b><a href="https://arxiv.org/abs/2006.16236">线性注意力</a></b><span>Katharopoulos 等：去掉 softmax，用核函数把注意力改写成状态 S 累加 kvᵀ，推理每步 O(1)；代价是召回能力明显变差。</span></div>
-<div class="dg-event"><i>2021-02</i><b><a href="https://arxiv.org/abs/2102.11174">DeltaNet</a></b><span>Schlag 等：先读出旧值再按误差改写记忆（delta 规则），修了线性注意力只加不减、记忆越存越乱的问题。</span></div>
-<div class="dg-event hot"><i>2025-10</i><b><a href="https://arxiv.org/abs/2510.26692">KDA</a></b><span>Kimi 团队：在 Gated DeltaNet 上把标量衰减换成逐通道衰减，Kimi Linear 用它做 3:1 混合层，长上下文解码吞吐约 6 倍。</span><div class="dg-more">为什么逐通道：不同通道存的信息寿命不同，标量衰减只能让它们一起遗忘；逐通道后短期和长期信息各用各的衰减率。</div></div>
+<div class="dg-event"><i>2020-06</i><b><a href="https://arxiv.org/abs/2006.16236">线性注意力</a></b><span>Katharopoulos 等去掉 softmax，用核函数把注意力改写成状态 S 累加 kvᵀ，推理每步 O(1)。</span><div class="dg-more"><p><b>背景</b>：softmax 注意力的计算随序列长度平方增长，长序列推理要存整个 KV cache。</p><p><b>做法</b>：用特征映射 φ 近似 exp，$o_t=\phi(q_t)^\top S_t$，$S_t=S_{t-1}+\phi(k_t)v_t^\top$。</p><p><b>效果与代价</b>：自回归生成快几个数量级；但状态只加不减，召回和语言建模质量明显落后 softmax。</p></div></div>
+<div class="dg-event"><i>2021-02</i><b><a href="https://arxiv.org/abs/2102.11174">DeltaNet</a></b><span>Schlag 等把线性注意力的累加换成 delta 规则：先读出旧值，再按误差改写记忆。</span><div class="dg-more"><p><b>背景</b>：线性注意力的状态只加不减，旧键值对互相干扰，记忆越存越乱。</p><p><b>做法</b>：$S_t=S_{t-1}+\beta_t(v_t-S_{t-1}k_t)k_t^\top$，用误差改写旧值。</p><p><b>效果与代价</b>：联想召回明显变好；但原始算法只能串行训练，直到 2024 年 Yang 等给出分块并行算法才能规模化。</p></div></div>
+<div class="dg-event hot"><i>2025-10</i><b><a href="https://arxiv.org/abs/2510.26692">KDA</a></b><span>Kimi 团队在 Gated DeltaNet 上把标量衰减换成逐通道衰减，Kimi Linear 用它做 3:1 混合层。</span><div class="dg-more"><p><b>背景</b>：Gated DeltaNet 用一个标量门让整块记忆一起衰减，不同通道存的信息寿命不同却只能一起遗忘。</p><p><b>做法</b>：门改成逐通道向量，短期和长期信息各用各的衰减率，配专门的分块并行 kernel。</p><p><b>效果与代价</b>：长上下文解码吞吐约 6 倍、KV cache 降约 75%；仍需保留 1/4 全注意力层保召回。</p></div></div>
 </div>
 ```
 任何节点 / 分支 / 卡片 / 模块加 `hot` 类表示本章重点，加 `warn` 类表示坑 / 失效边界。
