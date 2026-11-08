@@ -12,6 +12,7 @@ dependencies = [
     "yfinance>=1.7.0",
     "sherpa-onnx>=2.0.1",
     "websockets>=14",
+    "akshare>=1.18.88",
 ]
 
 [dependency-groups]
