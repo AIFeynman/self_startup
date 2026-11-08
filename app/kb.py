@@ -24,12 +24,12 @@ MANIFEST = ".manifest.json"
 TYPE_DIRS = {
     "daily": "daily", "note": "notes", "research": "research", "product": "products",
     "paper": "learn/papers", "papernote": "learn/paper-notes", "repo": "learn/repos", "plan": "learn/plans", "book": "learn/books", "feed": "feed", "annotation": "annotations",
-    "intel": "intel/events", "intelco": "intel/companies", "concept": "concepts",
+    "intel": "intel/events", "intelco": "intel/companies", "vision": "vision", "concept": "concepts",
 }
 TYPE_NAMES = {
     "daily": "每日记录", "note": "问题与经验", "research": "调研", "product": "产品体验",
     "paper": "论文深读", "papernote": "论文笔记", "repo": "项目解读", "plan": "学习计划", "book": "深度读书", "feed": "收藏的信息", "annotation": "阅读批注",
-    "intel": "产品变化解读", "intelco": "产品雷达公司", "concept": "概念", "thread": "问题线",
+    "intel": "产品变化解读", "intelco": "产品雷达公司", "vision": "视野解读", "concept": "概念", "thread": "问题线",
 }
 
 README = """# 本地知识库（自动生成，勿手改）
@@ -403,6 +403,29 @@ def _intel() -> list[dict]:
     return out
 
 
+def _vision() -> list[dict]:
+    """视野：通过校验和审稿的解读卡，一张一个文件。"""
+    if not _has("vision_cards"):
+        return []
+    from app.modules.vision import BY_ID
+    out = []
+    for c in db.rows("SELECT * FROM vision_cards WHERE status='done' ORDER BY id DESC"):
+        b = json.loads(c["body"] or "{}")
+        cfg = BY_ID.get(c["series_id"], {})
+        why = [f"- {w.get('kind', '来源')}：{w.get('text', '')}" + (f"（[{w.get('date') or '来源'}]({w['url']})）" if w.get("url") else "")
+               for w in b.get("why") or []]
+        preds = [f"- {p.get('text', '')}（到 {p.get('due')} 对账，可信度{p.get('confidence')}）" for p in b.get("predictions") or []]
+        deeper = b.get("deeper") or {}
+        body = [f"> {cfg.get('name', c['series_id'])} · {c['period']}", "", b.get("plain", ""), "",
+                "## 打个比方", b.get("analogy", ""), "", "## 为什么", *why, "",
+                f"## 更深一层（{deeper.get('type', '')}）", deeper.get("text", ""), "", "## 我们的判断", *preds, "",
+                "## 对你意味着", b.get("meaning", ""), "", "## 接下来看", b.get("next", "")]
+        out.append(_doc("vision", c["id"], b.get("title") or cfg.get("name", ""), "\n".join(body), date=c["created_at"],
+                        updated=c["updated_at"] or "", tags=["视野", cfg.get("grp", ""), cfg.get("name", "")],
+                        url=f"#vision/{c['series_id']}", summary=b.get("plain", "")))
+    return out
+
+
 def _annotations() -> list[dict]:
     """一份材料一个文件：每条划线（或针对全文）一节，下面是评论和问答。"""
     if not _has("annotations"):
@@ -510,7 +533,7 @@ def _daily(docs: list[dict]) -> list[dict]:
 
 def build() -> list[dict]:
     docs: list[dict] = []
-    for fn in (_notes, _research, _products, _learn_items, _books, _plans, _feed_saved, _feed_hn, _paper_notes, _annotations, _intel):
+    for fn in (_notes, _research, _products, _learn_items, _books, _plans, _feed_saved, _feed_hn, _paper_notes, _annotations, _intel, _vision):
         try:
             docs += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它
