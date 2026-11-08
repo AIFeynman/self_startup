@@ -219,3 +219,18 @@ def test_answer_survives_a_later_background_task_note():
     proc = SimpleNamespace(stdout=[json.dumps(x) + "\n" for x in lines], returncode=0, stderr=None, wait=lambda: 0)
     done = next(e for e in agent._read("claude", proc, agent._parse_claude) if e["type"] == "done")
     assert '{"steps": []}' in done["text"] and "后台核对跑完了" in done["text"]
+
+
+def test_chat_on_default_engine_uses_module_model(client, monkeypatch):
+    from app import agent, settings
+    real = settings.get
+    monkeypatch.setattr(settings, "get", lambda k, d=None: {"vision": "claude-sonnet-5-5"} if k == "module_models" else real(k, d))
+    seen = []
+
+    def fake_stream(prompt, **kw):
+        seen.append(kw)
+        yield {"type": "done", "text": "ok", "engine": "claude"}
+
+    monkeypatch.setattr(agent, "run_stream", fake_stream)
+    client.post("/api/chat/vision", json={"message": "你是哪个模型", "ref": "vision:overview"}).text
+    assert seen[-1]["model"] == "claude-sonnet-5-5"
