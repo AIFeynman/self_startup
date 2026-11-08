@@ -7,7 +7,9 @@
     learn:plan:<id>:adapt    根据反馈调整计划
     learn:course:<id>        导入课程：解析官网课表成单元 + 步骤（轻量模型）；:sync = 同步新发布的讲次（只追加）
     learn:step:<id>:material 课程计划的一讲：先把课件 / 字幕 / 阅读材料整理成素材包 material.md（轻量模型），完成后接着写章节
-    learn:step:<id>:chapter  把计划的一步写成章节教程 + 章末测试（:prefetch = 用户读上一章时后台预生成）
+    learn:step:<id>:outline  普通章节分几次写：先定提纲（outline.json）并写开头 → 每个正文小节一个 :part:<n> 任务（同时跑）
+                             → :tail 写章末各节和测试，平台把 parts/*.md 拼成 chapter.md
+    learn:step:<id>:chapter  按需加的一节、课程的一讲：一次写完章节教程 + 章末测试（:prefetch = 用户读上一章时后台预生成）
     learn:step:<id>:grade    批改章末测试的简答题
     learn:step:<id>:check:<n> 点评第 n 个「停一下」：用户的判断和要点差在哪
     learn:book:<id>:toc      深度读书：PDF 目录页解析不出来时，让轻量模型从前 25 页抄出目录
@@ -2169,7 +2171,7 @@ def _first_chapter_block(p: dict, s: dict, steps: list[dict]) -> str:
             f"都不对应就不加（平台会让用户点它按需生成一节）。计划里后面的各步：\n{lst or '（无）'}\n")
 
 
-def chapter_prompt(s: dict, note: str = "") -> str:
+def _chapter_brief(s: dict, note: str = "") -> str:
     p = _plan(s["plan_id"])
     steps = _ordered(steps_of(p["id"]))
     before = [x for x in steps if (x["stage"], x["ord"], x["id"]) < (s["stage"], s["ord"], s["id"]) and x["status"] != "skipped"]
@@ -2177,8 +2179,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
                      + (f"；反馈：{x['feedback'][:150]}" if x["feedback"] else "") for i, x in enumerate(before, 1)) or "（这是第一章）"
     res = "\n".join(f"- {r.get('title')} {r.get('url', '')}（{r.get('type', '')}{'，' + str(r['date']) if r.get('date') else ''}）：{r.get('why', '')}"
                     for r in s["resources"]) or "（计划未给资源，自己检索）"
-    out = _step_dir(s)
-    return f"""任务：把学习计划里的一步写成「跟着学」的一章教程 + 章末测试。今天是 {db.today()}。
+    return f"""今天是 {db.today()}。
 
 计划主题：{p['topic']}
 我的背景：{p['background'] or '（未说明）'}；学习目标：{p['goal'] or '（未说明）'}
@@ -2201,31 +2202,119 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 用户最近在读 / 在做（章末测试至少 1 题从中挑和本章相关的论文或项目出题，学以致用）：
 {_recent_context()}
 {('用户对本章的要求：' + note) if note else ''}
-{_extra_block(s)}{_course_block(s)}{_first_chapter_block(p, s, steps)}
+{_extra_block(s)}{_course_block(s)}{_first_chapter_block(p, s, steps)}"""
+
+
+def _chapter_spec(s: dict) -> str:
+    return f"""---- 章节教程规范（文中 examples/ 等相对路径都在 {SKILL_DIR} 下）----
+{_ref_text('chapter.md')}
+
+---- 本计划的学法 ----
+{_ref_text(f'domains/{method_of(_plan(s["plan_id"]))}.chapter.md')}
+"""
+
+
+def _assets_rule(out: Path, prefix: str = "") -> str:
+    return (f"   - 交互小组件：{out / 'widgets'}/{prefix}<名字>.html\n"
+            f"   - 图片（目录要自己建）：原文图下载到 {out / 'figs'}/，自己画的示意图写成 {out / 'figs'}/{prefix}<名字>.svg；正文都用相对路径 figs/… 引用\n"
+            f"   {FIGS.format(out=out).replace('下载进笔记', '下载进章节').replace('在笔记正文里', '在章节正文里')}\n"
+            f"   目录里的 history/ 是旧版本归档：不要读、不要沿用，按本次要求从头写。")
+
+
+STAGED_RULE = "3. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了。"
+
+
+def chapter_prompt(s: dict, note: str = "") -> str:
+    out = _step_dir(s)
+    return f"""任务：把学习计划里的一步写成「跟着学」的一章教程 + 章末测试。{_chapter_brief(s, note)}
 做法：
 1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）。资源不够、打不开或已过时，联网补充真实资料；资料时效按学法的要求核对。
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
    - {out / 'chapter.md'}
    - {out / 'quiz.json'}（测试题 + 知识卡）
    - {out / 'track.json'}（各小节的追踪锚点，见规范「持续更新」）
-   - 交互小组件：{out / 'widgets'}/<名字>.html
-   - 图片（目录要自己建）：原文图下载到 {out / 'figs'}/，自己画的示意图写成 {out / 'figs'}/<名字>.svg；正文都用相对路径 figs/… 引用
-   {FIGS.format(out=out).replace('下载进笔记', '下载进章节').replace('在笔记正文里', '在章节正文里')}
-   目录里的 history/ 是旧版本归档：不要读、不要沿用，按本次要求从头写。
+{_assets_rule(out)}
 3. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了，以及资料时效结论。
 
----- 章节教程规范（文中 examples/ 等相对路径都在 {SKILL_DIR} 下）----
-{_ref_text('chapter.md')}
+{_chapter_spec(s)}"""
 
----- 本计划的学法 ----
-{_ref_text(f'domains/{method_of(p)}.chapter.md')}
-"""
+
+def _staged(s: dict) -> bool:
+    """普通章节分几次写（提纲 → 每个正文小节一个任务 → 收尾），免得一次输出太长被压缩；按需加的一节和课程篇幅短，一次写完。"""
+    return s.get("origin") not in EXTRA and not _is_course(s)
+
+
+def _outline(s: dict) -> list[dict]:
+    o = _loads((_step_dir(s) / "outline.json").read_text("utf-8", errors="replace"), {}) if (_step_dir(s) / "outline.json").is_file() else {}
+    secs = o.get("sections") if isinstance(o, dict) else None
+    return [{"title": str(x["title"]).strip(), "brief": str(x.get("brief") or "").strip()}
+            for x in secs if isinstance(x, dict) and str(x.get("title") or "").strip()][:8] if isinstance(secs, list) else []
+
+
+def _outline_text(secs: list[dict]) -> str:
+    return "\n".join(f"{i}. {x['title']}：{x['brief']}" for i, x in enumerate(secs, 1))
+
+
+def _note(s: dict) -> str:
+    f = _step_dir(s) / "parts" / "note.txt"
+    return f.read_text("utf-8").strip() if f.is_file() else ""
+
+
+def outline_prompt(s: dict, note: str = "") -> str:
+    out = _step_dir(s)
+    return f"""任务：这一章分几次写，这次定提纲并写开头。之后平台给每个正文小节单独开一个任务照你的提纲写，最后一个任务写章末各节和测试，平台再把各部分拼成 chapter.md。{_chapter_brief(s, note)}
+做法：
+1. 先读资源原文（WebFetch / curl；arXiv 优先读 /html/ 或 /abs/ 页）和本机资料库。资源不够、打不开或已过时，联网补充真实资料；资料时效按学法的要求核对。
+2. 按下面规范「写作要求」第 4 条定 3–6 个正文小节（按子方向切分，不重不漏，合起来覆盖全景图的主要分支），写两个文件（绝对路径）：
+   - {out / 'outline.json'}：{{"sections": [{{"title": "一、…", "brief": "…"}}]}}。title 就是该节的 `##` 标题；brief 写 5–10 行，交给另一个人照着就能写出这一节：起点技术和要讲透的前置概念；优化路线和每条的关键论文（标题、链接、日期）；实战讲哪一家、用哪个框架、去仓库哪个目录找代码和启动脚本；本节相关工作的候选论文和仓库；和相邻小节的分工（谁讲什么、不重复）。
+   - {out / 'parts' / '00-head.md'}：一级标题 `# {s['title']}`，然后写规范「写作要求」第 1–3 条（开头引用块、资料时效、首章要求的内容、全景图）。不写正文小节和章末各节。
+{_assets_rule(out, 's00-')}
+{STAGED_RULE}
+
+{_chapter_spec(s)}"""
+
+
+def part_prompt(s: dict, n: int, secs: list[dict]) -> str:
+    out = _step_dir(s)
+    sec = secs[n - 1]
+    return f"""任务：这一章分几次写，提纲和开头已经写好，这次只写第 {n} 个正文小节「{sec['title']}」。其他小节由别的任务同时在写，章末各节和测试最后单独写。{_chapter_brief(s, _note(s))}
+全章提纲（别的小节讲的内容不要重复，需要时一句话指过去）：
+{_outline_text(secs)}
+
+本节要写的（提纲里的说明）：
+{sec['brief'] or '（提纲没写细，按本节标题和规范自己定）'}
+
+做法：
+1. 先读 {out / 'parts' / '00-head.md'}（记号、全景图要和它一致），再读本节要用的资源原文、本机论文库和开源项目库、GitHub 上的真实代码。
+2. 写 {out / 'parts' / f'{n:02d}.md'}：以 `## {sec['title']}` 开头，按下面规范「写作要求」第 4 条把这一节写完整——四段（起点讲透 → 优化方向 → 对比与选型 → 实战，含经验与坑、框架里怎么实现的调用链 / 原文代码 / 配置与启动命令 / 换个框架）、节末「本节相关工作」卡片、「停一下」卡；公式按学法推到能手推。篇幅不用省，这一个文件只有这一节。
+{_assets_rule(out, f's{n:02d}-')}
+{STAGED_RULE}
+
+{_chapter_spec(s)}"""
+
+
+def tail_prompt(s: dict, secs: list[dict]) -> str:
+    out = _step_dir(s)
+    return f"""任务：这一章分几次写，开头和各正文小节已经写好（{out / 'parts'}/ 下 00-head.md、01.md…），这次写章末各节和测试，平台再把各部分按文件名顺序拼成 chapter.md。{_chapter_brief(s, _note(s))}
+全章提纲：
+{_outline_text(secs)}
+
+做法：
+1. 先通读 parts/ 下已写好的每个文件。各节之间记号不一致、内容重复或互相矛盾的地方，直接改对应文件修正。
+2. 写 {out / 'parts' / '99-tail.md'}：按下面规范「写作要求」第 5 条往后写（一条主线走一遍、判断与方向、与已学内容的联系、相关工作地图——各节「本节相关工作」已有的卡不再重复——以及学法要求的章末内容，如「动手」）。
+3. 写 {out / 'quiz.json'}（测试题 + 知识卡，覆盖全章各节）和 {out / 'track.json'}（各小节的追踪锚点，见规范「持续更新」）。
+4. 按规范「交付前自检」把全章（parts/ 下所有文件）逐条查一遍，没过就改。
+{_assets_rule(out, 's99-')}
+5. 不要调用平台 API 写数据，不要写其他目录。最终回复只用一两句话说明写完了。
+
+{_chapter_spec(s)}"""
 
 
 def _archive_chapter(s: dict) -> str:
     """重新生成前把旧章节（正文、测试、追踪锚点、小组件）挪到 history/<时间>/，Agent 只能重写，学习记录里留着旧版路径。"""
     out = _step_dir(s)
-    olds = [p for p in (out / "chapter.md", out / "quiz.json", out / "track.json", out / "widgets") if p.exists()]
+    olds = [p for p in (out / "chapter.md", out / "quiz.json", out / "track.json", out / "widgets", out / "outline.json", out / "parts")
+            if p.exists()]
     if not olds:
         return ""
     dest = out / "history" / db.now().replace(":", "").replace("-", "")
@@ -2298,11 +2387,60 @@ def start_chapter_job(s: dict, note: str = "", prefetch: bool = False) -> int:
     return _submit_chapter(s, note, prefetch)
 
 
+def _submit_stage(s: dict, stage: str, prompt: str) -> int:
+    return jobs.submit("learn", prompt, ref=f"learn:step:{s['id']}:{stage}", cwd=str(_step_dir(s)), add_dirs=[str(SKILL_DIR)],
+                       tier=_tier("chapter"))
+
+
 def _submit_chapter(s: dict, note: str = "", prefetch: bool = False) -> int:
-    jid = jobs.submit("learn", chapter_prompt(s, note), ref=f"learn:step:{s['id']}:{'prefetch' if prefetch else 'chapter'}",
-                      cwd=str(_step_dir(s)), add_dirs=[str(SKILL_DIR)], tier=_tier("chapter"))
+    if _staged(s):
+        parts = _step_dir(s) / "parts"
+        parts.mkdir(parents=True, exist_ok=True)
+        if note:
+            (parts / "note.txt").write_text(note, "utf-8")
+        jid = _submit_stage(s, "outline", outline_prompt(s, note))
+    else:
+        jid = _submit_stage(s, "prefetch" if prefetch else "chapter", chapter_prompt(s, note))
     db.update("learn_steps", s["id"], {"chapter_status": "generating", "chapter_job": jid})
     return jid
+
+
+def _finish_outline(sid: int, job: dict) -> None:
+    s = _step(sid)
+    if s.get("chapter_job") != job.get("id"):
+        return
+    secs = _outline(s) if job.get("status") == "done" else []
+    if not secs:
+        db.update("learn_steps", sid, {"chapter_status": "failed"})
+        return
+    for n in range(1, len(secs) + 1):
+        _submit_stage(s, f"part:{n}", part_prompt(s, n, secs))
+
+
+def _finish_part(sid: int, job: dict) -> None:
+    """子章节都写完（同时在跑，谁最后完成谁来接）就开收尾任务；chapter_job 还指着提纲任务，比它早的是旧一版的任务。"""
+    s = _step(sid)
+    head = s.get("chapter_job")
+    if not head or job["id"] < head or s.get("chapter_status") != "generating":
+        return
+    parts = db.rows("SELECT status FROM jobs WHERE ref LIKE ? AND id>?", [f"learn:step:{sid}:part:%", head])
+    if any(j["status"] not in ("done", "failed") for j in parts):
+        return
+    if db.execute("UPDATE learn_steps SET chapter_job=NULL WHERE id=? AND chapter_job=?", [sid, head]) != 1:
+        return  # 别的子章节回调已经接手
+    if any(j["status"] == "failed" for j in parts):
+        db.update("learn_steps", sid, {"chapter_status": "failed", "chapter_job": head})
+        return
+    db.update("learn_steps", sid, {"chapter_job": _submit_stage(s, "tail", tail_prompt(s, _outline(s)))})
+
+
+def _finish_tail(sid: int, job: dict) -> None:
+    s = _step(sid)
+    if s.get("chapter_job") != job.get("id"):
+        return
+    parts = sorted(p for p in (_step_dir(s) / "parts").glob("*.md"))
+    (_step_dir(s) / "chapter.md").write_text("\n\n".join(p.read_text("utf-8", errors="replace").strip() for p in parts) + "\n", "utf-8")
+    _finish_chapter(sid, job)
 
 
 def _prefetch_next(s: dict) -> int | None:
@@ -2995,6 +3133,12 @@ def on_job_done(job: dict) -> None:
         _finish_material(int(m.group(1)), job, bool(m.group(2)))
     elif m := re.fullmatch(r"learn:step:(\d+):(chapter|prefetch)", ref):
         _finish_chapter(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:step:(\d+):outline", ref):
+        _finish_outline(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:step:(\d+):part:\d+", ref):
+        _finish_part(int(m.group(1)), job)
+    elif m := re.fullmatch(r"learn:step:(\d+):tail", ref):
+        _finish_tail(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:step:(\d+):grade", ref):
         _finish_grade(int(m.group(1)), job)
     elif m := re.fullmatch(r"learn:step:(\d+):check:(\d+)", ref):
