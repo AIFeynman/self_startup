@@ -81,3 +81,14 @@ def test_revisions_append_and_latest_wins():
 def test_overview_orders_themes_ai_first(client):
     d = client.get("/api/vision/overview").json()
     assert [t["id"] for t in d["themes"]] == ["ai", "fun", "life", "learn", "macro"]
+
+
+@pytest.mark.parametrize("text", [
+    "软件岗位比去年同月多 14%（同比，即和去年同一个月比）",
+    "出生率从 6.39‰ 回升到 6.77‰，也就是每千人出生 6.77 个",
+])
+def test_explained_terms_pass(text):
+    from app.modules import _vision_cards as vc
+    card = {"title": "t", "plain": text, "analogy": "a", "meaning": "m", "next": "n", "why": [], "deeper": {}}
+    probs = vc.check(card, [], set(), lambda u: (200, ""))["problems"]
+    assert not any("术语" in p for p in probs)

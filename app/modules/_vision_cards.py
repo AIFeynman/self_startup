@@ -147,6 +147,14 @@ def card_text(card: dict) -> str:
                      card.get("meaning", ""), card.get("next", "")])
 
 
+def explained(body: str, i: int, term: str) -> bool:
+    if re.match(r"\s*[（(]", body[i + len(term):i + len(term) + 2]):
+        return True
+    if re.search(r"[（(][^）)]{0,4}$", body[max(0, i - 5):i]):
+        return True
+    return term == "‰" and bool(re.search(r"千分之|每千", body))
+
+
 def check(card: dict, facts: list[float], series_ids: set[str], fetch_text, today: date | None = None) -> dict:
     """返回 {ok, problems[]}；fetch_text(url) -> (status, text)，打不开时 status 非 2xx/3xx。"""
     today = today or date.today()
@@ -161,7 +169,7 @@ def check(card: dict, facts: list[float], series_ids: set[str], fetch_text, toda
     body = card_text(card)
     for t in TERMS:
         i = body.find(t)
-        if i >= 0 and not re.match(r"\s*[（(]", body[i + len(t):i + len(t) + 2]) and t not in (card.get("title") or ""):
+        if i >= 0 and not explained(body, i, t) and t not in (card.get("title") or ""):
             probs.append(f"术语「{t}」第一次出现时没有括号解释")
     deeper = card.get("deeper") if isinstance(card.get("deeper"), dict) else {}
     if deeper.get("type") not in INSIGHT_TYPES or not deeper.get("text"):
