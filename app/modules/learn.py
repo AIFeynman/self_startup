@@ -2123,7 +2123,8 @@ def _local_library(exclude_plan: int) -> str:
 - 已深读的论文 / 项目 / 文章（全部）：
 {chr(10).join(lines) or '（暂无）'}
 - 知识库全文检索（深读、调研、笔记）：curl -s "{api}/api/kb/search?q=关键词"，读全文 curl -s "{api}/api/kb/doc?path=<path>"
-- 论文库（近 10 万篇，带被引和是否已深读）：curl -s "{api}/api/kb/papers/search?q=英文关键词&limit=20"
+- 论文库（近 10 万篇，带一句话简介、会议、被引和是否已深读）：curl -s "{api}/api/kb/papers/search?q=英文关键词&limit=20"
+- 论文前后脉络（它基于库里哪些、库里哪些接着它做）：curl -s "{api}/api/kb/papers/lineage?s2id=<s2id>&limit=10"
 - 论文脉络图（主题列表在 curl -s {api}/api/kb/papers 的 maps 里）：curl -s "{api}/api/kb/papers/map?topic=主题"
 - 开源项目库（6 万多个 GitHub 仓库）：curl -s "{api}/api/intel/oss/search?q=关键词&k=10"，详情 curl -s "{api}/api/intel/oss/repo?name=owner/repo"
 - 创业公司与产品库：curl -s "{api}/api/intel/startups?q=关键词&all=1"
@@ -2206,6 +2207,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 2. 按下面「章节教程」规范写两个文件（绝对路径，目录已创建）：
    - {out / 'chapter.md'}
    - {out / 'quiz.json'}（测试题 + 知识卡）
+   - {out / 'track.json'}（各小节的追踪锚点，见规范「持续更新」）
    - 交互小组件：{out / 'widgets'}/<名字>.html
    - 图片（目录要自己建）：原文图下载到 {out / 'figs'}/，自己画的示意图写成 {out / 'figs'}/<名字>.svg；正文都用相对路径 figs/… 引用
    {FIGS.format(out=out).replace('下载进笔记', '下载进章节').replace('在笔记正文里', '在章节正文里')}
@@ -2221,9 +2223,9 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 
 
 def _archive_chapter(s: dict) -> str:
-    """重新生成前把旧章节（正文、测试、小组件）挪到 history/<时间>/，Agent 只能重写，学习记录里留着旧版路径。"""
+    """重新生成前把旧章节（正文、测试、追踪锚点、小组件）挪到 history/<时间>/，Agent 只能重写，学习记录里留着旧版路径。"""
     out = _step_dir(s)
-    olds = [p for p in (out / "chapter.md", out / "quiz.json", out / "widgets") if p.exists()]
+    olds = [p for p in (out / "chapter.md", out / "quiz.json", out / "track.json", out / "widgets") if p.exists()]
     if not olds:
         return ""
     dest = out / "history" / db.now().replace(":", "").replace("-", "")

@@ -258,19 +258,42 @@ def papers_map(topic: str):
     return paper_map.view(json.loads(row["result"]))
 
 
+PAPER_CARD = "s2id, arxiv, title, year, pub_date, venue, cites, infl, tier, tldr, abstract"
+
+
+def _paper_cards(rows: list[dict]) -> list[dict]:
+    read = paper_map.reads([r["s2id"] for r in rows])
+    return [{"s2id": r["s2id"], "title": r["title"], "year": r["year"], "pub_date": r["pub_date"], "venue": r["venue"],
+             "cites": r["cites"], "infl": r["infl"], "tier": r["tier"],
+             "tldr": r["tldr"] or (r["abstract"] or "")[:300],
+             "url": paper_map.paper_url(r) or f"https://www.semanticscholar.org/paper/{r['s2id']}",
+             **({"read": read[r["s2id"]]} if r["s2id"] in read else {})} for r in rows]
+
+
 @router.get("/papers/search")
 def papers_search(q: str, limit: int = 20):
-    """论文库全文检索，按被引排序；已深读的带上深读条目。"""
+    """论文库全文检索，按被引排序；带一句话简介，已深读的带上深读条目。"""
     paper_map._init()
     ids = paper_map._fts(q.strip())
     if not ids:
         return []
-    rows = paper_map.db.rows(f"SELECT s2id, arxiv, title, year, cites, tier FROM paper_items WHERE rowid IN ({','.join('?' * len(ids))}) "
-                             "ORDER BY cites DESC LIMIT ?", [*ids, max(1, min(limit, 100))])
-    read = paper_map.reads([r["s2id"] for r in rows])
-    return [{"s2id": r["s2id"], "title": r["title"], "year": r["year"], "cites": r["cites"], "tier": r["tier"],
-             "url": paper_map.paper_url(r) or f"https://www.semanticscholar.org/paper/{r['s2id']}",
-             **({"read": read[r["s2id"]]} if r["s2id"] in read else {})} for r in rows]
+    return _paper_cards(paper_map.db.rows(f"SELECT {PAPER_CARD} FROM paper_items WHERE rowid IN ({','.join('?' * len(ids))}) "
+                                          "ORDER BY cites DESC LIMIT ?", [*ids, max(1, min(limit, 100))]))
+
+
+@router.get("/papers/lineage")
+def papers_lineage(s2id: str, limit: int = 10):
+    """一篇论文在库里的前后脉络：它引用了库里哪些（builds_on），库里哪些引用了它（followed_by），都按被引排序。"""
+    me = paper_map.db.row(f"SELECT {PAPER_CARD}, refs FROM paper_items WHERE s2id=?", [s2id])
+    if not me:
+        raise HTTPException(404, "论文库里没有这篇")
+    limit = max(1, min(limit, 50))
+    refs = json.loads(me["refs"] or "[]")
+    before = paper_map.db.rows(f"SELECT {PAPER_CARD} FROM paper_items WHERE s2id IN ({','.join('?' * len(refs))}) "
+                               "ORDER BY cites DESC LIMIT ?", [*refs, limit]) if refs else []
+    after = paper_map.db.rows(f"SELECT {PAPER_CARD} FROM paper_items WHERE refs LIKE ? ORDER BY cites DESC LIMIT ?",
+                              [f'%"{s2id}"%', limit])
+    return {"paper": _paper_cards([me])[0], "builds_on": _paper_cards(before), "followed_by": _paper_cards(after)}
 
 
 class PaperReadIn(BaseModel):

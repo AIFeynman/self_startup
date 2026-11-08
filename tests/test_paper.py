@@ -202,6 +202,22 @@ def test_kb_papers_search_ranks_by_citations_and_marks_deep_reads(client):
     assert client.get("/api/kb/papers/search", params={"q": " "}).json() == []
 
 
+def test_kb_papers_search_and_lineage_give_summary_and_who_builds_on_whom(client):
+    paper("A", "Linear attention is all you need", 2020, 900, abstract="We make attention linear. " * 30)
+    paper("B", "Gated linear attention transformers", 2024, 300, refs=["A", "Z"])
+    paper("C", "Delta rule linear attention", 2025, 50, refs=["B", "A"])
+    db.execute("UPDATE paper_items SET tldr='Adds data-dependent gates to linear attention.', venue='ICML' WHERE s2id='B'")
+    lab.run(call=fake_label())
+    got = {r["s2id"]: r for r in client.get("/api/kb/papers/search", params={"q": "linear attention"}).json()}
+    assert got["B"]["tldr"] == "Adds data-dependent gates to linear attention." and got["B"]["venue"] == "ICML"
+    assert got["B"]["pub_date"] == "2024-06-01" and got["A"]["tldr"].startswith("We make attention linear.") and len(got["A"]["tldr"]) <= 301
+    lin = client.get("/api/kb/papers/lineage", params={"s2id": "B"}).json()
+    assert lin["paper"]["title"] == "Gated linear attention transformers"
+    assert [r["s2id"] for r in lin["builds_on"]] == ["A"] and [r["s2id"] for r in lin["followed_by"]] == ["C"]
+    assert lin["followed_by"][0]["url"] == "https://arxiv.org/abs/xC"
+    assert client.get("/api/kb/papers/lineage", params={"s2id": "nope"}).status_code == 404
+
+
 def test_kb_papers_read_reuses_and_creates(client, monkeypatch):
     from app import jobs
     from app.modules import kb as kbmod

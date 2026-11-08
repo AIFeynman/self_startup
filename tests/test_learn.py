@@ -841,9 +841,10 @@ def test_chapter_lists_every_deep_read_and_local_search_endpoints(client, fake_s
     client.post(f"/api/learn/steps/{s1['id']}/open", json={})
     prompt = fake_submit[-1]["prompt"]
     assert f"#learn/item/{old[0]}" in prompt and "/data/learn/0" in prompt
-    for api in ("/api/kb/papers/search", "/api/kb/papers/map", "/api/intel/oss/search", "/api/intel/startups", "/api/kb/search"):
+    for api in ("/api/kb/papers/search", "/api/kb/papers/lineage", "/api/kb/papers/map", "/api/intel/oss/search", "/api/intel/startups", "/api/kb/search"):
         assert api in prompt
     assert "在代码里看" in prompt and "产业落地" in prompt
+    assert "track.json" in prompt and "相关工作地图" in prompt and "判断与方向" in prompt
     client.delete(f"/api/learn/plans/{p['id']}")
     db.execute(f"DELETE FROM learn_items WHERE id IN ({','.join('?' * len(old))})", old)
 
