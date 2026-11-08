@@ -75,6 +75,8 @@ const CSS = `
 .kb-tl > .kb-jr { position: relative; }
 .kb-tl > .kb-jr::before { content: ''; position: absolute; left: -18px; top: 13px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line-2); }
 .kb-tl > .kb-jr.chg::before { border-color: var(--accent); background: var(--accent); }
+.kb-think { display: grid; gap: 6px; padding: 14px 16px; margin: 14px 0 0; border-left: 3px solid var(--accent); }
+.kb-think .q { font-size: 16px; font-weight: 600; }
 .kb-new { display: grid; gap: 8px; padding: 14px 16px; margin-bottom: 14px; }
 .kb-src { display: grid; gap: 6px; }
 .kb-src .sel { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -569,6 +571,8 @@ async function judgeTab(body, ctx, focus = '') {
     { k: `已复查 · 仍成立 ${S.verdicts.holds} · 修正 ${S.verdicts.revised} · 推翻 ${S.verdicts.overturned}`, v: S.reviewed },
   ]));
   if (S.pending) body.append(h('div.kb-status', { style: { margin: '8px 0 0' } }, `还有 ${S.pending} 条新记录没归类，点右上角「整理」`));
+  const t = await api.get('/api/kb/think/today').catch(() => null);
+  if (t) body.append(thinkCard(ctx, t, j.today));
 
   // 记一条（带类型 / 信心 / 复查日；只想快速记就用上面输入框的「记判断」）
   const newBox = h('div');
@@ -685,6 +689,21 @@ function srcList(h, srcs) {
     ...srcs.map((x) => (x.link || x.url) ? h('a', { href: x.link || x.url, ...(x.link ? {} : { target: '_blank', rel: 'noopener' }) }, x.title || x.url) : h('span', {}, x.title))]);
 }
 
+const think = (ctx, t) => ctx.openChat({ module: 'kb', ref: t.ref, title: '今日一想', send: t.chatted ? '' : `我们来想这个问题：${t.question}` });
+
+function thinkCard(ctx, t, today) {
+  const { h, ui } = ctx;
+  const origin = h('span.muted', {}, t.date === today ? '' : `${t.date} 开始想的`);
+  return h('div.card.kb-think', {}, [
+    h('div.row', {}, [h('b', {}, '今日一想'), h('span.grow'), origin]),
+    h('div.q', {}, t.question),
+    t.judgment
+      ? h('div.kb-ag', {}, [h('b', {}, '想出来的判断：'), t.judgment.text, h('span.muted', {}, ' · 已记进台账，明天接着往下想')])
+      : h('div.muted', {}, t.chatted ? '想到一半，接着和批判者聊；想清楚了让它帮你记下判断' : '批判者每轮给一个认知、一个追问、去哪求证，不给结论；想清楚后由它帮你记下判断'),
+    h('div.row', {}, [h('button', { onclick: () => think(ctx, t) }, [ui.icon('chat'), t.chatted || t.judgment ? '接着聊' : '开始想'])]),
+  ]);
+}
+
 // 一行判断，点开看原话、Agent 评价、复查记录，并能复查
 function jRow(ctx, c, { open = false, today, chg = false, lead = '' } = {}) {
   const { h } = ctx;
@@ -781,6 +800,7 @@ function jDetail(ctx, c, today) {
       h('span.grow'),
       date, h('button.ghost', { onclick: () => send('snooze') }, '改期'),
       h('button.ghost', { onclick: (ev) => recheck(ev.currentTarget) }, '让 Agent 对照新材料'),
+      h('button.ghost', { title: '和批判者对话把这条想深，想清楚后记下新判断', onclick: async () => think(ctx, await api.post('/api/kb/think', { sid: c.sid })) }, '接着想'),
       c.type === '疑问' ? null : h('button.ghost', { title: '派后台调研任务联网查之后的证据，带来源给参考结论', onclick: (ev) => verify(ev.currentTarget) }, '联网核验'),
     ]),
   ]);

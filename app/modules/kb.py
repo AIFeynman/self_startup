@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 import re
 
-from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
+from .. import kb, kb_graph, kb_idea, kb_judge, kb_verify, kb_whynot
 from . import _paper_add as paper_add, _paper_label as paper_label, _paper_maintain as paper_maintain, _paper_map as paper_map
 
 TITLE = "知识库"
@@ -48,6 +48,8 @@ def stats():
 
 
 def agent_context(ref: str) -> str:
+    if ref.startswith("think:"):
+        return kb_idea.context(int(ref.split(":")[1]))
     try:
         return (kb.read("GRAPH.md")[:4000] + "\n\n" + kb.read("INDEX.md")[:3000]
                 + "\n\n我的判断台账在 JUDGMENTS.md / judgments/（问题线、复查记录）。").strip()
@@ -164,6 +166,38 @@ def judgment_review(body: ReviewIn):
 
 class RecheckIn(BaseModel):
     sid: str
+
+
+@router.get("/think/today")
+def think_today():
+    return kb_idea.today()
+
+
+@router.post("/think")
+def think_start(body: RecheckIn):
+    t = kb_idea.start(body.sid)
+    if not t:
+        raise HTTPException(404, "judgment not found")
+    return t
+
+
+class ThinkRecordIn(BaseModel):
+    text: str
+    type: str = ""
+    confidence: str = ""
+    due: str = ""
+
+
+@router.post("/think/{tid}/record")
+def think_record(tid: int, body: ThinkRecordIn):
+    try:
+        t = kb_idea.record(tid, body.text, body.type, body.confidence, body.due)
+    except ValueError:
+        raise HTTPException(400, "empty")
+    if not t:
+        raise HTTPException(404, "think not found")
+    kb_graph.schedule_refresh()
+    return {"ok": True, "sid": t["judgment"]["sid"], "think": t}
 
 
 @router.post("/judgments/verify")
