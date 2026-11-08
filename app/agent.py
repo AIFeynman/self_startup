@@ -68,16 +68,20 @@ def available(engine: str) -> bool:
     return bool(shutil.which(cfg.get("bin", engine)))
 
 
-def module_model(module: str, engine: str = "claude") -> str:
+def _is_claude(engine: str) -> bool:
+    return (engine or settings.get("engines.default", "claude")) == "claude"
+
+
+def module_model(module: str, engine: str = "") -> str:
     """板块单独指定的模型（设置 module_models.<板块>，只对 Claude 生效）；空 = 用引擎默认模型。"""
-    if engine != "claude":
+    if not _is_claude(engine):
         return ""
     return str((settings.get("module_models", {}) or {}).get(module) or "")
 
 
-def tier_model(tier: str, engine: str = "claude") -> str:
+def tier_model(tier: str, engine: str = "") -> str:
     """按任务难度取模型（设置 model_tiers.<档>，只对 Claude 生效）；空 = 走板块 / 引擎默认。"""
-    if engine != "claude" or not tier:
+    if not _is_claude(engine) or not tier:
         return ""
     return str((settings.get("model_tiers", {}) or {}).get(tier) or "")
 
