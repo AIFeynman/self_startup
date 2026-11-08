@@ -1,0 +1,23 @@
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{--bg:#fffdf9;--fg:#2a2520;--mut:#8b8178;--ln:#ebe3d8;--ac:#c4552f}@media (prefers-color-scheme:dark){:root{--bg:#262420;--fg:#ece6dd;--ac:#e0774f;--ln:#3a3631}}html,body{margin:0;background:transparent;color:var(--fg);font:13px system-ui,sans-serif}.w{padding:8px 10px}label{display:flex;align-items:center;gap:8px;margin:5px 0}label span.n{width:130px;color:var(--mut)}input[type=range]{flex:1;accent-color:var(--ac)}b.v{width:64px;text-align:right}.bar{height:14px;background:var(--ac);border-radius:3px}.row{display:flex;align-items:center;gap:8px;margin:3px 0}.row .k{width:150px;color:var(--mut)}.row .t{flex:1;background:var(--ln);border-radius:3px}.hint{color:var(--mut);margin:4px 0 6px}table{border-collapse:collapse;margin-top:6px}td,th{border:1px solid var(--ln);padding:3px 7px;text-align:right}.bad{color:var(--ac);font-weight:600}select{background:var(--bg);color:var(--fg);border:1px solid var(--ln);border-radius:4px}</style>
+<div class=w>
+<div class=hint>4×4 权重 W，右上角是离群值。FP4(E2M1) 取值 {0, .5, 1, 1.5, 2, 3, 4, 6}，块内 scale = 块最大值/6。前向量化 W，反向量化 Wᵀ，比较同一个元素。</div>
+<label><span class=n>离群值 W[0,3]</span><input id=o type=range min=1 max=8 step=0.5 value=5><b class=v id=ov></b></label>
+<label><span class=n>分块方式</span><select id=m><option value=1>1D：每 2 个连续元素一块</option><option value=2>2D：2×2 方块</option></select></label>
+<div id=out></div></div>
+<script>
+const V=[0,.5,1,1.5,2,3,4,6];
+const q=(x,s)=>{const y=Math.abs(x)/s;let b=V[0];for(const v of V)if(Math.abs(y-v)<Math.abs(y-b))b=v;return Math.sign(x)*b*s};
+function q1(W){return W.map(row=>{const o=[];for(let j=0;j<4;j+=2){const s=Math.max(Math.abs(row[j]),Math.abs(row[j+1]))/6;o.push(q(row[j],s),q(row[j+1],s))}return o})}
+function q2(W){const o=W.map(r=>r.slice());for(let i=0;i<4;i+=2)for(let j=0;j<4;j+=2){const s=Math.max(...[[0,0],[0,1],[1,0],[1,1]].map(([a,b])=>Math.abs(W[i+a][j+b])))/6;for(const[a,b]of[[0,0],[0,1],[1,0],[1,1]])o[i+a][j+b]=q(W[i+a][j+b],s)}return o}
+const T=M=>M[0].map((_,j)=>M.map(r=>r[j]));
+function go(){const ov=+O.value;ovv.textContent=ov;
+const W=[[.4,.5,.6,ov],[.3,.2,.9,.7],[.5,.6,.4,.3],[.2,.3,.1,.8]];
+const f=m.value==1?q1:q2;const F=f(W),Bk=T(f(T(W)));
+let mx=0,at='';const c=[];for(let i=0;i<4;i++)for(let j=0;j<4;j++){const d=Math.abs(F[i][j]-Bk[i][j]);if(d>mx){mx=d;at='W['+i+','+j+']'}}
+let h='<table><tr><th></th>'+[0,1,2,3].map(j=>'<th>列'+j+'</th>').join('')+'</tr>';
+for(let i=0;i<4;i++){h+='<tr><th>行'+i+'</th>'+[0,1,2,3].map(j=>{const d=Math.abs(F[i][j]-Bk[i][j])>1e-9;return '<td class="'+(d?'bad':'')+'">'+F[i][j].toFixed(2)+' / '+Bk[i][j].toFixed(2)+'</td>'}).join('')+'</tr>'}
+h+='</table><div class=hint>每格：前向 / 反向。红色 = 同一元素两次量化结果不一致。最大差 '+mx.toFixed(3)+(mx>1e-9?'（'+at+'，原值 '+W[+at[2]][+at[4]]+'）':'')+'。<br>观察：1D 时离群值拖着同块的小值被量化得偏小（默认 5.0 时 W[0,2]=0.6 前向得 0.4167），而反向里它和 0.9 同块，得到 0.6；切到 2D 红格消失，但总量化误差略大。</div>';
+out.innerHTML=h}
+const O=document.getElementById('o'),ovv=document.getElementById('ov'),m=document.getElementById('m'),out=document.getElementById('out');
+O.oninput=m.onchange=go;go();
+</script>

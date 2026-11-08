@@ -1,0 +1,22 @@
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{--bg:#fffdf9;--fg:#2a2520;--mut:#8b8178;--ln:#ebe3d8;--ac:#c4552f}@media (prefers-color-scheme:dark){:root{--bg:#262420;--fg:#ece6dd;--ac:#e0774f;--ln:#3a3631}}html,body{margin:0;background:transparent;color:var(--fg);font:13px system-ui,sans-serif}.w{padding:8px 10px}label{display:flex;align-items:center;gap:8px;margin:5px 0}label span.n{width:130px;color:var(--mut)}input[type=range]{flex:1;accent-color:var(--ac)}b.v{width:64px;text-align:right}.bar{height:14px;background:var(--ac);border-radius:3px}.row{display:flex;align-items:center;gap:8px;margin:3px 0}.row .k{width:150px;color:var(--mut)}.row .t{flex:1;background:var(--ln);border-radius:3px}.hint{color:var(--mut);margin:4px 0 6px}table{border-collapse:collapse;margin-top:6px}td,th{border:1px solid var(--ln);padding:3px 7px;text-align:right}.bad{color:var(--ac);font-weight:600}select{background:var(--bg);color:var(--fg);border:1px solid var(--ln);border-radius:4px}</style>
+<div class=w>
+<div class=hint>玩具参数：基准点 N=T=D=1 时三项分别为 0.10 / 0.15 / 0.05，指数都取 0.5，E=2，L₀=10。拖动三个滑条（每格 ×2），看 L 怎么变。</div>
+<label><span class=n>参数量 N（×）</span><input id=n type=range min=-2 max=4 value=0><b class=v id=nv></b></label>
+<label><span class=n>总训练样本 T（×）</span><input id=t type=range min=-2 max=4 value=0><b class=v id=tv></b></label>
+<label><span class=n>不重复数据 D（×）</span><input id=d type=range min=-2 max=4 value=0><b class=v id=dv></b></label>
+<div class=row><span class=k>欠容量 a/N^α</span><div class=t><div class=bar id=b1></div></div><b class=v id=x1></b></div>
+<div class=row><span class=k>欠训练 b/T^β</span><div class=t><div class=bar id=b2></div></div><b class=v id=x2></b></div>
+<div class=row><span class=k>过拟合 c·N^γ/D^δ</span><div class=t><div class=bar id=b3></div></div><b class=v id=x3></b></div>
+<div class=hint id=out></div></div>
+<script>
+const E=2,L0=10,f=(x)=>Math.pow(2,x);
+function r(){const n=f(+N.value),t=f(+T.value),d=f(+D.value);
+const a=.10/Math.sqrt(n),b=.15/Math.sqrt(t),c=.05*Math.sqrt(n)/Math.sqrt(d);
+const L=h=>E+(L0-E)*h/(1+h);
+nv.textContent='×'+n;tv.textContent='×'+t;dv.textContent='×'+d;
+[[b1,x1,a],[b2,x2,b],[b3,x3,c]].forEach(([e,x,v])=>{e.style.width=Math.min(100,v/0.4*100)+'%';x.textContent=v.toFixed(3)});
+const h=a+b+c;
+out.innerHTML='h = '+h.toFixed(3)+' → <b>L = '+L(h).toFixed(3)+'</b>；Chinchilla 式（无过拟合项）会给 L = '+L(a+b).toFixed(3)+'。重复轮数 T/D = ×'+(t/d).toFixed(2)+'。<br>观察：D 不变时只加 N，过拟合项同步变大，收益被吃掉；加 T 或加 D 才继续降。';}
+const N=document.getElementById('n'),T=document.getElementById('t'),D=document.getElementById('d');
+['n','t','d'].forEach(i=>document.getElementById(i).oninput=r);r();
+</script>

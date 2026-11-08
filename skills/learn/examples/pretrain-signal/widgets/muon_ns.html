@@ -1,0 +1,22 @@
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{--bg:#fffdf9;--fg:#2a2520;--mut:#8b8178;--ln:#ebe3d8;--ac:#c4552f}@media (prefers-color-scheme:dark){:root{--bg:#262420;--fg:#ece6dd;--ac:#e0774f;--ln:#3a3631}}html,body{margin:0;background:transparent;color:var(--fg);font:13px system-ui,sans-serif}.w{padding:8px 10px}label{display:flex;align-items:center;gap:8px;margin:5px 0}label span.n{width:130px;color:var(--mut)}input[type=range]{flex:1;accent-color:var(--ac)}b.v{width:64px;text-align:right}.bar{height:14px;background:var(--ac);border-radius:3px}.row{display:flex;align-items:center;gap:8px;margin:3px 0}.row .k{width:150px;color:var(--mut)}.row .t{flex:1;background:var(--ln);border-radius:3px}.hint{color:var(--mut);margin:4px 0 6px}table{border-collapse:collapse;margin-top:6px}td,th{border:1px solid var(--ln);padding:3px 7px;text-align:right}.bad{color:var(--ac);font-weight:600}select{background:var(--bg);color:var(--fg);border:1px solid var(--ln);border-radius:4px}</style>
+<div class=w>
+<div class=hint>梯度奇异值 σ=(1, r)，先除以 Frobenius 范数；每一步 s ← a·s + b·s³ + c·s⁵。拖动 r 和步数，看两个奇异值是否靠近 1。</div>
+<label><span class=n>小奇异值比 r</span><input id=r type=range min=0.02 max=1 step=0.01 value=0.33><b class=v id=rv></b></label>
+<label><span class=n>NS 迭代步数</span><input id=k type=range min=0 max=10 value=5><b class=v id=kv></b></label>
+<label><span class=n>系数</span><select id=m><option value=a>Keller 五次式全程 (3.4445, −4.7750, 2.0315)</option><option value=h>DeepSeek-V4 混合：前 8 步 Keller，后 2 步 (2, −1.5, 0.5)</option></select></label>
+<div class=row><span class=k>大奇异值 s₁</span><div class=t><div class=bar id=b1></div></div><b class=v id=x1></b></div>
+<div class=row><span class=k>小奇异值 s₂</span><div class=t><div class=bar id=b2></div></div><b class=v id=x2></b></div>
+<div class=hint id=out></div></div>
+<script>
+const A=[3.4445,-4.7750,2.0315],B=[2,-1.5,.5];
+function step(s,c){return c[0]*s+c[1]*s**3+c[2]*s**5}
+function go(){const r=+R.value,k=+K.value,m=M.value;
+let nrm=Math.sqrt(1+r*r),s1=1/nrm,s2=r/nrm;
+for(let i=0;i<k;i++){const c=(m=='h'&&i>=8)?B:A;s1=step(s1,c);s2=step(s2,c)}
+rv.textContent=r.toFixed(2);kv.textContent=k;
+b1.style.width=Math.min(100,s1/1.5*100)+'%';b2.style.width=Math.min(100,s2/1.5*100)+'%';
+x1.textContent=s1.toFixed(4);x2.textContent=s2.toFixed(4);
+out.innerHTML='SGD 式更新保留比例 1 : '+r.toFixed(2)+'；Muon 后比例 1 : '+(s2/s1).toFixed(3)+'（理想正交化是 1 : 1）。<br>观察：Keller 系数不收敛到 1，而是在约 0.7–1.2 间抖动；混合方案最后 2 步把它们钉在 1 附近。';}
+const R=document.getElementById('r'),K=document.getElementById('k'),M=document.getElementById('m');
+R.oninput=K.oninput=M.onchange=go;go();
+</script>
