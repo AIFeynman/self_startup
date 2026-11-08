@@ -2111,6 +2111,25 @@ def _quiz_line(s: dict) -> str:
     return f"测试 {r.get('score')} 分" + (f"，薄弱：{weak}" if weak else "")
 
 
+def _local_library(exclude_plan: int) -> str:
+    """章节要把本机已有的深读、调研、论文库、开源项目库、创业公司库关联进来：深读全量列出，其余给只读检索接口。"""
+    api = agent.API_BASE
+    items = db.rows("SELECT id,kind,title,url,output_path FROM learn_items WHERE status='done' ORDER BY id")
+    lines = [f"- [条目{i['id']} {i['kind']}] {i['title'] or i['url']}　页面 #learn/item/{i['id']}"
+             f"　产物目录 {Path(i['output_path']).parent if i['output_path'] else _item_dir(i)}" for i in items]
+    plans = db.rows("SELECT id,topic FROM learn_plans WHERE id!=? ORDER BY id DESC LIMIT 10", [exclude_plan])
+    lines += [f"- [计划{x['id']}] {x['topic']}" for x in plans]
+    return f"""本机资料库（只读，按需 curl；和本章相关的要用上，见规范「本地资料」）：
+- 已深读的论文 / 项目 / 文章（全部）：
+{chr(10).join(lines) or '（暂无）'}
+- 知识库全文检索（深读、调研、笔记）：curl -s "{api}/api/kb/search?q=关键词"，读全文 curl -s "{api}/api/kb/doc?path=<path>"
+- 论文库（近 10 万篇，带被引和是否已深读）：curl -s "{api}/api/kb/papers/search?q=英文关键词&limit=20"
+- 论文脉络图（主题列表在 curl -s {api}/api/kb/papers 的 maps 里）：curl -s "{api}/api/kb/papers/map?topic=主题"
+- 开源项目库（6 万多个 GitHub 仓库）：curl -s "{api}/api/intel/oss/search?q=关键词&k=10"，详情 curl -s "{api}/api/intel/oss/repo?name=owner/repo"
+- 创业公司与产品库：curl -s "{api}/api/intel/startups?q=关键词&all=1"
+"""
+
+
 def _recent_context() -> str:
     """用户最近在读 / 在做的东西：章末测试的「学以致用」题从这里取材。"""
     since = (date.fromisoformat(db.today()) - timedelta(days=14)).isoformat()
@@ -2176,8 +2195,7 @@ def chapter_prompt(s: dict, note: str = "") -> str:
 前面各章（衔接用：不要重复讲已学的；测试暴露的薄弱处在本章相关地方顺带补上）：
 {prev}
 
-用户已学的其他内容（可做联系）：
-{_known_knowledge(exclude_plan=p['id'], limit=10)}
+{_local_library(p['id'])}
 
 用户最近在读 / 在做（章末测试至少 1 题从中挑和本章相关的论文或项目出题，学以致用）：
 {_recent_context()}

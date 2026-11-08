@@ -258,6 +258,21 @@ def papers_map(topic: str):
     return paper_map.view(json.loads(row["result"]))
 
 
+@router.get("/papers/search")
+def papers_search(q: str, limit: int = 20):
+    """论文库全文检索，按被引排序；已深读的带上深读条目。"""
+    paper_map._init()
+    ids = paper_map._fts(q.strip())
+    if not ids:
+        return []
+    rows = paper_map.db.rows(f"SELECT s2id, arxiv, title, year, cites, tier FROM paper_items WHERE rowid IN ({','.join('?' * len(ids))}) "
+                             "ORDER BY cites DESC LIMIT ?", [*ids, max(1, min(limit, 100))])
+    read = paper_map.reads([r["s2id"] for r in rows])
+    return [{"s2id": r["s2id"], "title": r["title"], "year": r["year"], "cites": r["cites"], "tier": r["tier"],
+             "url": paper_map.paper_url(r) or f"https://www.semanticscholar.org/paper/{r['s2id']}",
+             **({"read": read[r["s2id"]]} if r["s2id"] in read else {})} for r in rows]
+
+
 class PaperReadIn(BaseModel):
     s2ids: list[str]
     dry_run: bool = False    # 只看哪些复用、哪些要新跑，不建任务

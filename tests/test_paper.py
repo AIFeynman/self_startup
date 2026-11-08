@@ -187,6 +187,21 @@ def test_kb_papers_endpoints(client):
     assert client.get("/api/kb/papers").json()["maps"][0]["lines"] == 1
 
 
+def test_kb_papers_search_ranks_by_citations_and_marks_deep_reads(client):
+    paper("A", "Linear attention is all you need", 2020, 900)
+    paper("B", "Gated linear attention transformers", 2024, 300)
+    paper("C", "Proximal policy optimization", 2017, 30000)
+    lab.run(call=fake_label())
+    db.execute("DELETE FROM learn_items")
+    db.insert("learn_items", {"kind": "paper", "url": "https://arxiv.org/abs/xB", "status": "done",
+                              "title": "GLA", "created_at": db.now(), "updated_at": db.now()})
+    got = client.get("/api/kb/papers/search", params={"q": "linear attention"}).json()
+    assert [r["title"] for r in got] == ["Linear attention is all you need", "Gated linear attention transformers"]
+    assert got[0]["url"] == "https://arxiv.org/abs/xA" and got[0]["year"] == 2020 and "read" not in got[0]
+    assert got[1]["read"]["status"] == "done"
+    assert client.get("/api/kb/papers/search", params={"q": " "}).json() == []
+
+
 def test_kb_papers_read_reuses_and_creates(client, monkeypatch):
     from app import jobs
     from app.modules import kb as kbmod

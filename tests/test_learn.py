@@ -831,6 +831,23 @@ def test_tech_chapter_asks_for_paper_figures_timeline_and_widgets(client, fake_s
     client.delete(f"/api/learn/plans/{p['id']}")
 
 
+def test_chapter_lists_every_deep_read_and_local_search_endpoints(client, fake_submit):
+    old = [db.insert("learn_items", {"kind": "paper", "url": f"https://arxiv.org/abs/old{i}", "title": f"老论文{i}", "status": "done",
+                                     "output_path": f"/data/learn/{i}/note.md", "created_at": db.now(), "updated_at": db.now()})
+           for i in range(15)]
+    p = client.post("/api/learn/plans", json={"topic": "LLM", "method": "tech"}).json()
+    learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out()))
+    s1, _ = client.get(f"/api/learn/plans/{p['id']}").json()["steps"]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    prompt = fake_submit[-1]["prompt"]
+    assert f"#learn/item/{old[0]}" in prompt and "/data/learn/0" in prompt
+    for api in ("/api/kb/papers/search", "/api/kb/papers/map", "/api/intel/oss/search", "/api/intel/startups", "/api/kb/search"):
+        assert api in prompt
+    assert "在代码里看" in prompt and "产业落地" in prompt
+    client.delete(f"/api/learn/plans/{p['id']}")
+    db.execute(f"DELETE FROM learn_items WHERE id IN ({','.join('?' * len(old))})", old)
+
+
 def test_design_chapter_uses_design_method_not_architecture(client, fake_submit):
     p = client.post("/api/learn/plans", json={"topic": "UX", "method": "design"}).json()
     learn.on_job_done(_job(fake_submit[-1]["id"], _plan_out()))
