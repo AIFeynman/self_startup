@@ -93,3 +93,24 @@ def test_explained_terms_pass(text):
     card = {"title": "t", "plain": text, "analogy": "a", "meaning": "m", "next": "n", "why": [], "deeper": {}}
     probs = vc.check(card, [], set(), lambda u: (200, ""))["problems"]
     assert not any("术语" in p for p in probs)
+
+
+@pytest.mark.parametrize("sid", ["eci_closed", "eci_open", "eci_china", "eci_gap_open", "bench_swe", "bench_metr", "compute_frontier"])
+def test_frontier_series_name_the_model(sid, cache):
+    *_, label = src.fetch(vision.BY_ID[sid], cache)[-1]
+    assert label and not label[0].isdigit()
+    if sid.startswith("eci_gap"):
+        assert " 比 " in label
+
+
+def test_series_page_and_agent_show_which_model(client):
+    sid = "eci_open"
+    _seed(sid, [("2026-01", 150.0, "旧模型"), ("2026-02", 152.5, "新模型 A")])
+    vision.save_points(sid, [("2026-01", 150.0, "旧模型"), ("2026-02", 152.5, "新模型 A"), ("2026-03", 152.5, "新模型 A")])
+    d = client.get(f"/api/vision/series/{sid}").json()
+    assert d["summary"]["label"] == "新模型 A"
+    assert d["labels"]["2026-01"] == "旧模型"
+    tile = next(s for t in client.get("/api/vision/overview").json()["themes"] for s in t["series"] if s["id"] == sid)
+    assert tile["summary"]["label"] == "新模型 A"
+    ctx = vision.agent_context(f"vision:series:{sid}")
+    assert "新模型 A" in ctx and "2026-01" in ctx and vision.BY_ID[sid]["name"] in ctx

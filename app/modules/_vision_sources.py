@@ -1,4 +1,4 @@
-"""视野板块取数：每个来源一个适配器，输入指标配置，输出 [(period, value)]。
+"""视野板块取数：每个来源一个适配器，输入指标配置，输出 [(period, value)]，能说出是哪个模型的多带一列 label。
 
 period 统一写法：年 YYYY、季 YYYY-Qn、月 YYYY-MM、日 YYYY-MM-DD。
 同一轮里多个指标共用的下载（Epoch 压缩包、Indeed 表、OpenRouter 列表）放在 cache 里，只下一次。
@@ -57,19 +57,20 @@ def _cached(cache: dict, key: str, fn):
     return cache[key]
 
 
-def _monthly_running_max(rows: list[tuple[str, float]]) -> list[tuple[str, float]]:
-    """按发布日期取「截至每个月的最高分」，从第一个月连续到最后一次发布，中间没发新模型的月份沿用上月。"""
-    best: dict[str, float] = {}
-    for d, v in rows:
+def _monthly_running_max(rows: list[tuple[str, float, str]]) -> list[tuple[str, float, str]]:
+    """按发布日期取「截至每个月的最高分」和拿到它的模型，从第一个月连续到最后一次发布，中间没发新模型的月份沿用上月。"""
+    best: dict[str, tuple[float, str]] = {}
+    for d, v, name in rows:
         m = _month(d)
-        best[m] = max(best.get(m, v), v)
+        if m not in best or v > best[m][0]:
+            best[m] = (v, name)
     if not best:
         return []
     out, cur, m, end = [], None, min(best), max(best)
     while m <= end:
-        if m in best:
-            cur = best[m] if cur is None else max(cur, best[m])
-        out.append((m, cur))
+        if m in best and (cur is None or best[m][0] > cur[0]):
+            cur = best[m]
+        out.append((m, *cur))
         y, mo = int(m[:4]), int(m[5:])
         m = f"{y + (mo == 12)}-{mo % 12 + 1:02d}"
     return out
@@ -86,12 +87,13 @@ def _zip_csv(z: zipfile.ZipFile, name: str) -> list[dict]:
     return _csv(z.read(path).decode("utf-8-sig"))
 
 
-def epoch_eci(cfg: dict, cache: dict) -> list[tuple[str, float]]:
+def epoch_eci(cfg: dict, cache: dict) -> list[tuple[str, float, str]]:
     rows = _cached(cache, "eci", lambda: _zip_csv(_epoch_zip(cache), "eci_scores.csv"))
 
-    def series(pred) -> dict[str, float]:
-        pts = [(r["date"], v) for r in rows if (v := _num(r.get("eci"))) is not None and r.get("date") and pred(r)]
-        return dict(_monthly_running_max(pts))
+    def series(pred) -> dict[str, tuple[float, str]]:
+        pts = [(r["date"], v, r.get("Display name") or r.get("Model") or "") for r in rows
+               if (v := _num(r.get("eci"))) is not None and r.get("date") and pred(r)]
+        return {m: (v, name) for m, v, name in _monthly_running_max(pts)}
 
     closed = lambda r: r.get("Accessibility group", "").startswith("Closed")  # noqa: E731
     is_open = lambda r: r.get("Accessibility group") == "Open weights"  # noqa: E731
@@ -99,29 +101,29 @@ def epoch_eci(cfg: dict, cache: dict) -> list[tuple[str, float]]:
     g = cfg["args"]["group"]
     if g in ("closed", "open", "china"):
         s = series({"closed": closed, "open": is_open, "china": country("China")}[g])
-        return sorted(s.items())
+        return sorted((m, v, name) for m, (v, name) in s.items())
     a, b = (series(closed), series(is_open)) if g == "gap_open" else (series(country("United States")), series(country("China")))
-    return sorted((m, round(a[m] - b[m], 2)) for m in a.keys() & b.keys())
+    return sorted((m, round(a[m][0] - b[m][0], 2), f"{a[m][1]} 比 {b[m][1]}") for m in a.keys() & b.keys())
 
 
-def epoch_bench(cfg: dict, cache: dict) -> list[tuple[str, float]]:
+def epoch_bench(cfg: dict, cache: dict) -> list[tuple[str, float, str]]:
     a = cfg["args"]
     rows = _zip_csv(_epoch_zip(cache), a["file"])
-    pts = [(r["Release date"], v * a.get("scale", 1)) for r in rows
+    pts = [(r["Release date"], v * a.get("scale", 1), r.get("Model version") or "") for r in rows
            if (v := _num(r.get(a["col"]))) is not None and r.get("Release date")]
-    return [(m, round(v, 2)) for m, v in _monthly_running_max(pts)]
+    return [(m, round(v, 2), name) for m, v, name in _monthly_running_max(pts)]
 
 
-def epoch_models(cfg: dict, cache: dict) -> list[tuple[str, float]]:
+def epoch_models(cfg: dict, cache: dict) -> list[tuple]:
     rows = _cached(cache, "models", lambda: _csv(_get(f"{EPOCH}/notable_ai_models.csv").text))
-    by_year: dict[str, list[float]] = defaultdict(list)
+    by_year: dict[str, list[tuple[float, str]]] = defaultdict(list)
     for r in rows:
         y = (r.get("Publication date") or "")[:4]
         if y.isdigit() and int(y) >= 2000:
-            by_year[y].append(_num(r.get("Training compute (FLOP)")) or 0)
+            by_year[y].append((_num(r.get("Training compute (FLOP)")) or 0, r.get("Model") or ""))
     if cfg["args"]["kind"] == "count":
         return sorted((y, float(len(v))) for y, v in by_year.items() if y < str(date.today().year))
-    return sorted((y, max(v)) for y, v in by_year.items() if max(v) > 0)
+    return sorted((y, *max(v)) for y, v in by_year.items() if max(v)[0] > 0)
 
 
 def epoch_dc(cfg: dict, cache: dict) -> list[tuple[str, float]]:
@@ -289,8 +291,8 @@ ADAPTERS = {f.__name__: f for f in (epoch_eci, epoch_bench, epoch_models, epoch_
                                     ak_unemp, ak_nbs, ak_boxoffice)}
 
 
-def fetch(cfg: dict, cache: dict, have: set[str] | None = None, tries: int = 3) -> list[tuple[str, float]]:
-    """akshare 走 requests，经代理时常见 SSL EOF 断连：整次调用退避重试。"""
+def fetch(cfg: dict, cache: dict, have: set[str] | None = None, tries: int = 3) -> list[tuple]:
+    """返回 [(period, value)]，能说出是哪个模型的指标多带一列 label。akshare 走 requests，经代理时常见 SSL EOF 断连：整次调用退避重试。"""
     fn = ADAPTERS[cfg["source"]]
     for i in range(tries):
         try:
