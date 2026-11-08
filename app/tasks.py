@@ -65,10 +65,10 @@ def list_for(date: str) -> list[dict]:
         "ORDER BY COALESCE(start_time,''), priority, id", [date, date, date, date])]
 
 
-def add_open(title: str, date: str, notes: str) -> dict | None:
-    if db.row(f"SELECT id FROM tasks WHERE end_date IS NULL AND title=? AND status NOT IN {CLOSED}", [title]):
+def add_once(title: str, date: str, notes: str) -> dict | None:
+    if db.row("SELECT id FROM tasks WHERE date=? AND title=?", [date, title]):
         return None
-    return create({"title": title, "date": date, "end_date": "", "notes": notes})
+    return create({"title": title, "date": date, "notes": notes})
 
 
 def _dates(data: dict) -> dict:

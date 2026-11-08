@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import date as Date, timedelta
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
@@ -130,7 +131,8 @@ def api_review(body: ReviewIn):
         raise HTTPException(400, "至少填一栏")
     date = body.date or db.today()
     note = add("\n".join([f"复盘 {date[5:]}", *(f"{key}：{text}" for key, text in filled)]), "review", date=date)
-    issues = [tasks.add_open(f"{key.split('·')[0]}：{review.parse_quick_note(text)['title']}", date, f"来自 {date} 的复盘")
+    next_day = (Date.fromisoformat(date) + timedelta(days=1)).isoformat()
+    issues = [tasks.add_once(f"{key.split('·')[0]}：{review.parse_quick_note(text)['title']}", next_day, f"来自 {date} 的复盘")
               for key, text in filled if key.endswith(f"·{ISSUE_ASPECT}")]
     return {"note": note, "issues": [i for i in issues if i]}
 
