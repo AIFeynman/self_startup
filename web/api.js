@@ -53,10 +53,25 @@ export function h(tag, attrs = {}, children = []) {
   return el;
 }
 
+const TEX_INLINE = /(?<![\\$])\$(?!\$)[^\s$][^$\n]*?[\\^_][^$\n]*?(?<![\s\\])\$(?!\$)/g;
+const TEX_INLINE_SPLIT = new RegExp(`(${TEX_INLINE.source})`);
+const TEX_BEFORE = /[\s*]/;
+const TEX_AFTER = /[\s*?!.,:？！。，：]/;
+const PRICE = /(?<![\\$])\$(?=\d[\d.,]*(?:[\s\u3000-\u303f\uff00-\uffef]|$))/g;
+
+// marked-katex 标准模式要求 $ 外侧是空格或指定标点，且行内公式里允许出现 $：
+// 中文里公式常紧挨「：、（」，给明显是 LaTeX 的 $…$ 两侧补空格；$2.45 这类金额转义，免得和后面的公式配成一对
+export function texSpaces(text) {
+  const pad = (m, at, s) =>
+    `${at && !TEX_BEFORE.test(s[at - 1]) ? ' ' : ''}${m}${at + m.length < s.length && !TEX_AFTER.test(s[at + m.length]) ? ' ' : ''}`;
+  return text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part, i) => (i % 2 ? part
+    : part.split(TEX_INLINE_SPLIT).map((seg, j) => (j % 2 ? seg : seg.replace(PRICE, '\\$'))).join('').replace(TEX_INLINE, pad))).join('');
+}
+
 export function md(text) {
   const div = document.createElement('div');
   div.className = 'md';
-  div.innerHTML = window.marked ? window.marked.parse(text || '') : (text || '').replace(/</g, '&lt;').replace(/\n/g, '<br>');
+  div.innerHTML = window.marked ? window.marked.parse(texSpaces(text || '')) : (text || '').replace(/</g, '&lt;').replace(/\n/g, '<br>');
   // 站外链接新标签打开；#learn/... 这类站内链接在当前页跳转
   div.querySelectorAll('a').forEach((a) => { if (!a.getAttribute('href')?.startsWith('#')) { a.target = '_blank'; a.rel = 'noopener'; } });
   return div;

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root { --bg: #fffdf9; --fg: #2a2520; --mute: #8b8178; --line: #ebe3d8; --acc: #c4552f; --ok: #3d7a4f; }
+@media (prefers-color-scheme: dark) { :root { --bg: #262420; --fg: #ece6dd; --mute: #a39a90; --line: #3a362f; --acc: #e0774f; --ok: #7fbf8f; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: transparent; color: var(--fg); font: 13px/1.45 system-ui, -apple-system, sans-serif; }
+.wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+@media (max-width: 560px) { .wrap { grid-template-columns: minmax(0, 1fr); } }
+.box { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg); min-width: 0; }
+h4 { margin: 0 0 6px; font-size: 12px; color: var(--mute); font-weight: 600; letter-spacing: .04em; }
+.modes { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+.modes button, .acts button { border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 6px; padding: 3px 9px; font: inherit; cursor: pointer; }
+.modes button.on { border-color: var(--acc); color: var(--acc); font-weight: 600; }
+.acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.acts button.main { background: var(--acc); border-color: var(--acc); color: #fff; }
+label { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+label span { width: 64px; color: var(--mute); flex: none; }
+input[type=range] { flex: 1; min-width: 0; accent-color: var(--acc); }
+input[type=number] { width: 58px; font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+.val { width: 78px; text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+.mat { display: inline-grid; grid-template-columns: repeat(2, 64px); gap: 2px; border-left: 2px solid var(--fg); border-right: 2px solid var(--fg); padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.mat div { text-align: right; padding: 2px 4px; border-radius: 3px; }
+.mat div.chg { background: color-mix(in srgb, var(--acc) 18%, transparent); }
+.reads { margin-top: 8px; display: grid; gap: 2px; font-variant-numeric: tabular-nums; }
+.reads div { display: flex; justify-content: space-between; gap: 8px; }
+.log { margin-top: 8px; color: var(--mute); font-size: 12px; white-space: pre-wrap; font-variant-numeric: tabular-nums; max-height: 92px; overflow: auto; }
+.hint { color: var(--mute); font-size: 12px; margin-top: 6px; }
+.dis { opacity: .4; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="box">
+    <h4>更新规则</h4>
+    <div class="modes" id="modes">
+      <button data-m="lin">线性注意力</button>
+      <button data-m="delta" class="on">Delta</button>
+      <button data-m="kda">KDA</button>
+    </div>
+    <label><span>k 角度</span><input id="th" type="range" min="0" max="90" step="1" value="0"><b class="val" id="kv"></b></label>
+    <label><span>v</span><input id="v1" type="number" step="0.5" value="4"><input id="v2" type="number" step="0.5" value="4"></label>
+    <label id="lb"><span>β</span><input id="b" type="range" min="0" max="1" step="0.05" value="1"><b class="val" id="bv"></b></label>
+    <label id="la1"><span>α₁</span><input id="a1" type="range" min="0.0067" max="1" step="any" value="1"><b class="val" id="a1v"></b></label>
+    <label id="la2"><span>α₂</span><input id="a2" type="range" min="0.0067" max="1" step="any" value="1"><b class="val" id="a2v"></b></label>
+    <div class="acts">
+      <button class="main" id="write">写入 (k, v)</button>
+      <button id="ex">载入本节例子</button>
+      <button id="reset">清零</button>
+    </div>
+    <div class="hint">k 角度 0° = k₁(1,0)，90° = k₂(0,1)，约 53° ≈ k₃(0.6,0.8)；k 始终是单位向量。</div>
+  </div>
+  <div class="box">
+    <h4>状态 S（第 i 行 = key 第 i 个通道存的内容）</h4>
+    <div class="mat" id="S"></div>
+    <div class="reads" id="reads"></div>
+    <div class="log" id="log">先选规则，再拖 k、填 v，点「写入」。</div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let mode = 'delta', S = [[0, 0], [0, 0]], last = null;
+const truth = {};
+const probes = [['k₁', [1, 0]], ['k₂', [0, 1]], ['k₃', [0.6, 0.8]]];
+const f = (x) => { const r = Math.round(x * 100) / 100; return (r === 0 ? 0 : r).toFixed(2).replace(/\.00$/, ''); };
+const vec = (a) => `(${a.map(f).join(', ')})`;
+const key = () => { const t = +$('th').value * Math.PI / 180; return [Math.cos(t), Math.sin(t)]; };
+const read = (M, k) => [0, 1].map((j) => M[0][j] * k[0] + M[1][j] * k[1]);
+const near = (k) => probes.find(([, p]) => Math.abs(p[0] - k[0]) < 0.02 && Math.abs(p[1] - k[1]) < 0.02);
+
+function render() {
+  const k = key();
+  $('kv').textContent = vec(k);
+  $('bv').textContent = f(+$('b').value);
+  $('a1v').textContent = (+$('a1').value).toFixed(3);
+  $('a2v').textContent = (+$('a2').value).toFixed(3);
+  $('lb').classList.toggle('dis', mode === 'lin');
+  ['la1', 'la2'].forEach((id) => $(id).classList.toggle('dis', mode !== 'kda'));
+  $('S').innerHTML = S.flat().map((x, i) => `<div class="${last && last[i] !== x ? 'chg' : ''}">${f(x)}</div>`).join('');
+  $('reads').innerHTML = '<div><b>探针</b><b>读出 Sᵀk</b><b>最后写入的值</b></div>' + probes.map(([n, p]) =>
+    `<div><span>${n}</span><span>${vec(read(S, p))}</span><span>${truth[n] ? vec(truth[n]) : '—'}</span></div>`).join('');
+}
+
+function write() {
+  const k = key(), v = [+$('v1').value, +$('v2').value];
+  const b = mode === 'lin' ? 1 : +$('b').value;
+  const a = mode === 'kda' ? [+$('a1').value, +$('a2').value] : [1, 1];
+  last = S.flat();
+  const D = S.map((row, i) => row.map((x) => a[i] * x));
+  let msg;
+  if (mode === 'lin') {
+    S = D.map((row, i) => row.map((x, j) => x + k[i] * v[j]));
+    msg = `线性：S ← S + k vᵀ，k=${vec(k)}，v=${vec(v)}`;
+  } else {
+    const vh = read(D, k), e = v.map((x, j) => x - vh[j]);
+    S = D.map((row, i) => row.map((x, j) => x + b * k[i] * e[j]));
+    msg = `${mode === 'kda' ? `先衰减 Diag(α)=${vec(a)}，` : ''}读出 v̂=${vec(vh)}，误差 e=v−v̂=${vec(e)}，S ← S + β k eᵀ（β=${f(b)}）`;
+  }
+  const p = near(k);
+  if (p) truth[p[0]] = v;
+  $('log').textContent = msg + '\n' + $('log').textContent.replace(/^先选规则.*$/, '');
+  render();
+}
+
+$('modes').onclick = (ev) => {
+  const m = ev.target.dataset.m;
+  if (!m) return;
+  mode = m;
+  [...$('modes').children].forEach((x) => x.classList.toggle('on', x.dataset.m === m));
+  render();
+};
+['th', 'b', 'a1', 'a2'].forEach((id) => $(id).oninput = render);
+$('write').onclick = write;
+$('reset').onclick = () => { S = [[0, 0], [0, 0]]; last = null; for (const n in truth) delete truth[n]; $('log').textContent = '已清零。'; render(); };
+$('ex').onclick = () => {
+  S = [[1, 2], [3, -1]]; last = null;
+  for (const n in truth) delete truth[n];
+  truth['k₁'] = [1, 2]; truth['k₂'] = [3, -1];
+  $('th').value = 0; $('v1').value = 4; $('v2').value = 4; $('b').value = 1;
+  $('log').textContent = '已载入手算 1：S = k₁v₁ᵀ + k₂v₂ᵀ。现在写入 (k₁,(4,4))，比较线性和 Delta。';
+  render();
+};
+render();
+</script>
+</body>
+</html>

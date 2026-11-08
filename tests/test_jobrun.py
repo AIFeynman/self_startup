@@ -126,3 +126,12 @@ def test_finished_skips_paused(client):
     jid = db.insert("jobs", {"module": "nomod", "engine": "claude", "prompt": "p", "status": "paused",
                              "created_at": db.now(), "finished_at": "2099-01-01T00:00:00"})
     assert jid not in [j["id"] for j in client.get("/api/jobs/finished", params={"since": "2098-12-31"}).json()]
+
+
+@pytest.mark.real_runner
+def test_pause_right_after_submit_stops_job(client, fake_claude):
+    db.execute("UPDATE jobs SET status='done' WHERE status IN ('queued','running')")
+    jid = jobs.submit("nomod", "slow", engine="claude")
+    assert client.post(f"/api/jobs/{jid}/pause").json() == {"ok": True}
+    j = _wait(jid, lambda j: j["status"] != "running", timeout=8)
+    assert j["status"] == "paused" and not j["output"]

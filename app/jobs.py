@@ -451,6 +451,13 @@ def pause(jid: int) -> bool:
                   ["\n[paused] 排队中被暂停", db.now(), jid]) == 1:  # 还没开始
         _hook(j["module"], "on_job_done", db.row("SELECT * FROM jobs WHERE id=?", [jid]))
         return True
+    if not j["pid"] and jid not in _procs and db.execute("UPDATE jobs SET status='paused', log=log||?, finished_at=? "
+                                                           "WHERE id=? AND status='running' AND pid IS NULL",
+                                                           ["\n[paused] 启动前被暂停", db.now(), jid]) == 1:  # 已认领、runner 还没登记 pid
+        _hook(j["module"], "on_job_done", db.row("SELECT * FROM jobs WHERE id=?", [jid]))
+        j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
+        if not j["pid"]:
+            return True
     if _alive(j["pid"]) and j["pid"] != os.getpid():  # runner 收到 SIGTERM 后停掉 CLI，记为已暂停（见 jobrun）
         os.kill(j["pid"], signal.SIGTERM)
         return True

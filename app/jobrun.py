@@ -19,13 +19,14 @@ def main(jid: int) -> None:
     j = db.row("SELECT * FROM jobs WHERE id=?", [jid])
     if not j or j["status"] != "running":  # kick 认领时已置为 running；别的状态说明已被暂停 / 处理过
         return
-    db.update("jobs", jid, {"pid": os.getpid()})
 
     def on_term(*_):
         jobs._paused.add(jid)
         if proc := jobs._procs.get(jid):
             agent.stop(proc)
     signal.signal(signal.SIGTERM, on_term)
+    if db.execute("UPDATE jobs SET pid=? WHERE id=? AND status='running'", [os.getpid(), jid]) != 1:
+        return  # 登记前被暂停
     jobs._run(jid, j["module"], j["prompt"], j["engine"], j["system"] or "", j["cwd"] or None,
               json.loads(j["add_dirs"] or "[]"), j["session_in"] or "", j.get("model") or "")
     kb._safe_sync()
