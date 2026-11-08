@@ -53,7 +53,7 @@ export function h(tag, attrs = {}, children = []) {
   return el;
 }
 
-const TEX_INLINE = /(?<![\\$])\$(?!\$)(?:[^\s$\d][^$\n]*?|[^\s$][^$\n]*?[\\^_=][^$\n]*?)(?<![\s\\])\$(?!\$)/g;
+const TEX_INLINE = /(?<![\\$])\$(?!\$)(?:[^\s$\d\u3000-\u303f\uff00-\uffef][^$\n]*?|[^\s$][^$\n]*?[\\^_=][^$\n]*?|[\d.,]+)(?<![\s\\])\$(?!\$)/g;
 const TEX_INLINE_SPLIT = new RegExp(`(${TEX_INLINE.source})`);
 const TEX_DISPLAY = /\$\$([\s\S]+?)\$\$/g;
 const TEX_BEFORE = /[\s*]/;
