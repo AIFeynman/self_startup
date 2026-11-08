@@ -52,7 +52,7 @@ function spark(pts) {
     <circle cx="${x(last)}" cy="${y(pts[last][1])}" r="2.6"/></svg>`;
 }
 
-function bigChart(h, cfg, pts) {
+function bigChart(h, cfg, pts, labels = {}) {
   const w = 720, ht = 260, pad = { left: 52, right: 14, top: 14, bottom: 26 };
   const { x, y, lo, hi } = scale(pts, w, ht, pad);
   const d = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join('');
@@ -73,7 +73,7 @@ function bigChart(h, cfg, pts) {
     const cx = x(i), cy = y(pts[i][1]);
     cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
     dot.setAttribute('cx', cx); dot.setAttribute('cy', cy); dot.setAttribute('visibility', 'visible');
-    tip.hidden = false; tip.textContent = `${pts[i][0]}：${fmt(pts[i][1])} ${cfg.unit || ''}`;
+    tip.hidden = false; tip.textContent = `${pts[i][0]}：${fmt(pts[i][1])} ${cfg.unit || ''}${labels[pts[i][0]] ? ` · ${labels[pts[i][0]]}` : ''}`;
     const left = cx / w * 100; tip.style.left = `${left}%`; tip.classList.toggle('flip', left > 60);
   });
   hit.addEventListener('mouseleave', () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); });
@@ -86,6 +86,7 @@ function tile(h, s) {
   return h('a.card.vs-tile', { href: `#vision/${s.id}` }, [
     h('div.vs-tile-name', {}, s.name),
     h('div.vs-tile-val', {}, [h('b', {}, fmt(sm.value)), h('span.muted', {}, ` ${s.unit || ''} · ${sm.period || '还没取到'}`)]),
+    sm.label ? h('div.vs-tile-model', { title: sm.label }, sm.label) : null,
     h('div.vs-tile-chg.muted', {}, changeLine(s, sm)),
     h('div', { html: spark(s.spark || []) }),
     reasons.length ? h('div.vs-reason', {}, reasons[0]) : null,
@@ -128,7 +129,7 @@ function themeBlock(h, ui, t) {
   return out;
 }
 
-function cardView(h, c, cfg, { full = false } = {}) {
+function cardView(h, c, cfg, { full = false, onAsk = null } = {}) {
   const b = c.body || {}, s = c.summary || {};
   const why = (b.why || []).map((w) => h('li', {}, [
     h(`span.tag.${w.kind === '推测' ? 'gray' : 'ok'}`, {}, w.kind || '来源'), ' ', w.text || '',
@@ -152,6 +153,7 @@ function cardView(h, c, cfg, { full = false } = {}) {
     cfg?.note ? row('口径提醒', h('span.muted', {}, cfg.note)) : null,
     full && (c.checks?.problems || []).length ? row('校验没过', h('ul.vs-list.err', {}, c.checks.problems.map((p) => h('li', {}, p)))) : null,
     full && c.review?.reason && !c.review.pass ? row('审稿意见', c.review.reason) : null,
+    onAsk && c.status === 'done' ? h('div.vs-card-ask', {}, h('button.ghost', { onclick: () => onAsk(c) }, '对这张卡有疑问？问 Agent')) : null,
   ]);
 }
 
@@ -172,10 +174,18 @@ function hitStats(ui, hits, themes) {
     ...themes.filter((t) => hits[t.id]).map((t) => ({ k: t.title, v: pct(hits[t.id]) }))]);
 }
 
-function askBar(ctx, ref, title) {
+function askBar(ctx, ref, title, tips = TIPS, placeholder = '问问这些数据：为什么会这样、接下来会怎样、对我意味着什么…') {
   const send = (text) => ctx.openChat({ module: 'vision', ref, title, send: text });
-  const box = ctx.ui.composer({ placeholder: '问问这些数据：为什么会这样、接下来会怎样、对我意味着什么…', hint: '', onSubmit: send });
-  return ctx.h('div.vs-ask', {}, [box, ctx.ui.chips(TIPS.map((t) => ({ label: t, onClick: () => send(t) })), { left: true })]);
+  const box = ctx.ui.composer({ placeholder, hint: '', onSubmit: send });
+  return ctx.h('div.vs-ask', {}, [box, ctx.ui.chips(tips.map((t) => ({ label: t, onClick: () => send(t) })), { left: true })]);
+}
+
+const askCard = (ctx, c) => ctx.openChat({ module: 'vision', ref: `vision:series:${c.series_id}`, title: '视野',
+  prefill: `关于解读卡「${c.body?.title || ''}」：` });
+
+function seriesTips(s) {
+  const who = s.summary?.label;
+  return [who ? `${who} 是谁家的，强在哪？` : `${s.name}为什么会这样变？`, '接下来一年会怎么走？', '这对我意味着什么？'];
 }
 
 function statusLine(st) {
@@ -195,7 +205,7 @@ async function home(el, ctx) {
     ui.pageHead('视野', statusLine(d.status), [btn]),
     askBar(ctx, 'vision:home', '视野'),
     ui.section('最近 30 天的解读', d.cards.length > 6 ? `共 ${d.cards.length} 张，显示最显著的 6 张` : ''),
-    d.cards.length ? h('div.vs-cards', {}, d.cards.slice(0, 6).map((c) => cardView(h, c, byId[c.series_id])))
+    d.cards.length ? h('div.vs-cards', {}, d.cards.slice(0, 6).map((c) => cardView(h, c, byId[c.series_id], { onAsk: (x) => askCard(ctx, x) })))
       : ui.empty('还没有解读卡', '每天更新数据后，程序挑出变化最显著的指标写卡；卡要先通过数字对账和审稿才会出现在这里。'),
     ...d.themes.flatMap((t) => themeBlock(h, ui, t)),
     ui.section('判断与对账', '每张卡至少一条到期能对账的判断'),
@@ -209,6 +219,7 @@ async function detail(el, ctx, sid) {
   const s = await api.get(`/api/vision/series/${sid}`);
   const sm = s.summary || {};
   const pts = s.spark || [];
+  const hasLabels = Object.keys(s.labels).length > 0;
   const btn = s.status === 'ok' ? h('button.ghost', { onclick: async () => {
     try { await api.post(`/api/vision/series/${sid}/card`, {}); toast('开始写这张卡：查原因 → 对账 → 审稿，几分钟后刷新'); } catch (e) { toast(e.message, true); }
   } }, [ui.icon('spark'), ' 现在写一张解读卡']) : null;
@@ -217,26 +228,28 @@ async function detail(el, ctx, sid) {
     ui.pageHead(s.name, `${s.unit || '无单位'} · 每${FREQ[s.freq] || s.freq}更新 · ${s.region || '全球'} · 来源 ${s.source}`, [btn]),
     sm.value !== undefined ? ui.stats([
       { k: `最新（${sm.period}）`, v: `${fmt(sm.value)} ${(s.unit || '').includes('=100') ? '' : s.unit || ''}` },
+      sm.label ? { k: s.id.startsWith('eci_gap') ? '谁比谁' : '是哪个模型', v: sm.label } : null,
       sm.change !== undefined ? { k: '比上一期', v: delta(s, sm.change) } : null,
       sm.yoy_pct !== undefined ? { k: '比一年前', v: `${sm.yoy_pct > 0 ? '+' : ''}${fmt(sm.yoy_pct)}%` }
         : sm.yoy_change !== undefined ? { k: '比一年前', v: delta(s, sm.yoy_change) } : null,
       { k: `高于历史上多少时期（${sm.first} 起）`, v: `${fmt(sm.rank_pct)}%` },
-      { k: `最高（${sm.max?.[0]}）`, v: fmt(sm.max?.[1]) },
+      { k: `最高（${sm.max?.[0]}）`, v: `${fmt(sm.max?.[1])}${s.labels[sm.max?.[0]] && s.labels[sm.max[0]] !== sm.label ? ` · ${s.labels[sm.max[0]]}` : ''}` },
       { k: `最低（${sm.min?.[0]}）`, v: fmt(sm.min?.[1]) },
     ].filter(Boolean)) : ui.empty('这个指标还没接入', s.note || ''),
+    s.status === 'ok' ? askBar(ctx, `vision:series:${sid}`, '视野', seriesTips(s), `问问「${s.name}」：为什么这样变、接下来会怎样…`) : null,
     (s.signals?.reasons || []).length ? h('div.card.vs-why-now', {}, [h('span.card-label', {}, '程序发现的显著变化'), h('div', {}, s.signals.reasons.join('；'))]) : null,
-    pts.length > 1 ? h('div.card', {}, [h('span.card-label', {}, s.freq === 'D' ? '历史走势（日数据按月取最后一个值）' : '历史走势'), bigChart(h, s, pts)]) : null,
+    pts.length > 1 ? h('div.card', {}, [h('span.card-label', {}, s.freq === 'D' ? '历史走势（日数据按月取最后一个值）' : '历史走势'), bigChart(h, s, pts, s.labels)]) : null,
     s.note ? h('div.card', {}, [h('span.card-label', {}, '口径'), h('div', {}, s.note)]) : null,
     ui.section('解读卡', `${s.cards.length} 张（含被打回的）`),
-    ...(s.cards.length ? s.cards.map((c) => cardView(h, c, s, { full: true })) : [ui.empty('这个指标还没有解读卡')]),
+    ...(s.cards.length ? s.cards.map((c) => cardView(h, c, s, { full: true, onAsk: (x) => askCard(ctx, x) })) : [ui.empty('这个指标还没有解读卡')]),
     ui.section('判断与对账'),
     s.predictions.length ? predTable(h, s.predictions, { [s.id]: s }) : ui.empty('还没有判断'),
     s.revisions.length ? [ui.section('数据修订', '官方改过的旧数据，旧值保留'),
       h('div.card.vs-table-wrap', {}, h('table.vs-table', {}, [h('tr', {}, ['期', '修订后', '第几次修订', '发现时间'].map((x) => h('th', {}, x))),
         ...s.revisions.map((r) => h('tr', {}, [h('td', {}, r.period), h('td', {}, fmt(r.value)), h('td', {}, r.revision), h('td.muted', {}, r.fetched_at)]))]))] : null,
     h('details.card.vs-raw', {}, [h('summary', {}, h('span.card-label', {}, `原始数据（${s.points.length} 期）`)),
-      h('div.vs-table-wrap', {}, h('table.vs-table', {}, [h('tr', {}, [h('th', {}, '期'), h('th', {}, `值（${s.unit || '无单位'}）`)]),
-        ...s.points.slice().reverse().map(([p, v]) => h('tr', {}, [h('td', {}, p), h('td', {}, fmt(v))]))]))]),
+      h('div.vs-table-wrap', {}, h('table.vs-table', {}, [h('tr', {}, [h('th', {}, '期'), h('th', {}, `值（${s.unit || '无单位'}）`), hasLabels ? h('th', {}, '模型') : null]),
+        ...s.points.slice().reverse().map(([p, v]) => h('tr', {}, [h('td', {}, p), h('td', {}, fmt(v)), hasLabels ? h('td', {}, s.labels[p] || '') : null]))]))]),
   ].flat()));
 }
 
@@ -245,6 +258,8 @@ const CSS = `
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .vs-page { --vs-line: #3987e5; } }
 :root[data-theme="dark"] .vs-page { --vs-line: #3987e5; }
 .vs-ask { margin: 0 0 16px; }
+.vs-tile-model { font-size: 13px; font-weight: 600; margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-card-ask { margin-top: 10px; }
 .vs-ask .composer { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 5px 6px 5px 14px; box-shadow: none; }
 .vs-ask .composer textarea { flex: 1; min-width: 0; min-height: 24px; font-size: 14px; }
 .vs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px; }

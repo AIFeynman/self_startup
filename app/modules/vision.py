@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS vision_points (
     value       REAL NOT NULL,
     revision    INTEGER DEFAULT 0,           -- 统计局会修订历史数：值变了就追加一版，不覆盖
     fetched_at  TEXT,
+    label       TEXT DEFAULT '',             -- 这一期的值是哪个模型拿到的，例如最强开源模型
     UNIQUE(series_id, period, revision)
 );
 CREATE TABLE IF NOT EXISTS vision_runs (
@@ -119,20 +120,29 @@ def points(series_id: str) -> list[tuple[str, float]]:
     return [(r["period"], r["value"]) for r in rows]
 
 
-def save_points(series_id: str, pts: list[tuple[str, float]]) -> dict:
+def labels(series_id: str) -> dict[str, str]:
+    return {r["period"]: r["label"] for r in db.rows(
+        "SELECT period, label FROM vision_points p WHERE series_id=? AND label!='' AND revision="
+        "(SELECT max(revision) FROM vision_points q WHERE q.series_id=p.series_id AND q.period=p.period)", [series_id])}
+
+
+def save_points(series_id: str, pts: list[tuple]) -> dict:
     latest = {r["period"]: r for r in db.rows(
-        "SELECT period, value, revision FROM vision_points p WHERE series_id=? AND revision="
+        "SELECT id, period, value, revision, label FROM vision_points p WHERE series_id=? AND revision="
         "(SELECT max(revision) FROM vision_points q WHERE q.series_id=p.series_id AND q.period=p.period)", [series_id])}
     added = revised = 0
     now = db.now()
-    for p, v in pts:
+    for p, v, *rest in pts:
+        label = rest[0] if rest else ""
         if p not in latest:
-            db.insert("vision_points", {"series_id": series_id, "period": p, "value": v, "revision": 0, "fetched_at": now})
+            db.insert("vision_points", {"series_id": series_id, "period": p, "value": v, "revision": 0, "fetched_at": now, "label": label})
             added += 1
         elif abs(latest[p]["value"] - v) > 1e-9 * max(1.0, abs(v)):
             db.insert("vision_points", {"series_id": series_id, "period": p, "value": v,
-                                        "revision": latest[p]["revision"] + 1, "fetched_at": now})
+                                        "revision": latest[p]["revision"] + 1, "fetched_at": now, "label": label})
             revised += 1
+        elif label and latest[p]["label"] != label:
+            db.execute("UPDATE vision_points SET label=? WHERE id=?", [label, latest[p]["id"]])
     return {"added": added, "revised": revised}
 
 
@@ -317,6 +327,8 @@ def _loop():
 
 
 def on_startup():
+    if "label" not in {r["name"] for r in db.rows("PRAGMA table_info(vision_points)")}:
+        db.execute("ALTER TABLE vision_points ADD COLUMN label TEXT DEFAULT ''")
     if os.environ.get("SELF_STARTUP_NO_AUTOREFRESH"):
         return
     threading.Thread(target=_loop, daemon=True, name="vision-loop").start()
@@ -331,7 +343,10 @@ def _card(c: dict) -> dict:
 def _series_view(cfg: dict, spark: int = 60) -> dict:
     pts = points(cfg["id"]) if cfg["status"] == "ok" else []
     sp = vs.stat_points(cfg, pts) if pts else []
-    return {**cfg, "summary": vs.summary(cfg, pts) if pts else {}, "spark": sp[-spark:],
+    sm = vs.summary(cfg, pts) if pts else {}
+    if sm and (label := labels(cfg["id"]).get(sm["period"])):
+        sm["label"] = label
+    return {**cfg, "summary": sm, "spark": sp[-spark:],
             "signals": vs.signals(cfg, pts) if len(pts) >= 3 else None}
 
 
@@ -366,7 +381,7 @@ def series(sid: str):
     cards = [_card(c) for c in db.rows("SELECT * FROM vision_cards WHERE series_id=? ORDER BY id DESC", [sid])]
     preds = db.rows("SELECT p.*, v.actual, v.hit, v.period AS verdict_period FROM vision_predictions p "
                     "LEFT JOIN vision_verdicts v ON v.prediction_id=p.id WHERE p.series_id=? ORDER BY p.id DESC", [sid])
-    return {**_series_view(cfg, spark=100000), "points": points(sid), "revisions": revisions, "cards": cards, "predictions": preds}
+    return {**_series_view(cfg, spark=100000), "points": points(sid), "labels": labels(sid), "revisions": revisions, "cards": cards, "predictions": preds}
 
 
 @router.post("/refresh")
@@ -395,11 +410,31 @@ def status():
 
 
 def agent_context(ref: str) -> str:
-    lines = ["视野板块当前指标快照（指标 id｜名称：最新期 = 值，单位）："]
+    if ref.startswith("vision:series:") and (cfg := BY_ID.get(ref.split(":", 2)[2])):
+        return _series_context(cfg)
+    lines = ["视野板块当前指标快照（指标 id｜名称：最新期 = 值，单位，是哪个模型）："]
     for cfg in enabled():
         if pts := points(cfg["id"]):
-            lines.append(f"- {cfg['id']}｜{cfg['name']}：{pts[-1][0]} = {pts[-1][1]:g} {cfg['unit']}")
+            label = labels(cfg["id"]).get(pts[-1][0], "")
+            lines.append(f"- {cfg['id']}｜{cfg['name']}：{pts[-1][0]} = {pts[-1][1]:g} {cfg['unit']}{f'（{label}）' if label else ''}")
     for c in db.rows("SELECT * FROM vision_cards WHERE status='done' ORDER BY id DESC LIMIT 8"):
         b = _j(c["body"], {})
         lines.append(f"- 解读卡 {c['created_at'][:10]}：{b.get('title', '')}——{b.get('plain', '')}")
+    return "\n".join(lines)
+
+
+def _series_context(cfg: dict) -> str:
+    pts, names = points(cfg["id"]), labels(cfg["id"])
+    v = _series_view(cfg)
+    lines = [f"用户正在看视野板块的指标「{cfg['name']}」（id {cfg['id']}，单位 {cfg['unit'] or '无'}，"
+             f"每{ {'D': '日', 'M': '月', 'Q': '季', 'H': '半年', 'Y': '年'}.get(cfg['freq'], cfg['freq'])}更新，"
+             f"范围 {cfg.get('region') or '全球'}，来源 {cfg['source']}）。",
+             f"口径：{cfg.get('note') or '无特别说明'}",
+             f"程序算的摘要：{json.dumps(v['summary'], ensure_ascii=False)}",
+             f"显著变化：{'；'.join((v['signals'] or {}).get('reasons') or []) or '无'}",
+             f"全部 {len(pts)} 期数据（期：值{'，拿到它的模型' if names else ''}），回答里的数字只能来自这里："]
+    lines += [f"{p}：{x:g}{f'，{names[p]}' if p in names else ''}" for p, x in pts[-240:]]
+    for c in db.rows("SELECT * FROM vision_cards WHERE series_id=? AND status='done' ORDER BY id DESC LIMIT 3", [cfg["id"]]):
+        b = _j(c["body"], {})
+        lines.append(f"已发布解读卡 {c['created_at'][:10]}：{b.get('title', '')}——{b.get('plain', '')}；判断：{b.get('meaning', '')}")
     return "\n".join(lines)
