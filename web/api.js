@@ -53,19 +53,33 @@ export function h(tag, attrs = {}, children = []) {
   return el;
 }
 
-const TEX_INLINE = /(?<![\\$])\$(?!\$)[^\s$][^$\n]*?[\\^_][^$\n]*?(?<![\s\\])\$(?!\$)/g;
+const TEX_INLINE = /(?<![\\$])\$(?!\$)(?:[^\s$\d][^$\n]*?|[^\s$][^$\n]*?[\\^_=][^$\n]*?)(?<![\s\\])\$(?!\$)/g;
 const TEX_INLINE_SPLIT = new RegExp(`(${TEX_INLINE.source})`);
+const TEX_DISPLAY = /\$\$([\s\S]+?)\$\$/g;
 const TEX_BEFORE = /[\s*]/;
 const TEX_AFTER = /[\s*?!.,:？！。，：]/;
 const PRICE = /(?<![\\$])\$(?=\d[\d.,]*(?:[\s\u3000-\u303f\uff00-\uffef]|$))/g;
+const HTML_BLOCK = /^ {0,3}<[a-zA-Z/]/;
+
+const tex = (src, displayMode) => window.katex.renderToString(src, { displayMode, throwOnError: false });
+
+// marked 不解析 HTML 块里的内容，块里的公式直接交给 KaTeX
+const texInHtml = (block) => block.replace(TEX_DISPLAY, (_, src) => tex(src, true)).replace(TEX_INLINE, (m) => tex(m.slice(1, -1), false));
 
 // marked-katex 标准模式要求 $ 外侧是空格或指定标点，且行内公式里允许出现 $：
 // 中文里公式常紧挨「：、（」，给明显是 LaTeX 的 $…$ 两侧补空格；$2.45 这类金额转义，免得和后面的公式配成一对
-export function texSpaces(text) {
+function texInMarkdown(block) {
   const pad = (m, at, s) =>
     `${at && !TEX_BEFORE.test(s[at - 1]) ? ' ' : ''}${m}${at + m.length < s.length && !TEX_AFTER.test(s[at + m.length]) ? ' ' : ''}`;
-  return text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part, i) => (i % 2 ? part
-    : part.split(TEX_INLINE_SPLIT).map((seg, j) => (j % 2 ? seg : seg.replace(PRICE, '\\$'))).join('').replace(TEX_INLINE, pad))).join('');
+  return block.split(TEX_INLINE_SPLIT).map((seg, j) => (j % 2 ? seg : seg.replace(PRICE, '\\$'))).join('').replace(TEX_INLINE, pad);
+}
+
+const texBlock = (block) => (window.katex && HTML_BLOCK.test(block) ? texInHtml(block)
+  : block.split(/(`[^`\n]*`)/).map((part, i) => (i % 2 ? part : texInMarkdown(part))).join(''));
+
+export function texSpaces(text) {
+  return text.split(/(```[\s\S]*?```)/).map((part, i) => (i % 2 ? part
+    : part.split(/(\n[ \t]*\n)/).map(texBlock).join(''))).join('');
 }
 
 export function md(text) {
