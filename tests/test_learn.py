@@ -197,13 +197,64 @@ def _plan_with_steps(client, fake_submit):
     return client.get(f"/api/learn/plans/{p['id']}").json()
 
 
+def _finish_stage(call, files):
+    out = learn._step_dir(learn._step(int(call["ref"].split(":")[2])))
+    for name, body in files.items():
+        (out / name).parent.mkdir(parents=True, exist_ok=True)
+        (out / name).write_text(body if isinstance(body, str) else json.dumps(body, ensure_ascii=False), "utf-8")
+    learn.on_job_done(_job(call["id"], "写完了"))
+
+
 def _write_chapter(client, fake_submit, s, quiz=QUIZ):
     call = fake_submit[-1]
-    assert call["ref"] == f"learn:step:{s['id']}:chapter"
-    out = learn._step_dir(s)
-    (out / "chapter.md").write_text("# 本章\n" + "正文" * 200, "utf-8")
-    (out / "quiz.json").write_text(json.dumps(quiz, ensure_ascii=False), "utf-8")
-    learn.on_job_done(_job(call["id"], "写完了"))
+    if call["ref"] == f"learn:step:{s['id']}:chapter":  # 按需加的一节、课程：一次写完
+        _finish_stage(call, {"chapter.md": "# 本章\n" + "正文" * 200, "quiz.json": quiz})
+        return
+    assert call["ref"] == f"learn:step:{s['id']}:outline"
+    _finish_stage(call, {"outline.json": {"sections": [{"title": "一、方向", "brief": "要点"}]}, "parts/00-head.md": "# 本章\n开头"})
+    _finish_stage(fake_submit[-1], {"parts/01.md": "## 一、方向\n" + "正文" * 200})
+    _finish_stage(fake_submit[-1], {"parts/99-tail.md": "## 判断与方向\n结论", "quiz.json": quiz})
+
+
+def test_chapter_is_written_outline_then_sections_then_tail(client, fake_submit):
+    s1 = _plan_with_steps(client, fake_submit)["steps"][0]
+    sid = s1["id"]
+    client.post(f"/api/learn/steps/{sid}/open", json={"note": "多讲 verl"})
+    outline = fake_submit[-1]
+    assert outline["ref"] == f"learn:step:{sid}:outline" and "多讲 verl" in outline["prompt"]
+    _finish_stage(outline, {"outline.json": {"sections": [{"title": "一、SFT", "brief": "起点交叉熵；实战 TRL"},
+                                                          {"title": "二、RLVR", "brief": "起点 GRPO；实战 verl"}]},
+                            "parts/00-head.md": "# 后训练\n## 全景图\n图"})
+    p1, p2 = fake_submit[-2:]
+    assert [p1["ref"], p2["ref"]] == [f"learn:step:{sid}:part:1", f"learn:step:{sid}:part:2"]
+    assert "一、SFT" in p1["prompt"] and "起点交叉熵；实战 TRL" in p1["prompt"] and "parts/01.md" in p1["prompt"]
+    assert "起点 GRPO；实战 verl" in p2["prompt"] and "多讲 verl" in p2["prompt"]
+    _finish_stage(p2, {"parts/02.md": "## 二、RLVR\n### 起点：GRPO\n" + "推导" * 100})
+    assert fake_submit[-1] is p2 and client.get(f"/api/learn/steps/{sid}").json()["chapter_status"] == "generating"
+    _finish_stage(p1, {"parts/01.md": "## 一、SFT\n### 起点：交叉熵\n" + "推导" * 100})
+    tail = fake_submit[-1]
+    assert tail["ref"] == f"learn:step:{sid}:tail" and "判断与方向" in tail["prompt"]
+    learn.on_job_done(_job(p1["id"], "重复回调"))
+    assert fake_submit[-1] is tail  # 收尾只开一次
+    _finish_stage(tail, {"parts/99-tail.md": "## 判断与方向\n结论", "quiz.json": QUIZ})
+    s = client.get(f"/api/learn/steps/{sid}").json()
+    assert s["chapter_status"] == "ready" and [q["id"] for q in s["quiz"]] == ["q1", "q2"]
+    md = s["chapter_md"]
+    assert md.index("## 全景图") < md.index("## 一、SFT") < md.index("## 二、RLVR") < md.index("## 判断与方向")
+    # 重新生成：旧的子章节任务晚到也不影响新一版
+    client.post(f"/api/learn/steps/{sid}/open", json={"force": True})
+    assert fake_submit[-1]["ref"] == f"learn:step:{sid}:outline"
+    assert not (learn._step_dir(s1) / "parts").exists() or not list((learn._step_dir(s1) / "parts").glob("*.md"))
+    learn.on_job_done(_job(p2["id"], "旧任务"))
+    assert client.get(f"/api/learn/steps/{sid}").json()["chapter_status"] == "generating"
+
+
+def test_chapter_fails_when_a_section_fails(client, fake_submit):
+    s1 = _plan_with_steps(client, fake_submit)["steps"][0]
+    client.post(f"/api/learn/steps/{s1['id']}/open", json={})
+    _finish_stage(fake_submit[-1], {"outline.json": {"sections": [{"title": "一、A", "brief": "b"}]}, "parts/00-head.md": "# 本章"})
+    learn.on_job_done(_job(fake_submit[-1]["id"], "", "failed"))
+    assert client.get(f"/api/learn/steps/{s1['id']}").json()["chapter_status"] == "failed"
 
 
 def test_chapter_quiz_flow(client, fake_submit):
@@ -228,7 +279,7 @@ def test_chapter_quiz_flow(client, fake_submit):
     assert client.get(f"/api/learn/steps/{s1['id']}/out/..%2F..%2F..%2Fapp.db").status_code == 404
     # 再次打开 → 预生成下一章
     client.post(f"/api/learn/steps/{s1['id']}/open", json={})
-    assert fake_submit[-1]["ref"] == f"learn:step:{s2['id']}:prefetch"
+    assert fake_submit[-1]["ref"] == f"learn:step:{s2['id']}:outline"
     # 交卷：选择题当场判，简答题交给批改任务
     r = client.post(f"/api/learn/steps/{s1['id']}/quiz", json={"answers": {"q1": 2, "q2": "规划方向，痛点是长程"}}).json()
     assert r["quiz_result"]["status"] == "grading" and r["quiz_result"]["items"]["q1"]["score"] == 1
