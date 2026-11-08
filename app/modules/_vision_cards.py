@@ -150,7 +150,7 @@ def card_text(card: dict) -> str:
 def explained(body: str, i: int, term: str) -> bool:
     if re.match(r"\s*[（(]", body[i + len(term):i + len(term) + 2]):
         return True
-    if re.search(r"[（(][^）)]{0,4}$", body[max(0, i - 5):i]):
+    if re.search(r"[（(][^）)]{0,20}$", body[max(0, i - 21):i]):
         return True
     return term == "‰" and bool(re.search(r"千分之|每千", body))
 

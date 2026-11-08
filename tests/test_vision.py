@@ -85,6 +85,7 @@ def test_overview_orders_themes_ai_first(client):
 
 @pytest.mark.parametrize("text", [
     "软件岗位比去年同月多 14%（同比，即和去年同一个月比）",
+    "2024 年（3.8e25 FLOP，算力单位，指总共做了多少次计算）还比 2023 年高",
     "出生率从 6.39‰ 回升到 6.77‰，也就是每千人出生 6.77 个",
 ])
 def test_explained_terms_pass(text):
