@@ -97,6 +97,8 @@ def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], mod
         if mcp:
             cmd += ["--mcp-config", json.dumps({"mcpServers": mcp}, ensure_ascii=False)]
     else:
+        # 用户级配置开了沙箱时，Bash 连不上本机端口，任务里 curl 平台接口全失败；放行本机连接
+        cmd += ["--settings", json.dumps({"sandbox": {"network": {"allowLocalBinding": True}}})]
         if cfg.get("permission_mode"):
             cmd += ["--permission-mode", cfg["permission_mode"]]
         if cfg.get("allowed_tools"):

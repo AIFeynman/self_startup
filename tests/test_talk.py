@@ -1,4 +1,5 @@
 import json
+import json
 import wave
 
 import pytest
@@ -103,6 +104,8 @@ def test_readonly_commands_cannot_write():
     assert "acceptEdits" not in cmd and cmd[cmd.index("--tools") + 1] == "Read,Glob,Grep,WebSearch,WebFetch"
     assert "read-only" in agent._codex_cmd("hi", "", "", [], "/tmp", readonly=True)
     assert "--tools" not in agent._claude_cmd("hi", "", "", [], "")
+    job = agent._claude_cmd("hi", "", "", [], "")
+    assert json.loads(job[job.index("--settings") + 1])["sandbox"]["network"]["allowLocalBinding"] is True
 
 
 def test_partial_text_comes_as_delta():
