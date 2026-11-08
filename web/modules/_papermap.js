@@ -92,14 +92,16 @@ export async function papersTab(body, ctx, topic = '') {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(input.value); });
   const tiers = TIERS.filter(([k]) => ov.tiers[k]).map(([k, n]) => `${n} ${fmt(ov.tiers[k])}`).join(' · ');
   const note = h('div.muted', {}, ov.total
-    ? `论文库 ${fmt(ov.total)} 篇（${tiers}），越老的论文门槛越高，近期论文过 Jev 筛水文；已标注 ${fmt(ov.labeled)} 篇。新主题生成一次约 20–60 秒、不到 1 分钱。`
+    ? `论文库 ${fmt(ov.total)} 篇（${tiers}），越老的论文门槛越高，近期论文过 Jev 筛水文；已标注 ${fmt(ov.labeled)} 篇。新主题在后台生成，约 1–3 分钟，页面会显示进行到哪一步。`
     : '论文库还是空的：先跑采集和标注（scripts/paper_proto collect / judge / label）。');
   const out = h('div');
   const adder = addPanel(ctx, (t) => go(t, false));
   body.append(h('div.card.pm-ask', {}, [input, btn, note, ov.total ? maintLine(ctx, ov.maintain) : null]), adder.el, out);
 
   if (topic) {
-    try { show(await api.get('/api/kb/papers/map?topic=' + enc(topic))); } catch { go(topic, false); }
+    let m;
+    try { m = await api.get('/api/kb/papers/map?topic=' + enc(topic)); } catch { go(topic, false); }
+    if (m) wait(m);
   } else list();
 
   function list() {
@@ -117,9 +119,19 @@ export async function papersTab(body, ctx, topic = '') {
     if (!t) return;
     if (decodeURIComponent(location.hash) !== '#kb/papers/' + t) { history.replaceState(null, '', pLink(t)); }
     btn.disabled = true;
-    out.replaceChildren(ui.empty(`正在梳理「${t}」…`, '改写检索意图 → 召回 → 引用子图选点 → 模型分线，约 20–60 秒'));
-    try { show(await api.post('/api/kb/papers/map', { topic: t, force })); } catch (e) { out.replaceChildren(); toast('生成失败：' + e.message, true); }
-    btn.disabled = false;
+    try { wait(await api.post('/api/kb/papers/map', { topic: t, force })); } catch (e) { out.replaceChildren(); toast('生成失败：' + e.message, true); btn.disabled = false; }
+  }
+
+  // 后台生成：每 2 秒看一次进度，离开这个主题就停
+  function wait(m) {
+    if (m.error) { out.replaceChildren(); toast('生成失败：' + m.error, true); btn.disabled = false; return; }
+    if (!m.running) { btn.disabled = false; show(m); return; }
+    btn.disabled = true;
+    out.replaceChildren(ui.empty(`正在梳理「${m.topic}」…`, `${m.step} · 改写检索意图 → 召回 → 引用子图选点 → 模型分线，共 1–3 分钟`));
+    setTimeout(async () => {
+      if (!out.isConnected || decodeURIComponent(location.hash) !== '#kb/papers/' + m.topic) return;
+      try { wait(await api.get('/api/kb/papers/map?topic=' + enc(m.topic))); } catch (e) { toast('生成失败：' + e.message, true); btn.disabled = false; }
+    }, 2000);
   }
 
   function show(m) {
@@ -250,15 +262,15 @@ export async function papersTab(body, ctx, topic = '') {
         h('button.outline', { onclick: () => go(m.topic, true) }, '重新生成'),
       ]),
       m.thin ? h('div.pm-thin', {}, [h('span', {}, `库里和「${m.topic}」相关的论文只召回到 ${m.recalled} 篇，脉络可能不全。`),
-        h('button.outline', { onclick: () => adder.topic(m.topic) }, '补充这个方向')]) : null,
-      m.overview ? h('div.pm-ov', {}, m.overview) : null,
+        h('button.outline', { onclick: () => adder.topic(m.topic) }, '补充这个方向')]) : '',
+      m.overview ? h('div.pm-ov', {}, m.overview) : '',
       lanes(h, m, jump),
       ...group('前置基础', '这些不在主题里，但主题内的论文大量引用', m.foundations, (s) => P[s]?.s ? ' · ' + P[s].s : ''),
       ui.section('研究线', `${m.lines.length} 条 · 每条按年份排；实心点 = 起点 / 里程碑`),
       ...lines,
       ...group('推荐综述', '', m.surveys, () => ''),
-      m.open.length ? ui.section('仍未解决') : null,
-      m.open.length ? h('div.card', { style: { padding: '12px 16px' } }, h('ul.pm-open', {}, m.open.map((o) => h('li', {}, o)))) : null,
+      m.open.length ? ui.section('仍未解决') : '',
+      m.open.length ? h('div.card', { style: { padding: '12px 16px' } }, h('ul.pm-open', {}, m.open.map((o) => h('li', {}, o)))) : '',
     );
   }
 }
@@ -330,8 +342,8 @@ function addPanel(ctx, openMap) {
     res.replaceChildren(
       h('div.act', {}, [h('span', {}, `「${a.topic}」将新增 ${fmt(a.n_new)} 篇` + (a.n_maybe ? `，另有 ${fmt(a.n_maybe)} 篇被引够工业界门槛、取摘要后再判` : '') + `；库里已有 ${fmt(a.have)} 篇。`),
         a.n_new + a.n_maybe ? go : null, h('button.outline', { onclick: () => res.replaceChildren() }, '取消')]),
-      a.new.length ? h('ol', {}, a.new.map((p) => h('li', {}, [pl(p), h('span.pm-c', {}, ` ${p.year || ''} · 被引 ${fmt(p.cites)}`)]))) : null,
-      a.n_new > a.new.length ? h('div.muted', {}, `只列了被引最高的 ${a.new.length} 篇`) : null,
+      a.new.length ? h('ol', {}, a.new.map((p) => h('li', {}, [pl(p), h('span.pm-c', {}, ` ${p.year || ''} · 被引 ${fmt(p.cites)}`)]))) : '',
+      a.n_new > a.new.length ? h('div.muted', {}, `只列了被引最高的 ${a.new.length} 篇`) : '',
       h('div.muted', {}, `检索式：${a.query}`));
   }
 
@@ -350,7 +362,7 @@ function addPanel(ctx, openMap) {
 // 总览：每条线一行，论文按年份落点（有论文的年份等宽排开，近几年论文多也不挤），同年多篇横向错开；点一下跳到那篇
 function lanes(h, m, jump) {
   const ys = [...new Set(m.lines.flatMap((ln) => ln.nodes.map((n) => m.papers[n.s2id]?.year).filter(Boolean)))].sort();
-  if (!ys.length) return null;
+  if (!ys.length) return '';
   const col = 100 / ys.length;
   const x = (y, k = 0, n = 1) => `${col * ys.indexOf(y) + col * (k + 1) / (n + 1)}%`;
   return h('div.card.pm-lanes', {}, [

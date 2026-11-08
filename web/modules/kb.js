@@ -180,8 +180,8 @@ async function home(el, ctx, tab, arg = '') {
     const ds = rs.filter((d) => d.type !== 'concept');
     results.replaceChildren(
       ui.section(`「${q}」`, [`${rs.length} 条 · `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); results.replaceChildren(); } }, '收起')]),
-      cs.length ? h('div.kb-cl', { style: { marginBottom: '10px' } }, cs.map((d) => h('a', { href: cLink(d.title) }, [d.title, h('small', {}, d.summary || '')]))) : null,
-      ds.length ? h('div.card', {}, h('div.list', {}, ds.map((d) => docRow(ctx, d, st.names)))) : cs.length ? null : ui.empty('没找到', '换个说法，或直接问 Agent'),
+      cs.length ? h('div.kb-cl', { style: { marginBottom: '10px' } }, cs.map((d) => h('a', { href: cLink(d.title) }, [d.title, h('small', {}, d.summary || '')]))) : '',
+      ds.length ? h('div.card', {}, h('div.list', {}, ds.map((d) => docRow(ctx, d, st.names)))) : cs.length ? '' : ui.empty('没找到', '换个说法，或直接问 Agent'),
     );
   }
 }

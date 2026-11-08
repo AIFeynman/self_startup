@@ -251,6 +251,9 @@ def papers_overview():
 
 @router.get("/papers/map")
 def papers_map(topic: str):
+    """生成中返回 {running, step}；刚失败返回 {error}（只报一次）；否则返回已生成的脉络。"""
+    if p := paper_map.progress(topic):
+        return p
     paper_map._init()
     row = paper_map.db.row("SELECT result FROM paper_maps WHERE topic=?", [paper_map.norm(topic)])
     if not row:
@@ -336,7 +339,7 @@ class PaperMapIn(BaseModel):
 
 @router.post("/papers/map")
 def papers_build(body: PaperMapIn):
-    """约 20 秒、$0.004：改写 → 召回 → 子图选点 → 模型成线。"""
+    """有缓存直接返回；否则后台生成（改写 → 召回 → 子图选点 → 模型成线，1–3 分钟），返回 {running, step}，用 GET 轮询。"""
     topic = body.topic.strip()
     if not topic:
         raise HTTPException(400, "主题不能为空")
@@ -344,12 +347,9 @@ def papers_build(body: PaperMapIn):
         raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
     if not paper_map.overview()["labeled"]:
         raise HTTPException(400, "论文库还是空的：先跑采集和标注")
-    try:
-        return paper_map.view(paper_map.build(topic, use_cache=not body.force))
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"模型接口暂时不可用，稍后再试（{e.response.status_code if isinstance(e, httpx.HTTPStatusError) else type(e).__name__}）")
-    except (RuntimeError, subprocess.TimeoutExpired) as e:
-        raise HTTPException(502, f"模型调用失败：{str(e)[:200]}")
+    if not body.force and (row := paper_map.db.row("SELECT result FROM paper_maps WHERE topic=?", [paper_map.norm(topic)])):
+        return paper_map.view(json.loads(row["result"]))
+    return paper_map.start(topic, body.force)
 
 
 class PaperAddIn(BaseModel):

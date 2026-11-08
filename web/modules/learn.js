@@ -1505,13 +1505,13 @@ function quizView(ctx, p, s, { gotoSection, chat, next, extra }) {
     if (next) actions.append(h('button.primary', { onclick: () => { location.hash = chapterHref(p.id, next.id); } }, ['下一章', ui.icon('arrow')]));
     actions.append(
       r.weak_points?.length || !r.passed ? h('button.outline', { title: '针对薄弱处在本章后加一节补课：换个讲法讲透 + 2–3 道小测试', onclick: () => extra.create('confused',
-        r.weak_points?.length ? `测试薄弱处：${r.weak_points.join('；')}` : `测试 ${r.score} 分，没过关的地方`) }, [ui.icon('plus'), '生成补课小节']) : null,
+        r.weak_points?.length ? `测试薄弱处：${r.weak_points.join('；')}` : `测试 ${r.score} 分，没过关的地方`) }, [ui.icon('plus'), '生成补课小节']) : '',
       h('button', { onclick: () => chat(`我刚做完本章测试（${r.score} 分），薄弱处：${(r.weak_points || []).join('；') || '见批改'}。请针对这些地方换个角度讲透，再出 2 道类似的题考我。`) }, [ui.icon('chat'), '针对薄弱处再讲一遍']),
       h('button.ghost', { onclick: async () => { await api.post(`/api/learn/steps/${s.id}/quiz/reset`); softRefresh(); } }, [ui.icon('refresh'), '重做测试']),
       !r.passed ? h('button.ghost', { onclick: async () => {
         await api.post(`/api/learn/plans/${p.id}/adapt`, { note: `「${s.title}」测试 ${r.score} 分，薄弱：${(r.weak_points || []).join('；')}` });
         toast('Agent 正在根据测试结果调整计划');
-      } }, '按测试结果调整计划') : null,
+      } }, '按测试结果调整计划') : '',
     );
   }
   wrap.append(actions);

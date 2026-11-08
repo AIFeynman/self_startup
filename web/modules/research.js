@@ -458,7 +458,7 @@ async function docs(el, ctx, openId) {
   sb.style.flex = '1';
   listBox.append(
     h('div.row', {}, [sb, since, h('span.muted', {}, '至'), until, h('button.primary', { onclick: () => editor() }, [ui.icon('plus'), '新建文档'])]),
-    tags.length ? tagPills : null,
+    tags.length ? tagPills : '',
     h('div.row', { style: { margin: '18px 0 8px' } }, [h('div.section-title.grow', { style: { margin: 0 } }, '全部文档'), count]),
     h('div.card', {}, list));
   el.append(listBox, view);

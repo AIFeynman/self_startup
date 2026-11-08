@@ -3,7 +3,7 @@
 ① 改写：模型（paper.llm_engine）把「后训练」改成 {must, should, domains}（中英文多种说法 + 分类体系的二级方向），改写两次取并集。
 ② 召回：FTS5 trigram 短语命中（标题 / 一句话 / 标签 / 摘要）+ 方向命中（主方向命中主题首要方向 1.2、其它方向 1.0，副方向 0.5）。
 ③ 子图：召回集合内的库内引用边；被 ≥ ANCESTOR_SHARE 的召回论文引用的库内论文作为「前置基础」拉进来（如 PPO 之于 RLHF）。
-④ 选点：PageRank（引用方 → 被引方）+ 主题内被引次数 + 年均被引 + 相关度的分位加权（0.3 / 0.3 / 0.3 / 0.1），按子方向分名额（∝ √该方向里关键词命中的篇数）取 NODES 篇，再给近 2 年的论文留 FRONTIER 个位置；
+④ 选点：PageRank（引用方 → 被引方）+ 主题内被引次数 + 年均被引 + 相关度的分位加权（0.3 / 0.3 / 0.3 / 0.1），按子方向分名额（∝ √该方向里关键词命中的篇数）取 NODES 篇，再给最近 12 个月发表的论文（按被引速度）留 FRONTIER 个位置，它们也必须出现；
    分数最高的 KEY 篇 + 每个子方向的前 LEAD 名必须出现在结果里，漏了补问一次；还漏就按引用边挂到最相关的线上。
 ⑤ 成线：把选出的论文（含 builds_on 和子图里的引用关系）交给模型分成 3–7 条线，每个节点写「相比前一步解决了什么」；
    只能用给定的论文编号，校验后落库缓存。
@@ -13,7 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import httpx
@@ -24,6 +27,7 @@ from . import _paper_collect as col, _paper_label as lab
 log = logging.getLogger(__name__)
 
 NODES, FRONTIER, ANCESTOR_SHARE, ANCESTOR_MAX = 80, 12, 0.08, 8
+FRESH_MONTHS = 12     # 前沿名额只给最近这么多个月发表的，按被引速度排：按年份算会让去年被引多的把今年的全挤掉
 OTHER = "_other"
 REWRITE_N = 2
 KEY, LEAD = 50, 3          # 分数最高的这些标 key，成线时必须出现，漏了补问一次
@@ -46,6 +50,7 @@ on=它引用或直接改进的库内论文编号），把它们整理成研究�
 规则：
 - lines 3-7 条，按这个主题里真实存在的技术路线分（不要按年份或论文类型分）；每条 3-14 个节点，按年份排。
 - 只能用给出的编号；同一篇最多出现在 2 条线里；「必须出现」列出的每个编号都要出现（放进某条线，或 foundations / surveys），输出前逐个核对。
+- 带 new 的是最近一年的新工作，放进它延续的那条线、role 用「最新」。
 - note 要说清「解决了前者的什么问题」，依据给出的 problem / method / on 关系，不要编造论文里没有的内容。"""
 
 
@@ -54,18 +59,25 @@ def norm(q: str) -> str:
 
 
 def rewrite(topic: str) -> tuple[dict, float]:
-    """改写 REWRITE_N 次取并集：单次改写列哪些方向有随机性（「后训练」时有时没有 peft / alignment），并集更稳。"""
+    """并行改写 REWRITE_N 次取并集：单次改写列哪些方向有随机性（「后训练」时有时没有 peft / alignment），并集更稳。"""
     doms = "；".join(f"{c}={n}" for c, n in lab.domain_names().items())
     ok = lab.codes()["d"]
     out: dict[str, list[str]] = {"must": [], "should": [], "domains": []}
     cost = 0.0
-    for i in range(REWRITE_N):
+
+    def once(_):
         try:
-            text, c = lab.chat(REWRITE.format(doms=doms), topic, max_tokens=1200, json_mode=True)
-        except httpx.HTTPError:
-            if i == REWRITE_N - 1 and not out["must"]:       # 一次都没成才报错；成了一次就用已有的并集
-                raise
+            return lab.chat(REWRITE.format(doms=doms), topic, max_tokens=1200, json_mode=True)
+        except httpx.HTTPError as e:
+            return e
+    with ThreadPoolExecutor(REWRITE_N) as ex:
+        got = list(ex.map(once, range(REWRITE_N)))
+    if all(isinstance(g, Exception) for g in got):         # 一次都没成才报错；成了一次就用已有的并集
+        raise got[-1]
+    for g in got:
+        if isinstance(g, Exception):
             continue
+        text, c = g
         cost += c
         x = json.loads(text)
         out["must"] += [str(t) for t in x.get("must") or [] if str(t).strip()][:10]
@@ -202,14 +214,16 @@ def subgraph(rel: dict[int, float], intent: dict | None = None) -> dict:
     doms = set(intent["domains"]) if intent else set()
     grp = {s: d if (d := by_s2[s].get("d")) in doms else OTHER for s in core}
     pick = _pick(score, grp, NODES - FRONTIER, kw & core)
-    yr = datetime.now().year
-    fresh = sorted([s for s in core if s not in pick and (by_s2[s]["year"] or 0) >= yr - 1],
-                   key=lambda s: -(col.log10p(by_s2[s]["cites"]) + by_s2[s]["hot"] + relv[s]))[:FRONTIER]
+    recent = [s for s in core if s not in pick and col.age_months(by_s2[s]["pub_date"]) <= FRESH_MONTHS]
+    recent = [s for s in recent if grp[s] != OTHER] or recent
+    speed = _pct({s: (by_s2[s]["cites"] or 0) / max(1, col.age_months(by_s2[s]["pub_date"])) for s in recent})
+    fit = _pct({s: relv[s] for s in recent})
+    fresh = sorted(recent, key=lambda s: -(0.6 * speed[s] + 0.4 * fit[s] + 0.2 * (by_s2[s]["hot"] or 0)))[:FRONTIER]
     chosen = pick + fresh + [a for a in ancestors if a not in pick]
     lead = {s for g in set(grp.values()) - {OTHER}
             for s in sorted((s for s in chosen if grp.get(s) == g), key=lambda s: -score[s])[:LEAD]}   # 每个子方向前几名
-    key = set(sorted([s for s in chosen if s in score], key=lambda s: -score[s])[:KEY]) | set(ancestors[:3]) | lead
-    return {"chosen": chosen, "key": key, "by_s2": by_s2, "edges": edges, "pr": pr, "ancestors": ancestors,
+    key = set(sorted([s for s in chosen if s in score], key=lambda s: -score[s])[:KEY]) | set(ancestors[:3]) | lead | set(fresh)
+    return {"chosen": chosen, "key": key, "frontier": fresh, "by_s2": by_s2, "edges": edges, "pr": pr, "ancestors": ancestors,
             "core": len(core), "anc_counts": {a: cnt[a] for a in ancestors}}
 
 
@@ -227,7 +241,8 @@ def _node_text(g: dict) -> tuple[str, dict[str, str]]:
         lines.append(json.dumps({"id": pid, "y": r["year"], "t": r["title"][:120], "k": r.get("k") or "", "d": r.get("d") or "",
                                  "cites": r["cites"], "s": r.get("s") or (r.get("tldr") or "")[:120],
                                  "pb": json.loads(r.get("problem") or "[]"), "m": json.loads(r.get("method") or "[]"),
-                                 "on": [ids[b] for b in on]} | ({"key": True} if s in g["key"] else {}),
+                                 "on": [ids[b] for b in on]} | ({"key": True} if s in g["key"] else {})
+                                | ({"new": True} if s in g["frontier"] else {}),
                                 ensure_ascii=False))
     return "\n".join(lines), {v: k for k, v in ids.items()}
 
@@ -271,19 +286,23 @@ def _attach(res: dict, miss: list[str], g: dict) -> dict:
     return res
 
 
-def build(topic: str, use_cache: bool = True) -> dict:
+def build(topic: str, use_cache: bool = True, on_step=lambda step: None) -> dict:
     key = norm(topic)
     if use_cache and (c := db.row("SELECT result FROM paper_maps WHERE topic=?", [key])):
         return json.loads(c["result"])
+    on_step(f"改写检索意图（并行 {REWRITE_N} 次）")
     intent, c1 = rewrite(topic)
+    on_step("召回 + 引用子图选点")
     rel = recall(intent)
     g = subgraph(rel, intent)
+    on_step(f"模型分线：召回 {len(rel)} 篇，选 {len(g['chosen'])} 篇")
     text, back = _node_text(g)
     must = ", ".join(sorted((fwd := {v: k for k, v in back.items()})[s] for s in g["key"]))
     user = f"主题：{topic}\n必须出现：{must}\n论文：\n{text}"
     raw, c2 = lab.chat(LINES, user, max_tokens=6000, json_mode=True)
     res = _clean(json.loads(raw), back)
     if miss := [fwd[s] for s in g["key"] if s not in _shown(res)]:
+        on_step(f"模型分线：补问漏掉的 {len(miss)} 篇关键论文")
         raw, c3 = lab.chat(LINES, f"{user}\n\n上一版结果：{raw}\n\n上一版漏了这些 key 论文：{', '.join(miss)}。"
                                   "把它们放进合适的线（或 foundations / surveys），输出完整的新 JSON。",
                            max_tokens=6000, json_mode=True)
@@ -324,6 +343,42 @@ def render(res: dict) -> str:
 
 
 # ---------- 知识库「论文脉络」标签页用 ----------
+
+_runs: dict[str, dict] = {}
+_runs_lock = threading.Lock()
+
+
+def start(topic: str, force: bool) -> dict:
+    """后台生成；同一主题已在跑就返回它的进度。"""
+    key = norm(topic)
+    with _runs_lock:
+        if (r := _runs.get(key)) and r["running"]:
+            return r
+        _runs[key] = r = {"topic": topic, "running": True, "step": "排队"}
+    threading.Thread(target=_run, args=(topic, force), daemon=True, name=f"paper-map-{key[:20]}").start()
+    return r
+
+
+def _run(topic: str, force: bool) -> None:
+    key = norm(topic)
+    try:
+        build(topic, use_cache=not force, on_step=lambda step: _runs[key].update(step=step))
+        _runs.pop(key, None)
+    except Exception as e:  # noqa: BLE001
+        log.exception("脉络生成失败：%s", topic)
+        why = (f"模型接口暂时不可用，稍后再试（{type(e).__name__}）" if isinstance(e, httpx.HTTPError)
+               else f"模型调用失败：{str(e)[:200]}" if isinstance(e, (RuntimeError, subprocess.TimeoutExpired))
+               else f"{type(e).__name__}: {str(e)[:200]}")
+        _runs[key] = {"topic": topic, "running": False, "error": why}
+
+
+def progress(topic: str) -> dict | None:
+    """在跑 → 进度；刚失败 → 错误（只报一次）；否则 None。"""
+    key = norm(topic)
+    r = _runs.get(key)
+    if r and not r["running"]:
+        _runs.pop(key, None)
+    return r
 
 def _init() -> None:
     db.init([col.SCHEMA])

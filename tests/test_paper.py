@@ -1,6 +1,8 @@
 """论文脉络库：入库门槛、标注校验 / 重问 / 索引、脉络召回 + 子图 + 成线校验。不联网。"""
 import json
-from datetime import datetime
+import threading
+import time
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -146,6 +148,23 @@ def test_build_map_recalls_pulls_ancestor_and_validates_ids(monkeypatch):
     assert pmap.build("后训练 ") == res and len(calls) == 2                       # 命中缓存
 
 
+def test_frontier_slots_go_to_last_12_months_and_must_appear(monkeypatch):
+    monkeypatch.setattr(pmap, "NODES", 3)
+    monkeypatch.setattr(pmap, "FRONTIER", 1)
+    ago = lambda m: (datetime.now() - timedelta(days=30.44 * m)).date().isoformat()  # noqa: E731
+    for i in range(3):
+        paper(f"OLD{i}", f"Preference optimization classic {i}", 2022, 20000)
+    paper("LASTYEAR", "Preference optimization last year", 2025, 900, pub=ago(14))
+    paper("NEW", "Preference optimization this year", 2026, 8, pub=ago(2))
+    lab.run(call=fake_label())
+    g = pmap.subgraph(pmap.recall({"must": ["preference optimization"], "should": [], "domains": ["pref_opt"]}),
+                      {"must": ["preference optimization"], "should": [], "domains": ["pref_opt"]})
+    assert "NEW" in g["chosen"] and "LASTYEAR" not in g["chosen"]
+    assert "NEW" in g["key"] and g["frontier"] == ["NEW"]
+    text, back = pmap._node_text(g)
+    assert any(json.loads(ln).get("new") for ln in text.splitlines() if back[json.loads(ln)["id"]] == "NEW")
+
+
 def test_recall_skips_domains_the_topic_barely_touches():
     for i in range(25):                                                          # 大方向：25 篇里只有 1 篇讲主题
         paper(f"A{i}", "Spiking neural network training" if i == 0 else f"Generic architecture {i}", 2020, 5000)
@@ -185,6 +204,48 @@ def test_kb_papers_endpoints(client):
     assert [n["s2id"] for n in got["lines"][0]["nodes"]] == ["A", "B"]        # 按年份排
     assert got["thin"] is True and got["chosen"] == 2 and got["papers"]["A"]["year"] == 2017 and got["papers"]["A"]["url"].endswith("xA")
     assert client.get("/api/kb/papers").json()["maps"][0]["lines"] == 1
+
+
+def _wait_map(client, topic):
+    for _ in range(100):
+        got = client.get("/api/kb/papers/map", params={"topic": topic}).json()
+        if not got.get("running"):
+            return got
+        time.sleep(0.05)
+    raise AssertionError("脉络一直没生成完")
+
+
+def test_kb_papers_map_builds_in_background_with_steps(client, monkeypatch):
+    paper("A", "Proximal policy optimization", 2017, 30000)
+    paper("B", "Direct preference optimization", 2023, 9000, refs=["A"])
+    lab.run(call=fake_label())
+    gate = threading.Event()
+
+    def chat(system, user, *a, **kw):
+        if "检索意图" in system:
+            return json.dumps({"must": ["optimization"], "should": [], "domains": ["pref_opt"]}), 0.001
+        gate.wait(5)
+        ids = [json.loads(ln)["id"] for ln in user.split("论文：\n")[1].splitlines()]
+        return json.dumps({"overview": "o", "lines": [{"name": "L", "summary": "s", "nodes": [{"id": i, "role": "改进", "note": "n"} for i in ids]}],
+                           "foundations": [], "surveys": [], "open": []}), 0.002
+    monkeypatch.setattr(lab, "chat", chat)
+    r = client.post("/api/kb/papers/map", json={"topic": "后训练"}).json()
+    assert r["running"] is True
+    for _ in range(100):
+        r = client.get("/api/kb/papers/map", params={"topic": "后训练"}).json()
+        if "模型分线" in r.get("step", ""):
+            break
+        time.sleep(0.05)
+    assert r["running"] is True and "模型分线" in r["step"]
+    gate.set()
+    got = _wait_map(client, "后训练")
+    assert [n["s2id"] for n in got["lines"][0]["nodes"]] == ["A", "B"]
+    assert client.post("/api/kb/papers/map", json={"topic": "后训练"}).json()["lines"]       # 有缓存直接返回
+
+    monkeypatch.setattr(lab, "chat", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Claude 挂了")))
+    assert client.post("/api/kb/papers/map", json={"topic": "后训练", "force": True}).json()["running"] is True
+    assert "Claude 挂了" in _wait_map(client, "后训练")["error"]
+    assert client.get("/api/kb/papers/map", params={"topic": "后训练"}).json()["lines"]      # 失败只报一次，之后回到旧脉络
 
 
 def test_kb_papers_search_ranks_by_citations_and_marks_deep_reads(client):
