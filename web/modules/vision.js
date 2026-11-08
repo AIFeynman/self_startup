@@ -9,7 +9,13 @@ const isRate = (unit) => ['%', '‰', ''].includes(unit || '') || (unit || '').i
 function fmt(v) {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   const a = Math.abs(v);
-  const d = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 1 ? 2 : 3;
+  if (a >= 1e12) {
+    const e = Math.floor(Math.log10(a));
+    const sup = String(e).replace(/\d/g, c => '⁰¹²³⁴⁵⁶⁷⁸⁹'[c]);
+    return `${Number((v / 10 ** e).toFixed(1))}×10${sup}`;
+  }
+  if (a >= 1e8) return `${Number((v / 1e8).toFixed(1)).toLocaleString('zh-CN')} 亿`;
+  const d =a >= 1000 ? 0 : a >= 100 ? 1 : a >= 1 ? 2 : 3;
   return Number(v.toFixed(d)).toLocaleString('zh-CN', { maximumFractionDigits: d });
 }
 
@@ -210,7 +216,7 @@ async function detail(el, ctx, sid) {
     h('a.muted', { href: '#vision' }, '← 视野'),
     ui.pageHead(s.name, `${s.unit || '无单位'} · 每${FREQ[s.freq] || s.freq}更新 · ${s.region || '全球'} · 来源 ${s.source}`, [btn]),
     sm.value !== undefined ? ui.stats([
-      { k: `最新（${sm.period}）`, v: `${fmt(sm.value)} ${s.unit || ''}` },
+      { k: `最新（${sm.period}）`, v: `${fmt(sm.value)} ${(s.unit || '').includes('=100') ? '' : s.unit || ''}` },
       sm.change !== undefined ? { k: '比上一期', v: delta(s, sm.change) } : null,
       sm.yoy_pct !== undefined ? { k: '比一年前', v: `${sm.yoy_pct > 0 ? '+' : ''}${fmt(sm.yoy_pct)}%` }
         : sm.yoy_change !== undefined ? { k: '比一年前', v: delta(s, sm.yoy_change) } : null,
