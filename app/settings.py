@@ -64,9 +64,9 @@ DEFAULTS: dict = {
     "oss": {"label_engine": "deepseek"},
     # 论文脉络的标注 / 脉络生成用哪个模型：haiku = 本机 Claude Code 登录（model_tiers.light）；deepseek = 官方 API
     "paper": {"llm_engine": "haiku", "feed_ingest": True, "maintain_days": 7},
-    # 理财：信号变化 / 每日汇总提醒；target = 一年收益目标；refresh_minutes = 行情和新闻刷新间隔；
+    # 理财：信号变化 / 每日汇总提醒（行情只在页面上手动刷新，刷新后才检查）；target = 一年收益目标；
     # proxy = 实时报价 WebSocket 走的代理（如 "http://127.0.0.1:12000"），空 = 按进程环境变量
-    "wealth": {"alerts": True, "target": 0.10, "summary_time": "16:30", "refresh_minutes": 60, "proxy": ""},
+    "wealth": {"alerts": True, "target": 0.10, "summary_time": "16:30", "proxy": ""},
     # 语音输入：本机 whisper.cpp 转写，音频不出本机。prompt 帮模型认对中英混说的术语，常说的词可以加进去
     "voice": {
         "bin": "whisper-cli",

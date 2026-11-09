@@ -101,7 +101,7 @@ def utc_now() -> str:
 
 def read_positions() -> dict[str, Any]:
     if not POSITIONS.is_file():
-        return {"refresh_minutes": 60, "positions": []}
+        return {"positions": []}
     return json.loads(POSITIONS.read_text("utf-8"))
 
 
@@ -404,7 +404,6 @@ def sell(symbol: str, target_avg: float | None = None, horizon_days: int | None 
                     "negative": sum(r["tone"] == "negative" for r in recent)},
         "notable_moves": sell_plan.notable_moves(hourly, news),
         "refresh": job_state("positions"),
-        "refresh_minutes": read_positions().get("refresh_minutes", 60),
         "generated_at": utc_now(),
     }
 
