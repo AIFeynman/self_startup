@@ -376,3 +376,28 @@ def test_span_children_kept_with_history_until_deleted(client):
     assert kids("1997-03-09") == ["学一小节"]
     assert p["id"] not in [t["id"] for t in _day(client, "1997-03-10")["tree"]]
     assert len(plan.db.rows("SELECT id FROM tasks WHERE id=? OR parent_id=?", [p["id"], p["id"]])) == 3
+
+
+def test_daily_set_copies_latest_day_once(client, monkeypatch):
+    p = client.post("/api/tasks", json={"date": "1996-05-01", "end_date": "1996-05-31", "title": "每天一套"}).json()
+    a = client.post("/api/tasks", json={"date": "1996-05-01", "parent_id": p["id"], "title": "学一小节", "est_minutes": 60}).json()
+    client.post("/api/tasks", json={"date": "1996-05-01", "parent_id": p["id"], "title": "看论文"})
+    assert client.patch(f"/api/tasks/{p['id']}", json={"daily_set": 1}).json()["daily_set"] == 1
+    client.patch(f"/api/tasks/{a['id']}", json={"status": "done"})
+
+    def kids(d):
+        return sorted((k["title"], k["status"], k["est_minutes"], k["date"]) for t in _day(client, d)["tree"] if t["id"] == p["id"] for k in t["children"])
+
+    monkeypatch.setattr(plan.db, "today", lambda: "1996-05-02")
+    client.post("/api/tasks", json={"date": "1996-05-02", "parent_id": p["id"], "title": "看论文"})
+    assert kids("1996-05-02") == [("学一小节", "todo", 60, "1996-05-02"), ("看论文", "todo", 30, "1996-05-02")]
+    assert kids("1996-05-02") == kids("1996-05-02")
+    assert kids("1996-05-01")[0] == ("学一小节", "done", 60, "1996-05-01")
+    assert kids("1996-05-04") == []
+
+    gone = next(k for t in _day(client, "1996-05-02")["tree"] if t["id"] == p["id"] for k in t["children"] if k["title"] == "看论文")
+    client.delete(f"/api/tasks/{gone['id']}")
+    assert [k[0] for k in kids("1996-05-02")] == ["学一小节"]
+    monkeypatch.setattr(plan.db, "today", lambda: "1996-05-05")
+    assert kids("1996-05-05") == [("学一小节", "todo", 60, "1996-05-05")]
+    assert len(kids("1996-05-01")) == 2
