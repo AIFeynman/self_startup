@@ -352,7 +352,7 @@ def test_review_problem_lands_in_next_days_plan(client):
     assert t["end_date"] == "2026-04-02" and t["notes"] == "来自 2026-04-01 的复盘"
 
 
-def test_span_children_stay_every_day_until_closed(client):
+def test_span_children_kept_with_history_until_deleted(client):
     p = client.post("/api/tasks", json={"date": "1997-03-01", "end_date": "1997-03-31", "title": "每天提升"}).json()
     a = client.post("/api/tasks", json={"date": "1997-03-02", "parent_id": p["id"], "title": "学一小节", "est_minutes": 60}).json()
     b = client.post("/api/tasks", json={"date": "1997-03-02", "parent_id": p["id"], "title": "看论文"}).json()
@@ -365,7 +365,14 @@ def test_span_children_stay_every_day_until_closed(client):
     assert [k["est_minutes"] for t in _day(client, "1997-03-05")["tree"] if t["id"] == p["id"] for k in t["children"] if k["id"] == a["id"]] == [60]
 
     plan.db.execute("UPDATE tasks SET status='done', updated_at='1997-03-06T10:00:00' WHERE id=?", [b["id"]])
-    assert sorted(kids("1997-03-06")) == ["学一小节", "看论文"]
-    assert kids("1997-03-07") == ["学一小节"]
-    assert client.post("/api/plan/carry", json={"date": "1997-03-07"}).json()["created"] == []
-    assert len(plan.db.rows("SELECT id FROM tasks WHERE parent_id=?", [p["id"]])) == 2
+    assert sorted(kids("1997-03-20")) == ["学一小节", "看论文"]
+    client.delete(f"/api/tasks/{b['id']}")
+    assert plan.db.row("SELECT deleted_on FROM tasks WHERE id=?", [b["id"]])["deleted_on"] == plan.db.today()
+    plan.db.execute("UPDATE tasks SET deleted_on='1997-03-08' WHERE id=?", [b["id"]])
+    assert sorted(kids("1997-03-07")) == ["学一小节", "看论文"]
+    assert kids("1997-03-08") == kids("1997-03-20") == ["学一小节"]
+    client.delete(f"/api/tasks/{p['id']}")
+    plan.db.execute("UPDATE tasks SET deleted_on='1997-03-10' WHERE id=?", [p["id"]])
+    assert kids("1997-03-09") == ["学一小节"]
+    assert p["id"] not in [t["id"] for t in _day(client, "1997-03-10")["tree"]]
+    assert len(plan.db.rows("SELECT id FROM tasks WHERE id=? OR parent_id=?", [p["id"], p["id"]])) == 3
