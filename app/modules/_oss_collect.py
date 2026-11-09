@@ -2,7 +2,7 @@
 
 - 全量：按 star 区间切片走 Search API（每个查询最多 1000 条，超了就把区间对半切）。
 - 每天新增：门槛段 1000..1100 做差 + 最近 7 天新建的高星 + 信息推荐 feed_items 里 ≥1000★ 的仓库（第三路，免费补充）。
-- 每周刷新：GraphQL 按 node_id 批量查 star / push / 归档 / 改名，查不到的标「已失效」，30 天后清掉。
+- 每周刷新：GraphQL 按 node_id 批量查 star / push / 归档 / 改名，查不到的标「已失效」，30 天后清掉；中途失败下次只补没刷到的。
 - README 摘录：GraphQL 批量取，清掉徽章 / 图片 / HTML，留前 1500 字给标注用。
 
 GitHub 请求头、HTTP 客户端、文本清洗、字段映射从信息推荐的 _feed_sources 直接 import，不复制。
@@ -28,9 +28,9 @@ KEEP_STARS = 900          # 已在库的跌破这个才移出检索（避免门�
 README_MAX = 1500
 GONE_PURGE_DAYS = 30
 SEARCH_CAP = 1000         # Search API 单个查询最多翻到 1000 条
-GQL_BATCH = 50
-README_BATCH = 20         # 带 README 正文的查询：50 个一批 GitHub 常 502，20 个一批约 6 秒
+README_BATCH = 20         # 每个仓库要探 6 个 README 路径：50 个一批 GitHub 常 502，20 个一批约 6 秒
 README_PARALLEL = 6       # 实测 20×6 并发约 1,100 个 / 分钟、不触发 502；全库约 1 小时
+REFRESH_RESUME_HOURS = 48 # 这段时间内刷过的不重刷：每周刷新失败重跑时接着上次的做
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS oss_repos (
@@ -210,7 +210,7 @@ def _readme_fields(with_text: bool) -> str:
 
 
 class GqlTimeout(RuntimeError):
-    """GitHub 算不完返回 502 / 504：多半是一次查的仓库太多，拆小了再查。"""
+    """GitHub 算不完（502 / 504 / 读超时 / 正文不是 JSON）或连接断了：多半是一次查的仓库太多，拆小了再查。"""
 
 
 def _gql(c: httpx.Client, query: str, variables: dict) -> dict:
@@ -218,17 +218,20 @@ def _gql(c: httpx.Client, query: str, variables: dict) -> dict:
     if "Authorization" not in h:
         raise RuntimeError("GraphQL 需要 GITHUB_TOKEN（项目根目录 .env）")
     for attempt in range(4):
-        r = c.post("https://api.github.com/graphql", headers=h, json={"query": query, "variables": variables})
-        if r.status_code in (502, 504):
-            if attempt >= 1:
-                raise GqlTimeout(f"GraphQL {r.status_code}")
-            time.sleep(5)
-            continue
-        if r.status_code in (403, 429):
-            time.sleep(10 * (attempt + 1))
-            continue
-        r.raise_for_status()
-        return r.json()
+        try:
+            r = c.post("https://api.github.com/graphql", headers=h, json={"query": query, "variables": variables})
+            if r.status_code in (403, 429):
+                time.sleep(10 * (attempt + 1))
+                continue
+            if r.status_code not in (502, 504):
+                r.raise_for_status()
+                return r.json()
+            why = f"GraphQL {r.status_code}"
+        except (httpx.TransportError, json.JSONDecodeError) as e:
+            why = f"GraphQL {type(e).__name__}"
+        if attempt >= 1:
+            raise GqlTimeout(why)
+        time.sleep(5)
     raise RuntimeError("GraphQL 一直失败")
 
 
@@ -242,7 +245,9 @@ def gql_nodes(c: httpx.Client, node_ids: list[str], with_text: bool) -> dict[str
             raise
         mid = len(node_ids) // 2
         return {**gql_nodes(c, node_ids[:mid], with_text), **gql_nodes(c, node_ids[mid:], with_text)}
-    nodes = (data.get("data") or {}).get("nodes") or [None] * len(node_ids)
+    nodes = (data.get("data") or {}).get("nodes")
+    if nodes is None:
+        raise RuntimeError(f"GraphQL 没给结果：{str(data.get('errors') or data)[:200]}")
     return {nid: (n or None) for nid, n in zip(node_ids, nodes)}
 
 
@@ -274,62 +279,75 @@ def fetch_readmes(names: list[str] | None = None, limit: int = 2000) -> dict:
     else:
         rows = db.rows("SELECT id, name, node_id FROM oss_repos WHERE readme_oid IS NULL AND node_id!='' AND status='ok' "
                        "ORDER BY stars DESC LIMIT ?", [limit])
-    def one(batch):
-        try:
-            with _client() as c:
-                return batch, gql_nodes(c, [r["node_id"] for r in batch], with_text=True)
-        except Exception as e:  # noqa: BLE001
-            log.warning("oss readme batch failed: %s", e)
-            return batch, None
-
     done = errors = 0
-    batches = [rows[i:i + README_BATCH] for i in range(0, len(rows), README_BATCH)]
-    with ThreadPoolExecutor(README_PARALLEL) as ex:
-        for batch, got in ex.map(one, batches):   # 并发只用在 GitHub 请求上，写库留在当前线程
-            if got is None:
-                errors += 1
+    for batch, got in _fetch(rows, with_text=True):
+        if got is None:
+            errors += 1
+            continue
+        for r in batch:
+            n = got.get(r["node_id"])
+            if n is None:
                 continue
-            for r in batch:
-                n = got.get(r["node_id"])
-                if n is None:
-                    continue
-                oid, text = _readme_of(n)
-                db.execute("UPDATE oss_repos SET readme=?, readme_oid=? WHERE id=?", [clean_readme(text), oid, r["id"]])
-                done += 1
+            oid, text = _readme_of(n)
+            db.execute("UPDATE oss_repos SET readme=?, readme_oid=? WHERE id=?", [clean_readme(text), oid, r["id"]])
+            done += 1
     return {"readme": done, "errors": errors}
 
 
+def _fetch(rows: list[dict], with_text: bool):
+    """分批并发查 GitHub，逐批给出（这批的行, 查到的结果）；某批查不到给 None。并发只用在请求上，写库留在调用方线程。"""
+    def one(batch):
+        try:
+            with _client() as c:
+                return batch, gql_nodes(c, [r["node_id"] for r in batch], with_text)
+        except Exception as e:  # noqa: BLE001
+            log.warning("oss github batch failed: %s", e)
+            return batch, None
+
+    batches = [rows[i:i + README_BATCH] for i in range(0, len(rows), README_BATCH)]
+    with ThreadPoolExecutor(README_PARALLEL) as ex:
+        for i in range(0, len(batches), README_PARALLEL):   # 一轮只发一组：中途停下时不用等后面排着的批次
+            yield from ex.map(one, batches[i:i + README_PARALLEL])
+
+
 def refresh(on_batch=None) -> dict:
-    """每周：按 node_id 批量刷新 star / push / 归档 / 改名 / README oid；查不到的标 gone，gone 超过 30 天的删掉。"""
-    rows = db.rows("SELECT id, name, node_id FROM oss_repos WHERE node_id!=''")
-    upd = gone = renamed = 0
+    """每周：按 node_id 批量刷新 star / push / 归档 / 改名 / README oid；查不到的标 gone，gone 超过 30 天的删掉。
+
+    某批查不到不影响其余批次，全部过完后报错；刚刷过的跳过，所以重跑只补没刷到的。
+    """
+    recent = (datetime.now() - timedelta(hours=REFRESH_RESUME_HOURS)).isoformat(timespec="seconds")
+    rows = db.rows("SELECT id, name, node_id FROM oss_repos WHERE node_id!='' AND updated<? ORDER BY updated", [recent])
+    upd = gone = renamed = seen = errors = 0
     now = db.now()
-    with _client() as c:
-        for i in range(0, len(rows), GQL_BATCH * 2):
-            batch = rows[i:i + GQL_BATCH * 2]
-            got = gql_nodes(c, [r["node_id"] for r in batch], with_text=False)
-            for r in batch:
-                n = got.get(r["node_id"])
-                if n is None:
-                    db.execute("UPDATE oss_repos SET status='gone', gone_at=CASE WHEN gone_at='' THEN ? ELSE gone_at END WHERE id=?",
-                               [now, r["id"]])
-                    gone += 1
-                    continue
-                oid, _ = _readme_of(n)
-                name = n.get("nameWithOwner") or r["name"]
-                if name != r["name"]:
-                    renamed += 1
-                    db.execute("UPDATE oss_labels SET name=? WHERE name=?", [name, r["name"]])
-                topics = [x["topic"]["name"] for x in ((n.get("repositoryTopics") or {}).get("nodes") or [])]
-                db.execute("UPDATE oss_repos SET name=?, stars=?, pushed=?, archived=?, descr=?, lang=?, topics=?, "
-                           "readme_oid=CASE WHEN readme_oid IS NULL THEN NULL WHEN readme_oid!=? THEN ? ELSE readme_oid END, "
-                           "status='ok', gone_at='', updated=? WHERE id=?",
-                           [name, int(n.get("stargazerCount") or 0), n.get("pushedAt") or "", int(bool(n.get("isArchived"))),
-                            clean(n.get("description") or ""), (n.get("primaryLanguage") or {}).get("name") or "",
-                            json.dumps(topics, ensure_ascii=False), oid, oid, now, r["id"]])
-                upd += 1
-            if on_batch:
-                on_batch(i + len(batch), len(rows))
+    for batch, got in _fetch(rows, with_text=False):
+        seen += len(batch)
+        if got is None:
+            errors += 1
+            continue
+        for r in batch:
+            n = got.get(r["node_id"])
+            if n is None:
+                db.execute("UPDATE oss_repos SET status='gone', gone_at=CASE WHEN gone_at='' THEN ? ELSE gone_at END WHERE id=?",
+                           [now, r["id"]])
+                gone += 1
+                continue
+            oid, _ = _readme_of(n)
+            name = n.get("nameWithOwner") or r["name"]
+            if name != r["name"]:
+                renamed += 1
+                db.execute("UPDATE oss_labels SET name=? WHERE name=?", [name, r["name"]])
+            topics = [x["topic"]["name"] for x in ((n.get("repositoryTopics") or {}).get("nodes") or [])]
+            db.execute("UPDATE oss_repos SET name=?, stars=?, pushed=?, archived=?, descr=?, lang=?, topics=?, "
+                       "readme_oid=CASE WHEN readme_oid IS NULL THEN NULL WHEN readme_oid!=? THEN ? ELSE readme_oid END, "
+                       "status='ok', gone_at='', updated=? WHERE id=?",
+                       [name, int(n.get("stargazerCount") or 0), n.get("pushedAt") or "", int(bool(n.get("isArchived"))),
+                        clean(n.get("description") or ""), (n.get("primaryLanguage") or {}).get("name") or "",
+                        json.dumps(topics, ensure_ascii=False), oid, oid, now, r["id"]])
+            upd += 1
+        if on_batch:
+            on_batch(seen, len(rows))
+    if errors:
+        raise RuntimeError(f"{errors} 批没刷到（共 {len(rows)} 个仓库，刷到 {upd + gone} 个），下次接着补")
     cutoff = (datetime.now() - timedelta(days=GONE_PURGE_DAYS)).isoformat(timespec="seconds")
     purged = [r["name"] for r in db.rows("SELECT name FROM oss_repos WHERE status='gone' AND gone_at!='' AND gone_at<?", [cutoff])]
     for name in purged:
