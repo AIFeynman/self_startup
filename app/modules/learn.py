@@ -397,12 +397,18 @@ DD_COLS = {"dd_status": "TEXT DEFAULT ''", "dd_stage": "TEXT DEFAULT ''", "dd_jo
            "dd_experiments": "TEXT DEFAULT '[]'", "dd_title": "TEXT DEFAULT ''", "dd_at": "TEXT DEFAULT ''"}
 # 打开过的时间，空 = 生成好了还没看（重新生成后清空）。上线前的老记录没有打开记录，有作答 / 笔记 / 追问等痕迹的算看过，值记 backfill
 OPENED_COLS = {"opened_at": "TEXT DEFAULT ''", "dd_opened_at": "TEXT DEFAULT ''"}
+READ_COLS = {"finished_at": "TEXT DEFAULT ''", "read_pos": "REAL DEFAULT 0"}
+FINISHED_POS = 0.98
 
 
 def _backfill_opened_items() -> None:
     for it in db.rows("SELECT * FROM learn_items"):
         if it.get("rating") or (it.get("my_notes") or "").strip() or _reads.qa_answers(it) or _reads.user_lines(it["id"]) or _reads.annot_lines(it["id"]):
             db.update("learn_items", it["id"], {"opened_at": "backfill"})
+
+
+def _backfill_finished_items() -> None:
+    db.execute("UPDATE learn_items SET finished_at=opened_at WHERE opened_at='backfill' OR (opened_at!='' AND opened_at<?)", [db.today()])
 
 
 def _backfill_opened_steps() -> None:
@@ -422,11 +428,17 @@ def _ensure_depth_col() -> None:
         db.execute("ALTER TABLE learn_items ADD COLUMN depth TEXT DEFAULT 'quick'")
     if "qa" not in cols:
         db.execute("ALTER TABLE learn_items ADD COLUMN qa TEXT DEFAULT '{}'")
-    for c, t in {**DD_COLS, **OPENED_COLS}.items():
+    for c, t in {**DD_COLS, **OPENED_COLS, **READ_COLS}.items():
         if c not in cols:
             db.execute(f"ALTER TABLE learn_items ADD COLUMN {c} {t}")
     if "opened_at" not in cols:
         _backfill_opened_items()
+    if "finished_at" not in cols:
+        _backfill_finished_items()
+
+
+def on_startup() -> None:
+    _ensure_depth_col()
 
 
 class ItemPatch(BaseModel):
@@ -987,6 +999,35 @@ def item_seen(iid: int, deepdive: bool = False):
     return {"ok": True}
 
 
+class ProgressIn(BaseModel):
+    pos: float
+
+
+class FinishIn(BaseModel):
+    done: bool
+
+
+@router.post("/items/{iid}/progress")
+def item_progress(iid: int, body: ProgressIn):
+    """读到哪了（正文读过的比例），回来接着读；读到底算读完。"""
+    _ensure_depth_col()
+    it = _item(iid)
+    pos = min(max(body.pos, 0.0), 1.0)
+    upd = {"read_pos": pos}
+    if pos >= FINISHED_POS and not it.get("finished_at"):
+        upd["finished_at"] = db.now()
+    db.update("learn_items", iid, upd)
+    return {k: _item(iid)[k] for k in ("read_pos", "finished_at")}
+
+
+@router.post("/items/{iid}/finish")
+def item_finish(iid: int, body: FinishIn):
+    _ensure_depth_col()
+    _item(iid)
+    db.update("learn_items", iid, {"finished_at": db.now()} if body.done else {"finished_at": "", "read_pos": 0})
+    return {k: _item(iid)[k] for k in ("read_pos", "finished_at")}
+
+
 @router.post("/items/{iid}/rerun")
 def rerun_item(iid: int, body: dict | None = None):
     _ensure_depth_col()
@@ -999,7 +1040,7 @@ def rerun_item(iid: int, body: dict | None = None):
     url, _ = normalize_target(it["url"])  # 旧数据里混进了说明文字的链接，顺手修正
     if url != it["url"]:
         upd["url"] = url
-    db.update("learn_items", iid, {**upd, "opened_at": ""})
+    db.update("learn_items", iid, {**upd, "opened_at": "", "finished_at": "", "read_pos": 0})
     it = _item(iid)
     start_item_job(it)
     return _item(iid)

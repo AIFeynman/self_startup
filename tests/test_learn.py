@@ -940,3 +940,19 @@ def test_items_list_newest_created_first(client):
     mid = db.insert("learn_items", {"kind": "paper", "url": "u-mid", "status": "done", "created_at": "2026-11-04 09:00:00"})
     ids = [r["id"] for r in client.get("/api/learn/items").json() if r["id"] in {old, new, mid}]
     assert ids == [new, mid, old]
+
+
+def test_existing_opened_items_split_into_finished_and_reading(client):
+    client.get("/api/learn/items")
+    db.execute("DELETE FROM learn_items")
+    recent = db.now()
+    old = db.insert("learn_items", {"kind": "paper", "url": "u-old", "status": "done", "opened_at": "2026-10-01 09:00:00"})
+    fill = db.insert("learn_items", {"kind": "paper", "url": "u-fill", "status": "done", "opened_at": "backfill"})
+    new = db.insert("learn_items", {"kind": "paper", "url": "u-new", "status": "done", "opened_at": recent})
+    fresh = db.insert("learn_items", {"kind": "paper", "url": "u-fresh", "status": "done"})
+    for c in ("finished_at", "read_pos"):
+        db.execute(f"ALTER TABLE learn_items DROP COLUMN {c}")
+    rows = {r["id"]: r for r in client.get("/api/learn/items").json()}
+    assert rows[old]["finished_at"] == "2026-10-01 09:00:00"
+    assert rows[fill]["finished_at"] == "backfill"
+    assert rows[new]["finished_at"] == "" and rows[fresh]["finished_at"] == ""
