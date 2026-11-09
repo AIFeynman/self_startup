@@ -1,7 +1,8 @@
 """理财板块：一年收益目标（QQQ / 谷歌 / 微软 / 红利低波 + 债基底仓，含买入时机和挂单）、美团减持 / 换仓计划、信号提醒。
 
 计算从 wealth 仓库迁来（_wealth_*）；数据在 data/wealth/ 和 app.db 的 wealth_* 表。
-后台每 wealth.refresh_minutes 分钟刷新行情和新闻、重算信号，有变化就通过 app.notify 提醒（页内 + Mac），每天 wealth.summary_time 发一条汇总。
+行情和新闻只在页面上点「刷新行情」时刷新（后台不自动刷）；刷新后重算信号、补到期的回测，有变化就通过 app.notify 提醒（页内 + Mac），
+当天过了 wealth.summary_time 的第一次刷新带一条汇总。实时报价（WebSocket）启动时连上。
 统计估算，不构成投资建议。
 """
 from __future__ import annotations
@@ -9,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 from datetime import datetime
 from typing import Any
 
@@ -26,7 +26,6 @@ log = logging.getLogger(__name__)
 TITLE = "理财"
 ORDER = 45
 EXIT_SYMBOL = "3690.HK"
-TICK_SECONDS = 300
 
 router = APIRouter()
 _views: dict[str, dict[str, Any]] = {}  # 页面 → 用户当前的设置，对话时用
@@ -91,7 +90,7 @@ def post_view(page: str, body: dict):
 
 @router.post("/refresh")
 def post_refresh():
-    """手动刷新：行情和新闻同步跑（十几秒），回测在后台补。"""
+    """手动刷新：行情和新闻同步跑（十几秒），信号重算和到期的回测在后台补。"""
     stats = _call(svc.refresh)
     threading.Thread(target=_after_refresh, daemon=True, name="wealth-after-refresh").start()
     return stats
@@ -182,7 +181,7 @@ def _quietly(fn) -> None:
         fn()
     except svc.Busy:
         pass
-    except Exception:  # noqa: BLE001 —— 下一轮再试
+    except Exception:  # noqa: BLE001 —— 下次刷新再试
         log.exception("理财后台任务失败：%s", getattr(fn, "__name__", fn))
 
 
@@ -190,32 +189,10 @@ def _after_refresh() -> None:
     if svc.target_plan_due():
         _quietly(lambda: svc.run_target_backtest(refresh=True))
     _quietly(check_alerts)
-
-
-def _refresh_due() -> bool:
-    state = svc.job_state("positions") or {}
-    return svc._hours_since(state.get("last_completed_at")) * 60 >= float(cfg("refresh_minutes", 60) or 60)
-
-
-def _tick() -> None:
-    if _refresh_due():
-        _quietly(svc.refresh)
-        _after_refresh()
-    else:
-        store = alerts.load(svc.DATA)
-        if cfg("alerts", True) and alerts.summary_due(store, datetime.now(), cfg("summary_time", "16:30")):
-            _quietly(check_alerts)
     if svc.sell_backtest_due():
         _quietly(svc.run_sell_backtest)
     if svc.signals_backtest_due():
         _quietly(svc.run_signals_backtest)
-
-
-def _loop() -> None:
-    time.sleep(20)   # 等服务起完再联网
-    while True:
-        _quietly(_tick)
-        time.sleep(TICK_SECONDS)
 
 
 def on_startup() -> None:
@@ -223,7 +200,6 @@ def on_startup() -> None:
     if os.environ.get("SELF_STARTUP_NO_AUTOREFRESH"):
         return
     svc.start_live()
-    threading.Thread(target=_loop, daemon=True, name="wealth-loop").start()
 
 
 def _page_context(page: str) -> str:

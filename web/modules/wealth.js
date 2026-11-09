@@ -508,7 +508,7 @@ function renderSell(box, ctx) {
   const premium = (plan.target_avg / quote.price - 1) * 100;
   const head = `<section class="card wl-controls">
     <div class="row between wl-wrapline"><div><div class="card-label">${esc(d.market || '')} · ${esc(d.currency)}</div><h3 class="wl-title">${esc(d.symbol)} · ${esc(d.name)} · 持有 ${int(d.position.shares)} 股</h3>
-      <div class="muted wl-small">价格 ${local(quote.observed_at)}（${quote.source === 'live' ? '实时' : quote.source === 'hourly' ? '小时线' : '收盘'}） · 行情资讯每 ${d.refresh_minutes} 分钟刷新，上次 ${local(refresh.last_completed_at)} ${esc(status)}</div></div></div>
+      <div class="muted wl-small">价格 ${local(quote.observed_at)}（${quote.source === 'live' ? '实时' : quote.source === 'hourly' ? '小时线' : '收盘'}） · 行情资讯点「刷新行情」才更新，上次 ${local(refresh.last_completed_at)} ${esc(status)}</div></div></div>
     <div class="wl-chips"><div class="wl-chip wl-price"><span>现价 ${esc(d.currency)}</span><b>${money(quote.price)}</b><em class="${tone(sm.change_1d_pct)}">${pctv(sm.change_1d_pct)}</em></div>
       ${chips.map(([k, v]) => `<div class="wl-chip"><span>${k}</span><b class="${tone(v)}">${pctv(v)}</b></div>`).join('')}
       <div class="wl-chip"><span>年化波动率</span><b>${(d.volatility.annual * 100).toFixed(1)}%</b></div>${range}</div>
@@ -812,7 +812,7 @@ function renderAlerts(box, ctx, d) {
     ${n.body ? `<div class="wl-body">${esc(n.body)}</div>` : ''}${(n.reasons || []).length ? `<details><summary>理由（${n.reasons.length}）</summary>${list(n.reasons)}</details>` : ''}</div>`).join('')}</div>` : emptyText('还没有提醒记录。信号变化或每天汇总时会出现在这里。');
   box.innerHTML = `<section class="card wl-controls"><div class="row between wl-wrapline"><div>
       <div class="card-label">提醒规则</div>
-      <p class="wl-small">后台每 ${cfg.refresh_minutes || 60} 分钟刷新行情、重算信号；QQQ、谷歌、微软、红利低波、纯债的加仓 / 持有 / 减仓信号变化，或美团建议现卖股数、目标均价的达标概率明显变化时，立刻提醒（页内 + Mac 系统通知），每天 ${esc(cfg.summary_time || '16:30')} 发一条汇总。${cfg.alerts === false ? '<b class="wl-warn">提醒已关闭（设置 wealth.alerts）</b>' : ''}</p>
+      <p class="wl-small">点右上角「刷新行情」时更新行情、重算信号（后台不自动刷新）；QQQ、谷歌、微软、红利低波、纯债的加仓 / 持有 / 减仓信号变化，或美团建议现卖股数、目标均价的达标概率明显变化时，刷新后立刻提醒（页内 + Mac 系统通知）；当天 ${esc(cfg.summary_time || '16:30')} 之后第一次刷新带一条汇总。${cfg.alerts === false ? '<b class="wl-warn">提醒已关闭（设置 wealth.alerts）</b>' : ''}</p>
       <p class="muted wl-small">上次检查 ${local(d.checked_at)} · 上次汇总 ${esc(d.summary_date || '—')} · ${DISCLAIMER}</p></div>
     <div class="row wl-actions"><button class="primary sm" data-act="check">立即检查</button><button class="outline sm" data-act="summary">发送汇总</button><button class="ghost sm" data-act="test">测试通知</button></div></div></section>`
     + card('当前信号', state, d.checked_at ? `算于 ${local(d.checked_at)}` : '') + card('提醒记录', log, `${d.log.length} 条`);

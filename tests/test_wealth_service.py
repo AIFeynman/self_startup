@@ -22,7 +22,7 @@ def positions(client, tmp_path, monkeypatch):
     monkeypatch.setattr(svc.asset_valuation, "load", lambda _: None)
     for table in ("wealth_bars", "wealth_quotes", "wealth_trades"):
         db.execute(f"DELETE FROM {table}")
-    svc.write_positions({"refresh_minutes": 60, "positions": [
+    svc.write_positions({"positions": [
         {"symbol": "3690.HK", "shares": 8500, "lot_size": 100, "target_avg": None, "horizon_days": 63, "shape": "balanced"},
         {"symbol": "NVDA", "shares": 1300, "lot_size": 1, "horizon_days": 63, "shape": "balanced"}]})
     now = datetime.now(UTC).replace(minute=30, second=0, microsecond=0)
@@ -262,3 +262,30 @@ def test_sell_plan_includes_signals_without_changing_plan(positions):
     assert after["signals"]["snapshot"]["benchmark"]["name"] == "恒生科技 ETF"
     assert after["plan"]["ladder"] == before["plan"]["ladder"]
     assert after["plan"]["probability_target"] == before["plan"]["probability_target"]
+
+
+def test_startup_does_not_refresh_in_the_background(tmp_path, monkeypatch):
+    import threading
+    monkeypatch.delenv("SELF_STARTUP_NO_AUTOREFRESH", raising=False)
+    monkeypatch.setattr(svc, "DATA", tmp_path)
+    monkeypatch.setattr(svc, "start_live", lambda: None)
+    wealth.on_startup()
+    assert "wealth-loop" not in {t.name for t in threading.enumerate()}
+
+
+def test_manual_refresh_recomputes_signals_and_due_backtests(client, tmp_path, monkeypatch):
+    import threading
+    ran = []
+    monkeypatch.setattr(svc, "DATA", tmp_path)
+    monkeypatch.setattr(svc, "refresh", lambda: ran.append("refresh") or {"ok": True})
+    monkeypatch.setattr(svc, "target_plan_due", lambda: False)
+    monkeypatch.setattr(svc, "sell_backtest_due", lambda: True)
+    monkeypatch.setattr(svc, "signals_backtest_due", lambda: False)
+    monkeypatch.setattr(svc, "run_sell_backtest", lambda: ran.append("sell_backtest"))
+    monkeypatch.setattr(svc, "run_signals_backtest", lambda: ran.append("signals_backtest"))
+    monkeypatch.setattr(wealth, "check_alerts", lambda: ran.append("alerts"))
+    assert client.post("/api/wealth/refresh").json() == {"ok": True}
+    for t in threading.enumerate():
+        if t.name == "wealth-after-refresh":
+            t.join(5)
+    assert ran == ["refresh", "alerts", "sell_backtest"]
