@@ -921,6 +921,7 @@ def day(date: str = ""):
         _habits.ensure_paper_task(date)
     except Exception:  # noqa: BLE001
         pass
+    tasks.ensure_daily_sets(date)
     ts = tasks.list_for(date)
     return {"date": date, "tasks": ts, "tree": _tree(ts), "config": _cfg(), "schedule": last_schedule(date),
             "runs": runs(date=date),

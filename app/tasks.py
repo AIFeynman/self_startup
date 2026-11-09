@@ -11,7 +11,7 @@ from . import db
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 FIELDS = ["date", "end_date", "parent_id", "title", "goal", "kind", "priority", "human_level", "executor", "est_minutes",
-          "parallel_group", "depends_on", "start_time", "end_time", "status", "progress", "repo", "notes"]
+          "parallel_group", "depends_on", "start_time", "end_time", "status", "progress", "repo", "notes", "daily_set"]
 
 
 class TaskIn(BaseModel):
@@ -33,6 +33,7 @@ class TaskIn(BaseModel):
     progress: int | None = None
     repo: str | None = None
     notes: str | None = None
+    daily_set: int | None = None
 
 
 def decode(t: dict) -> dict:
@@ -59,13 +60,32 @@ def span_label(t: dict) -> str:
 
 def list_for(date: str) -> list[dict]:
     """date 当天要看的事项：当天的单日事项 + 覆盖这天的跨日事项（过了结束日还没关的算逾期，照样显示）
-    + 这些跨日事项下之前加的全部子任务（手动维护，做完放弃都留着）。删掉的从删除那天起不再出现，之前的日子照旧。"""
+    + 这些跨日事项下之前加的全部子任务（手动维护，做完放弃都留着；「子项每天一套」的只看当天那一套）。
+    删掉的从删除那天起不再出现，之前的日子照旧。"""
     spans = (f"SELECT id FROM tasks WHERE date<? AND {SPAN} AND (status NOT IN {CLOSED} OR "
              "(substr(updated_at,1,10)>=? AND (end_date IS NULL OR end_date>=?)))")
     return [decode(t) for t in db.rows(
         f"SELECT * FROM tasks WHERE (deleted_on IS NULL OR deleted_on>?) AND "
-        f"(date=? OR id IN ({spans}) OR (date<? AND parent_id IN ({spans}))) "
+        f"(date=? OR id IN ({spans}) OR (date<? AND parent_id IN ({spans} AND NOT daily_set))) "
         "ORDER BY COALESCE(start_time,''), priority, id", [date, date, date, date, date, date, date, date, date])]
+
+
+DAILY_KEEP = ["title", "goal", "kind", "priority", "human_level", "executor", "est_minutes", "repo", "notes"]
+
+
+def ensure_daily_sets(date: str) -> None:
+    """「子项每天一套」的事项：今天还没有的，照最近一天那套补上（同标题不重复，今天删掉的不再补）。"""
+    if date != db.today():
+        return
+    for p in list_for(date):
+        if not p.get("daily_set") or p.get("parent_id") or not is_span(p):
+            continue
+        last = db.row("SELECT MAX(date) d FROM tasks WHERE parent_id=? AND date<?", [p["id"], date])["d"]
+        have = {r["title"] for r in db.rows("SELECT title FROM tasks WHERE parent_id=? AND date=?", [p["id"], date])}
+        for k in db.rows("SELECT * FROM tasks WHERE parent_id=? AND date=? AND deleted_on IS NULL ORDER BY id", [p["id"], last]):
+            if k["title"] not in have:
+                have.add(k["title"])
+                create({**{x: k[x] for x in DAILY_KEEP}, "date": date, "parent_id": p["id"]})
 
 
 def add_once(title: str, date: str, notes: str) -> dict | None:

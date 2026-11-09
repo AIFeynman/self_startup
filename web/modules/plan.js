@@ -823,6 +823,8 @@ export default {
             h('div', {}, ['预计时长', estProp(t.est_minutes, (v) => save({ est_minutes: v }))]),
             t.parent_id ? null : h('div', {}, ['日期', h('div.dates', {}, dateProps({ date: t.date, end_date: t.end_date || '' }, (b) => save(b))),
               isSpan(t) ? h('span.val', {}, spanText(t, state.date)) : null]),
+            !t.parent_id && isSpan(t) ? h('div', { title: '每天自动按最近一天的子项补一套到当天，当天已有的不重复加；某天删掉的从此不再补' },
+              ['子项', pickProp([{ v: 0, label: '手动维护' }, { v: 1, label: '每天一套' }], t.daily_set || 0, (v) => save({ daily_set: +v }), '子项')]) : null,
             h('div', {}, ['排程', h('span.val', {}, t.start_time ? `${t.start_time} – ${t.end_time}` : '未排')]),
             h('label', {}, ['完成标准', goalBox]),
             t.depends_on?.length ? h('div', {}, ['依赖', h('span.val', {}, t.depends_on.map((x) => `#${x}`).join('、'))]) : null,

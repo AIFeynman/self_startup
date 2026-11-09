@@ -153,6 +153,8 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
             c.execute("UPDATE tasks SET kind='work', date=substr(created_at,1,10) WHERE kind='issue'")
         if "deleted_on" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}:
             c.execute("ALTER TABLE tasks ADD COLUMN deleted_on TEXT")
+        if "daily_set" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}:
+            c.execute("ALTER TABLE tasks ADD COLUMN daily_set INTEGER DEFAULT 0")
         # 便签：老库的 review_notes 补上「谁写的」和引用来源（已有记录都算系统记的）
         note_cols = {r[1] for r in c.execute("PRAGMA table_info(review_notes)")}
         if note_cols:
