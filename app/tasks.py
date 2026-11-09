@@ -58,11 +58,14 @@ def span_label(t: dict) -> str:
 
 
 def list_for(date: str) -> list[dict]:
-    """date 当天要看的事项：当天的单日事项 + 覆盖这天的跨日事项（过了结束日还没关的算逾期，照样显示）。"""
+    """date 当天要看的事项：当天的单日事项 + 覆盖这天的跨日事项（过了结束日还没关的算逾期，照样显示）
+    + 这些跨日事项下之前加的子任务（没关的每天都在，关掉那天还显示）。"""
+    spans = (f"SELECT id FROM tasks WHERE date<? AND {SPAN} AND (status NOT IN {CLOSED} OR "
+             "(substr(updated_at,1,10)>=? AND (end_date IS NULL OR end_date>=?)))")
     return [decode(t) for t in db.rows(
-        f"SELECT * FROM tasks WHERE date=? OR (date<? AND {SPAN} AND (status NOT IN {CLOSED} OR "
-        "(substr(updated_at,1,10)>=? AND (end_date IS NULL OR end_date>=?)))) "
-        "ORDER BY COALESCE(start_time,''), priority, id", [date, date, date, date])]
+        f"SELECT * FROM tasks WHERE date=? OR id IN ({spans}) OR (date<? AND parent_id IN ({spans}) AND "
+        f"(status NOT IN {CLOSED} OR substr(updated_at,1,10)>=?)) "
+        "ORDER BY COALESCE(start_time,''), priority, id", [date, date, date, date, date, date, date, date, date])]
 
 
 def add_once(title: str, date: str, notes: str) -> dict | None:
