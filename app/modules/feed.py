@@ -400,12 +400,12 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = _without_radar(out)
     deeps = _deep_latest()
     read_urls = _read_log.urls("feed") | {u for u, d in deeps.items() if d.get("finished_at")}
-    deep_of = lambda d: {"id": d["id"], "status": d["status"], "seen": bool(d.get("opened_at")),
-                         "reading": bool(d.get("opened_at")) and not d.get("finished_at"), "pos": d.get("read_pos") or 0}
+    deep_of = lambda d: {"id": d["id"], "status": d["status"], "seen": bool(d.get("opened_at")), "finished": bool(d.get("finished_at")),
+                         "reading": bool(d.get("read_pos")) and not d.get("finished_at"), "pos": d.get("read_pos") or 0}
     out = [{**x, "read": x["norm_url"] in read_urls, "deep": deep_of(deeps[x["norm_url"]]) if x["norm_url"] in deeps else None}
            for x in out]
     if read == "deep" and not saved:
-        out = [x for x in out if x["deep"] and x["deep"]["status"] == "done" and x["deep"]["seen"] and not x["deep"]["reading"]]
+        out = [x for x in out if x["deep"] and x["deep"]["finished"]]
     elif read and not saved:
         out = [x for x in out if x["read"] == (read == "read")]
     if sort in ("new", "hot", "day"):
@@ -941,10 +941,10 @@ def _still_open(x: dict) -> bool:
 
 @router.get("/picks")
 def picks():
-    """页面顶部四组：waiting 深读完还没打开、reading 打开了没读完、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
+    """页面顶部四组：waiting 深读完还没开始读、reading 读了一部分没读完、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
     all_items = ranked(stale_ok=True)
     done = [x for x in all_items if x["deep"] and x["deep"]["status"] == "done"]
-    waiting = sorted((x for x in done if not x["deep"]["seen"]), key=lambda x: -x["deep"]["id"])
+    waiting = sorted((x for x in done if not x["deep"]["finished"] and not x["deep"]["reading"]), key=lambda x: -x["deep"]["id"])
     reading = sorted((x for x in done if x["deep"]["reading"]), key=lambda x: -x["deep"]["id"])
     waiting_ids = {x["id"] for x in waiting + reading}
     rest = [x for x in ranked(read="unread", stale_ok=True) if x["id"] not in waiting_ids]

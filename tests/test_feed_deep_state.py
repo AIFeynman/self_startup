@@ -28,7 +28,7 @@ def fresh(client, monkeypatch):
 def test_started_item_stays_unread_and_shows_running(fresh):
     it = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
     row = _row(fresh, "unread")
-    assert row["deep"] == {"id": it["id"], "status": "running", "seen": False, "reading": False, "pos": 0}
+    assert row["deep"] == {"id": it["id"], "status": "running", "seen": False, "finished": False, "reading": False, "pos": 0}
 
 
 def _picks(client):
@@ -57,7 +57,15 @@ def test_scrolling_to_end_finishes(fresh):
     fresh.post(f"/api/learn/items/{it['id']}/progress", json={"pos": 1})
     assert _row(fresh, "read")["deep"]["reading"] is False
     fresh.post(f"/api/learn/items/{it['id']}/finish", json={"done": False})
-    assert _picks(fresh)["reading"] == ["blog:deep"]
+    assert _picks(fresh)["reading"] == [] and _picks(fresh)["waiting"] == ["blog:deep"]
+
+
+def test_opened_without_reading_stays_waiting_not_reading(fresh):
+    it = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
+    db.update("learn_items", it["id"], {"status": "done"})
+    fresh.post(f"/api/learn/items/{it['id']}/seen")
+    assert _picks(fresh)["waiting"] == ["blog:deep"] and _picks(fresh)["reading"] == []
+    assert _row(fresh, "unread")["deep"]["reading"] is False
 
 
 def test_failed_stays_unread_and_retry_shows_new_run(fresh):
@@ -66,7 +74,7 @@ def test_failed_stays_unread_and_retry_shows_new_run(fresh):
     assert _row(fresh, "unread")["deep"]["status"] == "failed"
     again = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
     assert again["id"] != it["id"]
-    assert _row(fresh, "unread")["deep"] == {"id": again["id"], "status": "running", "seen": False, "reading": False, "pos": 0}
+    assert _row(fresh, "unread")["deep"] == {"id": again["id"], "status": "running", "seen": False, "finished": False, "reading": False, "pos": 0}
 
 
 def test_never_deep_read_has_no_state(fresh):
@@ -81,8 +89,8 @@ def test_reading_original_while_deep_pending_marks_read_and_done_still_waits(fre
     db.update("learn_items", it["id"], {"status": "done"})
     assert [x["id"] for x in fresh.get("/api/feed/picks").json()["waiting"]] == ["blog:deep"]
     fresh.post(f"/api/learn/items/{it['id']}/seen")
-    assert fresh.get("/api/feed/picks").json()["waiting"] == []
-    assert _picks(fresh)["reading"] == ["blog:deep"]
+    fresh.post(f"/api/learn/items/{it['id']}/progress", json={"pos": 0.3})
+    assert _picks(fresh)["waiting"] == [] and _picks(fresh)["reading"] == ["blog:deep"]
 
 
 def test_manual_mark_read(fresh):

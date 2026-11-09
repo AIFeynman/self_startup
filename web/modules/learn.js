@@ -659,10 +659,10 @@ function itemList(items, ctx) {
   return h('div', {}, kinds.length > 2 ? [tabs, grid] : [grid]);
 }
 
-const isReading = (it) => it.status === 'done' && it.opened_at && !it.finished_at;
+const isReading = (it) => it.status === 'done' && it.read_pos > 0 && !it.finished_at;
 function readTag(h, it) {
   if (it.finished_at) return h('span.tag.gray.ln-cs', { title: '读完了' }, '已读');
-  if (it.opened_at) return h('span.tag.ok.ln-cs', { title: '读到一半，点开回到上次的位置' }, `在读 ${Math.round((it.read_pos || 0) * 100)}%`);
+  if (isReading(it)) return h('span.tag.ok.ln-cs', { title: '读到一半，点开回到上次的位置' }, `在读 ${Math.round((it.read_pos || 0) * 100)}%`);
   return unreadTag(h, '未读');
 }
 
