@@ -1,5 +1,7 @@
-"""今日一想：每天从判断台账挑一个问题，和知识库对话 Agent（批判者）聊透，再由 Agent 把我的判断记进台账。"""
+"""今日一想：每天从判断台账挑一个问题，或自己写下问题和判断，和知识库对话 Agent（批判者）一层层往下挖到第 5 层，再由 Agent 把我的判断记进台账。"""
 from __future__ import annotations
+
+import re
 
 from . import agent, db, kb_judge
 
@@ -8,22 +10,36 @@ CREATE TABLE IF NOT EXISTS kb_thinks (             -- 每次想的问题（只�
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL,
     question TEXT NOT NULL,
-    origin_sid TEXT DEFAULT '',                    -- 从哪条判断想起
+    origin_sid TEXT DEFAULT '',                    -- 从哪条判断想起；空 = 自己出的题
+    stance TEXT DEFAULT '',                        -- 自己出题时一开始的判断
     judgment_id INTEGER,                           -- 想完记下的判断 kb_judgments.id
     done_on TEXT DEFAULT '',                       -- 记下判断的那天
     created_at TEXT
 );
 """
 
+MAX_DEPTH = 5
+LAYER_TAG = re.compile(r"〔第\s*([1-5])\s*/\s*5\s*层〕")
+BOTTOM_TAG = "〔5 层到底〕"
+
 CRITIC = """## 你现在是「今日一想」的批判者
-用户在想一个问题，你帮用户想得更深，但答案由用户自己给。规矩：
+用户在想一个问题，你帮用户一层层往下想，一共挖 5 层，答案由用户自己给。规矩：
+- 每一轮回复第一行只写层标记 `〔第 N / 5 层〕`，N 是这一轮追问所在的层，第一轮是第 1 层。
+- 每层的默认方向（按用户的回答灵活调整，但不要跳过）：
+  1. 澄清主张：用户到底在断言什么？概念的边界、适用范围、「更好」按什么标准算。
+  2. 依据：凭什么这么想？证据是亲眼看到的、读到的、还是推出来的，样本有多大。
+  3. 隐含前提：这个理由要成立，背后默认了哪些没说出口的条件？挑最脆弱的一个。
+  4. 反例与替代解释：在什么情况下会不成立？同样的现象还能怎么解释？有没有人反着做也成了。
+  5. 可检验：看到什么证据会让用户改主意？能不能写成一个有日期、可检查的预测或小实验。
+- 每一层的追问必须咬住用户上一轮刚给出的理由本身，追问「这个理由为什么成立 / 它依赖什么」，不另起话题、不泛泛而谈。
 - 每一轮只给三样，各一两句：
   1. **一个认知**：被忽略的视角、反例或隐含前提。只指出，不说「所以你对 / 错了」。
-  2. **一个引导问题**：指向用户推理里最薄弱的一环，具体到能去求证。
+  2. **一个引导问题**：指向这一层里用户推理最薄弱的一环，具体到能回答、能去求证。
   3. **去哪求证**：先从下面列的用户看过的材料、知识库里挑；没有就给该搜的方向或能做的小实验。
+- 进层标准要严：用户给出了新的理由、证据、机制或修正，才算接住了，N 加 1；复述、「嗯 / 对 / 应该是」、换个说法重复、只表态不讲为什么，都不算，N 不变，换个角度继续逼问这一层，并点明哪里还没答到。
 - 不替用户写答案，不改写用户的主张，不给结论（不给结论是硬规矩）。用户问「那答案是什么」时，只再给一条线索。
-- 用户回应后，看有没有接住上一轮的质疑：接住了就换下一个薄弱处；回避了就继续追问这一处。
-- 用户说想清楚了、要记下来时：用用户自己的话整理成一句可检查的判断（再标类型 观点 / 预测 / 评价 / 疑问、信心 高 / 中 / 低，预测写兑现日期），
+- 用户接住了第 5 层：第一行写 `〔5 层到底〕`，不再追问。按层列出用户每层给出的理由（用用户自己的话），指出和一开始的判断相比哪里变了、哪里还站不住，然后进入「记下来」。
+- 记下来（挖到底或用户说想清楚了）：用用户自己的话整理成一句可检查的判断（再标类型 观点 / 预测 / 评价 / 疑问、信心 高 / 中 / 低，预测写兑现日期），
   先给用户确认；确认后再记，命令：
   curl -s -X POST {api}/api/kb/think/{tid}/record -H 'Content-Type: application/json' -d '{{"text": "…", "type": "观点", "confidence": "中", "due": ""}}'
   记完一句话告诉用户记下了，明天的问题会接着这里想。没确认不要记。"""
@@ -31,16 +47,28 @@ CRITIC = """## 你现在是「今日一想」的批判者
 
 def _init() -> None:
     db.init([SCHEMA])
+    if "stance" not in {r["name"] for r in db.rows("PRAGMA table_info(kb_thinks)")}:
+        db.execute("ALTER TABLE kb_thinks ADD COLUMN stance TEXT DEFAULT ''")
 
 
 def _today() -> str:
     return db.today()
 
 
+def _depth(tid: int) -> tuple[int, bool]:
+    said = [m["content"] for m in db.rows(
+        "SELECT m.content FROM chat_messages m JOIN chat_sessions s ON s.id=m.session_id "
+        "WHERE s.module='kb' AND s.ref=? AND m.role='assistant'", [f"think:{tid}"])]
+    if any(BOTTOM_TAG in c for c in said):
+        return MAX_DEPTH, True
+    return max((int(n) for c in said for n in LAYER_TAG.findall(c)), default=0), False
+
+
 def _out(t: dict) -> dict:
     j = db.row("SELECT * FROM kb_judgments WHERE id=?", [t["judgment_id"]]) if t["judgment_id"] else None
     chatted = db.row("SELECT 1 FROM chat_sessions WHERE module='kb' AND ref=?", [f"think:{t['id']}"])
-    return {**t, "ref": f"think:{t['id']}", "chatted": bool(chatted),
+    depth, bottomed = _depth(t["id"])
+    return {**t, "ref": f"think:{t['id']}", "chatted": bool(chatted), "depth": depth, "max_depth": MAX_DEPTH, "bottomed": bottomed,
             "judgment": {"sid": f"my:{j['id']}", "text": j["text"]} if j else None}
 
 
@@ -59,8 +87,8 @@ def _candidates(lg: dict) -> list[tuple[dict, str]]:
     return [*((c, "") for c in lg["due"]), *((c, "") for c in lg["open"]), *latest, *((c, "") for c in lg["singles"])]
 
 
-def _create(date: str, question: str, origin: str) -> dict:
-    tid = db.insert("kb_thinks", {"date": date, "question": question, "origin_sid": origin, "created_at": db.now()})
+def _create(date: str, question: str, origin: str, stance: str = "") -> dict:
+    tid = db.insert("kb_thinks", {"date": date, "question": question, "origin_sid": origin, "stance": stance, "created_at": db.now()})
     return db.row("SELECT * FROM kb_thinks WHERE id=?", [tid])
 
 
@@ -69,7 +97,7 @@ def today() -> dict | None:
     last = db.row("SELECT * FROM kb_thinks ORDER BY id DESC LIMIT 1")
     if last and (not last["judgment_id"] or _today() in (last["date"], last["done_on"])):
         return _out(last)
-    done = {r["origin_sid"] for r in db.rows("SELECT origin_sid FROM kb_thinks")}
+    done = {r["origin_sid"] for r in db.rows("SELECT origin_sid FROM kb_thinks WHERE origin_sid!=''")}
     for c, thread in _candidates(kb_judge.ledger_json()):
         if c["sid"] not in done:
             return _out(_create(_today(), _question(c, thread), c["sid"]))
@@ -85,6 +113,14 @@ def start(sid: str) -> dict | None:
     return _out(_create(_today(), _question(c), sid)) if c else None
 
 
+def ask(question: str, stance: str) -> dict:
+    _init()
+    question, stance = question.strip(), stance.strip()
+    if not question or not stance:
+        raise ValueError("empty")
+    return _out(_create(_today(), question, "", stance))
+
+
 def get(tid: int) -> dict | None:
     _init()
     t = db.row("SELECT * FROM kb_thinks WHERE id=?", [tid])
@@ -95,7 +131,8 @@ def record(tid: int, text: str, type_: str = "", confidence: str = "", due: str 
     t = get(tid)
     if not t:
         return None
-    jid = kb_judge.add(text, type_, confidence, due, note=f"和批判者一起想：{t['question']}")
+    note = f"和批判者一起想：{t['question']}" + (f"；一开始的判断：{t['stance']}" if t["stance"] else "")
+    jid = kb_judge.add(text, type_, confidence, due, note=note)
     db.execute("UPDATE kb_thinks SET judgment_id=?, done_on=? WHERE id=?", [jid, _today(), tid])
     return get(tid)
 
@@ -120,6 +157,10 @@ def context(tid: int) -> str:
     origin = cards.get(t["origin_sid"])
     thread = next((th for th in lg["threads"] if origin and th["question"] == origin.get("thread")), None)
     parts = [CRITIC.format(api=agent.API_BASE, tid=tid), f"## 今天的问题\n{t['question']}"]
+    if t["stance"]:
+        parts.append(f"## 我一开始的判断\n{t['stance']}")
+    parts.append("## 现在的深度\n" + ("5 层已经挖到底，接下来只做整理和记下来。" if t["bottomed"]
+                                     else f"已经挖到第 {t['depth']} 层（共 5 层）。" if t["depth"] else "还没开始挖，这一轮从第 1 层开始。"))
     if origin:
         parts.append("## 这个问题从这条判断来\n" + _card_text(origin))
     if thread:

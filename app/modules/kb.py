@@ -181,6 +181,27 @@ def think_start(body: RecheckIn):
     return t
 
 
+class ThinkNewIn(BaseModel):
+    question: str
+    stance: str
+
+
+@router.post("/think/new")
+def think_new(body: ThinkNewIn):
+    try:
+        return kb_idea.ask(body.question, body.stance)
+    except ValueError:
+        raise HTTPException(400, "empty")
+
+
+@router.get("/think/{tid}")
+def think_get(tid: int):
+    t = kb_idea.get(tid)
+    if not t:
+        raise HTTPException(404, "think not found")
+    return t
+
+
 class ThinkRecordIn(BaseModel):
     text: str
     type: str = ""
