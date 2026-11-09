@@ -227,6 +227,67 @@ def test_gql_nodes_splits_on_github_timeout(monkeypatch):
     assert sizes[:3] == [100, 50, 25]
 
 
+def test_gql_retries_dropped_connection(monkeypatch):
+    """连接断了重试一次就好：不让整轮刷新失败。"""
+    import httpx
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setattr(col.time, "sleep", lambda s: None)
+    req = httpx.Request("POST", "https://api.github.com/graphql")
+    replies = [httpx.ConnectError("EOF occurred in violation of protocol"), httpx.Response(200, json={"data": {"nodes": []}}, request=req)]
+
+    class Client:
+        def post(self, *a, **k):
+            r = replies.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+    assert col._gql(Client(), "q", {}) == {"data": {"nodes": []}}
+
+
+def test_gql_nodes_splits_when_github_answers_garbage(monkeypatch):
+    """GitHub 回 200 但正文不是 JSON、或者读超时：和 502 一样拆小了再查。"""
+    import httpx
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setattr(col.time, "sleep", lambda s: None)
+    req = httpx.Request("POST", "https://api.github.com/graphql")
+    sizes = []
+
+    class Client:
+        def post(self, url, headers=None, json=None):
+            ids = json["variables"]["ids"]
+            sizes.append(len(ids))
+            if len(ids) > 10:
+                if len(sizes) % 2:
+                    raise httpx.ReadTimeout("The read operation timed out")
+                return httpx.Response(200, text="<html>Unicorn!</html>", request=req)
+            return httpx.Response(200, json={"data": {"nodes": [{"id": i} for i in ids]}}, request=req)
+    ids = [f"N{i}" for i in range(20)]
+    got = col.gql_nodes(Client(), ids, with_text=False)
+    assert list(got) == ids and sizes == [20, 20, 10, 10]
+
+
+def test_refresh_survives_a_bad_batch_and_next_run_only_redoes_it(monkeypatch):
+    """某一批一直查不到：其余照常刷完，这一轮记失败；再跑只补没刷到的，不从头来。"""
+    col.upsert(REPOS, "slice")
+    db.execute("UPDATE oss_repos SET updated='2026-01-01T00:00:00'")
+    monkeypatch.setattr(col, "README_BATCH", 1)
+    asked, broken = [], {"N_b/ocrkit"}
+
+    def fake(c, ids, with_text):
+        asked.extend(ids)
+        if broken & set(ids):
+            raise RuntimeError("GraphQL 一直失败")
+        return {i: {"nameWithOwner": i[2:], "stargazerCount": 7777} for i in ids}
+    monkeypatch.setattr(col, "gql_nodes", fake)
+    with pytest.raises(RuntimeError, match="1 批"):
+        col.refresh()
+    stars = {r["name"]: r["stars"] for r in db.rows("SELECT name, stars FROM oss_repos")}
+    assert stars["b/ocrkit"] == 3000 and all(v == 7777 for k, v in stars.items() if k != "b/ocrkit")
+    asked.clear()
+    broken.clear()
+    assert col.refresh()["updated"] == 1 and asked == ["N_b/ocrkit"]
+
+
 def test_validate_bad_kind_or_domain_falls_back():
     x = {"k": "lang_runtime", "d": "lang_runtime", "ai": "none", "t": ["Go 编译器"], "s": "Go 语言官方仓库"}
     assert lab.validate(x) is None                                # 第一轮严格：填错就重问
