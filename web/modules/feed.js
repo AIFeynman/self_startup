@@ -246,7 +246,7 @@ export default {
     const [settings, status0] = await Promise.all([api.get('/api/settings'), api.get('/api/feed/status')]);
     let interests = [...(settings.feed?.interests || [])];
     let status = status0;
-    let entries = []; // [{x, el, kind:'wait'|'top'|'earlier'|'list', i}]
+    let entries = []; // [{x, el, kind:'wait'|'reading'|'top'|'earlier'|'list', i}]
     let sel = -1;
     let listOffset = 0, listTotal = 0, loading = false, loadSeq = 0;
 
@@ -302,6 +302,7 @@ export default {
 
     // ---------- 精选 + 列表 ----------
     const waitBox = h('div');
+    const readingBox = h('div');
     const topBox = h('div');
     const earlierBox = h('div');
     const tabs = h('div.tabs');
@@ -324,7 +325,7 @@ export default {
     // 刚刷完的结果常驻在按钮旁；有新增时本次新收的排到列表最前（否则按综合分常落到几十名开外，看着像没刷）
     const freshNote = h('span.fd-fresh');
     let fresh = null;   // { since, added, label }
-    el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick, waitBox,
+    el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick, readingBox, waitBox,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, earlierBox,
       h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
 
@@ -657,6 +658,7 @@ export default {
     ];
     const deepBtn = (entry) => {
       const s = entry.x.deep?.status;
+      if (s === 'done' && entry.x.deep.reading) return h('button.fd-deep.done', { title: '回到上次读到的位置 (→)', onclick: () => deep(entry) }, [`接着读 ${Math.round(entry.x.deep.pos * 100)}%`, ui.icon('arrow')]);
       if (s === 'done') return h('button.fd-deep.done', { title: '打开解析结果 (→)', onclick: () => deep(entry) }, ['深度完成', ui.icon('arrow')]);
       if (s === 'failed') return h('button.fd-deep.failed', { title: '上次解析失败，点击重试 (→)', onclick: () => deep(entry) }, '解析失败，重试');
       if (s) return h('button.fd-deep.busy', { disabled: true, title: '后台解析中，完成后会提醒，可以继续看别的' }, '解析中');
@@ -834,7 +836,7 @@ export default {
           entry.el.remove(); entries.splice(idx, 1);
           if (sel >= entries.length) sel = entries.length - 1;
           if (entries[sel]) entries[sel].el.classList.add('fd-sel');
-          if (entry.kind === 'wait' || entry.kind === 'earlier') loadTop();
+          if (['wait', 'reading', 'earlier'].includes(entry.kind)) loadTop();
           toast('已隐藏，可在「已收藏」或 Agent 里恢复');
           return;
         }
@@ -848,8 +850,6 @@ export default {
     const deep = async ({ x }) => {
       const old = x.deep;
       if (old?.status === 'done') {
-        const hit = entries.find((e) => e.x === x);
-        if (hit) markRead(hit, '/api/feed/read');
         const backTo = { st: { ...st }, id: x.id, kind: entries.find((e) => e.x === x)?.kind, index: entries.findIndex((e) => e.x.id === x.id), count: listOffset, top: document.getElementById('page').scrollTop };
         history.replaceState({ feedBack: backTo }, '', location.href);
         location.hash = `#learn/item/${old.id}`;
@@ -956,11 +956,12 @@ export default {
       const picked = entries.filter((e) => e.kind !== 'list');
       for (const e of picked) e.el.remove();
       const row = (kind) => (x, i) => ({ x, kind, i });
-      const waits = r.waiting.map(row('wait')), tops = r.top.map(row('top')), earlier = r.earlier.map(row('earlier'));
-      entries = [...waits, ...tops, ...earlier, ...entries.filter((e) => e.kind === 'list')];
+      const waits = r.waiting.map(row('wait')), readings = r.reading.map(row('reading')), tops = r.top.map(row('top')), earlier = r.earlier.map(row('earlier'));
+      entries = [...readings, ...waits, ...tops, ...earlier, ...entries.filter((e) => e.kind === 'list')];
       if (cur && cur.kind !== 'list') sel = entries.findIndex((e) => e.kind === cur.kind && e.x.id === cur.x.id);
       else if (cur) sel = entries.indexOf(cur);
-      waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '看过的在列表筛选「深读过」里'), h('div.fd-list', {}, waits.map(mount))] : []));
+      readingBox.replaceChildren(...(readings.length ? [ui.section(`在读 ${readings.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.fd-list', {}, readings.map(mount))] : []));
+      waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '打开后进「在读」，读完的在列表筛选「深读过」里'), h('div.fd-list', {}, waits.map(mount))] : []));
       topBox.replaceChildren(tops.length ? h('div.fd-top', {}, tops.map(mount)) : ui.empty('还没有内容', '点右上角「刷新」抓取信息源'));
       earlierBox.replaceChildren(...(earlier.length ? [h('details.fd-earlier', {
         open: st.earlierOpen, ontoggle: (e) => { st.earlierOpen = e.target.open; },

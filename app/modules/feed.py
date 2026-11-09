@@ -399,12 +399,13 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     if not (saved or q or read in ("read", "deep")):
         out = _without_radar(out)
     deeps = _deep_latest()
-    read_urls = _read_log.urls("feed") | {u for u, d in deeps.items() if d.get("opened_at")}
-    deep_of = lambda d: {"id": d["id"], "status": d["status"], "seen": bool(d.get("opened_at"))}
+    read_urls = _read_log.urls("feed") | {u for u, d in deeps.items() if d.get("finished_at")}
+    deep_of = lambda d: {"id": d["id"], "status": d["status"], "seen": bool(d.get("opened_at")),
+                         "reading": bool(d.get("opened_at")) and not d.get("finished_at"), "pos": d.get("read_pos") or 0}
     out = [{**x, "read": x["norm_url"] in read_urls, "deep": deep_of(deeps[x["norm_url"]]) if x["norm_url"] in deeps else None}
            for x in out]
     if read == "deep" and not saved:
-        out = [x for x in out if x["deep"] and x["deep"]["status"] == "done" and x["deep"]["seen"]]
+        out = [x for x in out if x["deep"] and x["deep"]["status"] == "done" and x["deep"]["seen"] and not x["deep"]["reading"]]
     elif read and not saved:
         out = [x for x in out if x["read"] == (read == "read")]
     if sort in ("new", "hot", "day"):
@@ -940,10 +941,12 @@ def _still_open(x: dict) -> bool:
 
 @router.get("/picks")
 def picks():
-    """页面顶部三组：waiting 深读完还没打开、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
-    waiting = sorted((x for x in ranked(stale_ok=True) if x["deep"] and x["deep"]["status"] == "done" and not x["deep"]["seen"]),
-                     key=lambda x: -x["deep"]["id"])
-    waiting_ids = {x["id"] for x in waiting}
+    """页面顶部四组：waiting 深读完还没打开、reading 打开了没读完、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
+    all_items = ranked(stale_ok=True)
+    done = [x for x in all_items if x["deep"] and x["deep"]["status"] == "done"]
+    waiting = sorted((x for x in done if not x["deep"]["seen"]), key=lambda x: -x["deep"]["id"])
+    reading = sorted((x for x in done if x["deep"]["reading"]), key=lambda x: -x["deep"]["id"])
+    waiting_ids = {x["id"] for x in waiting + reading}
     rest = [x for x in ranked(read="unread", stale_ok=True) if x["id"] not in waiting_ids]
     top = rest[:rk.PICKS_N]
     now = datetime.now(timezone.utc)
@@ -953,7 +956,7 @@ def picks():
     cutoff = _iso(now - timedelta(days=PICKS_KEEP_DAYS))
     shown = {r["item_id"]: r["last_at"] for r in db.rows("SELECT item_id, last_at FROM feed_picks WHERE last_at>=?", [cutoff])}
     earlier = sorted((x for x in rest[rk.PICKS_N:] if x["id"] in shown and _still_open(x)), key=lambda x: shown[x["id"]], reverse=True)
-    return {k: [_public(x) for x in v] for k, v in (("waiting", waiting), ("top", top), ("earlier", earlier))}
+    return {k: [_public(x) for x in v] for k, v in (("waiting", waiting), ("reading", reading), ("top", top), ("earlier", earlier))}
 
 
 class FeedbackIn(BaseModel):
@@ -1055,7 +1058,7 @@ def feedback_stats() -> dict:
 def _deep_latest() -> dict[str, dict]:
     """每个链接最新一次深读。点了深读但还没打开看结果的不算已读，留在列表里显示进度。"""
     try:
-        rows = db.rows("SELECT id, url, status, opened_at FROM learn_items ORDER BY id")
+        rows = db.rows("SELECT id, url, status, opened_at, finished_at, read_pos FROM learn_items ORDER BY id")
     except Exception:  # noqa: BLE001  学习模块不存在
         return {}
     latest = {rk.norm_url(r["url"]): r for r in rows}

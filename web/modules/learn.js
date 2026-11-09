@@ -619,6 +619,8 @@ async function renderHome(el, ctx, scrollToPlans) {
   plansSec.append(ui.section('学习计划', plans.length ? `${plans.length} 个` : ''),
     plans.length ? h('div.grid', {}, plans.map((p) => planCard(p, ctx))) : ui.empty('还没有学习计划', '在上面输入一个主题，Enter 即可生成'));
   if (books.length) el.append(ui.section('深度读书', `${books.length} 本`), bookCards(books, ctx));
+  const reading = items.filter(isReading);
+  if (reading.length) el.append(ui.section(`在读 ${reading.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.grid', {}, reading.map((it) => itemCard(it, ctx))));
   el.append(plansSec,
     ui.section('论文与项目深读', items.length ? `${items.length} 篇` : ''),
     items.length ? itemList(items, ctx) : ui.empty('还没有深读条目', '粘贴一个 arXiv / GitHub 链接试试'));
@@ -657,13 +659,20 @@ function itemList(items, ctx) {
   return h('div', {}, kinds.length > 2 ? [tabs, grid] : [grid]);
 }
 
+const isReading = (it) => it.status === 'done' && it.opened_at && !it.finished_at;
+function readTag(h, it) {
+  if (it.finished_at) return h('span.tag.gray.ln-cs', { title: '读完了' }, '已读');
+  if (it.opened_at) return h('span.tag.ok.ln-cs', { title: '读到一半，点开回到上次的位置' }, `在读 ${Math.round((it.read_pos || 0) * 100)}%`);
+  return unreadTag(h, '未读');
+}
+
 function itemCard(it, ctx) {
   const { h, ui, openChat } = ctx;
   const busy = BUSY.includes(it.status);
   const go = () => { location.hash = `#learn/item/${it.id}`; };
   return h('div.card.ln-icard.ln-card-click', { onclick: go }, [
     h('div.row', {}, [badge(h, it.kind), it.status !== 'done' ? tag(h, it.status) : null,
-      it.status === 'done' ? (it.opened_at ? h('span.tag.gray.ln-cs', { title: '打开看过' }, '已读') : unreadTag(h, '未读')) : null,
+      it.status === 'done' ? readTag(h, it) : null,
       it.dd_status === 'done' && !it.dd_opened_at ? unreadTag(h, 'Deep Dive 未看') : null, h('span.grow'),
       it.rating ? stars(h, ui, it.rating, null, { readonly: true }) : null, h('span.muted', { title: it.created_at || '' }, (it.created_at || '').slice(0, 10))]),
     h('h3.serif.clamp2', {}, it.title || it.url),
@@ -704,11 +713,13 @@ async function renderItem(el, ctx, iid) {
   const fileName = (it.output_path || '').split('/').pop();
   const ref = `learn:item:${it.id}`;
   const chat = () => openChat({ module: 'learn', ref, title: '追问：' + (it.title || it.url).slice(0, 20) });
+  const ddTab = it.kind === 'github' && ctx.sub[2] === 'deepdive';
 
   el.append(back(h, ui), h('div.ln-head', {}, ui.pageHead(it.title || it.url, h('span', {}, [
     badge(h, it.kind), ' ', h('a', { href: it.url.startsWith('http') ? it.url : '#learn', target: '_blank', rel: 'noopener' }, it.url),
     ` · ${(it.created_at || '').slice(0, 10)}`, it.focus ? ` · 关注：${it.focus}` : '']), [
     it.status !== 'done' ? tag(h, it.status) : null,
+    it.status === 'done' && !ddTab ? finishBtn(ctx, it) : null,
     h('button.primary', { onclick: chat }, [ui.icon('chat'), '继续追问']),
   ])));
   el.append(h('div.row', { style: { marginBottom: '16px' } }, [
@@ -723,7 +734,6 @@ async function renderItem(el, ctx, iid) {
   ]));
 
   // GitHub 项目：深读笔记 / Deep Dive 两个标签（#learn/item/<id>/deepdive）
-  const ddTab = it.kind === 'github' && ctx.sub[2] === 'deepdive';
   if (it.kind === 'github') {
     el.append(h('div.ln-tabs2', {}, [
       h('button' + (ddTab ? '' : '.on'), { onclick: () => { location.hash = `#learn/item/${it.id}`; } }, '深读笔记'),
@@ -757,7 +767,9 @@ async function renderItem(el, ctx, iid) {
     if (hasNote) {
       // 追问清单那一节不在正文里列，改成下面的逐题作答区
       const note = text.replace(/^---[\s\S]*?---\s*/, '').replace(QA_SECTION, '').replace(DROPPED_SECTION, '').replace(EMPTY_NOTES_SECTION, '');
-      reader.append(h('div.card', {}, annotate(ctx, localImgs(md(note), `/api/learn/items/${it.id}/out/`), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note })));
+      const article = h('div.card', {}, annotate(ctx, localImgs(md(note), `/api/learn/items/${it.id}/out/`), { doc: `learn:item:${it.id}`, title: it.title || it.url, link: `#learn/item/${it.id}`, source: note }));
+      reader.append(article);
+      trackReading(ctx, it, article);
       // 论文：「为什么不 XX」——写下替代方案和猜测，后台查论文自己 + 后续论文怎么回答
       if (it.kind === 'paper') reader.append(...whyNotPanel(ctx, it));
       const qa = await api.get(`/api/learn/items/${it.id}/qa`).catch(() => null);
@@ -788,6 +800,41 @@ async function renderItem(el, ctx, iid) {
     h('div.row', { style: { marginTop: '10px' } }, [h('span.muted', {}, '评分'), stars(h, ui, rating, (v) => { rating = v; saveNotes(); }), h('span.grow'), saved,
       h('button', { onclick: chat }, [ui.icon('chat'), records.length ? '接着聊' : '去对话里聊']),
       h('button.primary', { onclick: saveNotes }, [ui.icon('check'), '保存'])])]));
+}
+
+function finishBtn(ctx, it) {
+  const { api, h, ui, toast } = ctx;
+  const btn = h('button.outline');
+  const paint = () => btn.replaceChildren(ui.icon('check'), it.finished_at ? '已读完 · 撤销' : '读完');
+  btn.onclick = async () => {
+    Object.assign(it, await api.post(`/api/learn/items/${it.id}/finish`, { done: !it.finished_at }));
+    paint();
+    toast(it.finished_at ? '已标记读完，移到「深读过」' : '已改回在读');
+  };
+  it.onFinished = paint;
+  paint();
+  return btn;
+}
+
+function trackReading(ctx, it, article) {
+  const page = document.getElementById('page');
+  const top = () => article.getBoundingClientRect().top - page.getBoundingClientRect().top + page.scrollTop;
+  const posNow = () => Math.min(1, Math.max(0, (page.scrollTop + page.clientHeight - top()) / article.offsetHeight));
+  let ready = false, timer = null;
+  const save = async () => {
+    timer = null;
+    const r = await ctx.api.post(`/api/learn/items/${it.id}/progress`, { pos: posNow() }).catch(() => null);
+    if (r && r.finished_at && !it.finished_at) { it.finished_at = r.finished_at; it.onFinished?.(); ctx.toast('读到底了，已标记读完'); }
+  };
+  const onScroll = () => {
+    if (!article.isConnected) return page.removeEventListener('scroll', onScroll);
+    if (ready && !timer) timer = setTimeout(save, 1500);
+  };
+  page.addEventListener('scroll', onScroll, { passive: true });
+  setTimeout(() => {
+    if (it.read_pos > 0 && !it.finished_at) page.scrollTop = top() + it.read_pos * article.offsetHeight - page.clientHeight;
+    setTimeout(() => { ready = true; }, 200);
+  }, 300);
 }
 
 // 后台任务实时进度：已用时 + Agent 最近几步（读了哪些文件、跑了什么命令）

@@ -1,4 +1,4 @@
-"""信息推荐点「深读」后留在列表里：解析中 / 完成 / 失败都能看到，打开看过结果才算已读。"""
+"""信息推荐点「深读」后留在列表里：解析中 / 完成 / 失败都能看到；打开后进「在读」，读完才算已读。"""
 import pytest
 
 from app import db
@@ -28,16 +28,36 @@ def fresh(client, monkeypatch):
 def test_started_item_stays_unread_and_shows_running(fresh):
     it = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
     row = _row(fresh, "unread")
-    assert row["deep"] == {"id": it["id"], "status": "running", "seen": False}
+    assert row["deep"] == {"id": it["id"], "status": "running", "seen": False, "reading": False, "pos": 0}
 
 
-def test_done_but_unopened_stays_unread_then_opening_marks_read(fresh):
+def _picks(client):
+    return {k: [x["id"] for x in v] for k, v in client.get("/api/feed/picks").json().items()}
+
+
+def test_opened_half_read_stays_findable_until_finished(fresh):
     it = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
     db.update("learn_items", it["id"], {"status": "done"})
-    assert _row(fresh, "unread")["deep"]["status"] == "done"
+    assert _picks(fresh)["waiting"] == ["blog:deep"]
     fresh.post(f"/api/learn/items/{it['id']}/seen")
+    fresh.post(f"/api/learn/items/{it['id']}/progress", json={"pos": 0.4})
+    assert _row(fresh, "unread")["deep"]["reading"] is True
+    assert _picks(fresh)["waiting"] == [] and _picks(fresh)["reading"] == ["blog:deep"]
+    assert fresh.get(f"/api/learn/items/{it['id']}").json()["read_pos"] == 0.4
+    fresh.post(f"/api/learn/items/{it['id']}/finish", json={"done": True})
+    assert _picks(fresh)["reading"] == []
     assert _row(fresh, "unread") is None
-    assert _row(fresh, "read")["deep"]["status"] == "done"
+    assert _row(fresh, "read")["deep"]["reading"] is False
+
+
+def test_scrolling_to_end_finishes(fresh):
+    it = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
+    db.update("learn_items", it["id"], {"status": "done"})
+    fresh.post(f"/api/learn/items/{it['id']}/seen")
+    fresh.post(f"/api/learn/items/{it['id']}/progress", json={"pos": 1})
+    assert _row(fresh, "read")["deep"]["reading"] is False
+    fresh.post(f"/api/learn/items/{it['id']}/finish", json={"done": False})
+    assert _picks(fresh)["reading"] == ["blog:deep"]
 
 
 def test_failed_stays_unread_and_retry_shows_new_run(fresh):
@@ -46,7 +66,7 @@ def test_failed_stays_unread_and_retry_shows_new_run(fresh):
     assert _row(fresh, "unread")["deep"]["status"] == "failed"
     again = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
     assert again["id"] != it["id"]
-    assert _row(fresh, "unread")["deep"] == {"id": again["id"], "status": "running", "seen": False}
+    assert _row(fresh, "unread")["deep"] == {"id": again["id"], "status": "running", "seen": False, "reading": False, "pos": 0}
 
 
 def test_never_deep_read_has_no_state(fresh):
@@ -62,6 +82,7 @@ def test_reading_original_while_deep_pending_marks_read_and_done_still_waits(fre
     assert [x["id"] for x in fresh.get("/api/feed/picks").json()["waiting"]] == ["blog:deep"]
     fresh.post(f"/api/learn/items/{it['id']}/seen")
     assert fresh.get("/api/feed/picks").json()["waiting"] == []
+    assert _picks(fresh)["reading"] == ["blog:deep"]
 
 
 def test_manual_mark_read(fresh):
@@ -71,11 +92,13 @@ def test_manual_mark_read(fresh):
     assert fresh.post("/api/feed/read", json={"id": "nope"}).status_code == 404
 
 
-def test_deep_filter_lists_finished_deep_reads_after_opening(fresh):
+def test_deep_filter_lists_finished_deep_reads(fresh):
     feed.upsert([_item("blog:other", "https://e.x/other")])
     it = fresh.post("/api/learn/items", json={"url": URL, "reuse": True}).json()
     assert _row(fresh, "deep") is None
     db.update("learn_items", it["id"], {"status": "done"})
     fresh.post(f"/api/learn/items/{it['id']}/seen")
+    assert _row(fresh, "deep") is None
+    fresh.post(f"/api/learn/items/{it['id']}/finish", json={"done": True})
     rows = fresh.get("/api/feed/items?limit=50&read=deep").json()["items"]
     assert [x["id"] for x in rows] == ["blog:deep"]

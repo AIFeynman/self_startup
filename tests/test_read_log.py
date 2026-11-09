@@ -46,9 +46,10 @@ def test_saved_tab_keeps_read_items(fresh):
     assert _ids(fresh, "saved=true&read=unread") == {"hn:a"}
 
 
-def test_opened_deep_read_counts_as_read(fresh):
+def test_finished_deep_read_counts_as_read(fresh):
+    fresh.get("/api/learn/items")
     feed.upsert([_item("hn:a", url="https://e.x/deep"), _item("hn:b")])
-    db.insert("learn_items", {"kind": "article", "url": "https://e.x/deep", "title": "t", "status": "done", "opened_at": "2026-11-06T09:00:00"})
+    db.insert("learn_items", {"kind": "article", "url": "https://e.x/deep", "title": "t", "status": "done", "opened_at": "2026-11-06T09:00:00", "finished_at": "2026-11-06T09:30:00"})
     assert _ids(fresh, "read=unread") == {"hn:b"}
 
 
