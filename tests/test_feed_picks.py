@@ -100,12 +100,14 @@ def test_item_back_in_top_is_not_also_in_earlier(fresh):
     assert victim in _ids(r["top"]) and victim not in _ids(r["earlier"])
 
 
-def test_finished_deep_waits_above_top_until_opened(fresh):
+def test_finished_deep_waits_above_top_until_started_reading(fresh):
     iid = _start_deep(fresh, "blog:3")
     r = _picks(fresh)
     assert _ids(r["waiting"]) == ["blog:3"]
     assert "blog:3" not in _ids(r["top"]) and len(r["top"]) == 5
     fresh.post(f"/api/learn/items/{iid}/seen")
+    assert _ids(_picks(fresh)["waiting"]) == ["blog:3"]
+    fresh.post(f"/api/learn/items/{iid}/progress", json={"pos": 0.2})
     assert _picks(fresh)["waiting"] == []
 
 

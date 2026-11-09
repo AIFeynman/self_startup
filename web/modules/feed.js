@@ -961,7 +961,7 @@ export default {
       if (cur && cur.kind !== 'list') sel = entries.findIndex((e) => e.kind === cur.kind && e.x.id === cur.x.id);
       else if (cur) sel = entries.indexOf(cur);
       readingBox.replaceChildren(...(readings.length ? [ui.section(`在读 ${readings.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.fd-list', {}, readings.map(mount))] : []));
-      waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '打开后进「在读」，读完的在列表筛选「深读过」里'), h('div.fd-list', {}, waits.map(mount))] : []));
+      waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '读了一部分进「在读」，读完的在列表筛选「深读过」里'), h('div.fd-list', {}, waits.map(mount))] : []));
       topBox.replaceChildren(tops.length ? h('div.fd-top', {}, tops.map(mount)) : ui.empty('还没有内容', '点右上角「刷新」抓取信息源'));
       earlierBox.replaceChildren(...(earlier.length ? [h('details.fd-earlier', {
         open: st.earlierOpen, ontoggle: (e) => { st.earlierOpen = e.target.open; },
