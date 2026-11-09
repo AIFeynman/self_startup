@@ -2,6 +2,7 @@
 // 系统记的问题与经验在「复盘」；数据都在 review_notes，靠 author 区分。
 import { kindChips, kindColor } from '../ui.js';
 import { noteHtml } from '../api.js';
+import { FOCUS_KEY } from './_annotate.js';
 
 const KIND_KEY = 'note-kind'; // 上次选的类型
 const short = (t, n = 18) => (t.length > n ? t.slice(0, n) + '…' : t);
@@ -42,8 +43,9 @@ export default {
       setTimeout(() => input.focus());
       return h('div.sn-picker', {}, [input, results]);
     }
+    const focusOn = (s) => { if (s.annotation_id) { try { sessionStorage.setItem(FOCUS_KEY, String(s.annotation_id)); } catch { /* ignore */ } } };
     const srcLink = (s) => (s.link
-      ? h('a', s.link.startsWith('#') ? { href: s.link } : { href: s.link, target: '_blank', rel: 'noopener' }, s.title)
+      ? h('a', { ...(s.link.startsWith('#') ? { href: s.link } : { href: s.link, target: '_blank', rel: 'noopener' }), onclick: () => focusOn(s) }, s.title)
       : h('span', {}, s.title));
     const srcRow = (s, onRemove) => h('div.sn-src', {}, [
       h('span', {}, [h('b', {}, s.type), srcLink(s)]),

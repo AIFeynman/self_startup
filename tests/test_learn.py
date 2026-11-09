@@ -932,3 +932,11 @@ def test_changing_method_makes_a_new_plan_and_keeps_the_old(client, fake_submit)
     assert client.post(f"/api/learn/plans/{old['id']}/method", json={"method": "tech"}).status_code == 400
     for pid in (old["id"], n["id"]):
         client.delete(f"/api/learn/plans/{pid}")
+
+
+def test_items_list_newest_created_first(client):
+    old = db.insert("learn_items", {"kind": "paper", "url": "u-old", "status": "done", "created_at": "2026-11-01 09:00:00"})
+    new = db.insert("learn_items", {"kind": "paper", "url": "u-new", "status": "done", "created_at": "2026-11-07 09:00:00"})
+    mid = db.insert("learn_items", {"kind": "paper", "url": "u-mid", "status": "done", "created_at": "2026-11-04 09:00:00"})
+    ids = [r["id"] for r in client.get("/api/learn/items").json() if r["id"] in {old, new, mid}]
+    assert ids == [new, mid, old]

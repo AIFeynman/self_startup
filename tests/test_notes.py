@@ -201,3 +201,47 @@ def test_review_is_a_builtin_kind_by_name_and_prefix(client):
     assert client.post("/api/notes", json={"text": "选的类型", "kind": "复盘"}).json()["kind"] == "review"
     prefixed = client.post("/api/notes", json={"text": "复盘：写了前缀"}).json()
     assert prefixed["kind"] == "review" and prefixed["title"] == "写了前缀"
+
+
+def test_deep_read_discussion_becomes_deep_note(client, monkeypatch):
+    from app import annotations
+    monkeypatch.setattr(annotations, "_answer", lambda *a: None)
+    _clean()
+    assert {"key": "deep", "label": "深度"} in [{"key": k["key"], "label": k["label"]} for k in client.get("/api/notes/kinds").json()]
+    base = {"doc": "learn:item:3", "title": "某论文", "link": "#learn/item/3", "quote": "关键的一段"}
+    client.post("/api/annotations", json={**base, "text": "这里的假设站不住", "note_kind": "deep"})
+    asked = client.post("/api/annotations", json={**base, "ask": True, "note_kind": "deep"}).json()
+    notes = client.get("/api/notes?kind=deep").json()["notes"]
+    assert {n["title"] for n in notes} == {"这里的假设站不住", "问 Claude：关键的一段"}
+    assert next(n for n in notes if n["title"].startswith("问 Claude"))["sources"][0]["annotation_id"] == asked["id"]
+
+
+def test_old_deep_read_discussions_backfilled_once(client):
+    from app import db
+    from app.modules import notes
+    _clean()
+    db.execute("DELETE FROM note_backfills")
+    db.execute("DELETE FROM annotation_msgs")
+    db.execute("DELETE FROM annotations")
+    def thread(doc, text, at="2026-11-02 10:00:00"):
+        aid = db.insert("annotations", {"doc": doc, "title": "T", "link": "#x", "quote": "原句", "created_at": at, "updated_at": at})
+        db.insert("annotation_msgs", {"annotation_id": aid, "role": "user", "content": text, "created_at": at})
+        db.insert("annotation_msgs", {"annotation_id": aid, "role": "assistant", "content": "答", "created_at": at})
+        return aid
+    old = thread("learn:chapter:5", "老评论")
+    asked = thread("learn:item:5", annotations_default())
+    linked = thread("learn:item:5", "已经贴过")
+    client.post("/api/notes", json={"text": "已经贴过", "kind": "idea", "sources": [{"doc": "learn:item:5", "annotation_id": linked}]})
+    thread("research_doc:1", "调研里的")
+    notes.on_startup()
+    notes.on_startup()
+    got = {n["title"]: n for n in client.get("/api/notes").json()["notes"]}
+    assert set(got) == {"老评论", "问 Claude：原句", "已经贴过"}
+    assert got["老评论"]["kind"] == "deep" and got["老评论"]["date"] == "2026-11-02" and got["老评论"]["created_at"].startswith("2026-11-02")
+    assert got["老评论"]["sources"][0]["annotation_id"] == old
+    assert got["问 Claude：原句"]["sources"][0]["annotation_id"] == asked
+
+
+def annotations_default():
+    from app import annotations
+    return annotations.DEFAULT_QUESTION

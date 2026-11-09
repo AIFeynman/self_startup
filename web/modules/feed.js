@@ -1,7 +1,7 @@
 // 信息推荐：按热度/新鲜度/兴趣/反馈排序的 AI 信息流；只展示标题 + 简介 + 链接 + 推荐理由。
 // 页面：深度完成待看 + 今日精选（前 5 条，编号行）+ 之前的精选（折叠）+ 分类 pill + 紧凑列表（无限加载）+ 一个多模式输入框（筛选 / 加兴趣 / 问 Agent）。
 // 键盘：↑↓ 移动选中，→ 详情（没解析过就开始深读），← 原文，j/k 切换类型，l 赞，s 收藏，x 隐藏。
-import { toMs } from '../api.js';
+import { nowLocal, toMs, today } from '../api.js';
 
 const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['hn', 'HN 精读'], ['video', '视频'], ['x_article', 'X 长文'], ['saved', '已收藏']];
 const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'hn', 'video', 'x_article'];
@@ -11,9 +11,9 @@ const fmtDur = (s) => s ? (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.fl
 const PAGE = 40;
 const TOP_N = 5;
 const DAYS = [['0', '不限时间'], ['1', '24 小时内'], ['3', '3 天内'], ['7', '7 天内'], ['30', '30 天内']];
-const SORTS = [['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）']];
-const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'score', hnView: 'posts', read: 'unread', earlierOpen: false };
-const READS = [['unread', '未读'], ['', '含已读'], ['read', '已读']];
+const SORTS = [['day', '按天 · 天内按推荐'], ['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）']];
+const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'day', hnView: 'posts', read: 'unread', earlierOpen: false };
+const READS = [['unread', '未读'], ['', '含已读'], ['read', '已读'], ['deep', '深读过']];
 const HN_ITEM = (id) => `https://news.ycombinator.com/item?id=${id}`;
 const SENT = { pos: ['好评', 'ok'], neg: ['差评', 'err'], mixed: ['褒贬不一', 'warn'], neutral: ['提及', 'gray'] };
 
@@ -43,6 +43,8 @@ const CSS = `
   font: 600 11.5px/18px var(--font); vertical-align: 2px; }
 .fd-readtag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--bg-2); color: var(--muted); font: 400 11.5px/18px var(--font); vertical-align: 2px; white-space: nowrap; }
 .fd-isread .fd-t { color: var(--muted); font-weight: 500; }
+.fd-day { margin: 14px 0 2px; padding-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font: 600 12.5px/18px var(--font); }
+.fd-day:first-child { margin-top: 0; }
 .fd-old { display: inline-block; margin-left: 6px; color: var(--muted); font: 400 11.5px/18px var(--font); vertical-align: 2px; white-space: nowrap; }
 .fd-sum { color: var(--text); opacity: .82; font-size: 13.5px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .fd-gist { color: var(--text); font-size: 14.5px; font-weight: 500; line-height: 1.5; margin-top: 4px; }
@@ -218,8 +220,13 @@ a.fd-cid:hover { color: var(--accent); }
 `;
 
 const fmtDate = (s) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || '');
+  const ms = /^\d{4}-\d{2}-\d{2}[T ]\d/.test(s || '') ? toMs(s) : NaN;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(Number.isNaN(ms) ? s || '' : nowLocal(ms));
   return m ? `${+m[2]}月${+m[3]}日` : '';
+};
+const dayName = (d) => {
+  const ago = Math.round((Date.parse(today()) - Date.parse(d)) / 864e5);
+  return (['今天 · ', '昨天 · '][ago] || '') + fmtDate(d) + ` 周${'日一二三四五六'[new Date(Date.parse(d)).getUTCDay()]}`;
 };
 const fmtTime = (s) => (s ? s.replace('T', ' ').slice(5, 16) : '');
 const ago = (s) => {
@@ -664,12 +671,13 @@ export default {
         h('button' + (f.vote > 0 ? '.on' : ''), { title: '赞 (l)', onclick: () => fb(entry, { vote: f.vote > 0 ? 0 : 1 }) }, '👍'),
         h('button' + (f.saved ? '.on' : ''), { title: '收藏 (s)', onclick: () => fb(entry, { saved: !f.saved }) }, f.saved ? '★' : '☆'),
         h('button' + (f.verdict ? '.on' : ''), { title: '读完写一句话判断（进知识库的论文笔记）', onclick: () => { entry.judging = !entry.judging; mount(entry); entry.el.querySelector('.fd-verdict input')?.focus(); } }, ui.icon('edit')),
+        x.read ? null : h('button', { title: '标为已读（不打开原文）', onclick: () => markRead(entry, '/api/feed/read') }, [ui.icon('check'), '读完']),
         deepBtn(entry),
       ]);
     };
     const unreadOnly = () => !st.q && st.tab !== 'saved' && st.read === 'unread';
-    const markRead = (entry) => {
-      api.post('/api/feed/click', { id: entry.x.id }).catch(() => {});
+    const markRead = (entry, path = '/api/feed/click') => {
+      api.post(path, { id: entry.x.id }).catch(() => {});
       if (entry.x.read) return;
       if (unreadOnly()) {
         listOffset = Math.max(0, listOffset - 1); listTotal = Math.max(0, listTotal - 1);
@@ -840,6 +848,8 @@ export default {
     const deep = async ({ x }) => {
       const old = x.deep;
       if (old?.status === 'done') {
+        const hit = entries.find((e) => e.x === x);
+        if (hit) markRead(hit, '/api/feed/read');
         const backTo = { st: { ...st }, id: x.id, kind: entries.find((e) => e.x === x)?.kind, index: entries.findIndex((e) => e.x.id === x.id), count: listOffset, top: document.getElementById('page').scrollTop };
         history.replaceState({ feedBack: backTo }, '', location.href);
         location.hash = `#learn/item/${old.id}`;
@@ -950,7 +960,7 @@ export default {
       entries = [...waits, ...tops, ...earlier, ...entries.filter((e) => e.kind === 'list')];
       if (cur && cur.kind !== 'list') sel = entries.findIndex((e) => e.kind === cur.kind && e.x.id === cur.x.id);
       else if (cur) sel = entries.indexOf(cur);
-      waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '打开后移除'), h('div.fd-list', {}, waits.map(mount))] : []));
+      waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '看过的在列表筛选「深读过」里'), h('div.fd-list', {}, waits.map(mount))] : []));
       topBox.replaceChildren(tops.length ? h('div.fd-top', {}, tops.map(mount)) : ui.empty('还没有内容', '点右上角「刷新」抓取信息源'));
       earlierBox.replaceChildren(...(earlier.length ? [h('details.fd-earlier', {
         open: st.earlierOpen, ontoggle: (e) => { st.earlierOpen = e.target.open; },
@@ -1022,10 +1032,19 @@ export default {
       listOffset = off + r.items.length; listTotal = r.total;
       const rows = r.items.map((x) => ({ x, kind: 'list' }));
       entries.push(...rows);
-      listBox.replaceChildren(...(rows.length ? rows.map(mount)
+      listBox.replaceChildren(...(rows.length ? withDays(rows, '')
         : [ui.empty(st.q ? `没有匹配「${st.q}」的内容` : st.tab === 'saved' ? '还没有收藏' : st.read === 'read' ? '这里还没有读过的内容' : st.days !== '0' ? '这段时间内没有内容' : unreadOnly() ? '这里的都读过了' : '暂无内容', st.q ? '换个词，或切到「问 Agent」' : st.tab === 'saved' ? '按 ☆ 或 s 收藏' : unreadOnly() ? '右上角选「含已读」能再看，或点「刷新」抓新的' : '点右上角「刷新」抓取')]));
       if (selId) { const i = entries.findIndex((e) => e.kind === 'list' && e.x.id === selId); if (i >= 0) select(i, false); else sel = -1; }
       renderSentinel();
+    }
+    function withDays(rows, prev) {
+      const out = [];
+      for (const e of rows) {
+        if (st.sort === 'day' && e.x.day && e.x.day !== prev) out.push(h('div.fd-day', {}, dayName(e.x.day)));
+        prev = e.x.day;
+        out.push(mount(e));
+      }
+      return out;
     }
     async function loadMore() {
       if (loading || listOffset >= listTotal || libView()) return;
@@ -1035,9 +1054,10 @@ export default {
         const r = await api.get('/api/feed/items?' + params(listOffset));
         if (seq !== loadSeq) return;
         listOffset += r.items.length; listTotal = r.total;
+        const prev = entries.filter((e) => e.kind === 'list').at(-1)?.x.day || '';
         const rows = r.items.map((x) => ({ x, kind: 'list' }));
         entries.push(...rows);
-        listBox.append(...rows.map(mount));
+        listBox.append(...withDays(rows, prev));
       } finally { loading = false; renderSentinel(); }
     }
     function renderSentinel() {

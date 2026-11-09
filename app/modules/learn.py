@@ -702,7 +702,7 @@ def list_items():
             import_chat_reads()
         except Exception:  # noqa: BLE001  补导入失败不影响列表
             log.exception("import chat reads")
-    return db.rows("SELECT * FROM learn_items ORDER BY id DESC")
+    return db.rows("SELECT * FROM learn_items ORDER BY created_at DESC, id DESC")
 
 
 @router.post("/items")
