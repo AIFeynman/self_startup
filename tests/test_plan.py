@@ -151,7 +151,7 @@ def test_carry_over(client):
     assert client.post("/api/plan/carry", json={"date": "2030-02-03"}).json()["created"] == []
 
 
-def test_carry_brings_all_history_and_span_children(client):
+def test_carry_brings_previous_day_and_span_children(client):
     client.post("/api/tasks", json={"title": "三天前没做完", "date": "2031-05-01"})
     client.post("/api/tasks", json={"title": "顺延过又没做完", "date": "2031-05-01"})
     client.post("/api/tasks", json={"title": "顺延过又没做完", "date": "2031-05-02"})
@@ -163,10 +163,10 @@ def test_carry_brings_all_history_and_span_children(client):
     client.post("/api/tasks", json={"title": "学一小节", "date": "2031-05-01", "parent_id": p["id"]})
 
     r = client.post("/api/plan/carry", json={"date": "2031-05-04"}).json()
-    assert {"2031-05-01", "2031-05-02"} <= set(r["from"])
+    assert r["from"] == ["2031-05-02"]
     tree = _day(client, "2031-05-04")["tree"]
     tops = [t["title"] for t in tree]
-    assert "三天前没做完" in tops and tops.count("顺延过又没做完") == 1 and "后来做完了" not in tops
+    assert "三天前没做完" not in tops and tops.count("顺延过又没做完") == 1 and "后来做完了" not in tops
     kids = [k["title"] for t in tree if t["id"] == p["id"] for k in t["children"]]
     assert sorted(kids) == ["听播客", "学一小节"]
     assert client.post("/api/plan/carry", json={"date": "2031-05-04"}).json()["created"] == []
