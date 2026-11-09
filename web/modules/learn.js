@@ -663,9 +663,9 @@ function itemCard(it, ctx) {
   const go = () => { location.hash = `#learn/item/${it.id}`; };
   return h('div.card.ln-icard.ln-card-click', { onclick: go }, [
     h('div.row', {}, [badge(h, it.kind), it.status !== 'done' ? tag(h, it.status) : null,
-      it.status === 'done' && !it.opened_at ? unreadTag(h) : null,
+      it.status === 'done' ? (it.opened_at ? h('span.tag.gray.ln-cs', { title: '打开看过' }, '已读') : unreadTag(h, '未读')) : null,
       it.dd_status === 'done' && !it.dd_opened_at ? unreadTag(h, 'Deep Dive 未看') : null, h('span.grow'),
-      it.rating ? stars(h, ui, it.rating, null, { readonly: true }) : null, h('span.muted', {}, (it.created_at || '').slice(5, 10))]),
+      it.rating ? stars(h, ui, it.rating, null, { readonly: true }) : null, h('span.muted', { title: it.created_at || '' }, (it.created_at || '').slice(0, 10))]),
     h('h3.serif.clamp2', {}, it.title || it.url),
     busy ? h('div.tldr.dots', {}, '后台解析中，完成后自动刷新')
       : it.status === 'failed' ? h('div.tldr', { style: { color: 'var(--err)' } }, '深读失败，可打开后重新生成')

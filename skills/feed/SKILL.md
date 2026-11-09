@@ -57,7 +57,8 @@ curl -s "$API/api/feed/items?limit=10"                       # 排序后的推�
 curl -s "$API/api/feed/items?type=paper&limit=5"             # type: paper/blog/podcast/product/repo/discussion/news
 curl -s "$API/api/feed/items?saved=true"                     # 已收藏
 curl -s "$API/api/feed/items?q=memory"                       # 标题/简介筛选
-curl -s "$API/api/feed/items?days=1&sort=hot"                # days: 只要最近 N 天发布的；sort: score 综合（默认）/ new 最新 / hot 最热（同源热度百分位）
+curl -s "$API/api/feed/items?days=1&sort=hot"                # days: 只要最近 N 天发布的；sort: day 按天新到旧、天内按推荐（默认）/ score 综合 / new 最新 / hot 最热（同源热度百分位）
+curl -s "$API/api/feed/items?read=deep"                       # read: unread 未读 / read 已读 / deep 深读完且看过；不传 = 全部
 curl -s -X POST $API/api/feed/refresh -H 'Content-Type: application/json' -d '{}'                 # 后台刷新全部来源
 curl -s -X POST $API/api/feed/refresh -H 'Content-Type: application/json' -d '{"sources":["hn","github"],"wait":true}'  # 同步刷新指定来源
 curl -s $API/api/feed/status                                 # 刷新状态、各来源条数/错误、反馈统计

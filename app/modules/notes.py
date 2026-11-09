@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS note_links (
     UNIQUE (a, b)
 );
 CREATE INDEX IF NOT EXISTS idx_note_links_b ON note_links(b);
+CREATE TABLE IF NOT EXISTS note_backfills (
+    name TEXT PRIMARY KEY,
+    at   TEXT
+);
 """
 router = APIRouter()
 
@@ -271,14 +275,44 @@ def sources(q: str = "", limit: int = 5):
 
 # ---------- 批注进便签 ----------
 
+def _annotation_source(a: dict) -> dict:
+    return {"doc": a["doc"], "title": a["title"] or a["doc"], "link": a["link"], "type": source_type(a["doc"]),
+            "quote": a["quote"], "annotation_id": a["id"]}
+
+
 def from_comment(annotation: dict, text: str, kind: str) -> dict | None:
     """评论时选了类型：同一句话贴一张便签，出处是被评论的文章和划线。便签失败不影响评论本身。"""
     try:
-        return add(text, kind, [{"doc": annotation["doc"], "title": annotation["title"] or annotation["doc"], "link": annotation["link"],
-                                 "type": source_type(annotation["doc"]), "quote": annotation["quote"], "annotation_id": annotation["id"]}])
+        return add(text, kind, [_annotation_source(annotation)])
     except Exception:  # noqa: BLE001
         log.exception("评论 %s 贴便签失败", annotation.get("id"))
         return None
+
+
+def has_annotation_note(aid: int) -> bool:
+    return bool(db.row("SELECT 1 AS x FROM review_notes WHERE EXISTS (SELECT 1 FROM json_each(review_notes.sources) "
+                       "WHERE json_extract(value, '$.annotation_id')=?)", [aid]))
+
+
+def asked_text(annotation: dict) -> str:
+    quote = re.sub(r"\s+", " ", annotation.get("quote") or "").strip()
+    return f"问 Claude：{quote[:80]}" if quote else "问 Claude"
+
+
+def on_startup() -> None:
+    if db.row("SELECT 1 AS x FROM note_backfills WHERE name='deep'"):
+        return
+    from .. import annotations
+    for a in db.rows("SELECT * FROM annotations WHERE doc LIKE 'learn:%' ORDER BY id"):
+        if has_annotation_note(a["id"]):
+            continue
+        first = db.row("SELECT content FROM annotation_msgs WHERE annotation_id=? AND role='user' ORDER BY id LIMIT 1", [a["id"]])
+        text = (first or {}).get("content") or ""
+        text = asked_text(a) if not text.strip() or text == annotations.DEFAULT_QUESTION else text
+        n = add(text, "deep", [_annotation_source(a)], (a["created_at"] or "")[:10] or None)
+        if a["created_at"]:
+            db.update("review_notes", n["id"], {"created_at": a["created_at"]})
+    db.insert("note_backfills", {"name": "deep", "at": db.now()})
 
 
 def agent_context(ref: str) -> str:

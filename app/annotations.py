@@ -157,10 +157,15 @@ def delete(aid: int):
 
 
 def _to_note(aid: int, text: str, kind: str) -> None:
-    """人写的评论和问题贴到便签；没写字只点「问 Claude」的不算。"""
-    if kind.strip() and text.strip():
-        from .modules import notes
-        notes.from_comment(db.row("SELECT * FROM annotations WHERE id=?", [aid]), text.strip(), kind)
+    """人写的评论和问题贴到便签；没写字只点「问 Claude」的只在深度学习的材料上算，一条讨论串记一张。"""
+    if not kind.strip():
+        return
+    from .modules import notes
+    a = db.row("SELECT * FROM annotations WHERE id=?", [aid])
+    if text.strip():
+        notes.from_comment(a, text.strip(), kind)
+    elif a["doc"].startswith("learn:") and not notes.has_annotation_note(aid):
+        notes.from_comment(a, notes.asked_text(a), kind)
 
 
 def _post(aid: int, text: str, ask: bool, source: str) -> None:

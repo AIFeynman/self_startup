@@ -111,3 +111,19 @@ def test_growth_case_read_survives_rewrite(fresh):
     assert fresh.get("/api/intel/growth").json()["cases"][0]["read"] is True
     x = fresh.get(f"/api/review/day?date={DAY}").json()["reads"][0]
     assert x["title"] == "Acme · 增长素材" and x["source"] == "增长 Case" and x["url"].startswith("#intel/g/") and new
+
+
+def _at(days_ago, hour=12):
+    d = datetime.now(timezone.utc).astimezone().replace(hour=hour, minute=0, second=0, microsecond=0)
+    from datetime import timedelta
+    return (d - timedelta(days=days_ago)).isoformat()
+
+
+def test_default_order_is_newest_day_first_then_recommendation_within_day(fresh):
+    feed.upsert([{**_item("hn:old_hot"), "date": _at(2), "popularity": 5000},
+                 {**_item("hn:today_cold"), "date": _at(0, 9), "popularity": 1},
+                 {**_item("hn:today_hot"), "date": _at(0, 8), "popularity": 5000},
+                 {**_item("hn:yday"), "date": _at(1), "popularity": 100}])
+    rows = fresh.get("/api/feed/items?limit=50").json()["items"]
+    assert [x["id"] for x in rows] == ["hn:today_hot", "hn:today_cold", "hn:yday", "hn:old_hot"]
+    assert rows[0]["day"] == rows[1]["day"] != rows[2]["day"]

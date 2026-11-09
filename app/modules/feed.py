@@ -376,8 +376,8 @@ def _scored(include_hidden: bool, stale_ok: bool) -> list[dict]:
 
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
            sort: str = "score", read: str = "", stale_ok: bool = False) -> list[dict]:
-    """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合 / new 最新 / hot 最热（同源热度百分位）；
-    read: unread 只要没读过的 / read 只要读过的（打开过原文或进过深读），收藏夹不按这个筛。
+    """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合（默认）/ day 按天（新的天在前，天内按综合） / new 最新 / hot 最热（同源热度百分位）；
+    read: unread 只要没读过的 / read 只要读过的（打开过原文、详情、深读结果或手动标过）/ deep 深读完看过的，收藏夹不按这个筛。
     产品雷达已有的内容不重复展示；收藏、搜索、已读里仍能找到。
     只有「全部 + 综合 + 不限时间 + 无筛选」时做类型 / 来源多样化（今日精选就取这个列表的前 5 条）。"""
     out = _compute_rank(_rank_inputs(), saved, now) if now else _scored(saved, stale_ok)
@@ -396,18 +396,18 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         ql = q.lower()
         out = [x for x in out if ql in f"{x['title']} {x['summary']} {x['extra'].get('gist', '')}".lower()]
     out = rk.within_days(out, days, now)
-    if not (saved or q or read == "read"):
+    if not (saved or q or read in ("read", "deep")):
         out = _without_radar(out)
     deeps = _deep_latest()
     read_urls = _read_log.urls("feed") | {u for u, d in deeps.items() if d.get("opened_at")}
-    # 深读结果还没看过的留在列表里，哪怕已经点开过原文
-    pending = {u for u, d in deeps.items() if d["status"] != "failed" and not d.get("opened_at")}
-    out = [{**x, "read": x["norm_url"] in read_urls and x["norm_url"] not in pending,
-            "deep": {"id": deeps[x["norm_url"]]["id"], "status": deeps[x["norm_url"]]["status"]} if x["norm_url"] in deeps else None}
+    deep_of = lambda d: {"id": d["id"], "status": d["status"], "seen": bool(d.get("opened_at"))}
+    out = [{**x, "read": x["norm_url"] in read_urls, "deep": deep_of(deeps[x["norm_url"]]) if x["norm_url"] in deeps else None}
            for x in out]
-    if read and not saved:
+    if read == "deep" and not saved:
+        out = [x for x in out if x["deep"] and x["deep"]["status"] == "done" and x["deep"]["seen"]]
+    elif read and not saved:
         out = [x for x in out if x["read"] == (read == "read")]
-    if sort in ("new", "hot"):
+    if sort in ("new", "hot", "day"):
         return rk.sort_items(out, sort, now)
     if not (type_ or saved or q or days):
         out = rk.diversify(out)
@@ -912,7 +912,7 @@ def source_health() -> dict:
 
 def _public(x: dict) -> dict:
     return {k: x[k] for k in ("id", "source", "type", "title", "url", "date", "popularity", "score",
-                              "why", "feedback", "also", "read", "deep")} | {k: x.get(k) for k in ("new", "seen_days")} | {"summary": rk.display_summary(x["title"], x["summary"]),
+                              "why", "feedback", "also", "read", "deep")} | {k: x.get(k) for k in ("new", "seen_days", "day")} | {"summary": rk.display_summary(x["title"], x["summary"]),
                                                               "gist": (x.get("extra") or {}).get("gist", ""),
                                                               "extra": x.get("extra", {}),
                                                               "source_label": rk.SOURCE_LABEL.get(x["source"], x["source"])}
@@ -920,12 +920,12 @@ def _public(x: dict) -> dict:
 
 @router.get("/items")
 def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0, days: float = 0,
-          sort: str = "score", since: str = "", read: str = ""):
+          sort: str = "day", since: str = "", read: str = ""):
     """since：刷新开始时间（status.started_utc），这之后第一次收进来的条目排到最前（刷完让人一眼看到新增）。"""
-    if sort not in ("score", "new", "hot"):
-        raise HTTPException(400, "sort 只能是 score / new / hot")
-    if read not in ("", "unread", "read"):
-        raise HTTPException(400, "read 只能是 unread / read")
+    if sort not in ("day", "score", "new", "hot"):
+        raise HTTPException(400, "sort 只能是 day / score / new / hot")
+    if read not in ("", "unread", "read", "deep"):
+        raise HTTPException(400, "read 只能是 unread / read / deep")
     out = ranked(type, saved, q, days=days, sort=sort, read=read, stale_ok=True)
     if t0 := rk._parse_dt(since):
         fresh = lambda x: (rk._parse_dt((x.get("extra") or {}).get("first_seen") or "") or datetime.min.replace(tzinfo=timezone.utc)) >= t0
@@ -941,10 +941,10 @@ def _still_open(x: dict) -> bool:
 @router.get("/picks")
 def picks():
     """页面顶部三组：waiting 深读完还没打开、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
-    out = ranked(read="unread", stale_ok=True)
-    done = lambda x: (x["deep"] or {}).get("status") == "done"
-    waiting = sorted(filter(done, out), key=lambda x: -x["deep"]["id"])
-    rest = [x for x in out if not done(x)]
+    waiting = sorted((x for x in ranked(stale_ok=True) if x["deep"] and x["deep"]["status"] == "done" and not x["deep"]["seen"]),
+                     key=lambda x: -x["deep"]["id"])
+    waiting_ids = {x["id"] for x in waiting}
+    rest = [x for x in ranked(read="unread", stale_ok=True) if x["id"] not in waiting_ids]
     top = rest[:rk.PICKS_N]
     now = datetime.now(timezone.utc)
     for x in top:
@@ -1018,14 +1018,25 @@ class ClickIn(BaseModel):
     id: str
 
 
+def _log_read(item_id: str) -> None:
+    it = db.row("SELECT title, url, source FROM feed_items WHERE id=?", [item_id])
+    if not it:
+        raise HTTPException(404, "条目不存在")
+    _read_log.log("feed", item_id, it["title"], it["url"], rk.SOURCE_LABEL.get(it["source"], it["source"]))
+
+
+@router.post("/read")
+def mark_read(body: ClickIn):
+    """进详情或手动点「读完」：只记已读，不算原文点击。"""
+    _log_read(body.id)
+    return {"id": body.id, "ok": True}
+
+
 @router.post("/click")
 def click(body: ClickIn):
     """打开原文链接时前端上报一次：记已读历史 + 转化漏斗统计，不参与排序。"""
     _ensure_cols()
-    it = db.row("SELECT title, url, source FROM feed_items WHERE id=?", [body.id])
-    if not it:
-        raise HTTPException(404, "条目不存在")
-    _read_log.log("feed", body.id, it["title"], it["url"], rk.SOURCE_LABEL.get(it["source"], it["source"]))
+    _log_read(body.id)
     db.execute("INSERT INTO feed_feedback (item_id, clicks, last_click, updated_at) VALUES (?,1,?,?) "
                "ON CONFLICT(item_id) DO UPDATE SET clicks=coalesce(clicks,0)+1, last_click=excluded.last_click",
                [body.id, db.now(), db.now()])
