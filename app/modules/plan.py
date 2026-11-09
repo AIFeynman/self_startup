@@ -941,24 +941,39 @@ def schedule(body: DateIn):
 
 @router.post("/carry")
 def carry(body: DateIn):
-    """把之前最近一天未完成的单日顶层事项（及其未完成子任务）顺延到 date；跨日事项本来每天都在，不用顺延。"""
+    """把上一天没做完的单日事项顺延到 date：顶层事项连同未完成子任务一起带过来，跨日事项下当天拆的子任务带到跨日事项下；
+    同名事项后面哪天已经有了（顺延过、或已做完）就不再带。跨日事项本身每天都在，不用顺延。"""
     date = body.date or db.today()
-    prev = db.row("SELECT MAX(date) d FROM tasks WHERE date<? AND end_date=date AND parent_id IS NULL", [date])
-    src = prev and prev["d"]
-    if not src:
-        return {"from": None, "created": []}
-    existing = {t["title"] for t in tasks.list_for(date) if not t.get("parent_id")}
-    ts = tasks.list_for(src)
-    ch = _children_map(ts)
+    prev = db.row("SELECT MAX(date) d FROM tasks WHERE date<? AND end_date=date", [date])["d"]
+    if not prev:
+        return {"from": [], "created": []}
+    later = "SELECT 1 FROM tasks l WHERE l.title=t.title AND l.date>t.date AND l.date<=? AND COALESCE(l.parent_id,0)=COALESCE(t.parent_id,0)"
+    src = [tasks.decode(t) for t in db.rows(
+        f"SELECT t.* FROM tasks t WHERE t.date=? AND t.end_date=t.date AND t.status IN {OPEN} AND NOT EXISTS ({later}) "
+        "ORDER BY t.id", [prev, date])]
+    target = tasks.list_for(date)
+    spans = {t["id"] for t in target if not t.get("parent_id") and tasks.is_span(t) and t["status"] in OPEN}
+    existing = {(t.get("parent_id") or 0, t["title"]) for t in target}
+    kids_of = _children_map([t for t in db.rows(
+        f"SELECT * FROM tasks WHERE parent_id IN (SELECT id FROM tasks WHERE date=? AND parent_id IS NULL) AND status IN {OPEN}",
+        [prev])])
     keep = ("title", "goal", "kind", "priority", "human_level", "executor", "est_minutes", "parallel_group", "repo", "progress")
     created: list[int] = []
-    for t in ts:
-        if t.get("parent_id") or tasks.is_span(t) or t["status"] not in OPEN or t["title"] in existing:
+    froms: set[str] = set()
+    for t in src:
+        pid = t.get("parent_id")
+        if pid and pid not in spans:
             continue
-        nt = tasks.create({**{k: t[k] for k in keep}, "date": date, "notes": f"顺延自 {src}"})
+        if (pid or 0, t["title"]) in existing:
+            continue
+        existing.add((pid or 0, t["title"]))
+        nt = tasks.create({**{k: t[k] for k in keep}, "date": date, "parent_id": pid, "notes": f"顺延自 {t['date']}"})
         created.append(nt["id"])
+        froms.add(t["date"])
+        if pid:
+            continue
         idmap = {}
-        kids = [k for k in ch.get(t["id"], []) if k["status"] in OPEN]
+        kids = [tasks.decode(k) for k in kids_of.get(t["id"], [])]
         for k in kids:
             idmap[k["id"]] = tasks.create({**{x: k[x] for x in keep}, "date": date, "parent_id": nt["id"]})["id"]
         for k in kids:
@@ -966,7 +981,7 @@ def carry(body: DateIn):
             if dep:
                 db.update("tasks", idmap[k["id"]], {"depends_on": dep})
         created += list(idmap.values())
-    return {"from": src, "created": created}
+    return {"from": sorted(froms), "created": created}
 
 
 # ---------------------------------------------------------------- 给对话 Agent 的快照

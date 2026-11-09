@@ -427,7 +427,7 @@ export default {
     };
     const carry = async () => {
       const r = await api.post('/api/plan/carry', { date: state.date });
-      toast(r.from ? `从 ${r.from} 顺延 ${r.created.length} 项` : '没有可顺延的事项'); load();
+      toast(r.created.length ? `从 ${r.from.join('、')} 顺延 ${r.created.length} 项` : '没有可顺延的事项'); load();
     };
     const launch = async (t) => {
       try {
@@ -445,7 +445,7 @@ export default {
       h('div.pl-bar', {}, [
         h('button.primary', { onclick: () => openNew(), title: '新建任务（C）' }, [ui.icon('plus'), '新建任务', h('span.pl-k', {}, 'C')]),
         search, h('span.sp'),
-        h('button.ghost', { onclick: carry, title: '把上一天没做完的事项顺延到这一天' }, [ui.icon('refresh'), '顺延未完成']),
+        h('button.ghost', { onclick: carry, title: '把上一天没做完的事项（含跨日事项下的子项）顺延到这一天' }, [ui.icon('refresh'), '顺延未完成']),
         h('button.ghost', { onclick: () => decompose() }, [ui.icon('spark'), 'AI 拆解']),
         h('button.ghost', { onclick: schedule }, [ui.icon('clock'), '排程']),
         h('button.ghost', { onclick: discuss }, [ui.icon('chat'), '问 Agent']),

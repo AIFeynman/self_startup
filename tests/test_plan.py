@@ -145,10 +145,31 @@ def test_carry_over(client):
     client.post("/api/tasks", json={"title": "子", "date": "2030-02-01", "parent_id": a["id"]})
     client.post("/api/tasks", json={"title": "已完成事项", "date": "2030-02-01", "status": "done"})
     r = client.post("/api/plan/carry", json={"date": "2030-02-03"}).json()
-    assert r["from"] == "2030-02-01" and len(r["created"]) == 2
+    assert "2030-02-01" in r["from"]
     titles = [t["title"] for t in client.get("/api/tasks?date=2030-02-03").json()]
-    assert sorted(titles) == ["子", "未完成事项"]
+    assert "子" in titles and "未完成事项" in titles and "已完成事项" not in titles
     assert client.post("/api/plan/carry", json={"date": "2030-02-03"}).json()["created"] == []
+
+
+def test_carry_brings_previous_day_and_span_children(client):
+    client.post("/api/tasks", json={"title": "三天前没做完", "date": "2031-05-01"})
+    client.post("/api/tasks", json={"title": "顺延过又没做完", "date": "2031-05-01"})
+    client.post("/api/tasks", json={"title": "顺延过又没做完", "date": "2031-05-02"})
+    client.post("/api/tasks", json={"title": "后来做完了", "date": "2031-05-01"})
+    client.post("/api/tasks", json={"title": "后来做完了", "date": "2031-05-02", "status": "done"})
+    p = client.post("/api/tasks", json={"title": "每天提升", "date": "2031-05-01", "end_date": "2031-06-30"}).json()
+    for k, st in (("学一小节", "todo"), ("看论文", "done"), ("听播客", "doing")):
+        client.post("/api/tasks", json={"title": k, "date": "2031-05-02", "parent_id": p["id"], "status": st})
+    client.post("/api/tasks", json={"title": "学一小节", "date": "2031-05-01", "parent_id": p["id"]})
+
+    r = client.post("/api/plan/carry", json={"date": "2031-05-04"}).json()
+    assert r["from"] == ["2031-05-02"]
+    tree = _day(client, "2031-05-04")["tree"]
+    tops = [t["title"] for t in tree]
+    assert "三天前没做完" not in tops and tops.count("顺延过又没做完") == 1 and "后来做完了" not in tops
+    kids = [k["title"] for t in tree if t["id"] == p["id"] for k in t["children"]]
+    assert sorted(kids) == ["听播客", "学一小节"]
+    assert client.post("/api/plan/carry", json={"date": "2031-05-04"}).json()["created"] == []
 
 
 def test_run_finish_marks_task(client):
