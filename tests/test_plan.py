@@ -145,31 +145,10 @@ def test_carry_over(client):
     client.post("/api/tasks", json={"title": "子", "date": "2030-02-01", "parent_id": a["id"]})
     client.post("/api/tasks", json={"title": "已完成事项", "date": "2030-02-01", "status": "done"})
     r = client.post("/api/plan/carry", json={"date": "2030-02-03"}).json()
-    assert "2030-02-01" in r["from"]
+    assert r["from"] == "2030-02-01" and len(r["created"]) == 2
     titles = [t["title"] for t in client.get("/api/tasks?date=2030-02-03").json()]
-    assert "子" in titles and "未完成事项" in titles and "已完成事项" not in titles
+    assert sorted(titles) == ["子", "未完成事项"]
     assert client.post("/api/plan/carry", json={"date": "2030-02-03"}).json()["created"] == []
-
-
-def test_carry_brings_previous_day_and_span_children(client):
-    client.post("/api/tasks", json={"title": "三天前没做完", "date": "2031-05-01"})
-    client.post("/api/tasks", json={"title": "顺延过又没做完", "date": "2031-05-01"})
-    client.post("/api/tasks", json={"title": "顺延过又没做完", "date": "2031-05-02"})
-    client.post("/api/tasks", json={"title": "后来做完了", "date": "2031-05-01"})
-    client.post("/api/tasks", json={"title": "后来做完了", "date": "2031-05-02", "status": "done"})
-    p = client.post("/api/tasks", json={"title": "每天提升", "date": "2031-05-01", "end_date": "2031-06-30"}).json()
-    for k, st in (("学一小节", "todo"), ("看论文", "done"), ("听播客", "doing")):
-        client.post("/api/tasks", json={"title": k, "date": "2031-05-02", "parent_id": p["id"], "status": st})
-    client.post("/api/tasks", json={"title": "学一小节", "date": "2031-05-01", "parent_id": p["id"]})
-
-    r = client.post("/api/plan/carry", json={"date": "2031-05-04"}).json()
-    assert r["from"] == ["2031-05-02"]
-    tree = _day(client, "2031-05-04")["tree"]
-    tops = [t["title"] for t in tree]
-    assert "三天前没做完" not in tops and tops.count("顺延过又没做完") == 1 and "后来做完了" not in tops
-    kids = [k["title"] for t in tree if t["id"] == p["id"] for k in t["children"]]
-    assert sorted(kids) == ["听播客", "学一小节"]
-    assert client.post("/api/plan/carry", json={"date": "2031-05-04"}).json()["created"] == []
 
 
 def test_run_finish_marks_task(client):
@@ -371,3 +350,22 @@ def test_review_problem_lands_in_next_days_plan(client):
     assert "产品迭代：排期总是写不清" not in _titles(client, "2026-04-03")
     t = next(t for t in client.get("/api/plan/day?date=2026-04-02").json()["tasks"] if t["title"] == "产品迭代：排期总是写不清")
     assert t["end_date"] == "2026-04-02" and t["notes"] == "来自 2026-04-01 的复盘"
+
+
+def test_span_children_stay_every_day_until_closed(client):
+    p = client.post("/api/tasks", json={"date": "1997-03-01", "end_date": "1997-03-31", "title": "每天提升"}).json()
+    a = client.post("/api/tasks", json={"date": "1997-03-02", "parent_id": p["id"], "title": "学一小节", "est_minutes": 60}).json()
+    b = client.post("/api/tasks", json={"date": "1997-03-02", "parent_id": p["id"], "title": "看论文"}).json()
+
+    def kids(d):
+        return [k["title"] for t in _day(client, d)["tree"] if t["id"] == p["id"] for k in t["children"]]
+
+    assert kids("1997-03-01") == []
+    assert sorted(kids("1997-03-05")) == ["学一小节", "看论文"]
+    assert [k["est_minutes"] for t in _day(client, "1997-03-05")["tree"] if t["id"] == p["id"] for k in t["children"] if k["id"] == a["id"]] == [60]
+
+    plan.db.execute("UPDATE tasks SET status='done', updated_at='1997-03-06T10:00:00' WHERE id=?", [b["id"]])
+    assert sorted(kids("1997-03-06")) == ["学一小节", "看论文"]
+    assert kids("1997-03-07") == ["学一小节"]
+    assert client.post("/api/plan/carry", json={"date": "1997-03-07"}).json()["created"] == []
+    assert len(plan.db.rows("SELECT id FROM tasks WHERE parent_id=?", [p["id"]])) == 2
