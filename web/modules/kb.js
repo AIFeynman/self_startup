@@ -2,6 +2,7 @@
 // 来源层是各板块同步来的 markdown 原文，可检索、可批注。
 // 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
 // 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source #kb/papers/<主题> · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
+import { chatBusy } from '../chat.js';
 import { annotate } from './_annotate.js';
 import { whyNotSection } from './_whynot.js';
 import { papersTab } from './_papermap.js';
@@ -77,9 +78,9 @@ const CSS = `
 .kb-tl > .kb-jr.chg::before { border-color: var(--accent); background: var(--accent); }
 .kb-think { display: grid; gap: 6px; padding: 14px 16px; margin: 14px 0 0; border-left: 3px solid var(--accent); }
 .kb-think .q { font-size: 16px; font-weight: 600; }
-.kb-depth { display: flex; gap: 4px; align-items: center; font-size: 12.5px; color: var(--muted); }
-.kb-depth i { width: 22px; height: 6px; border-radius: 3px; background: var(--line-2); }
-.kb-depth i.on { background: var(--accent); }
+.kb-think-history { display: grid; gap: 8px; margin-top: 10px; }
+.kb-think-history .row { flex-wrap: wrap; }
+.kb-think-history button.topic { text-align: left; white-space: normal; flex: 1; min-width: 160px; }
 .kb-ask { display: grid; gap: 8px; margin-top: 4px; }
 .kb-new { display: grid; gap: 8px; padding: 14px 16px; margin-bottom: 14px; }
 .kb-src { display: grid; gap: 6px; }
@@ -563,6 +564,8 @@ async function judgeTab(body, ctx, focus = '') {
   const { api, h, ui } = ctx;
   const j = await api.get('/api/kb/judgments');
   const S = j.stats;
+  const t = await api.get('/api/kb/think/today');
+  body.append(thinkCard(ctx, t, j.today));
   if (!S.total) {
     body.append(ui.empty('还没有整理出判断', S.pending ? `有 ${S.pending} 条记录待归类，点右上角「整理」` : '复盘、批注、学习作答里写下的看法会自动汇总到这里，也可以用上面的「记判断」直接写'));
     return;
@@ -575,8 +578,6 @@ async function judgeTab(body, ctx, focus = '') {
     { k: `已复查 · 仍成立 ${S.verdicts.holds} · 修正 ${S.verdicts.revised} · 推翻 ${S.verdicts.overturned}`, v: S.reviewed },
   ]));
   if (S.pending) body.append(h('div.kb-status', { style: { margin: '8px 0 0' } }, `还有 ${S.pending} 条新记录没归类，点右上角「整理」`));
-  const t = await api.get('/api/kb/think/today').catch(() => null);
-  body.append(thinkCard(ctx, t, j.today));
 
   // 记一条（带类型 / 信心 / 复查日；只想快速记就用上面输入框的「记判断」）
   const newBox = h('div');
@@ -693,33 +694,82 @@ function srcList(h, srcs) {
     ...srcs.map((x) => (x.link || x.url) ? h('a', { href: x.link || x.url, ...(x.link ? {} : { target: '_blank', rel: 'noopener' }) }, x.title || x.url) : h('span', {}, x.title))]);
 }
 
-const firstSay = (t) => (t.stance ? `我的问题：${t.question}\n我的判断：${t.stance}\n从第 1 层开始挖。` : `我们来想这个问题：${t.question}`);
-const think = (ctx, t) => ctx.openChat({ module: 'kb', ref: t.ref, title: '今日一想', send: t.chatted ? '' : firstSay(t) });
-
-function depthBar(h, t) {
-  return h('div.kb-depth', {}, [...Array.from({ length: t.max_depth }, (_, i) => h('i' + (i < t.depth ? '.on' : ''))),
-    h('span', {}, t.bottomed ? ' 5 层挖到底了' : t.depth ? ` 挖到第 ${t.depth} / ${t.max_depth} 层` : ` 共 ${t.max_depth} 层，还没开始挖`)]);
-}
+const THINK_MODES = { brainstorm: '一起脑爆', idea: '讨论思路', judgment: '讨论判断' };
+const firstSay = (t) => `${t.mode_name}：${t.question}${t.stance ? `\n我目前的想法和理由：${t.stance}` : ''}`;
+const think = async (ctx, topic) => {
+  if (chatBusy()) return ctx.toast('当前回复还在生成，请先等它结束或点击停止', true);
+  const t = await ctx.api.get('/api/kb/think/' + topic.id);
+  if (chatBusy()) return;
+  return ctx.openChat({ module: 'kb', ref: t.ref, title: t.question, sessionId: t.session_id, send: t.chatted ? '' : firstSay(t) });
+};
 
 function askForm(ctx) {
   const { h, api } = ctx;
-  const q = h('textarea', { rows: 2, placeholder: '我在想的问题，比如：做 Agent 产品要不要先搭评测？' });
-  const st = h('textarea', { rows: 2, placeholder: '我现在的判断和理由，比如：要，没有评测就不知道每次改动是变好还是变坏' });
-  return h('div.kb-ask', {}, [q, st, h('div.row', {}, [h('span.muted', {}, '批判者从澄清主张、依据、隐含前提、反例到「什么会让你改主意」，一层层追问到第 5 层，不给结论'), h('span.grow'),
-    h('button', { onclick: async () => {
-      if (!q.value.trim() || !st.value.trim()) return ctx.toast('问题和判断都要写', true);
-      think(ctx, await api.post('/api/kb/think/new', { question: q.value, stance: st.value }));
+  const mode = h('select', { 'aria-label': '讨论方式' }, Object.entries(THINK_MODES).map(([value, label]) => h('option', { value }, label)));
+  const q = h('textarea', { rows: 2, 'aria-label': '讨论话题', placeholder: '想解决什么问题？一个模糊的念头也可以' });
+  const st = h('textarea', { rows: 2, 'aria-label': '已有想法和理由', placeholder: '已有的想法、判断或理由（可选）' });
+  const hint = h('span.muted');
+  const hints = { brainstorm: '找到少量有突破的新方向，选中后继续深挖', idea: '推演起作用的机制、真正瓶颈与最小实验', judgment: '交锋依据、最强反例与判断成立的边界' };
+  const updateHint = () => { hint.textContent = hints[mode.value]; };
+  mode.addEventListener('change', updateHint);
+  updateHint();
+  const start = h('button', { onclick: async () => {
+    if (chatBusy()) return ctx.toast('当前回复还在生成，请先等它结束或点击停止', true);
+    if (!q.value.trim()) return ctx.toast('先写一个想讨论的话题', true);
+    start.disabled = true;
+    try {
+      const t = await api.post('/api/kb/think/new', { question: q.value, stance: st.value, mode: mode.value });
+      await think(ctx, t);
       ctx.refresh();
-    } }, [ctx.ui.icon('chat'), '开始挖'])])]);
+    } catch (e) { ctx.toast(e.message, true); }
+    finally { start.disabled = false; }
+  } }, [ctx.ui.icon('chat'), '新建话题并讨论']);
+  return h('div.kb-ask', {}, [h('div.row', {}, [mode, hint]), q, st,
+    h('div.row', {}, [h('span.muted', {}, '主动给判断，一起交锋 · 话题和对话自动保存'), h('span.grow'), start])]);
+}
+
+function thinkHistory(ctx) {
+  const { h, api } = ctx;
+  const list = h('div.kb-think-history');
+  const search = h('input', { type: 'search', placeholder: '搜索话题和对话内容', 'aria-label': '搜索历史话题' });
+  const mode = h('select', { 'aria-label': '筛选讨论方式' }, [h('option', { value: '' }, '全部类型'),
+    ...Object.entries(THINK_MODES).map(([value, label]) => h('option', { value }, label))]);
+  const count = h('span.muted');
+  let offset = 0, version = 0;
+  const load = async (more = false) => {
+    const current = ++version;
+    const nextOffset = more ? offset : 0;
+    try {
+      const data = await api.get('/api/kb/think/history?' + new URLSearchParams({ q: search.value, mode: mode.value, offset: nextOffset, limit: 20 }));
+      if (current !== version) return;
+      if (!more) list.replaceChildren();
+      list.querySelector('.more')?.remove();
+      count.textContent = `共 ${data.total} 个话题`;
+      for (const t of data.items) list.append(h('div.row', {}, [
+        h('span.kb-st', {}, t.mode_name),
+        h('button.ghost.topic', { onclick: () => think(ctx, t) }, t.question),
+        h('span.muted', {}, `${(t.updated_at || t.date).slice(0, 10)} · ${t.judgment ? '已记判断' : t.chatted ? '可续聊' : '待开始'}`),
+      ]));
+      offset = nextOffset + data.items.length;
+      if (!data.total) list.append(h('span.muted', {}, '没有匹配的话题'));
+      if (offset < data.total) list.append(h('button.ghost.more', { onclick: () => load(true) }, '查看更多'));
+    } catch (e) { ctx.toast(e.message, true); }
+  };
+  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
+  mode.addEventListener('change', () => load());
+  const detail = h('details', {}, [h('summary', {}, '历史话题'), h('div.row', { style: { flexWrap: 'wrap', marginTop: '8px' } }, [search, mode,
+    h('button.ghost', { onclick: () => load() }, '查找 / 刷新'), count]), list]);
+  detail.addEventListener('toggle', () => { if (detail.open) load(); });
+  return detail;
 }
 
 function thinkCard(ctx, t, today) {
-  const box = ctx.h('div', {}, [thinkBody(ctx, t, today)]);
+  const box = ctx.h('div', {}, [thinkBody(ctx, t, today), thinkHistory(ctx)]);
   const onDone = async (e) => {
     if (!box.isConnected) return document.removeEventListener('agent-done', onDone);
     if (!t || e.detail.ref !== t.ref) return;
     t = await ctx.api.get('/api/kb/think/' + t.id);
-    box.replaceChildren(thinkBody(ctx, t, today));
+    box.firstChild.replaceWith(thinkBody(ctx, t, today));
   };
   document.addEventListener('agent-done', onDone);
   return box;
@@ -727,21 +777,16 @@ function thinkCard(ctx, t, today) {
 
 function thinkBody(ctx, t, today) {
   const { h, ui } = ctx;
-  const own = h('div');
-  const ownBtn = h('button.ghost', { onclick: () => own.replaceChildren(...(own.childElementCount ? [] : [askForm(ctx)])) }, [ui.icon('plus'), '自己出一题']);
-  if (!t) return h('div.card.kb-think', {}, [h('div.row', {}, [h('b', {}, '今日一想'), h('span.grow')]), askForm(ctx)]);
-  const origin = h('span.muted', {}, t.date === today ? '' : `${t.date} 开始想的`);
   return h('div.card.kb-think', {}, [
-    h('div.row', {}, [h('b', {}, '今日一想'), h('span.grow'), origin, ownBtn]),
-    h('div.q', {}, t.question),
-    t.stance ? h('div', {}, [h('span.muted', {}, '一开始的判断：'), t.stance]) : null,
-    depthBar(h, t),
-    t.judgment
-      ? h('div.kb-ag', {}, [h('b', {}, '想出来的判断：'), t.judgment.text, h('span.muted', {}, ' · 已记进台账，明天接着往下想')])
-      : h('div.muted', {}, t.bottomed ? '5 层挖到底了，确认批判者整理的那句判断就能记进台账'
-        : t.chatted ? '挖到一半，接着回答批判者这一层的追问；答到点子上才进下一层' : '批判者每层给一个认知、一个追问、去哪求证，不给结论；答到点子上才进下一层，挖满 5 层后帮你记下判断'),
-    h('div.row', {}, [h('button', { onclick: () => think(ctx, t) }, [ui.icon('chat'), t.chatted || t.judgment ? '接着聊' : '开始想'])]),
-    own,
+    h('div.row', {}, [h('b', {}, '今日一想'), h('span.grow'), h('span.muted', {}, 'Opus 5.5 · 本机 Claude Code')]),
+    askForm(ctx),
+    t ? h('div', {}, [
+      h('div.muted', {}, `${t.mode_name} · ${t.date === today ? '今天的话题' : t.date + ' 的话题'}`),
+      h('div.q', {}, t.question),
+      t.stance ? h('div', {}, [h('span.muted', {}, '最初的想法：'), t.stance]) : null,
+      t.judgment ? h('div.kb-ag', {}, [h('b', {}, '已记下的判断：'), t.judgment.text]) : null,
+      h('button.ghost', { onclick: () => think(ctx, t) }, [ui.icon('chat'), t.chatted ? '接着聊' : '开始讨论']),
+    ]) : null,
   ]);
 }
 

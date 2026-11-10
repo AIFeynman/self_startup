@@ -1,7 +1,5 @@
-"""今日一想：每天从判断台账挑一个问题，或自己写下问题和判断，和知识库对话 Agent（批判者）一层层往下挖到第 5 层，再由 Agent 把我的判断记进台账。"""
+"""今日一想：脑爆、思路推演与判断交锋，话题持久保存、随时续聊。"""
 from __future__ import annotations
-
-import re
 
 from . import agent, db, kb_judge
 
@@ -11,6 +9,7 @@ CREATE TABLE IF NOT EXISTS kb_thinks (             -- 每次想的问题（只�
     date TEXT NOT NULL,
     question TEXT NOT NULL,
     origin_sid TEXT DEFAULT '',                    -- 从哪条判断想起；空 = 自己出的题
+    mode TEXT NOT NULL DEFAULT 'judgment',
     stance TEXT DEFAULT '',                        -- 自己出题时一开始的判断
     judgment_id INTEGER,                           -- 想完记下的判断 kb_judgments.id
     done_on TEXT DEFAULT '',                       -- 记下判断的那天
@@ -18,58 +17,67 @@ CREATE TABLE IF NOT EXISTS kb_thinks (             -- 每次想的问题（只�
 );
 """
 
-MAX_DEPTH = 5
-LAYER_TAG = re.compile(r"〔第\s*([1-5])\s*/\s*5\s*层〕")
-BOTTOM_TAG = "〔5 层到底〕"
+MODES = {"brainstorm": "一起脑爆", "idea": "讨论思路", "judgment": "讨论判断"}
+MODEL = "claude-opus-5-5"
 
-CRITIC = """## 你现在是「今日一想」的批判者
-用户在想一个问题，你帮用户一层层往下想，一共挖 5 层，答案由用户自己给。规矩：
-- 每一轮回复第一行只写层标记 `〔第 N / 5 层〕`，N 是这一轮追问所在的层，第一轮是第 1 层。
-- 每层的默认方向（按用户的回答灵活调整，但不要跳过）：
-  1. 澄清主张：用户到底在断言什么？概念的边界、适用范围、「更好」按什么标准算。
-  2. 依据：凭什么这么想？证据是亲眼看到的、读到的、还是推出来的，样本有多大。
-  3. 隐含前提：这个理由要成立，背后默认了哪些没说出口的条件？挑最脆弱的一个。
-  4. 反例与替代解释：在什么情况下会不成立？同样的现象还能怎么解释？有没有人反着做也成了。
-  5. 可检验：看到什么证据会让用户改主意？能不能写成一个有日期、可检查的预测或小实验。
-- 每一层的追问必须咬住用户上一轮刚给出的理由本身，追问「这个理由为什么成立 / 它依赖什么」，不另起话题、不泛泛而谈。
-- 每一轮只给三样，各一两句：
-  1. **一个认知**：被忽略的视角、反例或隐含前提。只指出，不说「所以你对 / 错了」。
-  2. **一个引导问题**：指向这一层里用户推理最薄弱的一环，具体到能回答、能去求证。
-  3. **去哪求证**：先从下面列的用户看过的材料、知识库里挑；没有就给该搜的方向或能做的小实验。
-- 进层标准要严：用户给出了新的理由、证据、机制或修正，才算接住了，N 加 1；复述、「嗯 / 对 / 应该是」、换个说法重复、只表态不讲为什么，都不算，N 不变，换个角度继续逼问这一层，并点明哪里还没答到。
-- 不替用户写答案，不改写用户的主张，不给结论（不给结论是硬规矩）。用户问「那答案是什么」时，只再给一条线索。
-- 用户接住了第 5 层：第一行写 `〔5 层到底〕`，不再追问。按层列出用户每层给出的理由（用用户自己的话），指出和一开始的判断相比哪里变了、哪里还站不住，然后进入「记下来」。
-- 记下来（挖到底或用户说想清楚了）：用用户自己的话整理成一句可检查的判断（再标类型 观点 / 预测 / 评价 / 疑问、信心 高 / 中 / 低，预测写兑现日期），
-  先给用户确认；确认后再记，命令：
+DIRECTIONS = {
+    "brainstorm": "目标：找到有突破、值得继续推演的新方向。先抓目标与最硬约束，首轮只给 2 个机制不同的候选，每个一句话说明如何起作用；推荐一个并点明最关键的代价。用户选中或提出方向后，沿它深挖，不每轮重列点子。",
+    "idea": "目标：把一个思路推演到能判断是否值得做。复原它起作用的因果链，找出真正瓶颈、最脆弱前提与失败条件；主动给更强的改法，并设计能区分原方案与改法的最小实验。",
+    "judgment": "目标：检验自己的判断是否站得住。先忠实理解主张和依据，再给最强反例与替代解释，划清成立边界，说明你的当前判断及信心、什么证据会让双方改主意。不要为了反对而反对。",
+}
+
+PARTNER = """## 今日一想：深入而简练的讨论伙伴
+你和用户共同思考，主动提出判断、提供新视角并交锋。不要只当提问教练，也不要迎合用户。
+- 深入指找到决定结果的机制、关键假设、最强反例和可验证的分歧；不以轮数、篇幅或固定五层衡量。
+- 每轮紧扣用户刚说的内容，只推进最重要的一处分歧。先给一句有信息量的判断，再用最必要的理由或例子支撑；必要时只问一个能推动讨论的问题。
+- 简练是硬约束：除非用户明确要求展开，每轮正文不超过 300 个汉字，优先 150–250 字；只留下最有价值的判断和支撑它的理由。复杂证据先给摘要，附来源供展开。避免铺陈、复述、套话和每轮套同一模板；用户要求详解时按需展开。
+- 证据不足就说清不确定性和成立条件；把用户的判断、你的推断、已核实的事实分开。
+- 需要用户过往材料时先检索知识库；涉及会影响结论的最新事实、陌生技术或争议证据时主动搜索一手资料，附来源链接与日期。搜索要服务于当前分歧，不堆资料；没搜到不能说已证实。
+- 适合量化或检验机制时，可做小规模计算、反例构造或模拟。明确假设、方法和结果；思想实验须标明「假设推演」，没有实际运行不能称为实测；样本量、显著性、成本、提升幅度等定量结论必须有可核对的计算或来源，不凭直觉报数字。脚本只写临时目录，不改项目、配置或业务数据，不启动付费服务。
+- 已有可靠结论或明确下一步时及时收束；不要强迫用户继续答题。用户要求整理时，用几句话记录：当前共识、关键分歧、判断变化、最小验证与待查证事项。没有结论也可以保留为开放话题。
+- 话题与每轮对话由平台自动保存，不需要用户确认。要把一句判断写入用户的判断台账时，先给用户确认，确认后调用：
   curl -s -X POST {api}/api/kb/think/{tid}/record -H 'Content-Type: application/json' -d '{{"text": "…", "type": "观点", "confidence": "中", "due": ""}}'
-  记完一句话告诉用户记下了，明天的问题会接着这里想。没确认不要记。"""
+  不把 AI 的意见自动记作用户的判断。
+"""
 
 
 def _init() -> None:
+    kb_judge._init()
     db.init([SCHEMA])
-    if "stance" not in {r["name"] for r in db.rows("PRAGMA table_info(kb_thinks)")}:
+    columns = {r["name"] for r in db.rows("PRAGMA table_info(kb_thinks)")}
+    if "stance" not in columns:
         db.execute("ALTER TABLE kb_thinks ADD COLUMN stance TEXT DEFAULT ''")
+    if "mode" not in columns:
+        db.execute("ALTER TABLE kb_thinks ADD COLUMN mode TEXT NOT NULL DEFAULT 'judgment'")
 
 
 def _today() -> str:
     return db.today()
 
 
-def _depth(tid: int) -> tuple[int, bool]:
-    said = [m["content"] for m in db.rows(
-        "SELECT m.content FROM chat_messages m JOIN chat_sessions s ON s.id=m.session_id "
-        "WHERE s.module='kb' AND s.ref=? AND m.role='assistant'", [f"think:{tid}"])]
-    if any(BOTTOM_TAG in c for c in said):
-        return MAX_DEPTH, True
-    return max((int(n) for c in said for n in LAYER_TAG.findall(c)), default=0), False
-
-
 def _out(t: dict) -> dict:
     j = db.row("SELECT * FROM kb_judgments WHERE id=?", [t["judgment_id"]]) if t["judgment_id"] else None
-    chatted = db.row("SELECT 1 FROM chat_sessions WHERE module='kb' AND ref=?", [f"think:{t['id']}"])
-    depth, bottomed = _depth(t["id"])
-    return {**t, "ref": f"think:{t['id']}", "chatted": bool(chatted), "depth": depth, "max_depth": MAX_DEPTH, "bottomed": bottomed,
+    session = db.row("SELECT id, updated_at FROM chat_sessions WHERE module='kb' AND ref=? ORDER BY updated_at DESC, id DESC LIMIT 1", [f"think:{t['id']}"])
+    return {**t, "ref": f"think:{t['id']}", "chatted": bool(session),
+            "mode_name": MODES[t["mode"]], "session_id": session["id"] if session else None,
+            "updated_at": session["updated_at"] if session else t["created_at"],
             "judgment": {"sid": f"my:{j['id']}", "text": j["text"]} if j else None}
+
+
+def history(q: str = "", mode: str = "", limit: int = 20, offset: int = 0) -> dict:
+    _init()
+    where, args = [], []
+    if q.strip():
+        where.append("(instr(k.question, ?) OR instr(k.stance, ?) OR EXISTS (SELECT 1 FROM chat_sessions s JOIN chat_messages m ON m.session_id=s.id WHERE s.module='kb' AND s.ref='think:' || k.id AND instr(m.content, ?)))")
+        args.extend([q.strip()] * 3)
+    if mode:
+        where.append("k.mode=?")
+        args.append(mode)
+    clause = " WHERE " + " AND ".join(where) if where else ""
+    total = db.row("SELECT count(*) AS n FROM kb_thinks k" + clause, args)["n"]
+    rows = db.rows("SELECT k.* FROM kb_thinks k" + clause +
+                   " ORDER BY COALESCE((SELECT max(s.updated_at) FROM chat_sessions s WHERE s.module='kb' AND s.ref='think:' || k.id), k.created_at) DESC, k.id DESC LIMIT ? OFFSET ?", [*args, limit, offset])
+    return {"items": [_out(t) for t in rows], "total": total}
 
 
 def _question(c: dict, thread: str = "") -> str:
@@ -87,8 +95,8 @@ def _candidates(lg: dict) -> list[tuple[dict, str]]:
     return [*((c, "") for c in lg["due"]), *((c, "") for c in lg["open"]), *latest, *((c, "") for c in lg["singles"])]
 
 
-def _create(date: str, question: str, origin: str, stance: str = "") -> dict:
-    tid = db.insert("kb_thinks", {"date": date, "question": question, "origin_sid": origin, "stance": stance, "created_at": db.now()})
+def _create(date: str, question: str, origin: str, stance: str = "", mode: str = "judgment") -> dict:
+    tid = db.insert("kb_thinks", {"date": date, "question": question, "origin_sid": origin, "stance": stance, "mode": mode, "created_at": db.now()})
     return db.row("SELECT * FROM kb_thinks WHERE id=?", [tid])
 
 
@@ -113,12 +121,12 @@ def start(sid: str) -> dict | None:
     return _out(_create(_today(), _question(c), sid)) if c else None
 
 
-def ask(question: str, stance: str) -> dict:
+def ask(question: str, stance: str = "", mode: str = "judgment") -> dict:
     _init()
     question, stance = question.strip(), stance.strip()
-    if not question or not stance:
+    if not question or mode not in MODES:
         raise ValueError("empty")
-    return _out(_create(_today(), question, "", stance))
+    return _out(_create(_today(), question, "", stance, mode))
 
 
 def get(tid: int) -> dict | None:
@@ -156,11 +164,9 @@ def context(tid: int) -> str:
     cards = {c["sid"]: c for c in [*lg["due"], *lg["open"], *lg["singles"], *(x for th in lg["threads"] for x in th["items"])]}
     origin = cards.get(t["origin_sid"])
     thread = next((th for th in lg["threads"] if origin and th["question"] == origin.get("thread")), None)
-    parts = [CRITIC.format(api=agent.API_BASE, tid=tid), f"## 今天的问题\n{t['question']}"]
+    parts = [PARTNER.format(api=agent.API_BASE, tid=tid), f"## 讨论方式：{MODES[t['mode']]}\n{DIRECTIONS[t['mode']]}", f"## 今天的问题\n{t['question']}"]
     if t["stance"]:
         parts.append(f"## 我一开始的判断\n{t['stance']}")
-    parts.append("## 现在的深度\n" + ("5 层已经挖到底，接下来只做整理和记下来。" if t["bottomed"]
-                                     else f"已经挖到第 {t['depth']} 层（共 5 层）。" if t["depth"] else "还没开始挖，这一轮从第 1 层开始。"))
     if origin:
         parts.append("## 这个问题从这条判断来\n" + _card_text(origin))
     if thread:
