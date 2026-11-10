@@ -2,8 +2,10 @@
 import json
 import subprocess
 import threading
+from typing import Literal
 
 import httpx
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -183,15 +185,23 @@ def think_start(body: RecheckIn):
 
 class ThinkNewIn(BaseModel):
     question: str
-    stance: str
+    stance: str = ""
+    mode: Literal["brainstorm", "idea", "judgment"] = "judgment"
 
 
 @router.post("/think/new")
 def think_new(body: ThinkNewIn):
     try:
-        return kb_idea.ask(body.question, body.stance)
+        return kb_idea.ask(body.question, body.stance, body.mode)
     except ValueError:
         raise HTTPException(400, "empty")
+
+
+@router.get("/think/history")
+def think_history(q: str = "", mode: Literal["", "brainstorm", "idea", "judgment"] = "", limit: int = 20, offset: int = 0):
+    if not 1 <= limit <= 100 or offset < 0:
+        raise HTTPException(400, "invalid pagination")
+    return kb_idea.history(q, mode, limit, offset)
 
 
 @router.get("/think/{tid}")

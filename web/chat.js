@@ -77,7 +77,9 @@ function render(sessions) {
   root.innerHTML = '';
   sessSel = h('select', { title: '历史对话', onchange: async (e) => { state.sessionId = e.target.value ? +e.target.value : null; await loadMessages(); } },
     [h('option', { value: '' }, '＋ 新对话'), ...sessions.map((s) => h('option', { value: s.id, selected: s.id === state.sessionId }, (s.title || '对话').slice(0, 18)))]);
-  engineSel = h('select', { title: '引擎' }, [h('option', { value: '' }, '默认引擎'), h('option', { value: 'claude' }, 'Claude Code'), h('option', { value: 'codex' }, 'Codex')]);
+  const think = state.module === 'kb' && state.ref.startsWith('think:');
+  engineSel = h('select', { title: think ? '今日一想固定使用本机 Opus 5.5' : '引擎', disabled: think }, [h('option', { value: '' }, '默认引擎'), h('option', { value: 'claude' }, 'Claude Code'), h('option', { value: 'codex' }, 'Codex')]);
+  if (think) { engineSel.value = 'claude'; engineSel.selectedOptions[0].textContent = 'Opus 5.5'; }
   log = noteZone(h('div.chat-log'), chatSource);
   const talk = state.module === 'talk';
   box = composer({ placeholder: talk ? '接着说…' : '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', voiceAutoSend: talk, onSubmit: (t) => submit(t) });

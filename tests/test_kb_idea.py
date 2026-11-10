@@ -4,6 +4,7 @@ from test_kb_judge import _clean, _setup  # noqa: F401
 
 
 def _wipe():
+    db.execute("DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE module='kb')")
     db.execute("DELETE FROM chat_sessions WHERE module='kb'")
     if db.row("SELECT 1 FROM sqlite_master WHERE name='kb_thinks'"):
         db.execute("DELETE FROM kb_thinks")
@@ -22,7 +23,7 @@ def test_daily_think_guides_then_records_judgment(client, monkeypatch):
     assert client.get("/api/kb/think/today").json()["id"] == t["id"]
 
     ctx, _ = chat._context("kb", f"think:{t['id']}")
-    assert "批判者" in ctx and "不给结论" in ctx and t["question"] in ctx
+    assert "主动提出判断" in ctx and t["question"] in ctx
     assert first_due["claim"] in ctx and f"/api/kb/think/{t['id']}/record" in ctx
 
     monkeypatch.setattr(kb_idea, "_today", lambda: "2026-11-09")
@@ -55,34 +56,95 @@ def _say(sess_id, role, content):
     db.insert("chat_messages", {"session_id": sess_id, "role": role, "content": content, "created_at": db.now()})
 
 
-def test_own_question_digs_five_layers(client, monkeypatch):
+def test_three_modes_saved_searchable_and_resumable(client, monkeypatch):
     _wipe()
-    assert client.post("/api/kb/think/new", json={"question": "要不要先做评测？", "stance": " "}).status_code == 400
-    t = client.post("/api/kb/think/new", json={"question": "要不要先做评测？", "stance": "要，没评测就不知道改得对不对"}).json()
-    assert t["stance"] == "要，没评测就不知道改得对不对" and t["origin_sid"] == ""
-    assert t["depth"] == 0 and t["max_depth"] == 5 and not t["bottomed"]
-    assert client.get("/api/kb/think/today").json()["id"] == t["id"]
-
-    ctx, _ = chat._context("kb", t["ref"])
-    assert "要不要先做评测？" in ctx and "没评测就不知道改得对不对" in ctx
-    assert "〔第 N / 5 层〕" in ctx and "〔5 层到底〕" in ctx and "还没开始挖" in ctx
-    assert all(k in ctx for k in ("隐含前提", "反例", "改主意"))
-
+    topics = []
+    for mode in ("brainstorm", "idea", "judgment"):
+        t = client.post("/api/kb/think/new", json={"question": "Agent 评测怎么做？", "mode": mode}).json()
+        assert t["mode"] == mode and not t["chatted"]
+        topics.append(t)
+    assert len({t["id"] for t in topics}) == 3
+    assert client.post("/api/kb/think/new", json={"question": " ", "mode": "idea"}).status_code == 400
+    assert client.post("/api/kb/think/new", json={"question": "x", "mode": "unknown"}).status_code == 422
+    t = topics[0]
     sid = db.insert("chat_sessions", {"module": "kb", "ref": t["ref"], "engine": "claude", "title": "x", "created_at": db.now(), "updated_at": db.now()})
-    _say(sid, "assistant", "〔第 1 / 5 层〕\n**一个认知**：……")
-    _say(sid, "user", "因为改动多")
-    _say(sid, "assistant", "〔第 2 / 5 层〕\n……")
-    _say(sid, "user", "嗯")
-    _say(sid, "assistant", "〔第 2 / 5 层〕\n换个角度……")
-    got = client.get(f"/api/kb/think/{t['id']}").json()
-    assert got["depth"] == 2 and got["chatted"] and not got["bottomed"]
-    assert "已经挖到第 2 层" in chat._context("kb", t["ref"])[0]
+    _say(sid, "user", "考虑先做失败案例库")
+    _say(sid, "assistant", "关键分歧是案例是否能区分两种方案")
+    history = client.get("/api/kb/think/history", params={"q": "失败案例"}).json()
+    assert [x["id"] for x in history["items"]] == [t["id"]]
+    assert history["items"][0]["session_id"] == sid
+    assert history["items"][0]["chatted"]
+    assert client.get("/api/kb/think/history", params={"mode": "idea"}).json()["total"] == 1
+    assert client.get("/api/kb/think/history", params={"limit": 1, "offset": 1}).json()["total"] == 3
+    for topic in topics:
+        ctx = chat._context("kb", topic["ref"])[0]
+        assert topic["question"] in ctx
+        assert "主动提出判断" in ctx and "模拟" in ctx and "搜索" in ctx
+        assert "〔第 N / 5 层〕" not in ctx
+    assert "突破" in chat._context("kb", topics[0]["ref"])[0]
+    assert "瓶颈" in chat._context("kb", topics[1]["ref"])[0]
+    assert "反例" in chat._context("kb", topics[2]["ref"])[0]
 
-    _say(sid, "assistant", "〔5 层到底〕\n第 1 层你说……")
-    got = client.get(f"/api/kb/think/{t['id']}").json()
-    assert got["depth"] == 5 and got["bottomed"]
-    assert "5 层已经挖到底" in chat._context("kb", t["ref"])[0]
 
-    r = client.post(f"/api/kb/think/{t['id']}/record", json={"text": "评测先做最小一版", "type": "观点"}).json()
-    row = db.row("SELECT * FROM kb_judgments WHERE id=?", [int(r["sid"].split(":")[1])])
-    assert "要不要先做评测？" in row["note"] and "没评测就不知道改得对不对" in row["note"]
+def test_think_uses_opus_without_engine_fallback(client, monkeypatch):
+    _wipe()
+    t = client.post("/api/kb/think/new", json={"question": "评测值得做吗", "mode": "judgment", "stance": "值得"}).json()
+    calls = []
+    def stream(prompt, **kw):
+        assert "分析讨论" in prompt and "一起想" in prompt
+        calls.append(kw)
+        yield {"type": "done", "text": "先看它能否影响一次真实选择。", "engine": "claude"}
+    monkeypatch.setattr(chat.agent, "run_stream", stream)
+    r = client.post("/api/chat/kb", json={"message": "一起想", "ref": t["ref"], "engine": "codex"})
+    assert r.status_code == 200
+    assert calls[0]["engine"] == "claude"
+    assert calls[0]["model"] == "claude-opus-5-5"
+    assert calls[0]["fallback"] is False
+    saved = client.get(f"/api/kb/think/{t['id']}").json()
+    messages = client.get(f"/api/chat/session/{saved['session_id']}").json()["messages"]
+    assert messages[-1]["content"] == "先看它能否影响一次真实选择。"
+
+
+def test_new_database_keeps_thinking_context(client, monkeypatch, tmp_path):
+    original = db.conn()
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "fresh.db")
+    connection = db.connect()
+    monkeypatch.setattr(db, "_conn", connection)
+    db.init()
+    try:
+        t = client.post("/api/kb/think/new", json={"question": "如何学得更好", "mode": "brainstorm"}).json()
+        ctx = chat._context("kb", t["ref"])[0]
+        assert "主动提出判断" in ctx and "如何学得更好" in ctx
+    finally:
+        monkeypatch.setattr(db, "_conn", original)
+        connection.close()
+
+
+def test_think_saves_visible_reply_before_stream_finishes(client, monkeypatch):
+    _wipe()
+    t = client.post("/api/kb/think/new", json={"question": "一个新方向", "mode": "idea"}).json()
+    def stream(prompt, **kw):
+        yield {"type": "session", "id": "local-opus-session"}
+        yield {"type": "text", "text": "关键是反馈能否改变下一次行为。"}
+        session = db.row("SELECT * FROM chat_sessions WHERE ref=?", [t["ref"]])
+        assert session["engine_session"] == "local-opus-session"
+        assert db.row("SELECT content FROM chat_messages WHERE session_id=? AND role='assistant'", [session["id"]])["content"] == "关键是反馈能否改变下一次行为。"
+        yield {"type": "done", "text": "关键是反馈能否改变下一次行为。", "engine": "claude"}
+    monkeypatch.setattr(chat.agent, "run_stream", stream)
+    client.post("/api/chat/kb", json={"message": "继续", "ref": t["ref"]})
+    saved = client.get(f"/api/kb/think/{t['id']}").json()
+    assert len(db.rows("SELECT * FROM chat_messages WHERE session_id=? AND role='assistant'", [saved["session_id"]])) == 1
+
+
+def test_old_codex_topic_continues_with_its_arguments(client, monkeypatch):
+    _wipe()
+    t = client.post("/api/kb/think/new", json={"question": "方案怎么选", "mode": "idea"}).json()
+    sid = db.insert("chat_sessions", {"module": "kb", "ref": t["ref"], "engine": "codex", "engine_session": "codex-thread", "title": "x", "created_at": db.now(), "updated_at": db.now()})
+    _say(sid, "user", "最硬的约束是不能增加维护时间")
+    _say(sid, "assistant", "共识是只复用现有记录")
+    def stream(prompt, **kw):
+        assert "不能增加维护时间" in prompt and "只复用现有记录" in prompt
+        assert kw["session"] == "" and kw["engine"] == "claude"
+        yield {"type": "done", "text": "继续检查现有记录的偏差。", "engine": "claude"}
+    monkeypatch.setattr(chat.agent, "run_stream", stream)
+    client.post("/api/chat/kb", json={"message": "沿这个继续想", "session_id": sid})

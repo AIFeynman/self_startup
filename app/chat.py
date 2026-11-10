@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, db, jobs, kb, modules
+from . import agent, db, jobs, kb, kb_idea, modules
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -113,7 +113,7 @@ def chat(module: str, body: ChatIn):
     sid = sess["id"]
     _stopping.discard(sid)
     prompt = _with_interruption(sid, body.message)
-    db.insert("chat_messages", {"session_id": sid, "role": "user", "content": body.message, "created_at": db.now()})
+    message_id = db.insert("chat_messages", {"session_id": sid, "role": "user", "content": body.message, "created_at": db.now()})
     mod = modules.get(module)
     if mod and hasattr(mod, "on_chat"):  # 板块按用户的话更新自己的记录（如深读条目的追问 / 感想推进当天事项）
         try:
@@ -124,7 +124,17 @@ def chat(module: str, body: ChatIn):
     # 每轮都带上最新数据快照，让 Agent 看到平台的当前状态
     ctx, dirs = _context(module, sess["ref"] or body.ref)
     system = agent.build_system(module, ctx)
-    engine = sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"])
+    think = module == "kb" and (sess["ref"] or body.ref).startswith("think:")
+    engine_session = sess["engine_session"] if not think or sess["engine"] in ("", "claude") else ""
+    engine = "claude" if think else (sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"]))
+    if think and sess["engine"] not in ("", "claude"):
+        prior = db.rows("SELECT role,content FROM chat_messages WHERE session_id=? AND id<? AND role IN ('user','assistant') ORDER BY id", [sid, message_id])
+        if prior:
+            transcript = json.dumps(prior, ensure_ascii=False)
+            prompt = f"以下是同一话题此前的讨论记录，仅作背景：\n{transcript}\n\n用户现在接着说：\n{prompt}"
+
+    if think:
+        prompt = "这是「今日一想」的分析讨论，只交换想法，不执行工程任务；不输出工程验收或自主决策汇报。\n用户这轮说：\n" + prompt
 
     def stream():
         global active
@@ -137,8 +147,16 @@ def chat(module: str, body: ChatIn):
     def _stream():
         last_job = (db.row("SELECT max(id) AS m FROM jobs") or {}).get("m") or 0
         yield _sse({"type": "meta", "session_id": sid})
-        final, eng_session, used = "", sess["engine_session"], engine
+        final, eng_session, used = "", engine_session, engine
         said, live = [], ""
+        reply_id = None
+
+        def save_reply(text, role="assistant"):
+            nonlocal reply_id
+            if reply_id:
+                db.update("chat_messages", reply_id, {"content": text, "role": role})
+            else:
+                reply_id = db.insert("chat_messages", {"session_id": sid, "role": role, "content": text, "created_at": db.now()})
 
         def on_proc(proc):
             _procs[sid] = proc
@@ -146,8 +164,9 @@ def chat(module: str, body: ChatIn):
                 agent.stop(proc)
 
         run = agent.run_stream(prompt, engine=engine, system=system,
-                               session=sess["engine_session"], add_dirs=dirs,
-                               model=agent.module_model(module, engine),
+                               session=engine_session, add_dirs=dirs,
+                               model=kb_idea.MODEL if think else agent.module_model(module, engine),
+                               fallback=not think,
                                readonly=getattr(mod, "CHAT_READONLY", False), on_proc=on_proc)
         for ev in run:
             if sid in _stopping:  # 不往下读：进程被杀后的报错不是真错，也不该回退到备选引擎
@@ -162,15 +181,20 @@ def chat(module: str, body: ChatIn):
                 live = ""
             if ev["type"] == "session":
                 eng_session = ev["id"]
+                if think:
+                    db.update("chat_sessions", sid, {"engine": engine, "engine_session": eng_session, "updated_at": db.now()})
             elif ev["type"] == "done":
                 final, used = ev["text"], ev["engine"]
             elif ev["type"] == "tool":
                 db.insert("chat_messages", {"session_id": sid, "role": "tool", "content": ev["text"], "created_at": db.now()})
+            if think and ev["type"] in ("text", "done"):
+                visible = final or "\n\n".join(said).strip()
+                if visible:
+                    save_reply(visible)
             yield _sse(ev)
         _procs.pop(sid, None)
         _stopping.discard(sid)
-        db.insert("chat_messages", {"session_id": sid, "role": "assistant" if final else "error",
-                                    "content": final or "（无回复，见上方错误）", "created_at": db.now()})
+        save_reply(final or "（无回复，见上方错误）", "assistant" if final else "error")
         db.update("chat_sessions", sid, {"engine": used, "engine_session": eng_session, "updated_at": db.now()})
         if getattr(mod, "CHAT_READONLY", False) and used == "claude" and eng_session:
             _prepare_next(module, sess["ref"] or body.ref, eng_session)
