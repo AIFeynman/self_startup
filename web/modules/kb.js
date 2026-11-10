@@ -2,6 +2,7 @@
 // 来源层是各板块同步来的 markdown 原文，可检索、可批注。
 // 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
 // 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source #kb/papers/<主题> · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
+import { imagePicker, imageList } from '../_images.js';
 import { chatBusy } from '../chat.js';
 import { annotate } from './_annotate.js';
 import { whyNotSection } from './_whynot.js';
@@ -564,7 +565,7 @@ async function judgeTab(body, ctx, focus = '') {
   const { api, h, ui } = ctx;
   const j = await api.get('/api/kb/judgments');
   const S = j.stats;
-  const t = await api.get('/api/kb/think/today');
+  const t = await api.get('/api/kb/think/latest');
   body.append(thinkCard(ctx, t, j.today));
   if (!S.total) {
     body.append(ui.empty('还没有整理出判断', S.pending ? `有 ${S.pending} 条记录待归类，点右上角「整理」` : '复盘、批注、学习作答里写下的看法会自动汇总到这里，也可以用上面的「记判断」直接写'));
@@ -700,7 +701,7 @@ const think = async (ctx, topic) => {
   if (chatBusy()) return ctx.toast('当前回复还在生成，请先等它结束或点击停止', true);
   const t = await ctx.api.get('/api/kb/think/' + topic.id);
   if (chatBusy()) return;
-  return ctx.openChat({ module: 'kb', ref: t.ref, title: t.question, sessionId: t.session_id, send: t.chatted ? '' : firstSay(t) });
+  return ctx.openChat({ module: 'kb', ref: t.ref, title: t.question, sessionId: t.session_id, send: t.chatted ? '' : firstSay(t), images: t.chatted ? [] : t.images });
 };
 
 function askForm(ctx) {
@@ -708,6 +709,7 @@ function askForm(ctx) {
   const mode = h('select', { 'aria-label': '讨论方式' }, Object.entries(THINK_MODES).map(([value, label]) => h('option', { value }, label)));
   const q = h('textarea', { rows: 2, 'aria-label': '讨论话题', placeholder: '想解决什么问题？一个模糊的念头也可以' });
   const st = h('textarea', { rows: 2, 'aria-label': '已有想法和理由', placeholder: '已有的想法、判断或理由（可选）' });
+  const pictures = imagePicker({ label: '话题图片' });
   const hint = h('span.muted');
   const hints = { brainstorm: '找到少量有突破的新方向，选中后继续深挖', idea: '推演起作用的机制、真正瓶颈与最小实验', judgment: '交锋依据、最强反例与判断成立的边界' };
   const updateHint = () => { hint.textContent = hints[mode.value]; };
@@ -715,17 +717,20 @@ function askForm(ctx) {
   updateHint();
   const start = h('button', { onclick: async () => {
     if (chatBusy()) return ctx.toast('当前回复还在生成，请先等它结束或点击停止', true);
-    if (!q.value.trim()) return ctx.toast('先写一个想讨论的话题', true);
+    if (pictures.busy) return ctx.toast('图片正在添加，请稍等', true);
+    if (!q.value.trim() && !pictures.value().length) return ctx.toast('写一个话题或添加图片', true);
     start.disabled = true;
     try {
-      const t = await api.post('/api/kb/think/new', { question: q.value, stance: st.value, mode: mode.value });
+      const t = await api.post('/api/kb/think/new', { question: q.value, stance: st.value, mode: mode.value, images: pictures.value() });
       await think(ctx, t);
       ctx.refresh();
     } catch (e) { ctx.toast(e.message, true); }
     finally { start.disabled = false; }
   } }, [ctx.ui.icon('chat'), '新建话题并讨论']);
-  return h('div.kb-ask', {}, [h('div.row', {}, [mode, hint]), q, st,
+  const form = h('div.kb-ask', {}, [h('div.row', {}, [mode, hint]), q, st, pictures.el,
     h('div.row', {}, [h('span.muted', {}, '主动给判断，一起交锋 · 话题和对话自动保存'), h('span.grow'), start])]);
+  pictures.bind(form);
+  return form;
 }
 
 function thinkHistory(ctx) {
@@ -767,8 +772,8 @@ function thinkCard(ctx, t, today) {
   const box = ctx.h('div', {}, [thinkBody(ctx, t, today), thinkHistory(ctx)]);
   const onDone = async (e) => {
     if (!box.isConnected) return document.removeEventListener('agent-done', onDone);
-    if (!t || e.detail.ref !== t.ref) return;
-    t = await ctx.api.get('/api/kb/think/' + t.id);
+    if (e.detail.module !== 'kb' || !e.detail.ref.startsWith('think:')) return;
+    t = await ctx.api.get('/api/kb/think/latest');
     box.firstChild.replaceWith(thinkBody(ctx, t, today));
   };
   document.addEventListener('agent-done', onDone);
@@ -777,16 +782,24 @@ function thinkCard(ctx, t, today) {
 
 function thinkBody(ctx, t, today) {
   const { h, ui } = ctx;
+  const form = h('div');
+  const plus = h('button.icon', { title: '添加新话题', 'aria-label': '添加新话题', 'aria-expanded': 'false', onclick: () => {
+    const open = !form.childElementCount;
+    form.replaceChildren(...(open ? [askForm(ctx)] : []));
+    plus.setAttribute('aria-expanded', String(open));
+    if (open) form.querySelector('textarea')?.focus();
+  } }, ui.icon('plus'));
   return h('div.card.kb-think', {}, [
-    h('div.row', {}, [h('b', {}, '今日一想'), h('span.grow'), h('span.muted', {}, 'Opus 5.5 · 本机 Claude Code')]),
-    askForm(ctx),
+    h('div.row', {}, [h('b', {}, '今日一想'), h('span.grow'), plus]),
     t ? h('div', {}, [
-      h('div.muted', {}, `${t.mode_name} · ${t.date === today ? '今天的话题' : t.date + ' 的话题'}`),
+      h('div.muted', {}, `${t.mode_name} · ${(t.updated_at || t.date).slice(0, 10)}`),
       h('div.q', {}, t.question),
       t.stance ? h('div', {}, [h('span.muted', {}, '最初的想法：'), t.stance]) : null,
+      t.images?.length ? imageList(t.images) : null,
       t.judgment ? h('div.kb-ag', {}, [h('b', {}, '已记下的判断：'), t.judgment.text]) : null,
       h('button.ghost', { onclick: () => think(ctx, t) }, [ui.icon('chat'), t.chatted ? '接着聊' : '开始讨论']),
-    ]) : null,
+    ]) : h('span.muted', {}, '还没有讨论，点右上角 ＋ 开始一个话题'),
+    form,
   ]);
 }
 

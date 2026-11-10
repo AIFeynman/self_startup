@@ -94,15 +94,20 @@ export function composer(opts = {}) {
   const el = h('div.composer', {}, [ta, h('div.bar', {}, [modeBtns.length ? h('div.modes', {}, modeBtns) : null, hint, mic, send])]);
   el.mode = mode;
   // 空的或还不可见（如收起的对话面板，宽度 0 时 scrollHeight 会很大）时不撑高
-  const grow = () => { ta.style.height = 'auto'; if (ta.value && ta.offsetWidth) ta.style.height = Math.min(ta.scrollHeight, 240) + 'px'; send.disabled = !ta.value.trim(); };
+  const grow = () => { ta.style.height = 'auto'; if (ta.value && ta.offsetWidth) ta.style.height = Math.min(ta.scrollHeight, 240) + 'px'; send.disabled = !ta.value.trim() && !opts.hasContent?.(); };
   let busy = false;
   const submit = async () => {
     const text = ta.value.trim();
-    if (!text || busy) return;
+    if ((!text && !opts.hasContent?.()) || busy) return;
     busy = true; send.disabled = true;
+    if (opts.clearOnSend) { ta.value = ''; grow(); }
     try {
       const r = await opts.onSubmit?.(text, mode);
-      if (r !== false) { ta.value = ''; }
+      if (opts.clearOnSend) { if (r === false && !ta.value) ta.value = text; }
+      else if (r !== false && ta.value.trim() === text) ta.value = '';
+    } catch (e) {
+      if (opts.clearOnSend && !ta.value) ta.value = text;
+      throw e;
     } finally { busy = false; grow(); }
   };
   ta.addEventListener('input', grow);
@@ -112,6 +117,7 @@ export function composer(opts = {}) {
   send.addEventListener('click', submit);
   el.setValue = (v) => { ta.value = v; grow(); ta.focus(); ta.setSelectionRange(v.length, v.length); };
   el.focus = () => ta.focus();
+  el.update = grow;
   el.setHint = (t) => { hint.textContent = t; };
   if (opts.autofocus) setTimeout(() => ta.focus(), 30);
   setTimeout(grow, 0);

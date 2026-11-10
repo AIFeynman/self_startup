@@ -1,7 +1,8 @@
 // 右侧对话面板：每个板块一个 Agent，调本地 Claude Code（Codex 备选）。
 // openChat({module, ref, title, prefill, send, sessionId, fresh, expand})
 //   send: 直接发送这条消息；prefill: 只填入输入框；fresh: 开新对话；sessionId: 打开指定会话。
-import { api, h, md } from './api.js';
+import { imagePicker, imageList } from './_images.js';
+import { api, h, md, toast } from './api.js';
 import { icon, composer, chips, noteZone } from './ui.js';
 import { inCall, sentenceFeed, tts } from './voice.js';
 
@@ -19,7 +20,7 @@ const TIPS = {
 };
 
 const state = { module: '', ref: '', title: '', sessionId: null, busy: false, stopping: false, turn: null };
-let root, box, log, sessSel, engineSel;
+let root, box, log, sessSel, engineSel, pictures;
 
 // ---------- 朗读回复：讨论板块可开，通话时总是念；开口就打断（见 voice.js）----------
 const speakable = () => state.module === 'talk';
@@ -49,7 +50,7 @@ export function initChat(el) {
   });
 }
 
-export async function openChat({ module, ref = '', prefill = '', send = '', title = '', expand = true, fresh = false, sessionId = null } = {}) {
+export async function openChat({ module, ref = '', prefill = '', send = '', title = '', expand = true, fresh = false, sessionId = null, images = [] } = {}) {
   const changed = module !== state.module || ref !== state.ref || fresh || sessionId;
   state.module = module; state.ref = ref; state.title = title || state.title || module;
   if (changed || !box) {
@@ -60,7 +61,7 @@ export async function openChat({ module, ref = '', prefill = '', send = '', titl
     await loadMessages();
   }
   if (expand) root.classList.remove('collapsed');
-  if (send) submit(send);
+  if (send || images.length) submit(send, images);
   else if (prefill) box.setValue(prefill);
 }
 
@@ -82,7 +83,9 @@ function render(sessions) {
   if (think) { engineSel.value = 'claude'; engineSel.selectedOptions[0].textContent = 'Opus 5.5'; }
   log = noteZone(h('div.chat-log'), chatSource);
   const talk = state.module === 'talk';
-  box = composer({ placeholder: talk ? '接着说…' : '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', voiceAutoSend: talk, onSubmit: (t) => submit(t) });
+  pictures = think ? imagePicker({ label: '聊天图片', onChange: () => box?.update() }) : null;
+  box = composer({ clearOnSend: true, hasContent: () => Boolean(pictures?.value().length), placeholder: talk ? '接着说…' : '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', voiceAutoSend: talk, onSubmit: (t) => submit(t) });
+  if (pictures) { box.insertBefore(pictures.el, box.lastChild); pictures.bind(box); }
   const wideBtn = h('button.icon.chat-wide', { title: '加宽 / 还原（也可以拖左边缘调宽度）', onclick: () => toggleWide(wideBtn) }, icon('expand'));
   root.append(
     h('div.chat-resize', { title: '拖动调整宽度，双击还原', onmousedown: startResize, ondblclick: () => setWidth(420) }),
@@ -136,13 +139,13 @@ async function loadMessages() {
   log.innerHTML = '';
   if (!state.sessionId) { log.append(tips()); return; }
   const s = await api.get(`/api/chat/session/${state.sessionId}`);
-  for (const m of s.messages) log.append(bubble(m.role, m.content));
+  for (const m of s.messages) log.append(bubble(m.role, m.content, m.images));
   log.scrollTop = log.scrollHeight;
 }
 
-function bubble(role, content) {
+function bubble(role, content, images = []) {
   if (role === 'tool') return h('div.msg.tool', { title: content }, '⚙ ' + content);
-  if (role === 'user') return h('div.msg.user', {}, content);
+  if (role === 'user') return h('div.msg.user', {}, [content, images?.length ? imageList(images) : null]);
   if (role === 'error') return h('div.msg.error', {}, content);
   const long = (content || '').length > 600;
   return h('div.msg.assistant' + (long ? '.long' : ''), {}, [h('div.avatar', {}, icon('leaf')), h('div.body', {}, [
@@ -165,19 +168,23 @@ function openReader(content) {
   document.body.append(ov);
 }
 
-async function submit(text) {
+async function submit(text, attached = []) {
   text = (text || '').trim();
-  if (!text || (state.busy && !state.stopping)) return false;
+  if (pictures?.busy) { toast('图片正在添加，请稍等', true); return false; }
+  const sentPictures = pictures;
+  const images = attached.length ? attached : (pictures?.images() || []);
+  if ((!text && !images.length) || (state.busy && !state.stopping)) return false;
   while (state.busy) await state.turn; // 被打断的上一轮很快收尾，等它存好再发这一句
   let endTurn;
   state.turn = new Promise((resolve) => { endTurn = resolve; });
   state.busy = true; state.stopping = false;
+  pictures?.clear();
   tts.newTurn();
   performance.mark('chat-submit');
   const voice = sentenceFeed((t) => { if (speaking() && !state.stopping) tts.say(t); });
   root.classList.remove('collapsed');
   if (log.querySelector('.chat-tips')) log.innerHTML = '';
-  log.append(bubble('user', text));
+  log.append(bubble('user', text, images));
   const body = h('div.body', {}, h('span.dots', {}, '思考中'));
   const pending = h('div.msg.assistant.pending', {}, [h('div.avatar', {}, icon('leaf')), body]);
   log.append(pending);
@@ -185,8 +192,9 @@ async function submit(text) {
   try {
     const r = await fetch(`/api/chat/${state.module}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, session_id: state.sessionId, ref: state.ref, engine: engineSel.value }),
+      body: JSON.stringify({ message: text, session_id: state.sessionId, ref: state.ref, engine: engineSel.value, images: images.map((img) => img.id) }),
     });
+    if (!r.ok) throw new Error((await r.json()).detail || '发送失败');
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '', live = ''; const texts = []; let linked = [];
@@ -218,6 +226,8 @@ async function submit(text) {
     document.dispatchEvent(new CustomEvent('agent-done', { detail: { module: state.module, ref: state.ref } }));
   } catch (e) {
     body.replaceChildren('出错：' + e.message);
+    if (sentPictures && !sentPictures.value().length) sentPictures.restore(images);
+    return false;
   } finally {
     state.busy = false; state.stopping = false;
     endTurn();

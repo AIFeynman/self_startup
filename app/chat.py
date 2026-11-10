@@ -5,10 +5,10 @@ import json
 import logging
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
-from . import agent, db, jobs, kb, kb_idea, modules
+from . import agent, chat_images, db, jobs, kb, kb_idea, modules
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -23,6 +23,29 @@ class ChatIn(BaseModel):
     session_id: int | None = None   # 平台会话 id；空则新建
     ref: str = ""                   # 绑定对象，如 learn:plan:3
     engine: str = ""                # claude / codex，空=默认
+    images: list[str] = Field(default_factory=list, max_length=4)
+
+
+class ImageIn(BaseModel):
+    name: str = Field(default="图片", max_length=255)
+    data: str = Field(max_length=12_000_000)
+
+
+@router.post("/images")
+def upload_image(body: ImageIn):
+    try:
+        return chat_images.upload(body.name, body.data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/images/{image_id}")
+def image_file(image_id: str):
+    try:
+        img = chat_images.get(image_id)
+    except ValueError:
+        raise HTTPException(404, "image not found")
+    return FileResponse(chat_images.path(img), media_type=img["mime"], headers={"X-Content-Type-Options": "nosniff"})
 
 
 def _context(module: str, ref: str) -> tuple[str, list[str]]:
@@ -38,7 +61,7 @@ def _context(module: str, ref: str) -> tuple[str, list[str]]:
             dirs = mod.agent_dirs(ref) or []
         except Exception:  # noqa: BLE001
             log.exception("agent_dirs %s", module)
-    return ctx, [*dirs, str(kb.KB_DIR)]
+    return ctx, [*dirs, str(kb.KB_DIR), str(chat_images.directory())]
 
 
 @router.get("/recent")
@@ -60,6 +83,8 @@ def session_messages(sid: int):
     if not s:
         raise HTTPException(404)
     s["messages"] = db.rows("SELECT * FROM chat_messages WHERE session_id=? ORDER BY id", [sid])
+    for message in s["messages"]:
+        message["images"] = chat_images.of("message", message["id"])
     return s
 
 
@@ -105,6 +130,12 @@ def stop_reply(sid: int):
 
 @router.post("/{module}")
 def chat(module: str, body: ChatIn):
+    try:
+        images = chat_images.resolve(body.images)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not body.message.strip() and not images:
+        raise HTTPException(400, "请填写消息或添加图片")
     sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [body.session_id]) if body.session_id else None
     if not sess:
         sid = db.insert("chat_sessions", {"module": module, "ref": body.ref, "engine": body.engine or "",
@@ -114,6 +145,7 @@ def chat(module: str, body: ChatIn):
     _stopping.discard(sid)
     prompt = _with_interruption(sid, body.message)
     message_id = db.insert("chat_messages", {"session_id": sid, "role": "user", "content": body.message, "created_at": db.now()})
+    chat_images.attach("message", message_id, body.images)
     mod = modules.get(module)
     if mod and hasattr(mod, "on_chat"):  # 板块按用户的话更新自己的记录（如深读条目的追问 / 感想推进当天事项）
         try:
@@ -135,6 +167,8 @@ def chat(module: str, body: ChatIn):
 
     if think:
         prompt = "这是「今日一想」的分析讨论，只交换想法，不执行工程任务；不输出工程验收或自主决策汇报。\n用户这轮说：\n" + prompt
+
+    prompt += chat_images.prompt(images)
 
     def stream():
         global active
