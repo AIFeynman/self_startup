@@ -1,7 +1,7 @@
 """今日一想：脑爆、思路推演与判断交锋，话题持久保存、随时续聊。"""
 from __future__ import annotations
 
-from . import agent, db, kb_judge
+from . import agent, chat_images, db, kb_judge
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kb_thinks (             -- 每次想的问题（只追加；judgment_id 记下判断后回填）
@@ -59,7 +59,7 @@ def _today() -> str:
 def _out(t: dict) -> dict:
     j = db.row("SELECT * FROM kb_judgments WHERE id=?", [t["judgment_id"]]) if t["judgment_id"] else None
     session = db.row("SELECT id, updated_at FROM chat_sessions WHERE module='kb' AND ref=? ORDER BY updated_at DESC, id DESC LIMIT 1", [f"think:{t['id']}"])
-    return {**t, "ref": f"think:{t['id']}", "chatted": bool(session),
+    return {**t, "images": chat_images.of("think", t["id"]), "ref": f"think:{t['id']}", "chatted": bool(session),
             "mode_name": MODES[t["mode"]], "session_id": session["id"] if session else None,
             "updated_at": session["updated_at"] if session else t["created_at"],
             "judgment": {"sid": f"my:{j['id']}", "text": j["text"]} if j else None}
@@ -91,26 +91,14 @@ def _question(c: dict, thread: str = "") -> str:
     return f"「{c['claim']}」为什么成立？最脆弱的前提是什么？"
 
 
-def _candidates(lg: dict) -> list[tuple[dict, str]]:
-    latest = [(t["items"][-1], t["question"]) for t in lg["threads"]]
-    return [*((c, "") for c in lg["due"]), *((c, "") for c in lg["open"]), *latest, *((c, "") for c in lg["singles"])]
-
-
 def _create(date: str, question: str, origin: str, stance: str = "", mode: str = "judgment") -> dict:
     tid = db.insert("kb_thinks", {"date": date, "question": question, "origin_sid": origin, "stance": stance, "mode": mode, "created_at": db.now()})
     return db.row("SELECT * FROM kb_thinks WHERE id=?", [tid])
 
 
-def today() -> dict | None:
-    _init()
-    last = db.row("SELECT * FROM kb_thinks ORDER BY id DESC LIMIT 1")
-    if last and (not last["judgment_id"] or _today() in (last["date"], last["done_on"])):
-        return _out(last)
-    done = {r["origin_sid"] for r in db.rows("SELECT origin_sid FROM kb_thinks WHERE origin_sid!=''")}
-    for c, thread in _candidates(kb_judge.ledger_json()):
-        if c["sid"] not in done:
-            return _out(_create(_today(), _question(c, thread), c["sid"]))
-    return None
+def latest() -> dict | None:
+    items = history(limit=1)["items"]
+    return items[0] if items else None
 
 
 def start(sid: str) -> dict | None:
@@ -122,12 +110,16 @@ def start(sid: str) -> dict | None:
     return _out(_create(_today(), _question(c), sid)) if c else None
 
 
-def ask(question: str, stance: str = "", mode: str = "judgment") -> dict:
+def ask(question: str, stance: str = "", mode: str = "judgment", images: list[str] | None = None) -> dict:
     _init()
+    image_ids = images or []
+    chat_images.resolve(image_ids)
     question, stance = question.strip(), stance.strip()
-    if not question or mode not in MODES:
+    if (not question and not image_ids) or mode not in MODES:
         raise ValueError("empty")
-    return _out(_create(_today(), question, "", stance, mode))
+    t = _create(_today(), question or "围绕图片讨论", "", stance, mode)
+    chat_images.attach("think", t["id"], image_ids)
+    return _out(t)
 
 
 def get(tid: int) -> dict | None:
@@ -180,4 +172,4 @@ def context(tid: int) -> str:
                    "WHERE k.id!=? ORDER BY k.id DESC LIMIT 5", [tid])
     if prev:
         parts.append("## 之前几天想出来的判断（可以接着往下想）\n" + "\n".join(f"- {p['date']} 想「{p['question']}」→ {p['text']}" for p in prev))
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) + chat_images.prompt(t["images"])

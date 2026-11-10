@@ -8,7 +8,7 @@ import httpx
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import re
 
@@ -170,9 +170,9 @@ class RecheckIn(BaseModel):
     sid: str
 
 
-@router.get("/think/today")
-def think_today():
-    return kb_idea.today()
+@router.get("/think/latest")
+def think_latest():
+    return kb_idea.latest()
 
 
 @router.post("/think")
@@ -184,17 +184,18 @@ def think_start(body: RecheckIn):
 
 
 class ThinkNewIn(BaseModel):
-    question: str
+    question: str = ""
     stance: str = ""
     mode: Literal["brainstorm", "idea", "judgment"] = "judgment"
+    images: list[str] = Field(default_factory=list, max_length=4)
 
 
 @router.post("/think/new")
 def think_new(body: ThinkNewIn):
     try:
-        return kb_idea.ask(body.question, body.stance, body.mode)
-    except ValueError:
-        raise HTTPException(400, "empty")
+        return kb_idea.ask(body.question, body.stance, body.mode, body.images)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/think/history")
