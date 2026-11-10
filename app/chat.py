@@ -133,6 +133,9 @@ def chat(module: str, body: ChatIn):
             transcript = json.dumps(prior, ensure_ascii=False)
             prompt = f"以下是同一话题此前的讨论记录，仅作背景：\n{transcript}\n\n用户现在接着说：\n{prompt}"
 
+    if think:
+        prompt = "这是「今日一想」的分析讨论，只交换想法，不执行工程任务；不输出工程验收或自主决策汇报。\n用户这轮说：\n" + prompt
+
     def stream():
         global active
         active += 1

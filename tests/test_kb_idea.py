@@ -91,6 +91,7 @@ def test_think_uses_opus_without_engine_fallback(client, monkeypatch):
     t = client.post("/api/kb/think/new", json={"question": "评测值得做吗", "mode": "judgment", "stance": "值得"}).json()
     calls = []
     def stream(prompt, **kw):
+        assert "分析讨论" in prompt and "一起想" in prompt
         calls.append(kw)
         yield {"type": "done", "text": "先看它能否影响一次真实选择。", "engine": "claude"}
     monkeypatch.setattr(chat.agent, "run_stream", stream)
