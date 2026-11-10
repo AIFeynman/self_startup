@@ -3,7 +3,7 @@
 // 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
 // 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source #kb/papers/<主题> · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
 import { imagePicker, imageList } from '../_images.js';
-import { chatBusy } from '../chat.js';
+import { chatBusy, chatSnapshot, closeChat } from '../chat.js';
 import { annotate } from './_annotate.js';
 import { whyNotSection } from './_whynot.js';
 import { papersTab } from './_papermap.js';
@@ -81,7 +81,6 @@ const CSS = `
 .kb-think .q { font-size: 16px; font-weight: 600; }
 .kb-think-history { display: grid; gap: 8px; margin-top: 10px; }
 .kb-think-history .row { flex-wrap: wrap; }
-.kb-think-history button.topic { text-align: left; white-space: normal; flex: 1; min-width: 160px; }
 .kb-ask { display: grid; gap: 8px; margin-top: 4px; }
 .kb-new { display: grid; gap: 8px; padding: 14px 16px; margin-bottom: 14px; }
 .kb-src { display: grid; gap: 6px; }
@@ -733,7 +732,7 @@ function askForm(ctx) {
   return form;
 }
 
-function thinkHistory(ctx) {
+function thinkHistory(ctx, onDeleted) {
   const { h, api } = ctx;
   const list = h('div.kb-think-history');
   const search = h('input', { type: 'search', placeholder: '搜索话题和对话内容', 'aria-label': '搜索历史话题' });
@@ -750,11 +749,7 @@ function thinkHistory(ctx) {
       if (!more) list.replaceChildren();
       list.querySelector('.more')?.remove();
       count.textContent = `共 ${data.total} 个话题`;
-      for (const t of data.items) list.append(h('div.row', {}, [
-        h('span.kb-st', {}, t.mode_name),
-        h('button.ghost.topic', { onclick: () => think(ctx, t) }, t.question),
-        h('span.muted', {}, `${(t.updated_at || t.date).slice(0, 10)} · ${t.judgment ? '已记判断' : t.chatted ? '可续聊' : '待开始'}`),
-      ]));
+      for (const t of data.items) list.append(h('div.card.kb-think', {}, topicBody(ctx, t, onDeleted)));
       offset = nextOffset + data.items.length;
       if (!data.total) list.append(h('span.muted', {}, '没有匹配的话题'));
       if (offset < data.total) list.append(h('button.ghost.more', { onclick: () => load(true) }, '查看更多'));
@@ -765,22 +760,62 @@ function thinkHistory(ctx) {
   const detail = h('details', {}, [h('summary', {}, '历史话题'), h('div.row', { style: { flexWrap: 'wrap', marginTop: '8px' } }, [search, mode,
     h('button.ghost', { onclick: () => load() }, '查找 / 刷新'), count]), list]);
   detail.addEventListener('toggle', () => { if (detail.open) load(); });
+  detail.reload = () => load();
   return detail;
 }
 
+async function deleteThink(ctx, topic, onDeleted, button) {
+  const selected = chatSnapshot();
+  if (selected.module === 'kb' && selected.ref === topic.ref && chatBusy()) return ctx.toast('话题正在回复，请先停止或等待回复结束', true);
+  if (!confirm(`删除「${topic.question}」及它的全部对话？已记入台账的判断会保留。`)) return;
+  button.disabled = true;
+  try {
+    await ctx.api.del('/api/kb/think/' + topic.id);
+    const current = chatSnapshot();
+    if (current.module === 'kb' && current.ref === topic.ref) {
+      await ctx.openChat({ module: 'kb', title: '知识库', fresh: true, expand: false });
+      closeChat();
+    }
+    document.dispatchEvent(new CustomEvent('chat-sessions-changed'));
+    await onDeleted();
+    ctx.toast('话题和对话已删除');
+  } catch (e) { ctx.toast(e.message, true); }
+  finally { button.disabled = false; }
+}
+
+function topicBody(ctx, t, onDeleted) {
+  const { h, ui } = ctx;
+  const remove = h('button.ghost', { title: '删除话题', onclick: () => deleteThink(ctx, t, onDeleted, remove) }, [ui.icon('trash'), '删除话题']);
+  return h('div.kb-topic', { 'data-topic-id': t.id }, [
+    h('div.muted', {}, `${t.mode_name} · ${(t.updated_at || t.date).slice(0, 10)}`),
+    h('div.q', {}, t.question),
+    t.stance ? h('div', {}, [h('span.muted', {}, '最初的想法：'), t.stance]) : null,
+    t.images?.length ? imageList(t.images) : null,
+    t.judgment ? h('div.kb-ag', {}, [h('b', {}, '已记下的判断：'), t.judgment.text]) : null,
+    h('div.row', {}, [h('button.ghost', { onclick: () => think(ctx, t) }, [ui.icon('chat'), t.chatted ? '接着聊' : '开始讨论']), h('span.grow'), remove]),
+  ]);
+}
+
 function thinkCard(ctx, t, today) {
-  const box = ctx.h('div', {}, [thinkBody(ctx, t, today), thinkHistory(ctx)]);
+  const box = ctx.h('div');
+  let history;
+  const refresh = async () => {
+    t = await ctx.api.get('/api/kb/think/latest');
+    box.firstChild.replaceWith(thinkBody(ctx, t, today, refresh));
+    if (history.open) await history.reload();
+  };
+  history = thinkHistory(ctx, refresh);
+  box.append(thinkBody(ctx, t, today, refresh), history);
   const onDone = async (e) => {
     if (!box.isConnected) return document.removeEventListener('agent-done', onDone);
-    if (e.detail.module !== 'kb' || !e.detail.ref.startsWith('think:')) return;
-    t = await ctx.api.get('/api/kb/think/latest');
-    box.firstChild.replaceWith(thinkBody(ctx, t, today));
+    if (e.detail.module !== 'kb' || !e.detail.ref?.startsWith('think:')) return;
+    await refresh();
   };
   document.addEventListener('agent-done', onDone);
   return box;
 }
 
-function thinkBody(ctx, t, today) {
+function thinkBody(ctx, t, today, onDeleted) {
   const { h, ui } = ctx;
   const form = h('div');
   const plus = h('button.icon', { title: '添加新话题', 'aria-label': '添加新话题', 'aria-expanded': 'false', onclick: () => {
@@ -791,14 +826,7 @@ function thinkBody(ctx, t, today) {
   } }, ui.icon('plus'));
   return h('div.card.kb-think', {}, [
     h('div.row', {}, [h('b', {}, '今日一想'), h('span.grow'), plus]),
-    t ? h('div', {}, [
-      h('div.muted', {}, `${t.mode_name} · ${(t.updated_at || t.date).slice(0, 10)}`),
-      h('div.q', {}, t.question),
-      t.stance ? h('div', {}, [h('span.muted', {}, '最初的想法：'), t.stance]) : null,
-      t.images?.length ? imageList(t.images) : null,
-      t.judgment ? h('div.kb-ag', {}, [h('b', {}, '已记下的判断：'), t.judgment.text]) : null,
-      h('button.ghost', { onclick: () => think(ctx, t) }, [ui.icon('chat'), t.chatted ? '接着聊' : '开始讨论']),
-    ]) : h('span.muted', {}, '还没有讨论，点右上角 ＋ 开始一个话题'),
+    t ? topicBody(ctx, t, onDeleted) : h('span.muted', {}, '还没有讨论，点右上角 ＋ 开始一个话题'),
     form,
   ]);
 }

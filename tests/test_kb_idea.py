@@ -130,3 +130,54 @@ def test_old_codex_topic_continues_with_its_arguments(client, monkeypatch):
         yield {"type": "done", "text": "继续检查现有记录的偏差。", "engine": "claude"}
     monkeypatch.setattr(chat.agent, "run_stream", stream)
     client.post("/api/chat/kb", json={"message": "沿这个继续想", "session_id": sid})
+
+
+def test_delete_topic_removes_its_chats_but_keeps_judgment_and_other_topics(client, monkeypatch):
+    from app import chat_images
+    from test_chat_images import PNG
+    _wipe()
+    pic = client.post("/api/chat/images", json={"name": "topic.png", "data": "data:image/png;base64," + PNG}).json()
+    first = client.post("/api/kb/think/new", json={"question": "保留的讨论", "mode": "idea", "images": [pic["id"]]}).json()
+    target = client.post("/api/kb/think/new", json={"question": "要删除的讨论", "mode": "idea", "images": [pic["id"]]}).json()
+    recorded = client.post(f"/api/kb/think/{target['id']}/record", json={"text": "独立保留的判断"}).json()
+    sids = []
+    for i in range(2):
+        sid = db.insert("chat_sessions", {"module": "kb", "ref": target["ref"], "engine": "claude", "title": "x", "created_at": db.now(), "updated_at": db.now()})
+        sids.append(sid)
+        mid = db.insert("chat_messages", {"session_id": sid, "role": "user", "content": "看图片", "created_at": db.now()})
+        chat_images.attach("message", mid, [pic["id"]])
+    assert client.delete(f"/api/kb/think/{target['id']}").status_code == 200
+    assert client.get(f"/api/kb/think/{target['id']}").status_code == 404
+    assert all(client.get(f"/api/chat/session/{sid}").status_code == 404 for sid in sids)
+    assert not db.rows("SELECT * FROM chat_messages WHERE session_id IN (?,?)", sids)
+    assert not chat_images.of("think", target["id"])
+    assert client.get("/api/kb/think/latest").json()["id"] == first["id"]
+    assert db.row("SELECT text FROM kb_judgments WHERE id=?", [int(recorded["sid"].split(":")[1])])["text"] == "独立保留的判断"
+    assert client.get(pic["url"]).status_code == 200
+    assert client.delete(f"/api/kb/think/{target['id']}").status_code == 404
+
+
+def test_delete_topic_refuses_running_reply_and_stale_new_messages(client, monkeypatch):
+    _wipe()
+    t = client.post("/api/kb/think/new", json={"question": "正在讨论的题", "mode": "idea"}).json()
+    def stream(prompt, **kw):
+        assert client.delete(f"/api/kb/think/{t['id']}").status_code == 409
+        yield {"type": "done", "text": "讨论结束。", "engine": "claude"}
+    monkeypatch.setattr(chat.agent, "run_stream", stream)
+    client.post("/api/chat/kb", json={"message": "开始", "ref": t["ref"]})
+    assert client.delete(f"/api/kb/think/{t['id']}").status_code == 200
+    assert client.post("/api/chat/kb", json={"message": "旧页面继续发", "ref": t["ref"]}).status_code == 404
+    assert not db.rows("SELECT * FROM chat_sessions WHERE ref=?", [t["ref"]])
+
+
+def test_failed_chat_preparation_releases_topic_delete_guard(client, monkeypatch):
+    import pytest
+    _wipe()
+    t = client.post("/api/kb/think/new", json={"question": "准备失败的题", "mode": "idea"}).json()
+    def context(module, ref):
+        assert client.delete(f"/api/kb/think/{t['id']}").status_code == 409
+        raise RuntimeError("准备失败")
+    monkeypatch.setattr(chat, "_context", context)
+    with pytest.raises(RuntimeError, match="准备失败"):
+        client.post("/api/chat/kb", json={"message": "开始", "ref": t["ref"]})
+    assert client.delete(f"/api/kb/think/{t['id']}").status_code == 200
