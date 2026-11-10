@@ -15,7 +15,17 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 active = 0  # 正在进行的对话轮数；自动重启会等它归零
 INTERRUPTED = "（说到这里被打断）"
 _procs: dict[int, object] = {}  # 正在回复的会话 → CLI 进程，打断时用
+_inflight: dict[int, int] = {}
 _stopping: set[int] = set()
+
+
+def _release(sid: int):
+    with db._lock:
+        count = _inflight.get(sid, 0) - 1
+        if count > 0:
+            _inflight[sid] = count
+        else:
+            _inflight.pop(sid, None)
 
 
 class ChatIn(BaseModel):
@@ -136,39 +146,53 @@ def chat(module: str, body: ChatIn):
         raise HTTPException(400, str(e))
     if not body.message.strip() and not images:
         raise HTTPException(400, "请填写消息或添加图片")
-    sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [body.session_id]) if body.session_id else None
-    if not sess:
-        sid = db.insert("chat_sessions", {"module": module, "ref": body.ref, "engine": body.engine or "",
-                                          "title": body.message[:40], "created_at": db.now(), "updated_at": db.now()})
-        sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [sid])
-    sid = sess["id"]
-    _stopping.discard(sid)
-    prompt = _with_interruption(sid, body.message)
-    message_id = db.insert("chat_messages", {"session_id": sid, "role": "user", "content": body.message, "created_at": db.now()})
-    chat_images.attach("message", message_id, body.images)
-    mod = modules.get(module)
-    if mod and hasattr(mod, "on_chat"):  # 板块按用户的话更新自己的记录（如深读条目的追问 / 感想推进当天事项）
-        try:
-            mod.on_chat(sess["ref"] or "", body.message)
-        except Exception:  # noqa: BLE001
-            log.exception("on_chat %s", module)
+    with db._lock:
+        sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [body.session_id]) if body.session_id else None
+        ref = (sess["ref"] or body.ref) if sess else body.ref
+        if module == "kb" and ref.startswith("think:"):
+            try:
+                topic = kb_idea.get(int(ref.split(":")[1]))
+            except ValueError:
+                raise HTTPException(400, "invalid topic")
+            if not topic:
+                raise HTTPException(404, "think not found")
+        if not sess:
+            sid = db.insert("chat_sessions", {"module": module, "ref": body.ref, "engine": body.engine or "",
+                                              "title": body.message[:40], "created_at": db.now(), "updated_at": db.now()})
+            sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [sid])
+        sid = sess["id"]
+        _inflight[sid] = _inflight.get(sid, 0) + 1
+    try:
+        _stopping.discard(sid)
+        prompt = _with_interruption(sid, body.message)
+        message_id = db.insert("chat_messages", {"session_id": sid, "role": "user", "content": body.message, "created_at": db.now()})
+        chat_images.attach("message", message_id, body.images)
+        mod = modules.get(module)
+        if mod and hasattr(mod, "on_chat"):  # 板块按用户的话更新自己的记录（如深读条目的追问 / 感想推进当天事项）
+            try:
+                mod.on_chat(sess["ref"] or "", body.message)
+            except Exception:  # noqa: BLE001
+                log.exception("on_chat %s", module)
 
-    # 每轮都带上最新数据快照，让 Agent 看到平台的当前状态
-    ctx, dirs = _context(module, sess["ref"] or body.ref)
-    system = agent.build_system(module, ctx)
-    think = module == "kb" and (sess["ref"] or body.ref).startswith("think:")
-    engine_session = sess["engine_session"] if not think or sess["engine"] in ("", "claude") else ""
-    engine = "claude" if think else (sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"]))
-    if think and sess["engine"] not in ("", "claude"):
-        prior = db.rows("SELECT role,content FROM chat_messages WHERE session_id=? AND id<? AND role IN ('user','assistant') ORDER BY id", [sid, message_id])
-        if prior:
-            transcript = json.dumps(prior, ensure_ascii=False)
-            prompt = f"以下是同一话题此前的讨论记录，仅作背景：\n{transcript}\n\n用户现在接着说：\n{prompt}"
+        # 每轮都带上最新数据快照，让 Agent 看到平台的当前状态
+        ctx, dirs = _context(module, sess["ref"] or body.ref)
+        system = agent.build_system(module, ctx)
+        think = module == "kb" and (sess["ref"] or body.ref).startswith("think:")
+        engine_session = sess["engine_session"] if not think or sess["engine"] in ("", "claude") else ""
+        engine = "claude" if think else (sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"]))
+        if think and sess["engine"] not in ("", "claude"):
+            prior = db.rows("SELECT role,content FROM chat_messages WHERE session_id=? AND id<? AND role IN ('user','assistant') ORDER BY id", [sid, message_id])
+            if prior:
+                transcript = json.dumps(prior, ensure_ascii=False)
+                prompt = f"以下是同一话题此前的讨论记录，仅作背景：\n{transcript}\n\n用户现在接着说：\n{prompt}"
 
-    if think:
-        prompt = "这是「今日一想」的分析讨论，只交换想法，不执行工程任务；不输出工程验收或自主决策汇报。\n用户这轮说：\n" + prompt
+        if think:
+            prompt = "这是「今日一想」的分析讨论，只交换想法，不执行工程任务；不输出工程验收或自主决策汇报。\n用户这轮说：\n" + prompt
 
-    prompt += chat_images.prompt(images)
+        prompt += chat_images.prompt(images)
+    except BaseException:
+        _release(sid)
+        raise
 
     def stream():
         global active
@@ -177,6 +201,7 @@ def chat(module: str, body: ChatIn):
             yield from _stream()
         finally:
             active -= 1
+            _release(sid)
 
     def _stream():
         last_job = (db.row("SELECT max(id) AS m FROM jobs") or {}).get("m") or 0

@@ -1,0 +1,58 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>历史卡片与话题删除验收</title><style>
+:root{--font-sans:-apple-system,"PingFang SC",sans-serif;--radius:8px;--surface-0:#fff;--surface-2:#fff;--text-primary:#14213d;--text-secondary:#4a5568;
+--text-muted:#8a94a6;--border:#d9dee7;--border-strong:#b8c0cc;--bg-accent:#e1f5ee;--text-accent:#0f6e56;--border-accent:#1d9e75;
+--bg-success:#e1f5ee;--text-success:#0f6e56;--bg-warning:#faeeda;--text-warning:#854f0b;--bg-danger:#fcebeb;--text-danger:#a32d2d}
+@media (prefers-color-scheme:dark){:root{--surface-0:#121417;--surface-2:#1b1e23;--text-primary:#e8ebf0;--text-secondary:#aab2bf;--text-muted:#7c8594;
+--border:#2f343c;--border-strong:#454c57;--bg-accent:#085041;--text-accent:#9fe1cb;--border-accent:#5dcaa5;--bg-success:#085041;--text-success:#9fe1cb;
+--bg-warning:#633806;--text-warning:#fac775;--bg-danger:#791f1f;--text-danger:#f7c1c1}}
+body{background:var(--surface-0);max-width:720px;margin:0 auto;padding:24px 16px}
+h1{font:500 20px Georgia,"Songti SC",serif;color:var(--text-primary);margin:0}
+button,input,textarea{font:inherit;color:var(--text-primary);background:transparent;border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:6px 10px}
+</style></head><body><h1>历史卡片与话题删除验收</h1><style>
+.ap{font-family:var(--font-sans);color:var(--text-primary);font-size:14px;line-height:1.6;padding:.5rem 0}
+.ap h3{font-size:13px;font-weight:500;color:var(--text-secondary);margin:1.25rem 0 .5rem}
+.ap .row{border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin:0 0 8px;background:var(--surface-2)}
+.ap .head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}
+.ap .sub{font-size:12px;color:var(--text-secondary);margin-top:2px}
+.ap .tag{font-size:11px;padding:1px 8px;border-radius:var(--radius);white-space:nowrap;margin-right:6px}
+.ap button{font-size:12px;white-space:nowrap;cursor:pointer}
+.ap button[aria-pressed=true]{background:var(--bg-accent);color:var(--text-accent);border-color:var(--border-accent)}
+.ap .opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.ap .opt{text-align:left;white-space:normal;padding:8px 12px;flex:1 1 180px}
+.ap input[type=text],.ap textarea{width:100%;box-sizing:border-box;margin-top:8px;font-size:13px}
+.ap .err{font-size:13px;color:var(--text-danger);margin-top:4px}
+.ap [hidden]{display:none}
+</style><div class="ap" data-title="历史卡片与话题删除验收"><h2 class="sr-only" style="position:absolute;left:-9999px">验收与决策确认</h2><h3>要你定的</h3><div class="row" data-kind="question" data-label="合main"><div><span class="tag" style="background:var(--bg-warning);color:var(--text-warning)">合main</span>是否将 PR #8 合入 main，并更新日常服务？按你的停点清单，需要本次确认。</div><div class="opts"><button type="button" class="opt" data-value="合并 main（推荐）" aria-pressed="true">合并 main（推荐）（推荐）<div class="sub">让日常8780入口使用完整历史卡片和删除功能；合并后再从日常入口验证。</div></button><button type="button" class="opt" data-value="先保留预览" aria-pressed="false">先保留预览<div class="sub">继续在8793查看，本轮不修改日常入口。</div></button></div><input type="text" class="other" placeholder="都不选，写你的想法"></div><h3>完成标准</h3><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>历史话题使用相同的完整卡片，默认折叠<div class="sub">最近/历史复用同一渲染函数，显示类型、时间、话题、原始想法、图片、已记判断、续聊与删除。真实浏览器已验证。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>确认删除话题和全部关联聊天，保留独立知识<div class="sub">取消确认会保留话题；确认后话题和关联会话404，消息和附件关联清除；已记台账判断、上传原图及其他话题保留。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>删除后界面和并发行为正常<div class="sub">保留历史搜索与展开状态，更新最近卡片和侧栏；删除当前话题后关闭聊天面板；准备和生成回复期间返回409；旧页面不能恢复已删除话题。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>验证与审查<div class="sub">51项相关测试通过；JS语法与diff检查通过；codex review无新增缺陷。真实浏览器验证取消/确认删除、记录移除、最近话题回退和390px无横向溢出。仅使用独立预览库验收数据。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><h3>我自己定的，可否决</h3><div class="row" data-kind="decision"><div class="head"><div>硬删除话题、全部聊天记录及附件关联<div class="sub">备选：只归档或隐藏话题 · 理由：用户要求可删除，避免隐藏后仍通过历史链接打开 · 改回代价：被删讨论需从备份恢复；代码改回归档方式成本低</div></div><button type="button" data-flip aria-pressed="false">改用备选</button></div><input type="text" class="why" placeholder="想怎么改" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="decision"><div class="head"><div>保留独立判断与原图上传资产<div class="sub">备选：删除话题时同时清除台账判断和原图文件 · 理由：判断已经独立确认，图片可被其他讨论共用，本次不增加文件回收策略 · 改回代价：低；可另行改变资源删除策略，已删对话仍需备份恢复</div></div><button type="button" data-flip aria-pressed="false">改用备选</button></div><input type="text" class="why" placeholder="想怎么改" hidden><div class="err" hidden>先写一句原因</div></div><textarea class="note" rows="2" placeholder="补充意见，可不填"></textarea><div style="margin-top:10px"><button type="button" class="send">提交</button></div><div class="hint sub" hidden>已生成回复，复制下面这段发回对话</div><textarea class="reply" rows="3" readonly hidden></textarea></div><script>
+(function(){
+var root=document.querySelector('.ap');
+function all(s,e){return Array.prototype.slice.call((e||root).querySelectorAll(s));}
+all('[data-flip]').forEach(function(b){b.addEventListener('click',function(){
+var on=b.getAttribute('aria-pressed')!=='true';b.setAttribute('aria-pressed',on);
+var r=b.closest('.row');r.querySelector('.why').hidden=!on;r.querySelector('.err').hidden=true;});});
+all('.opt').forEach(function(b){b.addEventListener('click',function(){
+all('.opt',b.closest('.row')).forEach(function(o){o.setAttribute('aria-pressed',o===b);});});});
+all('.why').forEach(function(i){i.addEventListener('input',function(){i.closest('.row').querySelector('.err').hidden=true;});});
+function flipped(kind,word){var out=[],bad=false;
+all('.row[data-kind="'+kind+'"]').forEach(function(r,n){
+if(r.querySelector('[data-flip]').getAttribute('aria-pressed')!=='true')return;
+var why=r.querySelector('.why').value.trim();
+r.querySelector('.err').hidden=!!why;if(!why)bad=true;
+out.push('第'+(n+1)+'项'+word+'（'+why+'）');});
+return bad?null:out;}
+root.querySelector('.send').addEventListener('click',function(){
+var parts=[],c=flipped('criteria','不通过'),d=flipped('decision','改用备选');
+if(c===null||d===null)return;
+if(all('.row[data-kind="criteria"]').length)parts.push('验收：'+(c.length?c.join('，')+'，其余通过':'全部通过'));
+if(all('.row[data-kind="decision"]').length)parts.push('决策：'+(d.length?d.join('，')+'，其余保留':'全部保留'));
+all('.row[data-kind="question"]').forEach(function(r){
+var other=r.querySelector('.other').value.trim(),p=r.querySelector('.opt[aria-pressed="true"]');
+parts.push(r.dataset.label+'：'+(other||(p?p.dataset.value:'未选')));});
+var note=root.querySelector('.note').value.trim();if(note)parts.push('补充：'+note);
+var text='【'+root.dataset.title+'】'+parts.join('；');
+if(typeof sendPrompt==='function'){sendPrompt(text);this.textContent='已提交';return;}
+var box=root.querySelector('.reply');box.hidden=false;box.value=text;box.focus();box.select();
+root.querySelector('.hint').hidden=false;
+if(navigator.clipboard)navigator.clipboard.writeText(text).catch(function(){});});
+})();
+</script><section style="max-width:900px;margin:24px auto;padding:0 12px"><h2 style="color:#19365c">交付与真实入口验证</h2><p><a href="http://127.0.0.1:8793/#kb">打开预览</a> · <a href="https://github.com/AIFeynman/self_startup/pull/8">查看 PR #8</a></p><p>入口：知识库 → 判断 → 历史话题。工作树 self_startup-kb-topic-history-delete，分支 codex/kb-topic-history-delete，保留用于预览。main和日常用户数据未改动。</p><ul><li>历史使用完整卡片：通过</li><li>图片、最初想法和判断完整呈现：通过</li><li>取消删除保留话题：通过</li><li>删除后话题与聊天不可再打开：通过</li><li>保留搜索与折叠状态：通过</li><li>清理当前已删除聊天：通过</li><li>最近话题回退到上一条：通过</li><li>判断保留：通过</li><li>共用原图保留：通过</li><li>手机无横向溢出：通过</li></ul><p>本次未改模型调用参数，因此没有新增真实模型生成；卡片与删除通过真实浏览器和后端接口验证，测试中的历史对话是明确标注的验收夹具。原图文件和本机模型自己的会话日志不属于本次删除范围。GitHub若无CI检查，本次依据为本地51项测试、代码审查和真实浏览器记录。</p><p>回滚：对本PR合并提交执行revert可回退功能；已删除讨论不能通过回滚代码恢复，需要备份。</p></section></body></html>

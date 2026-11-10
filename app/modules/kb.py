@@ -213,6 +213,17 @@ def think_get(tid: int):
     return t
 
 
+@router.delete("/think/{tid}")
+def think_delete(tid: int):
+    try:
+        deleted = kb_idea.delete(tid)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    if not deleted:
+        raise HTTPException(404, "think not found")
+    return {"ok": True}
+
+
 class ThinkRecordIn(BaseModel):
     text: str
     type: str = ""

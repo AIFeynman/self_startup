@@ -128,6 +128,28 @@ def get(tid: int) -> dict | None:
     return _out(t) if t else None
 
 
+def delete(tid: int) -> bool:
+    from . import chat
+    _init()
+    chat_images._init()
+    with db._lock:
+        c = db.conn()
+        if not c.execute("SELECT 1 FROM kb_thinks WHERE id=?", [tid]).fetchone():
+            return False
+        ref = f"think:{tid}"
+        sessions = [r[0] for r in c.execute("SELECT id FROM chat_sessions WHERE module='kb' AND ref=?", [ref])]
+        if any(chat._inflight.get(sid, 0) for sid in sessions):
+            raise RuntimeError("话题正在回复，请停止或等待回复结束后再删除")
+        with c:
+            c.execute("DELETE FROM chat_image_links WHERE kind='message' AND owner_id IN (SELECT m.id FROM chat_messages m JOIN chat_sessions s ON s.id=m.session_id WHERE s.module='kb' AND s.ref=?)", [ref])
+            c.execute("DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE module='kb' AND ref=?)", [ref])
+            c.execute("UPDATE jobs SET chat_session_id=NULL WHERE chat_session_id IN (SELECT id FROM chat_sessions WHERE module='kb' AND ref=?)", [ref])
+            c.execute("DELETE FROM chat_sessions WHERE module='kb' AND ref=?", [ref])
+            c.execute("DELETE FROM chat_image_links WHERE kind='think' AND owner_id=?", [tid])
+            c.execute("DELETE FROM kb_thinks WHERE id=?", [tid])
+    return True
+
+
 def record(tid: int, text: str, type_: str = "", confidence: str = "", due: str = "") -> dict | None:
     t = get(tid)
     if not t:

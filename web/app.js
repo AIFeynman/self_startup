@@ -29,6 +29,7 @@ async function boot() {
   );
   window.addEventListener('hashchange', route);
   document.addEventListener('agent-done', loadRecent);
+  document.addEventListener('chat-sessions-changed', loadRecent);
   await route();
   loadRecent();
   watchJobs();
