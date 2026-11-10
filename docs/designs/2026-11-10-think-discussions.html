@@ -1,0 +1,90 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>今日一想改造验收</title><style>
+:root{--font-sans:-apple-system,"PingFang SC",sans-serif;--radius:8px;--surface-0:#fff;--surface-2:#fff;--text-primary:#14213d;--text-secondary:#4a5568;
+--text-muted:#8a94a6;--border:#d9dee7;--border-strong:#b8c0cc;--bg-accent:#e1f5ee;--text-accent:#0f6e56;--border-accent:#1d9e75;
+--bg-success:#e1f5ee;--text-success:#0f6e56;--bg-warning:#faeeda;--text-warning:#854f0b;--bg-danger:#fcebeb;--text-danger:#a32d2d}
+@media (prefers-color-scheme:dark){:root{--surface-0:#121417;--surface-2:#1b1e23;--text-primary:#e8ebf0;--text-secondary:#aab2bf;--text-muted:#7c8594;
+--border:#2f343c;--border-strong:#454c57;--bg-accent:#085041;--text-accent:#9fe1cb;--border-accent:#5dcaa5;--bg-success:#085041;--text-success:#9fe1cb;
+--bg-warning:#633806;--text-warning:#fac775;--bg-danger:#791f1f;--text-danger:#f7c1c1}}
+body{background:var(--surface-0);max-width:720px;margin:0 auto;padding:24px 16px}
+h1{font:500 20px Georgia,"Songti SC",serif;color:var(--text-primary);margin:0}
+button,input,textarea{font:inherit;color:var(--text-primary);background:transparent;border:0.5px solid var(--border-strong);border-radius:var(--radius);padding:6px 10px}
+</style></head><body><h1>今日一想改造验收</h1><style>
+.ap{font-family:var(--font-sans);color:var(--text-primary);font-size:14px;line-height:1.6;padding:.5rem 0}
+.ap h3{font-size:13px;font-weight:500;color:var(--text-secondary);margin:1.25rem 0 .5rem}
+.ap .row{border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin:0 0 8px;background:var(--surface-2)}
+.ap .head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}
+.ap .sub{font-size:12px;color:var(--text-secondary);margin-top:2px}
+.ap .tag{font-size:11px;padding:1px 8px;border-radius:var(--radius);white-space:nowrap;margin-right:6px}
+.ap button{font-size:12px;white-space:nowrap;cursor:pointer}
+.ap button[aria-pressed=true]{background:var(--bg-accent);color:var(--text-accent);border-color:var(--border-accent)}
+.ap .opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.ap .opt{text-align:left;white-space:normal;padding:8px 12px;flex:1 1 180px}
+.ap input[type=text],.ap textarea{width:100%;box-sizing:border-box;margin-top:8px;font-size:13px}
+.ap .err{font-size:13px;color:var(--text-danger);margin-top:4px}
+.ap [hidden]{display:none}
+</style><div class="ap" data-title="今日一想改造验收"><h2 class="sr-only" style="position:absolute;left:-9999px">验收与决策确认</h2><h3>要你定的</h3><div class="row" data-kind="question" data-label="合main"><div><span class="tag" style="background:var(--bg-warning);color:var(--text-warning)">合main</span>是否将 PR #6 合入 main？这是你规定的“合 main”停点，需要本次确认。</div><div class="opts"><button type="button" class="opt" data-value="合并 main（推荐）" aria-pressed="true">合并 main（推荐）（推荐）<div class="sub">将已验收功能接入日常使用的源码；合并后再确认本地实际入口。此次不包含dev发布。</div></button><button type="button" class="opt" data-value="保留预览，暂不合并" aria-pressed="false">保留预览，暂不合并<div class="sub">继续在8793端口试聊，main保留现状。</div></button></div><input type="text" class="other" placeholder="都不选，写你的想法"></div><h3>完成标准</h3><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>三类深入讨论：一起脑爆、讨论思路、讨论判断<div class="sub">取消固定五层；主动判断与交锋，按需检索和计算。三类均从真实浏览器调用本机模型并留下回复。篇幅仍取决于模型，首轮样例约数百字；要求100字的续聊已简练回复，具体风格可直接在预览试聊验收。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>固定本机登录的 Opus 5.5<div class="sub">三类模型回执均为 claude-opus-5-5，provider=firstParty；禁用引擎自动回退。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>新话题自动保存，历史可查可续聊<div class="sub">支持分类、话题与对话全文检索、分页；刷新后恢复原文；过期历史不重复发开场；真实续聊沿原推荐回答；手机390px无横向溢出。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="criteria"><div class="head"><div><span class="tag" style="background:var(--bg-success);color:var(--text-success)">已完成</span>验证与代码审查<div class="sub">46项相关测试通过；JS语法、git diff检查通过；两轮codex review，确认的问题已修。PR #6没有配置CI检查，本地真实验收和测试为本次证据。</div></div><button type="button" data-flip aria-pressed="false">不通过</button></div><input type="text" class="why" placeholder="哪里不对" hidden><div class="err" hidden>先写一句原因</div></div><h3>我自己定的，可否决</h3><div class="row" data-kind="decision"><div class="head"><div>复用已有话题与会话存储，新增讨论类型和历史入口<div class="sub">备选：另建讨论系统 · 理由：已有流式回复、持久化与续聊能力，改动集中 · 改回代价：低；界面与查询可替换，已保存讨论继续保留</div></div><button type="button" data-flip aria-pressed="false">改用备选</button></div><input type="text" class="why" placeholder="想怎么改" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="decision"><div class="head"><div>仅今日一想固定使用本机Opus 5.5，失败直接报错<div class="sub">备选：整个知识库切Opus，或失败时换模型 · 理由：符合指定模型要求，不改变其他知识库问答 · 改回代价：低；调整think对话的路由</div></div><button type="button" data-flip aria-pressed="false">改用备选</button></div><input type="text" class="why" placeholder="想怎么改" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="decision"><div class="head"><div>聊天自动保存，判断入台账仍先确认<div class="sub">备选：自动将AI结论记作用户判断 · 理由：保留完整讨论，同时准确区分用户立场与AI建议 · 改回代价：低；调整入账规则</div></div><button type="button" data-flip aria-pressed="false">改用备选</button></div><input type="text" class="why" placeholder="想怎么改" hidden><div class="err" hidden>先写一句原因</div></div><div class="row" data-kind="decision"><div class="head"><div>每轮明确标识为分析讨论，保留本机权限和检查<div class="sub">备选：继续套用工程交付汇报形式 · 理由：真实样例发现工程收尾规则会干扰自然追问 · 改回代价：低；调整讨论提示</div></div><button type="button" data-flip aria-pressed="false">改用备选</button></div><input type="text" class="why" placeholder="想怎么改" hidden><div class="err" hidden>先写一句原因</div></div><textarea class="note" rows="2" placeholder="补充意见，可不填"></textarea><div style="margin-top:10px"><button type="button" class="send">提交</button></div><div class="hint sub" hidden>已生成回复，复制下面这段发回对话</div><textarea class="reply" rows="3" readonly hidden></textarea></div><script>
+(function(){
+var root=document.querySelector('.ap');
+function all(s,e){return Array.prototype.slice.call((e||root).querySelectorAll(s));}
+all('[data-flip]').forEach(function(b){b.addEventListener('click',function(){
+var on=b.getAttribute('aria-pressed')!=='true';b.setAttribute('aria-pressed',on);
+var r=b.closest('.row');r.querySelector('.why').hidden=!on;r.querySelector('.err').hidden=true;});});
+all('.opt').forEach(function(b){b.addEventListener('click',function(){
+all('.opt',b.closest('.row')).forEach(function(o){o.setAttribute('aria-pressed',o===b);});});});
+all('.why').forEach(function(i){i.addEventListener('input',function(){i.closest('.row').querySelector('.err').hidden=true;});});
+function flipped(kind,word){var out=[],bad=false;
+all('.row[data-kind="'+kind+'"]').forEach(function(r,n){
+if(r.querySelector('[data-flip]').getAttribute('aria-pressed')!=='true')return;
+var why=r.querySelector('.why').value.trim();
+r.querySelector('.err').hidden=!!why;if(!why)bad=true;
+out.push('第'+(n+1)+'项'+word+'（'+why+'）');});
+return bad?null:out;}
+root.querySelector('.send').addEventListener('click',function(){
+var parts=[],c=flipped('criteria','不通过'),d=flipped('decision','改用备选');
+if(c===null||d===null)return;
+if(all('.row[data-kind="criteria"]').length)parts.push('验收：'+(c.length?c.join('，')+'，其余通过':'全部通过'));
+if(all('.row[data-kind="decision"]').length)parts.push('决策：'+(d.length?d.join('，')+'，其余保留':'全部保留'));
+all('.row[data-kind="question"]').forEach(function(r){
+var other=r.querySelector('.other').value.trim(),p=r.querySelector('.opt[aria-pressed="true"]');
+parts.push(r.dataset.label+'：'+(other||(p?p.dataset.value:'未选')));});
+var note=root.querySelector('.note').value.trim();if(note)parts.push('补充：'+note);
+var text='【'+root.dataset.title+'】'+parts.join('；');
+if(typeof sendPrompt==='function'){sendPrompt(text);this.textContent='已提交';return;}
+var box=root.querySelector('.reply');box.hidden=false;box.value=text;box.focus();box.select();
+root.querySelector('.hint').hidden=false;
+if(navigator.clipboard)navigator.clipboard.writeText(text).catch(function(){});});
+})();
+</script><section style="max-width:900px;margin:24px auto;padding:0 12px"><h2 style="color:#19365c">真实样例与交付</h2><p>2026-11-10 · 独立工作树与数据库验证。<a href="http://127.0.0.1:8793/#kb">打开本地预览</a> · <a href="https://github.com/AIFeynman/self_startup/pull/6">查看 PR #6</a></p><p>入口：知识库 → 判断 → 今日一想。工作树保留用于预览：self_startup-kb-think-discussions；分支 codex/kb-think-discussions。尚未合并或部署。回退方式：合并后对本PR的合并提交执行 revert；保留已保存的数据，不删表或讨论。</p><details style="margin:14px 0"><summary>一起脑爆：每天只有10分钟，如何把论文里的机制迁移到自己的项目？一起脑爆两个不同办法，推荐一个并指出代价。</summary><pre style="white-space:pre-wrap;font:inherit;line-height:1.8;padding:12px;background:#eef5f4">知识库里还没有论文深读或项目相关的记录，下面是我直接给的两个办法。我的判断是：10 分钟不够读完一篇论文，所以不要在这 10 分钟里读论文，要把它花在做判断上。
+
+A. 先从自己项目的卡点出发，再找机制（问题驱动） 手里维护一份项目卡点清单。每天只看一篇论文的方法图或算法框，写一张卡：&quot;论文用 X 解决 Y，我项目里的 Y 是 Z，改动最小的做法是……&quot;。周末从攒下的卡里挑一张去做。 它的作用是过滤：带着问题去看，大部分论文 1 分钟就能判断跳过。
+
+B. 每天写一个最小实验，交给 Agent 跑 10 分钟只写一份小实验说明，包括改哪里、跟什么对照、看什么指标。交给 Claude Code / Codex 在非专注时间跑。第二天再用 10 分钟看结果，决定留还是扔。 它的作用是把执行交给 Agent，你自己只出假设、做裁决。
+
+我推荐 B。 A 的卡片容易越攒越多却从不验证，但一个机制能不能迁移，只有跑过才知道。
+
+B 最关键的代价：项目得有能快速跑出对比的指标。没有的话，Agent 跑出来的结果没法判断，10 分钟就变成在看噪声。而且时间一长，你会不自觉地去挑容易测的机制，而不是重要的机制。
+
+想问你一句：你的项目现在有没有 5 分钟内就能跑出 A/B 对比的评测？</pre></details><details style="margin:14px 0"><summary>讨论思路：我想用每天一次闭卷复述，判断昨天的论文是否真正学会。请推演这个思路最脆弱的前提，并设计最小实验。</summary><pre style="white-space:pre-wrap;font:inherit;line-height:1.8;padding:12px;background:#eef5f4">我的判断：最脆弱的前提是“能复述 = 能迁移”。 隔一天的闭卷复述，测的主要是你还记不记得论文的叙事线：问题、方法、结果。迁移靠的是另一种知识：这个方法为什么有效，换了条件它会在哪里失效。前一种可以很流畅，后一种却完全没有。另外，复述由你自己评分，这会放大“我觉得自己懂了”的错觉。
+
+最小实验（4 周，8 篇论文）：
+
+读完当天，让 AI 针对每篇论文出 1 道迁移题并封存。题目是改一个关键条件，比如换数据分布或去掉某个假设，问你方法还成不成立、为什么。
+次日先闭卷复述，再做迁移题。两项都按 0–2 分打，最好由 AI 盲评。
+重点看“复述高分、迁移低分”的论文有几篇。8 篇里有 3 篇以上，就说明复述不能代替迁移检验。
+
+更强的改法： 把一半复述换成“预测题”：给一个变体场景，先判断方法会不会失效，再说理由。这个成本几乎不变，测的却是机制。
+
+问你一句：你说的“学会”，最终用在哪里？是自己做实验时用上，还是能评判别人的工作？两者对应的迁移题出法不一样。</pre></details><details style="margin:14px 0"><summary>讨论判断：我判断每组只有20条样本时，命中率70%对50%已经足够证明方案更好。请实际运行一个小计算或模拟检验我，给出条件和最强反例。</summary><pre style="white-space:pre-wrap;font:inherit;line-height:1.8;padding:12px;background:#eef5f4">结论：不够。 每组 20 条时，14/20 对 10/20 还不能证明方案更好。
+
+实测结果（scipy 计算加模拟，脚本只写在临时目录）：
+
+Fisher 精确检验：双侧 p=0.33，单侧 p=0.17。
+差值的 95% 置信区间：约 [−10%, +50%]，区间包含 0，也就包含&quot;新方案更差&quot;。
+最强反例：两方案真实命中率都是 60%，每组 20 条。20 万次模拟里，约 13% 会出现&quot;新方案多中 4 条以上&quot;，相当于约每 8 次实验就有 1 次假装赢 20 个点。
+反过来：就算真实是 70% 对 50%，n=20 的检出率也只有约 16%，另有约 13% 的概率旧方案看起来持平或更好。
+每组 50 条，检出率约 46%；每组约 93 条才到 75%，100 条约 79%。
+
+成立条件：只有在有其他独立证据时，这个小样本才算得上佐证。比如预先注册过方向、多轮重复都同向，或者这 20 条是同一批样本在两个方案上配对比较（要改用 McNemar 检验）。
+
+问你一个问题：这 20 条是两组各自独立的样本，还是同一批题目分别跑了两个方案？如果是后者，结论可能会变。</pre></details><h3 style="color:#008078">真实续聊</h3><p>没有现成评测，也不想先搭评测平台。这会怎样改变你刚才的推荐？</p><blockquote>推荐还是 B。没有评测，就把&quot;看指标&quot;换成&quot;看样例&quot;：挑 3 个项目里真实的难例固定下来，Agent 每次把改动前后的输出并排给你看，你用 10 分钟凭眼睛判断。代价是主观、样本小，只能发现明显的提升。</blockquote><p style="color:#798497">这些是本次实际模型回复，不作为外部事实来源。判断类已核对实际Bash计算调用。模型来源依据CLI回执；讨论与计算的可重复性仍取决于问题与假设。CLI参数参考 <a href="https://code.claude.com/docs/en/cli-reference">Claude Code 官方文档</a>。</p></section></body></html>
