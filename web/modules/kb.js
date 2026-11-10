@@ -767,7 +767,7 @@ function thinkHistory(ctx, onDeleted) {
 async function deleteThink(ctx, topic, onDeleted, button) {
   const selected = chatSnapshot();
   if (selected.module === 'kb' && selected.ref === topic.ref && chatBusy()) return ctx.toast('话题正在回复，请先停止或等待回复结束', true);
-  if (!confirm(`删除「${topic.question}」及它的全部对话？已记入台账的判断会保留。`)) return;
+  if (!confirm(`删除「${topic.question}」及它的全部对话？已记入台账的判断和上传原图会保留。`)) return;
   button.disabled = true;
   try {
     await ctx.api.del('/api/kb/think/' + topic.id);
