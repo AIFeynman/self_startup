@@ -195,7 +195,7 @@ def test_people_api(client, monkeypatch):
     _wipe()
     P.upsert([P._item("arxiv:1", "paper", ["neel", "hinton"], "Paper", "https://arxiv.org/abs/1", "2026-11-10")])
     r = client.get("/api/feed/people?days=1").json()
-    assert [g["person"]["id"] for g in r["groups"]] == ["hinton", "neel"]
+    assert [it["id"] for it in r["pinned"]] == ["arxiv:1"] and r["groups"] == []
     assert {c["id"] for c in r["channels"]} == set(P.CHANNELS)
     r = client.get("/api/feed/people?person=neel").json()
     assert r["person"]["id"] == "neel" and [i["id"] for i in r["items"]] == ["arxiv:1"]
@@ -272,3 +272,20 @@ def test_run_adds_gists_drops_low_tweets_and_backfills(monkeypatch):
     assert ids["blog:old"]["gist"].startswith("中文：") and ids["twitter:old"].get("low") == 1
     shown = [it["id"] for g in P.view(days=30)["groups"] for it in g["items"]]
     assert "twitter:old" not in shown and "twitter:a" in shown
+
+
+def test_view_pins_core_long_form_and_video():
+    _wipe()
+    P.upsert([P._item("blog:1", "blog", ["marcus"], "Essay", "u", "2026-11-10"),
+              P._item("youtube:long", "youtube", ["dario"], "Dario interview", "u", "2026-11-10", seconds=3600),
+              P._item("youtube:short", "youtube", ["dario"], "Dario clip", "u", "2026-11-10", seconds=300),
+              P._item("podcast:1", "podcast", ["yanjunjie"], "访谈", "u", "2026-11-09"),
+              P._item("twitter:art", "x", ["karpathy"], "@karpathy：long read", "u", "2026-11-10", x_article="own"),
+              P._item("twitter:plain", "x", ["karpathy"], "@karpathy：a thought", "u", "2026-11-10"),
+              P._item("news:1", "news", ["hinton"], "Hinton warns", "u", "2026-11-10")])
+    r = P.view(days=1)
+    pinned = [it["id"] for it in r["pinned"]]
+    assert set(pinned) == {"blog:1", "youtube:long", "podcast:1", "twitter:art"}
+    assert pinned.index("youtube:long") < pinned.index("blog:1")
+    grouped = {it["id"] for g in r["groups"] for it in g["items"]}
+    assert grouped == {"youtube:short", "twitter:plain", "news:1"}

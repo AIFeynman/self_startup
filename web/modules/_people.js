@@ -19,6 +19,9 @@ const CSS = `
 .pp-it .g { font-size: 13.5px; line-height: 1.55; margin-top: 2px; }
 .pp-it .s { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pp-ch { font-size: 11.5px; border-radius: 6px; padding: 1px 7px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.pp-pin { border-color: var(--accent); }
+.pp-pin > b { display: block; margin-bottom: 4px; }
+.pp-pin > b small { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
 .pp-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .pp-people button { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 12px; color: var(--text); }
 .pp-people button:hover { border-color: var(--accent); }
@@ -117,8 +120,10 @@ export function peopleTab(box, ctx, sub = '') {
         h('b', {}, who(p)), h('small', {}, `Tier${p.tier} · ${p.group} · ${p.total} 条`)]))));
     } else {
       const n = r.groups.reduce((s, g) => s + g.items.length, 0);
-      box.replaceChildren(bar(r), r.groups.length ? h('div.muted', { style: { fontSize: '12.5px', margin: '0 0 8px' } },
-        `${days === 1 ? '最近 24 小时' : '最近 7 天'}新发现 ${r.groups.length} 人 · ${n} 条 · Tier1 在前`) : ui.empty('这段时间还没发现新发声', '点「立即搜一轮」，或等自动搜索（X 每 3 小时，其他渠道 6–12 小时）'),
+      const pin = r.pinned.length ? h('div.card.pp-grp.pp-pin', {}, [h('b', {}, ['置顶 · 核心长文与视频', h('small', {}, `近 7 天 ${r.pinned.length} 条 · 博客长文、X 长文、论文、本人出镜的访谈 / 演讲 / 播客`)]),
+        ...r.pinned.map((it) => row(it, true, idx))]) : null;
+      box.replaceChildren(bar(r), pin || '', r.groups.length ? h('div.muted', { style: { fontSize: '12.5px', margin: '0 0 8px' } },
+        `${days === 1 ? '最近 24 小时' : '最近 7 天'}其他新发现 ${r.groups.length} 人 · ${n} 条 · Tier1 在前`) : pin ? '' : ui.empty('这段时间还没发现新发声', '点「立即搜一轮」，或等自动搜索（X 每 3 小时，其他渠道 6–12 小时）'),
       ...r.groups.map((g) => {
         const items = g.items.slice(0, 6);
         return h('div.card.pp-grp', {}, [

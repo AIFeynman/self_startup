@@ -720,6 +720,30 @@ def _row(r: dict) -> dict:
     return {**r, "people": json.loads(r["people"]), "extra": json.loads(r["extra"] or "{}")}
 
 
+PIN_DAYS, PIN_MAX, PIN_MIN_VIDEO = 7, 12, 600
+
+
+def is_core(it: dict) -> bool:
+    """核心长文和视频：本人博客、X 长文、论文、本人出镜的播客和视频（已知时长的要 ≥10 分钟）。"""
+    ch, extra = it["channel"], it["extra"]
+    if ch in ("blog", "paper", "podcast"):
+        return True
+    if ch in ("youtube", "bili"):
+        return not extra.get("seconds") or extra["seconds"] >= PIN_MIN_VIDEO
+    return ch == "x" and extra.get("x_article") == "own"
+
+
+def pinned(idx: dict) -> list[dict]:
+    since = (datetime.now() - timedelta(days=PIN_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+    rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL "
+                                    "AND channel IN ('blog', 'paper', 'podcast', 'youtube', 'bili', 'x')", [since])]
+    core = [r for r in rs if is_core(r)]
+    tier = lambda r: min((idx.get(p, {}).get("tier", 3) for p in r["people"]), default=3)
+    core.sort(key=lambda r: r["date"] or r["first_seen"] or "", reverse=True)
+    core.sort(key=tier)
+    return core[:PIN_MAX]
+
+
 def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
     """days 天内新发现的发声，按人归组；person 给定时返回这个人的全部时间线。"""
     _init()
@@ -731,8 +755,12 @@ def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
     rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                                     [since, limit])]
+    pins = pinned(idx)
+    pin_ids = {r["id"] for r in pins}
     groups: dict[str, list] = {}
     for r in rs:
+        if r["id"] in pin_ids:
+            continue
         for pid in r["people"]:
             groups.setdefault(pid, []).append(r)
     counts = {r["pid"]: r["n"] for r in db.rows(
@@ -741,5 +769,5 @@ def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
         long_form = sum(1 for r in groups[pid] if r["channel"] != "x")
         return (idx.get(pid, {}).get("tier", 3), -long_form, -len(groups[pid]))
     order = sorted(groups, key=rank)
-    return {"groups": [{"person": idx.get(pid) or {"id": pid, "name": pid}, "items": groups[pid]} for pid in order],
+    return {"pinned": pins, "groups": [{"person": idx.get(pid) or {"id": pid, "name": pid}, "items": groups[pid]} for pid in order],
             "people": [{**p, "total": counts.get(p["id"], 0)} for p in people()], **status()}
