@@ -627,6 +627,7 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
             items, errs = FETCHERS[ch](pool)
         except Exception as e:  # noqa: BLE001
             items, errs = [], [f"{type(e).__name__}: {str(e)[:160]}"]
+        items = [it for it in items if not is_translation(it)]
         if ch in JUDGED and items:
             marks = ",".join("?" * len(items))
             ids = [it["id"] for it in items]
@@ -720,6 +721,18 @@ def _row(r: dict) -> dict:
     return {**r, "people": json.loads(r["people"]), "extra": json.loads(r["extra"] or "{}")}
 
 
+TRANSLATED = {"podcast", "youtube", "bili"}
+
+
+def is_translation(it: dict) -> bool:
+    """中文标题的播客 / 视频，关联人物里却没有中文母语者：基本是翻译、搬运版（新闻不算，中文媒体报道本人表态照收）。"""
+    from ._feed_gist import is_chinese
+    if it["channel"] not in TRANSLATED or not is_chinese(it["title"]):
+        return False
+    idx = by_id()
+    return not any(idx.get(p, {}).get("native_zh") for p in it["people"])
+
+
 PIN_DAYS, PIN_MAX, PIN_MIN_VIDEO = 7, 12, 600
 
 
@@ -737,7 +750,7 @@ def pinned(idx: dict) -> list[dict]:
     since = (datetime.now() - timedelta(days=PIN_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
     rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL "
                                     "AND channel IN ('blog', 'paper', 'podcast', 'youtube', 'bili', 'x')", [since])]
-    core = [r for r in rs if is_core(r)]
+    core = [r for r in rs if is_core(r) and not is_translation(r)]
     tier = lambda r: min((idx.get(p, {}).get("tier", 3) for p in r["people"]), default=3)
     core.sort(key=lambda r: r["date"] or r["first_seen"] or "", reverse=True)
     core.sort(key=tier)
@@ -751,7 +764,7 @@ def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
     if person:
         rs = db.rows("SELECT * FROM people_items WHERE people LIKE ? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                      [f'%"{person}"%', limit])
-        return {"person": idx.get(person), "items": [_row(r) for r in rs], **status()}
+        return {"person": idx.get(person), "items": [it for it in map(_row, rs) if not is_translation(it)], **status()}
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
     rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                                     [since, limit])]
@@ -759,7 +772,7 @@ def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
     pin_ids = {r["id"] for r in pins}
     groups: dict[str, list] = {}
     for r in rs:
-        if r["id"] in pin_ids:
+        if r["id"] in pin_ids or is_translation(r):
             continue
         for pid in r["people"]:
             groups.setdefault(pid, []).append(r)

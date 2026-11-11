@@ -21,7 +21,8 @@
    "Alphabet CEO",
    "Google CEO",
    "谷歌CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "koray",
@@ -44,7 +45,8 @@
   "titles": [
    "DeepMind chief",
    "DeepMind负责人"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "demis",
@@ -64,7 +66,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "logan",
@@ -84,7 +87,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "woodward",
@@ -104,7 +108,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "dario",
@@ -125,7 +130,8 @@
   "titles": [
    "Anthropic CEO",
    "Anthropic首席执行官"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "krieger",
@@ -143,7 +149,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "vora",
@@ -161,7 +168,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "patil",
@@ -179,7 +187,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "cherny",
@@ -197,7 +206,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "daniela",
@@ -215,7 +225,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "jumper",
@@ -237,7 +248,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "sholto",
@@ -255,7 +267,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "clark",
@@ -273,7 +286,8 @@
   "strict": true,
   "papers": false,
   "rss": "https://jack-clark.net/feed/",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "altman",
@@ -295,7 +309,8 @@
   "titles": [
    "OpenAI CEO",
    "OpenAI首席执行官"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "brockman",
@@ -317,7 +332,8 @@
   "titles": [
    "OpenAI President",
    "OpenAI总裁"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "pachocki",
@@ -336,7 +352,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "markchen",
@@ -355,7 +372,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "shazeer",
@@ -378,7 +396,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "tibo",
@@ -397,7 +416,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "turley",
@@ -416,7 +436,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "catwu",
@@ -437,7 +458,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "wang",
@@ -459,7 +481,8 @@
   "titles": [
    "Meta Chief AI Officer",
    "Meta首席AI官"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "friedman",
@@ -478,7 +501,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "zhao",
@@ -497,7 +521,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "zuck",
@@ -518,7 +543,8 @@
   "rss": "",
   "titles": [
    "Meta CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "musk",
@@ -539,7 +565,8 @@
   "rss": "",
   "titles": [
    "xAI CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "nicolls",
@@ -558,7 +585,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "xiaohong",
@@ -578,7 +606,8 @@
   "titles": [
    "Manus CEO",
    "Manus创始人"
-  ]
+  ],
+  "native_zh": true
  },
  {
   "id": "peak",
@@ -595,7 +624,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "feifei",
@@ -614,7 +644,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "dean",
@@ -635,7 +666,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "karpathy",
@@ -652,7 +684,8 @@
   "strict": false,
   "papers": true,
   "rss": "https://karpathy.bearblog.dev/feed/",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "hinton",
@@ -667,7 +700,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "bengio",
@@ -684,7 +718,8 @@
   "strict": false,
   "papers": true,
   "rss": "https://yoshuabengio.org/en/feed",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "lecun",
@@ -705,7 +740,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "ilya",
@@ -723,7 +759,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "ng",
@@ -738,7 +775,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "sutton",
@@ -761,7 +799,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "vinyals",
@@ -782,7 +821,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "nbrown",
@@ -801,7 +841,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "silver",
@@ -821,7 +862,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "schulman",
@@ -838,7 +880,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "weil",
@@ -857,7 +900,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "peebles",
@@ -876,7 +920,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "lightcap",
@@ -895,7 +940,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "simo",
@@ -914,7 +960,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "achiam",
@@ -933,7 +980,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "quocle",
@@ -954,7 +1002,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "ghemawat",
@@ -975,7 +1024,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "dennyzhou",
@@ -998,7 +1048,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "jimmyba",
@@ -1017,7 +1068,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "tonywu",
@@ -1036,7 +1088,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "chaplot",
@@ -1056,7 +1109,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "junyang",
@@ -1077,7 +1131,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "coxon",
@@ -1095,7 +1150,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "murati",
@@ -1114,7 +1170,8 @@
   "rss": "",
   "titles": [
    "Thinking Machines CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "aravind",
@@ -1133,7 +1190,8 @@
   "rss": "",
   "titles": [
    "Perplexity CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "truell",
@@ -1154,7 +1212,8 @@
   "titles": [
    "Anysphere CEO",
    "Cursor CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "scottwu",
@@ -1175,7 +1234,8 @@
   "rss": "",
   "titles": [
    "Cognition CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "mensch",
@@ -1194,7 +1254,8 @@
   "rss": "",
   "titles": [
    "Mistral CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "clem",
@@ -1213,7 +1274,8 @@
   "rss": "",
   "titles": [
    "Hugging Face CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "amasad",
@@ -1232,7 +1294,8 @@
   "rss": "",
   "titles": [
    "Replit CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "btaylor",
@@ -1252,7 +1315,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "adcock",
@@ -1269,7 +1333,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "cvalenzuela",
@@ -1286,7 +1351,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "lilian",
@@ -1303,7 +1369,8 @@
   "strict": false,
   "papers": true,
   "rss": "https://lilianweng.github.io/index.xml",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "lebrun",
@@ -1321,7 +1388,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "azalia",
@@ -1338,7 +1406,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "goldie",
@@ -1355,7 +1424,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "edwinchen",
@@ -1372,7 +1442,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "sifre",
@@ -1390,7 +1461,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "hausman",
@@ -1407,7 +1479,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "jagdeep",
@@ -1424,7 +1497,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "yangzhilin",
@@ -1447,7 +1521,8 @@
    "Kimi创始人",
    "Moonshot AI CEO",
    "月之暗面创始人"
-  ]
+  ],
+  "native_zh": true
  },
  {
   "id": "liangwenfeng",
@@ -1468,7 +1543,8 @@
   "titles": [
    "DeepSeek founder",
    "DeepSeek创始人"
-  ]
+  ],
+  "native_zh": true
  },
  {
   "id": "zhangpeng",
@@ -1489,7 +1565,8 @@
   "rss": "",
   "titles": [
    "智谱CEO"
-  ]
+  ],
+  "native_zh": true
  },
  {
   "id": "tangjie",
@@ -1510,7 +1587,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "yanjunjie",
@@ -1530,7 +1608,8 @@
   "titles": [
    "MiniMax CEO",
    "MiniMax创始人"
-  ]
+  ],
+  "native_zh": true
  },
  {
   "id": "jiangdaxin",
@@ -1548,7 +1627,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "yinqi",
@@ -1566,7 +1646,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "wuyonghui",
@@ -1586,7 +1667,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "zhouchang",
@@ -1606,7 +1688,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "liangrubo",
@@ -1626,7 +1709,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "shunyu",
@@ -1645,7 +1729,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "eddiewu",
@@ -1669,7 +1754,8 @@
   "titles": [
    "Alibaba CEO",
    "阿里巴巴CEO"
-  ]
+  ],
+  "native_zh": true
  },
  {
   "id": "zhoujingren",
@@ -1690,7 +1776,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "dengtaihua",
@@ -1708,7 +1795,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": true
  },
  {
   "id": "percy",
@@ -1726,7 +1814,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "manning",
@@ -1744,7 +1833,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "srush",
@@ -1759,7 +1849,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "tridao",
@@ -1777,7 +1868,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "lambert",
@@ -1795,7 +1887,8 @@
   "strict": true,
   "papers": true,
   "rss": "https://www.interconnects.ai/feed",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "raschka",
@@ -1810,7 +1903,8 @@
   "strict": false,
   "papers": true,
   "rss": "https://magazine.sebastianraschka.com/feed",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "jimfan",
@@ -1828,7 +1922,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "jasonwei",
@@ -1849,7 +1944,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "levine",
@@ -1866,7 +1962,8 @@
   "strict": true,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "neel",
@@ -1886,7 +1983,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "chollet",
@@ -1904,7 +2002,8 @@
   "strict": false,
   "papers": true,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "mollick",
@@ -1919,7 +2018,8 @@
   "strict": false,
   "papers": false,
   "rss": "https://www.oneusefulthing.org/feed",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "marcus",
@@ -1934,7 +2034,8 @@
   "strict": false,
   "papers": true,
   "rss": "https://garymarcus.substack.com/feed",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "simonw",
@@ -1949,7 +2050,8 @@
   "strict": false,
   "papers": false,
   "rss": "https://simonwillison.net/atom/entries/",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "nadella",
@@ -1969,7 +2071,8 @@
   "titles": [
    "Microsoft CEO",
    "微软CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "suleyman",
@@ -1988,7 +2091,8 @@
   "rss": "",
   "titles": [
    "Microsoft AI CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "jensen",
@@ -2010,7 +2114,8 @@
    "NVIDIA CEO",
    "Nvidia CEO",
    "英伟达CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "ghodsi",
@@ -2029,7 +2134,8 @@
   "rss": "",
   "titles": [
    "Databricks CEO"
-  ]
+  ],
+  "native_zh": false
  },
  {
   "id": "tobi",
@@ -2046,7 +2152,8 @@
   "strict": true,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "pmarca",
@@ -2064,7 +2171,8 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "eladgil",
@@ -2079,7 +2187,8 @@
   "strict": false,
   "papers": false,
   "rss": "https://blog.eladgil.com/feed",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  },
  {
   "id": "sarahguo",
@@ -2097,6 +2206,7 @@
   "strict": false,
   "papers": false,
   "rss": "",
-  "titles": []
+  "titles": [],
+  "native_zh": false
  }
 ]

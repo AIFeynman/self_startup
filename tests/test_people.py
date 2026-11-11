@@ -289,3 +289,26 @@ def test_view_pins_core_long_form_and_video():
     assert pinned.index("youtube:long") < pinned.index("blog:1")
     grouped = {it["id"] for g in r["groups"] for it in g["items"]}
     assert grouped == {"youtube:short", "twitter:plain", "news:1"}
+
+
+def test_chinese_titled_media_about_english_speakers_is_translation():
+    dean_fei = P._item("podcast:t", "podcast", ["dean", "feifei"], "直面我们的 AI 未来：Jeff Dean与李飞飞在斯坦福的对谈", "u", "")
+    yan = P._item("podcast:y", "podcast", ["yanjunjie"], "MiniMax CEO闫俊杰：低推理成本就是我们的护城河", "u", "")
+    en = P._item("podcast:e", "podcast", ["dean"], "Jeff Dean on Discovery Loop", "u", "")
+    news = P._item("news:t", "news", ["dean"], "李飞飞对话Jeff Dean：AI 能加速科学", "u", "")
+    assert P.is_translation(dean_fei) and not P.is_translation(yan) and not P.is_translation(en) and not P.is_translation(news)
+
+
+def test_translations_are_dropped_and_hidden(monkeypatch):
+    _wipe()
+    monkeypatch.setattr(P.notify, "notify", lambda *a, **k: 1)
+    P.upsert([P._item("podcast:old", "podcast", ["dean"], "Jeff Dean 谈人工智能的未来与科学发现", "u", "2026-11-10")])
+    monkeypatch.setattr(P, "FETCHERS", {"podcast": lambda pool: ([P._item("podcast:new", "podcast", ["feifei"], "李飞飞最新访谈：空间智能的下一步", "u", "2026-11-10"),
+                                                                 P._item("podcast:ok", "podcast", ["feifei"], "Fei-Fei Li on spatial intelligence", "u", "2026-11-10")], [])})
+    judge = lambda prompt, system, model: {"text": json.dumps({"items": [{"id": r["id"], "voice": True, "gist": "一句话", "keep": True}
+                                                                          for r in json.loads(prompt)]}, ensure_ascii=False)}
+    P.run(["podcast"], judge=(judge, "m"))
+    ids = {r["id"] for r in db.rows("SELECT id FROM people_items")}
+    assert "podcast:new" not in ids and "podcast:ok" in ids
+    shown = {it["id"] for it in P.view(days=30)["pinned"]} | {it["id"] for g in P.view(days=30)["groups"] for it in g["items"]}
+    assert "podcast:old" not in shown and "podcast:ok" in shown
