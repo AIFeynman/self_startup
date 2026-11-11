@@ -135,6 +135,15 @@ def _chunks(xs: list, n: int) -> list[list]:
 
 
 # ---------- X：名单账号拼成 from:a OR from:b 的高级搜索，每块一次请求 ----------
+X_MIN_WEIGHT = 20     # 去掉链接和 @ 后的正文长度（汉字算 2）低于这个、又没带链接的推文不收：nice、great、一个词的回复
+
+
+def x_substantive(text: str, links: list[str]) -> bool:
+    if links:
+        return True
+    body = re.sub(r"https?://\S+|@\w+", " ", text or "")
+    body = re.sub(r"\s+", " ", body).strip()
+    return sum(2 if is_zh(ch) else 1 for ch in body) >= X_MIN_WEIGHT
 def fetch_x(pool: list[dict]) -> tuple[list[dict], list[str]]:
     provs = src._x_providers()
     if not provs:
@@ -159,6 +168,8 @@ def fetch_x(pool: list[dict]) -> tuple[list[dict], list[str]]:
                     it = src.x_item(t, "people")
                     pid = handle.get(((t.get("author") or {}).get("userName") or "").lower())
                     if not it or not pid or (it["date"] or "") < since:
+                        continue
+                    if not it["extra"].get("x_article") and not x_substantive(t.get("text") or "", it["extra"].get("links") or []):
                         continue
                     out.append(_item(it["id"], "x", [pid], it["title"], it["url"], it["date"], it["summary"],
                                      it["popularity"], author=it["extra"].get("author"), links=it["extra"].get("links", []),
@@ -452,38 +463,103 @@ VOICE_SYSTEM = (
 _judge_lock = threading.Lock()
 
 
-def voice_filter(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait: float = 5) -> tuple[list[dict], list[str], list[str]]:
-    """返回 (本人发声的条目, 判为不是的 id, 错误)。同一时刻只跑一个判断（本机 Claude 并发时容易返回异常）；一批失败等一会儿重试一次，
-    仍失败的这批这轮不收（还在回看窗口里，下一轮会重新抓、重新判断），错误另报。"""
+def _ask(rows: list[dict], system: str, run, model: str, retry_wait: float) -> tuple[dict[str, dict], str]:
+    """把一批条目交给本机小模型，返回 ({id: 输出}, 错误)。同一时刻只跑一个（本机 Claude 并发时容易返回异常），失败等一会儿重试一次。"""
+    last = ""
+    for attempt in range(2):
+        try:
+            with _judge_lock:
+                text = run(json.dumps(rows, ensure_ascii=False), system=system, model=model)["text"]
+            m = re.search(r"\{.*\}", text or "", re.S)
+            got = {str(x.get("id")): x for x in (json.loads(m.group(0)).get("items") or []) if isinstance(x, dict)} if m else {}
+            if got:
+                return got, ""
+            last = f"没有解析出结果：{(text or '')[:80]!r}"
+        except Exception as e:  # noqa: BLE001
+            last = f"{type(e).__name__}: {str(e)[:100]}"
+        if attempt == 0 and retry_wait:
+            time.sleep(retry_wait)
+    return {}, last
+
+
+def _rows_for_model(items: list[dict]) -> list[dict]:
     idx = by_id()
+    return [{"id": it["id"], "channel": it["channel"],
+             "people": [idx[p]["name"] + (f"（{idx[p]['zh']}）" if idx[p].get("zh") else "") + f"，{idx[p]['role']}" for p in it["people"] if p in idx],
+             "title": it["title"], "summary": it["summary"][:300],
+             "source": it["extra"].get("uploader") or it["extra"].get("outlet") or it["extra"].get("show") or it["extra"].get("site") or ""}
+            for it in items]
+
+
+def voice_filter(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait: float = 5) -> tuple[list[dict], list[str], list[str]]:
+    """返回 (本人发声的条目, 判为不是的 id, 错误)。一批仍失败的这轮不收（还在回看窗口里，下一轮会重新抓、重新判断）。"""
     keep, rejected, errs = [], [], []
     for i in range(0, len(items), VOICE_BATCH):
         batch = items[i:i + VOICE_BATCH]
-        rows = [{"id": it["id"], "channel": it["channel"], "people": [idx[p]["name"] + (f"（{idx[p]['zh']}）" if idx[p].get("zh") else "") + f"，{idx[p]['role']}"
-                                                                for p in it["people"] if p in idx],
-                 "title": it["title"], "summary": it["summary"][:300],
-                 "source": it["extra"].get("uploader") or it["extra"].get("outlet") or it["extra"].get("show") or it["extra"].get("site") or ""}
-                for it in batch]
-        got, last = {}, ""
-        for attempt in range(2):
-            try:
-                with _judge_lock:
-                    text = run(json.dumps(rows, ensure_ascii=False), system=VOICE_SYSTEM, model=model)["text"]
-                m = re.search(r"\{.*\}", text or "", re.S)
-                got = {str(x.get("id")): bool(x.get("voice")) for x in (json.loads(m.group(0)).get("items") or []) if isinstance(x, dict)} if m else {}
-                if got:
-                    break
-                last = f"没有解析出结果：{(text or '')[:80]!r}"
-            except Exception as e:  # noqa: BLE001
-                last = f"{type(e).__name__}: {str(e)[:100]}"
-            if attempt == 0 and retry_wait:
-                time.sleep(retry_wait)
-        if got:
-            keep += [it for it in batch if got.get(it["id"])]
-            rejected += [it["id"] for it in batch if got.get(it["id"]) is False]
-        else:
-            errs.append(f"本人发声判断第 {i // VOICE_BATCH + 1} 批（{len(batch)} 条，下轮重判）：{last}")
+        got, err = _ask(_rows_for_model(batch), VOICE_SYSTEM, run, model, retry_wait)
+        if not got:
+            errs.append(f"本人发声判断第 {i // VOICE_BATCH + 1} 批（{len(batch)} 条，下轮重判）：{err}")
+            continue
+        keep += [it for it in batch if (got.get(it["id"]) or {}).get("voice")]
+        rejected += [it["id"] for it in batch if it["id"] in got and got[it["id"]].get("voice") is False]
     return keep, rejected, errs
+
+
+GIST_SYSTEM = (
+    "你是 AI 资讯编辑，帮读者扫一眼就知道 AI 名人这条发声讲了什么。每条输入是一条推文 / 博客 / 新闻 / 视频 / 播客 / 论文，带关联人物。\n"
+    "gist：一句中文介绍，不超过 40 个汉字。先说是谁、在哪、做了什么（发帖 / 撰文 / 访谈 / 演讲 / 论文），再点出最关键的一个观点或信息；"
+    "只根据给出的标题、简介、来源写，不补充、不猜测没给出的事实和数字；专有名词保留原文；不要「这条」「该推文」开头，不评价好坏。\n"
+    "keep：有没有信息量。纯寒暄、点赞、附和、表情、一两个词、没有上下文看不懂的回复、只有一个链接判 false；其余 true。\n"
+    '只输出 JSON：{"items": [{"id": "<原样返回>", "gist": "<一句话>", "keep": true 或 false}]}，每条输入都要有输出。'
+)
+
+
+def annotate(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait: float = 5) -> tuple[dict[str, str], set[str], list[str]]:
+    """返回 ({id: 中文一句话}, 没信息量的 id, 错误)。失败的批次这轮不写，之后补写。"""
+    gists, low, errs = {}, set(), []
+    for i in range(0, len(items), VOICE_BATCH):
+        batch = items[i:i + VOICE_BATCH]
+        got, err = _ask(_rows_for_model(batch), GIST_SYSTEM, run, model, retry_wait)
+        if not got:
+            errs.append(f"中文一句话第 {i // VOICE_BATCH + 1} 批（{len(batch)} 条，之后补写）：{err}")
+            continue
+        for it in batch:
+            x = got.get(it["id"]) or {}
+            if str(x.get("gist") or "").strip():
+                gists[it["id"]] = gist_fit(str(x["gist"]))
+            if x.get("keep") is False:
+                low.add(it["id"])
+    return gists, low, errs
+
+
+def gist_fit(text: str) -> str:
+    from ._feed_gist import fit
+    return fit(text)
+
+
+BACKFILL_MAX = 90
+
+
+def backfill(run, model: str) -> list[str]:
+    """给还没有中文一句话的条目补写；没信息量的推文标记隐藏（不删）。"""
+    rows = db.rows("SELECT * FROM people_items WHERE json_extract(extra, '$.gist') IS NULL AND json_extract(extra, '$.low') IS NULL "
+                   "AND json_extract(extra, '$.gist_tried') IS NULL "
+                   "ORDER BY first_seen DESC LIMIT ?", [BACKFILL_MAX])
+    if not rows:
+        return []
+    items = [_row(r) for r in rows]
+    gists, low, errs = annotate(items, run, model)
+    for it in items:
+        extra = dict(it["extra"])
+        if it["id"] in gists:
+            extra["gist"] = gists[it["id"]]
+        elif not errs:
+            extra["gist_tried"] = 1
+        if it["channel"] == "x" and it["id"] in low:
+            extra["low"] = 1
+        if extra != it["extra"]:
+            db.execute("UPDATE people_items SET extra=? WHERE id=?", [json.dumps(extra, ensure_ascii=False), it["id"]])
+    return errs
 
 
 def _haiku_runner():
@@ -564,6 +640,18 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
                 db.execute("INSERT OR REPLACE INTO people_rejected(id, at) VALUES(?, ?)", [iid, now])
             items = [it for it in items if it["id"] in seen] + kept
             errs = errs + verrs
+        if items:
+            stored = {r["id"] for r in db.rows(f"SELECT id FROM people_items WHERE id IN ({','.join('?' * len(items))})",
+                                               [it["id"] for it in items])}
+            fresh = [it for it in items if it["id"] not in stored]
+            runner, model = judge or _haiku_runner()
+            gists, low, gerrs = annotate(fresh, runner, model)
+            for it in fresh:
+                if it["id"] in gists:
+                    it["extra"]["gist"] = gists[it["id"]]
+            if ch == "x":
+                items = [it for it in items if it["id"] not in low]
+            errs = errs + gerrs
         new = upsert(items)
         db.execute("INSERT INTO people_runs(channel, at, count, new, errors) VALUES(?,?,?,?,?) "
                    "ON CONFLICT(channel) DO UPDATE SET at=excluded.at, count=excluded.count, new=excluded.new, errors=excluded.errors",
@@ -573,6 +661,9 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
     with ThreadPoolExecutor(max(1, len(chans))) as ex:
         results = dict(ex.map(one, chans))
     db.execute("DELETE FROM people_rejected WHERE at < ?", [(datetime.now() - timedelta(days=14)).isoformat(timespec="seconds")])
+    runner, model = judge or _haiku_runner()
+    for e in backfill(runner, model):
+        log.warning("people backfill: %s", e)
     summarize_and_notify()
     return results
 
@@ -634,11 +725,11 @@ def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
     _init()
     idx = by_id()
     if person:
-        rs = db.rows("SELECT * FROM people_items WHERE people LIKE ? ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
+        rs = db.rows("SELECT * FROM people_items WHERE people LIKE ? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                      [f'%"{person}"%', limit])
         return {"person": idx.get(person), "items": [_row(r) for r in rs], **status()}
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
+    rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                                     [since, limit])]
     groups: dict[str, list] = {}
     for r in rs:

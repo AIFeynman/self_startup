@@ -176,8 +176,10 @@ def test_run_merges_people_judges_new_only_and_notifies_once(monkeypatch):
 
     def judge(prompt, system, model):
         rows = json.loads(prompt)
-        judged.extend(r["id"] for r in rows)
-        return {"text": json.dumps({"items": [{"id": r["id"], "voice": r["id"] == "youtube:v1"} for r in rows]})}
+        if system == P.VOICE_SYSTEM:
+            judged.extend(r["id"] for r in rows)
+        return {"text": json.dumps({"items": [{"id": r["id"], "voice": r["id"] == "youtube:v1", "gist": "一句话", "keep": True} for r in rows]},
+                                   ensure_ascii=False)}
     r = P.run(["youtube", "x"], judge=(judge, "m"))
     assert r["youtube"] == {"count": 1, "new": 1, "errors": []} and r["x"]["errors"] == ["X boom"]
     assert len(sent) == 1 and "名人新发声 1 条" in sent[0][0][1]
@@ -226,3 +228,47 @@ def test_local_haiku_runs_outside_any_repo(monkeypatch):
     repo = Path(__file__).resolve().parents[1]
     assert seen.get("cwd") and not Path(seen["cwd"]).resolve().is_relative_to(repo)
     assert not (Path(seen["cwd"]) / ".git").exists()
+
+
+def test_x_substance_rule_drops_bare_reactions():
+    assert not P.x_substantive("nice", [])
+    assert not P.x_substantive("Gemini", [])
+    assert not P.x_substantive("looks that way @someone https://t.co/abc", [])
+    assert not P.x_substantive("好的", [])
+    assert P.x_substantive("short but has a link", ["https://example.com/post"])
+    assert P.x_substantive("Day 0 launch of Gemini 4 Carbon on @databricks! You can just get the tokens", [])
+    assert P.x_substantive("开源模型的护城河在产品层而不是模型层", [])
+
+
+def test_annotate_writes_chinese_gist_and_flags_low_content():
+    items = [P._item("twitter:1", "x", ["karpathy"], "@karpathy：nice job", "u", ""),
+             P._item("blog:1", "blog", ["marcus"], "Just say no to Anthropic's IPO", "u", "")]
+    reply = {"items": [{"id": "twitter:1", "gist": "Karpathy 点赞", "keep": False},
+                       {"id": "blog:1", "gist": "Marcus 撰文反对 Anthropic 上市", "keep": True}]}
+    gists, low, errs = P.annotate(items, lambda *a, **k: {"text": json.dumps(reply, ensure_ascii=False)})
+    assert gists == {"twitter:1": "Karpathy 点赞", "blog:1": "Marcus 撰文反对 Anthropic 上市"} and low == {"twitter:1"} and not errs
+
+    def boom(*a, **k):
+        raise RuntimeError("offline")
+    gists, low, errs = P.annotate(items, boom, retry_wait=0)
+    assert gists == {} and low == set() and errs
+
+
+def test_run_adds_gists_drops_low_tweets_and_backfills(monkeypatch):
+    _wipe()
+    monkeypatch.setattr(P.notify, "notify", lambda *a, **k: 1)
+    P.upsert([P._item("blog:old", "blog", ["marcus"], "Old essay without gist", "u", "2026-11-09"),
+              P._item("twitter:old", "x", ["marcus"], "@GaryMarcus：lol, indeed so", "u", "2026-11-09")])
+    monkeypatch.setattr(P, "FETCHERS", {"x": lambda pool: ([P._item("twitter:a", "x", ["karpathy"], "@karpathy：thoughts on agents and memory", "u", "2026-11-10"),
+                                                           P._item("twitter:b", "x", ["karpathy"], "@karpathy：this is so great honestly", "u", "2026-11-10")], [])})
+
+    def judge(prompt, system, model):
+        rows = json.loads(prompt)
+        return {"text": json.dumps({"items": [{"id": r["id"], "gist": "中文：" + r["title"][:10], "keep": r["id"] in ("twitter:a", "blog:old")} for r in rows]},
+                                   ensure_ascii=False)}
+    P.run(["x"], judge=(judge, "m"))
+    ids = {r["id"]: json.loads(r["extra"]) for r in db.rows("SELECT id, extra FROM people_items")}
+    assert "twitter:b" not in ids and ids["twitter:a"]["gist"].startswith("中文：")
+    assert ids["blog:old"]["gist"].startswith("中文：") and ids["twitter:old"].get("low") == 1
+    shown = [it["id"] for g in P.view(days=30)["groups"] for it in g["items"]]
+    assert "twitter:old" not in shown and "twitter:a" in shown

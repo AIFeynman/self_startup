@@ -16,6 +16,7 @@ const CSS = `
 .pp-it .t a { color: var(--text); font-size: 14px; }
 .pp-it .t a:hover { color: var(--accent); }
 .pp-it .m { color: var(--muted); font-size: 12px; }
+.pp-it .g { font-size: 13.5px; line-height: 1.55; margin-top: 2px; }
 .pp-it .s { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pp-ch { font-size: 11.5px; border-radius: 6px; padding: 1px 7px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
 .pp-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
@@ -63,7 +64,7 @@ export function peopleTab(box, ctx, sub = '') {
       h('span.pp-ch', {}, CH[it.channel] || it.channel),
       h('div.t', {}, [h('a', { href: safeUrl(it.url), target: '_blank', rel: 'noopener' }, it.title),
         h('div.m', {}, [meta(it), showPeople ? ' · ' + it.people.map((p) => idx[p] ? who(idx[p]) : p).join('、') : '']),
-        it.summary && it.channel !== 'x' ? h('div.s', {}, it.summary) : null]),
+        it.extra.gist ? h('div.g', {}, it.extra.gist) : it.summary && it.channel !== 'x' ? h('div.s', {}, it.summary) : null]),
       b,
     ]);
   };
