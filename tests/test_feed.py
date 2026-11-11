@@ -1127,16 +1127,3 @@ def test_parse_arxiv_search():
             '<entry><id>http://arxiv.org/abs/2501.00001v1</id><title>Old</title><summary>s</summary><published>2025-01-01T00:00:00Z</published></entry></feed>')
     got = src.parse_arxiv_search(atom, "agentic", days=10, now=datetime(2026, 11, 10, tzinfo=timezone.utc))
     assert [g["id"] for g in got] == ["arxiv:2611.01234"] and got[0]["type"] == "paper" and got[0]["title"] == "Agentic Video"
-
-
-def test_picks_has_paper_and_repo_groups(client, monkeypatch):
-    from app.modules import feed
-    fake = [_it(f"hn:{i}", f"Claude agent news {i}", pop=500 - i) for i in range(8)]
-    fake += [{**_it(f"arxiv:{i}", f"Agent paper {i}", pop=5), "source": "arxiv", "type": "paper"} for i in range(3)]
-    fake += [{**_it(f"github:{i}", f"agent repo {i}", pop=5), "source": "github", "type": "repo"} for i in range(3)]
-    monkeypatch.setattr(feed, "_collectors", lambda stats=None: {"hn": lambda: fake})
-    client.post("/api/feed/refresh", json={"sources": ["hn"], "wait": True})
-    r = client.get("/api/feed/picks").json()
-    assert {x["type"] for x in r["papers"]} <= {"paper"} and {x["type"] for x in r["repos"]} <= {"repo"}
-    top = {x["id"] for x in r["top"]}
-    assert not top & {x["id"] for x in r["papers"] + r["repos"]}

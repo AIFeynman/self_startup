@@ -309,7 +309,6 @@ export default {
     const readingBox = h('div');
     const topBox = h('div');
     const earlierBox = h('div');
-    const groupBox = h('div');
     const tabs = h('div.tabs');
     const listBox = h('div.fd-list');
     const hnBar = h('div.fd-hnbar');
@@ -331,7 +330,7 @@ export default {
     const freshNote = h('span.fd-fresh');
     let fresh = null;   // { since, added, label }
     el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick, readingBox, waitBox,
-      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, groupBox, earlierBox,
+      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, earlierBox,
       h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
@@ -847,7 +846,7 @@ export default {
           entry.el.remove(); entries.splice(idx, 1);
           if (sel >= entries.length) sel = entries.length - 1;
           if (entries[sel]) entries[sel].el.classList.add('fd-sel');
-          if (['wait', 'reading', 'earlier', 'group'].includes(entry.kind)) loadTop();
+          if (['wait', 'reading', 'earlier'].includes(entry.kind)) loadTop();
           toast('已隐藏，可在「已收藏」或 Agent 里恢复');
           return;
         }
@@ -968,18 +967,16 @@ export default {
       for (const e of picked) e.el.remove();
       const row = (kind) => (x, i) => ({ x, kind, i });
       const waits = r.waiting.map(row('wait')), readings = r.reading.map(row('reading')), tops = r.top.map(row('top')), earlier = r.earlier.map(row('earlier'));
-      const papers = r.papers.map(row('group')), repos = r.repos.map(row('group'));
-      entries = [...readings, ...waits, ...tops, ...papers, ...repos, ...earlier, ...entries.filter((e) => e.kind === 'list')];
+      entries = [...readings, ...waits, ...tops, ...earlier, ...entries.filter((e) => e.kind === 'list')];
       if (cur && cur.kind !== 'list') sel = entries.findIndex((e) => e.kind === cur.kind && e.x.id === cur.x.id);
       else if (cur) sel = entries.indexOf(cur);
       readingBox.replaceChildren(...(readings.length ? [ui.section(`在读 ${readings.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.fd-list', {}, readings.map(mount))] : []));
       waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '读了一部分进「在读」，读完的在列表筛选「深读过」里'), h('div.fd-list', {}, waits.map(mount))] : []));
       topBox.replaceChildren(tops.length ? h('div.fd-top', {}, tops.map(mount)) : ui.empty('还没有内容', '点右上角「刷新」抓取信息源'));
-      groupBox.replaceChildren(...[['论文', papers], ['开源项目', repos]].flatMap(([name, g]) => (g.length ? [ui.section(`${name}精选 ${g.length}`, '综合排序挤不进前 5 的，单独各留几条 · 不含已读'), h('div.fd-list', {}, g.map(mount))] : [])));
       earlierBox.replaceChildren(...(earlier.length ? [h('details.fd-earlier', {
         open: st.earlierOpen, ontoggle: (e) => { st.earlierOpen = e.target.open; },
       }, [h('summary', {}, [`之前的精选 ${earlier.length}`, h('span', {}, `被换下但还没处理 · 打开、深读、踩或隐藏后移除 · 7 天没处理退回列表`)]), h('div.fd-list', {}, earlier.map(mount))])] : []));
-      if (st.q) for (const e of [...waits, ...tops, ...papers, ...repos, ...earlier]) e.el.classList.toggle('fd-hidden', !matches(e.el));
+      if (st.q) for (const e of [...waits, ...tops, ...earlier]) e.el.classList.toggle('fd-hidden', !matches(e.el));
     }
     // 「全部」、综合排序、不限时间且无筛选时，列表从第 6 条开始，避免与精选重复
     const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' && st.read === 'unread' && !fresh?.added ? TOP_N : 0);
