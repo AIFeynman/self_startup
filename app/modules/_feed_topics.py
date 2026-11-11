@@ -16,18 +16,22 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 # 来源键 → 用哪种语言的词；键名同条目的 source（X 的条目 source 是 twitter）
-LANG = {"hn": "en", "github": "en", "reddit": "en", "youtube": "en", "x": "en", "zhihu": "zh"}
-SOURCE_LABEL = {"hn": "HN", "github": "GitHub", "reddit": "Reddit", "youtube": "YouTube", "x": "X", "zhihu": "知乎"}
+LANG = {"hn": "en", "github": "en", "reddit": "en", "youtube": "en", "x": "en", "zhihu": "zh", "arxiv": "en"}
+SOURCE_LABEL = {"hn": "HN", "github": "GitHub", "reddit": "Reddit", "youtube": "YouTube", "x": "X", "zhihu": "知乎", "arxiv": "arXiv"}
 # 每个来源最多用几个词：YouTube 搜索 100 配额 / 次、知乎走 DeepSeek 搜索按次计、X 是付费接口默认不派生
-CAPS = {"hn": 12, "github": 8, "reddit": 6, "youtube": 6, "zhihu": 6, "x": 0}
+CAPS = {"hn": 12, "github": 8, "reddit": 6, "youtube": 6, "zhihu": 6, "x": 0, "arxiv": 8}
 DEFAULT_TOPICS = [
-    {"name": "Coding Agent", "en": ["claude code", "coding agent"], "zh": ["Claude Code"], "github": ["claude code"]},
-    {"name": "AI Agent", "en": ["AI agent"], "zh": ["Agent"], "youtube": ["AI agents"], "github": ["ai agent"]},
+    {"name": "Coding Agent", "en": ["claude code", "coding agent"], "zh": ["Claude Code"], "github": ["claude code"],
+     "arxiv": ["coding agent", "software engineering agent"]},
+    {"name": "AI Agent", "en": ["AI agent"], "zh": ["Agent"], "youtube": ["AI agents"], "github": ["ai agent"],
+     "arxiv": ["LLM agent", "multi-agent", "agentic"]},
     {"name": "MCP", "en": ["mcp server"], "github": ["mcp"]},
     {"name": "LLM", "en": ["LLM"], "youtube": ["LLM explained"], "github": ["llm"]},
     {"name": "AI 工程 / Infra", "en": ["AI engineering"], "zh": ["AI Infra", "推理部署"]},
     {"name": "推理与后训练", "zh": ["推理模型", "后训练"]},
     {"name": "模型厂商动态", "hn": ["Claude", "OpenAI", "GPT"]},
+    {"name": "程序化视频", "en": ["programmatic video", "remotion"], "zh": ["程序化视频", "Remotion"],
+     "github": ["remotion", "programmatic video"], "arxiv": ["programmatic video", "video generation agent"]},
 ]
 STATS_DAYS = 30
 CJK_RE = re.compile(r"[一-鿿]")

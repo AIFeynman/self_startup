@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .. import agent, db, settings
 from . import _feed_follow as follow
+from . import _feed_cluster as cluster
 from . import _feed_gist as gist
 from . import _feed_hn as hnd
 from . import _feed_product as pa
@@ -139,18 +140,20 @@ CFG_DEFAULTS = {
     "gist_enabled": True,         # 完整刷新后给排序前列生成中文一句话（DeepSeek，.env 的 DEEPSEEK_API_KEY）
     "gist_top": 60,               # 「全部」前多少条
     "gist_per_type": 10,          # 每个分类前多少条
+    "gist_max": 150,              # 每次最多生成几条（排序前列优先，其余往后补）
     "gist_model": "deepseek-v4-flash",
+    "local_model": "claude-haiku-5-5",   # 本机 Claude Code 的小模型：中文一句话、X 事件聚合这类低强度活
     "hn_digest_enabled": True,    # 刷新 HN 后读评论区提炼（链接 / 技术产品 / 观点 / 经验），进「HN 精读」
     "hn_digest_top": 30,          # 每次最多提炼几帖（按分数从高到低，已提炼且评论没明显变多的跳过）
     "hn_digest_min_comments": 30, # 评论少于这个数的帖子不提炼
     "product_analysis_top": 20,   # 「产品」分类前多少条生成产品分析（收入 / 商业模式 / 定位 / 价值 / 痛点）
     "trustmrr_days": 30,          # TrustMRR：只要最近几天挂牌出售的产品
     "judge_enabled": True,        # 每次刷新后用 Jev 判：Trending 项目是否 AI、官方内容是否重要（.env 的 TYPESAFE_API_KEY / JEV_API_KEY）
-    "sources": ["hn", "hf", "alphaxiv", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt",
+    "sources": ["hn", "hf", "alphaxiv", "arxiv_search", "github", "rss", "sites", "podcast", "xiaoyuzhou", "reddit", "x", "producthunt",
                 "yc", "trustmrr", "analysis", "video", "zhihu"],
 }
 # 分类 → 采集器：分类页上的「刷新」只跑这些来源
-TYPE_SOURCES = {"paper": ["hf", "alphaxiv"], "blog": ["rss", "sites", "zhihu"], "podcast": ["podcast", "xiaoyuzhou"],
+TYPE_SOURCES = {"paper": ["hf", "alphaxiv", "arxiv_search"], "blog": ["rss", "sites", "zhihu"], "podcast": ["podcast", "xiaoyuzhou"],
                 "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["reddit", "x", "zhihu"],
                 "x_article": ["x"], "video": ["video"], "hn": ["hn"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
@@ -375,7 +378,7 @@ def _scored(include_hidden: bool, stale_ok: bool) -> list[dict]:
 
 
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
-           sort: str = "score", read: str = "", stale_ok: bool = False) -> list[dict]:
+           sort: str = "score", read: str = "", stale_ok: bool = False, events: bool = True) -> list[dict]:
     """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合（默认）/ day 按天（新的天在前，天内按综合） / new 最新 / hot 最热（同源热度百分位）；
     read: unread 只要没读过的 / read 只要读过的（打开过原文、详情、深读结果或手动标过）/ deep 深读完看过的，收藏夹不按这个筛。
     产品雷达已有的内容不重复展示；收藏、搜索、已读里仍能找到。
@@ -408,6 +411,8 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = [x for x in out if x["deep"] and x["deep"]["finished"]]
     elif read and not saved:
         out = [x for x in out if x["read"] == (read == "read")]
+    if events and not saved:
+        out = cluster.collapse(out)
     if sort in ("new", "hot", "day"):
         return rk.sort_items(out, sort, now)
     if not (type_ or saved or q or days):
@@ -447,7 +452,7 @@ def queries(source: str, stats: dict | None = None, auto: bool = True) -> list[s
 
 
 # 采集器 → 它会用到搜索词的来源；跑完记查询日志。YouTube / 知乎没 key 时不搜，不记
-QUERY_SOURCES = {"hn": "hn", "github": "github", "reddit": "reddit", "video": "youtube", "zhihu": "zhihu", "x": "x"}
+QUERY_SOURCES = {"hn": "hn", "arxiv_search": "arxiv", "github": "github", "reddit": "reddit", "video": "youtube", "zhihu": "zhihu", "x": "x"}
 QUERY_KEYS = {"youtube": "YOUTUBE_API_KEY", "zhihu": "DEEPSEEK_API_KEY"}
 
 
@@ -479,6 +484,7 @@ def _collectors(stats: dict | None = None) -> dict:
         "hn": lambda: src.fetch_hn(q("hn"), known_ids=_enriched_hn()),
         "hf": lambda: src.fetch_hf_papers(),
         "alphaxiv": lambda: src.fetch_alphaxiv(),
+        "arxiv_search": lambda: src.fetch_arxiv_search(q("arxiv")),
         "github": lambda: src.fetch_github_all(q("github"), min_stars=int(cfg("github_min_stars")),
                                                trending_languages=list(cfg("github_trending_languages")),
                                                watch_orgs=src_list("github_watch_orgs"),
@@ -568,6 +574,7 @@ def refresh_sync(only: list[str] | None = None, gists: bool | None = None) -> di
         results["judge"] = run_judge()
     if (not only if gists is None else gists) and cfg("gist_enabled"):       # 只刷部分来源时不跑，避免每次小刷新都调模型
         results["gist"] = run_gists()
+        results["events"] = run_events()
         results["product_analysis"] = run_product_analysis()
     return results
 
@@ -648,12 +655,19 @@ def _patch_extra(item_id: str, patch: dict) -> None:
     db.execute("UPDATE feed_items SET extra=? WHERE id=?", [json.dumps(ex, ensure_ascii=False), item_id])
 
 
+def _haiku(prompt: str, system: str = "", model: str = "") -> dict:
+    r = agent.run_once(prompt, engine="claude", system=system, model=model, readonly=True, fallback=False)
+    if not (r.get("text") or "").strip():
+        raise RuntimeError((r.get("log") or "本机 Claude 没有返回内容")[-200:])
+    return r
+
+
 def run_gists() -> dict:
-    """给排序前列里缺中文一句话（或标题 / 简介变了）的条目生成，写回 extra.gist。"""
+    """给缺中文一句话（或标题 / 简介变了）的条目生成，写回 extra.gist：先排序前列，再往后补到 gist_max 条。"""
     try:
         # 每个标签页的前列都要有：分类之外还有「X 长文」页
-        tabs = {t: ranked(type_=t) for t in [*TYPES, "x_article", "hn"]}
-        todo = gist.pick(ranked(), tabs, int(cfg("gist_top")), int(cfg("gist_per_type")))
+        tabs = {t: ranked(type_=t, events=False) for t in [*TYPES, "x_article", "hn"]}
+        todo = gist.pick(ranked(events=False), tabs, int(cfg("gist_top")), int(cfg("gist_per_type")), limit=int(cfg("gist_max")))
         radar = oss_labels(todo)
         for it in [x for x in todo if (x["extra"].get("repo") or "") in radar]:
             # 开源雷达已有中文一句话：直接用，不再单独生成
@@ -661,7 +675,7 @@ def run_gists() -> dict:
         todo = [x for x in todo if (x["extra"].get("repo") or "") not in radar]
         if not todo:
             return {"count": 0, "errors": []}
-        got, errors = gist.generate(todo, model=str(cfg("gist_model")))
+        got, errors = gist.generate(todo, run=_haiku, model=str(cfg("local_model")))
         for it in todo:
             if it["id"] in got:
                 row = db.row("SELECT extra FROM feed_items WHERE id=?", [it["id"]])
@@ -670,6 +684,25 @@ def run_gists() -> dict:
         return {"count": len(got), "errors": errors}
     except Exception as e:  # noqa: BLE001
         log.warning("feed gist failed: %s", e)
+        return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
+
+
+def run_events() -> dict:
+    """把 X 上说同一件事的推文归成事件（haiku），写回 extra.event / event_title；列表里每个事件只出一条，见 _feed_cluster.collapse。"""
+    try:
+        xs = [x for x in ranked(type_="discussion", stale_ok=True, events=False) if x["source"] == "twitter"][:cluster.BATCH_MAX]
+        groups = cluster.group(xs, run=_haiku, model=str(cfg("local_model")))
+        member = {i: g for g in groups for i in g["ids"]}
+        for x in xs:
+            g = member.get(x["id"])
+            old = x["extra"].get("event")
+            if g:
+                _patch_extra(x["id"], {"event": g["key"], "event_title": g["title"]})
+            elif old:
+                _patch_extra(x["id"], {"event": "", "event_title": ""})
+        return {"count": len(member), "events": len(groups), "errors": []}
+    except Exception as e:  # noqa: BLE001
+        log.warning("feed events failed: %s", e)
         return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}
 
 
@@ -913,7 +946,7 @@ def source_health() -> dict:
 
 def _public(x: dict) -> dict:
     return {k: x[k] for k in ("id", "source", "type", "title", "url", "date", "popularity", "score",
-                              "why", "feedback", "also", "read", "deep")} | {k: x.get(k) for k in ("new", "seen_days", "day")} | {"summary": rk.display_summary(x["title"], x["summary"]),
+                              "why", "feedback", "also", "read", "deep")} | {k: x.get(k) for k in ("new", "seen_days", "day", "event")} | {"summary": rk.display_summary(x["title"], x["summary"]),
                                                               "gist": (x.get("extra") or {}).get("gist", ""),
                                                               "extra": x.get("extra", {}),
                                                               "source_label": rk.SOURCE_LABEL.get(x["source"], x["source"])}
@@ -939,6 +972,9 @@ def _still_open(x: dict) -> bool:
     return (not x["deep"] or x["deep"]["status"] == "failed") and x["feedback"].get("vote", 0) >= 0
 
 
+PICKS_GROUP_N = 4
+
+
 @router.get("/picks")
 def picks():
     """页面顶部四组：waiting 深读完还没开始读、reading 读了一部分没读完、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
@@ -956,7 +992,12 @@ def picks():
     cutoff = _iso(now - timedelta(days=PICKS_KEEP_DAYS))
     shown = {r["item_id"]: r["last_at"] for r in db.rows("SELECT item_id, last_at FROM feed_picks WHERE last_at>=?", [cutoff])}
     earlier = sorted((x for x in rest[rk.PICKS_N:] if x["id"] in shown and _still_open(x)), key=lambda x: shown[x["id"]], reverse=True)
-    return {k: [_public(x) for x in v] for k, v in (("waiting", waiting), ("reading", reading), ("top", top), ("earlier", earlier))}
+    taken = {x["id"] for x in top}
+    by_type = lambda t: [x for x in rest[rk.PICKS_N:] if x["type"] == t and x["id"] not in taken][:PICKS_GROUP_N]   # noqa: E731
+    grouped = {x["id"] for t in ("paper", "repo") for x in by_type(t)}
+    earlier = [x for x in earlier if x["id"] not in grouped]
+    return {k: [_public(x) for x in v] for k, v in (("waiting", waiting), ("reading", reading), ("top", top), ("earlier", earlier),
+                                                    ("papers", by_type("paper")), ("repos", by_type("repo")))}
 
 
 class FeedbackIn(BaseModel):
