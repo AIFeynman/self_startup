@@ -135,12 +135,25 @@ function tips() {
   ]);
 }
 
+// 学习板块的对话按「轮」编号、最新一轮在最上：长回复出来直接从头读，不用再滑回顶部
+const newestFirst = () => state.module === 'learn';
+const follow = () => { log.scrollTop = newestFirst() ? 0 : log.scrollHeight; };
+function openTurn() {
+  const t = h('div.turn', {}, h('div.turn-no', {}, `第 ${log.querySelectorAll('.turn').length + 1} 轮`));
+  log.prepend(t);
+  return t;
+}
+
 async function loadMessages() {
   log.innerHTML = '';
   if (!state.sessionId) { log.append(tips()); return; }
   const s = await api.get(`/api/chat/session/${state.sessionId}`);
-  for (const m of s.messages) log.append(bubble(m.role, m.content, m.images));
-  log.scrollTop = log.scrollHeight;
+  let host = log;
+  for (const m of s.messages) {
+    if (newestFirst() && (m.role === 'user' || host === log)) host = openTurn();
+    host.append(bubble(m.role, m.content, m.images));
+  }
+  follow();
 }
 
 function bubble(role, content, images = []) {
@@ -184,11 +197,12 @@ async function submit(text, attached = []) {
   const voice = sentenceFeed((t) => { if (speaking() && !state.stopping) tts.say(t); });
   root.classList.remove('collapsed');
   if (log.querySelector('.chat-tips')) log.innerHTML = '';
-  log.append(bubble('user', text, images));
+  const host = newestFirst() ? openTurn() : log;
+  host.append(bubble('user', text, images));
   const body = h('div.body', {}, h('span.dots', {}, '思考中'));
   const pending = h('div.msg.assistant.pending', {}, [h('div.avatar', {}, icon('leaf')), body]);
-  log.append(pending);
-  log.scrollTop = log.scrollHeight;
+  host.append(pending);
+  follow();
   try {
     const r = await fetch(`/api/chat/${state.module}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -209,19 +223,19 @@ async function submit(text, attached = []) {
         const ev = JSON.parse(line.slice(6));
         if (ev.type === 'meta') { state.sessionId = ev.session_id; if (state.stopping) stopServer(); }
         else if (ev.type === 'end' && ev.jobs?.length) linked = ev.jobs;
-        else if (ev.type === 'tool') log.insertBefore(bubble('tool', ev.text), pending);
-        else if (ev.type === 'error' || ev.type === 'engine') log.insertBefore(bubble('error', ev.text), pending);
+        else if (ev.type === 'tool') pending.before(bubble('tool', ev.text));
+        else if (ev.type === 'error' || ev.type === 'engine') pending.before(bubble('error', ev.text));
         else if (ev.type === 'delta') { if (!live) performance.mark('reply-delta'); live += ev.text; voice.feed(ev.text); pending.classList.remove('pending'); body.replaceChildren(md([...texts, live].join('\n\n'))); }
         else if (ev.type === 'text') { if (!live) voice.feed(ev.text); voice.flush(); live = ''; texts.push(ev.text); pending.classList.remove('pending'); body.replaceChildren(md(texts.join('\n\n'))); }
         else if (ev.type === 'done' && ev.text) { pending.classList.remove('pending'); body.replaceChildren(md(ev.text)); }
-        log.scrollTop = log.scrollHeight;
+        follow();
       }
     }
     if (!texts.length && body.querySelector('.dots')) pending.remove();
     if (linked.length) {
       await loadMessages(); // 已经跑完的任务此时已回帖
-      log.append(h('div.msg.tool', {}, `⏳ 这轮提交了 ${linked.length} 个后台任务，完成后结果会自动发到这个对话`));
-      log.scrollTop = log.scrollHeight;
+      (newestFirst() ? log.querySelector('.turn') : log).append(h('div.msg.tool', {}, `⏳ 这轮提交了 ${linked.length} 个后台任务，完成后结果会自动发到这个对话`));
+      follow();
     }
     document.dispatchEvent(new CustomEvent('agent-done', { detail: { module: state.module, ref: state.ref } }));
   } catch (e) {

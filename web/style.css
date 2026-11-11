@@ -202,6 +202,9 @@ body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { 
 .msg.pending .body { color: var(--muted); }
 .msg.tool { font: 11px/1.5 var(--mono); color: var(--muted); padding-left: 40px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .msg.error { color: var(--err); font-size: 12px; padding-left: 40px; }
+.turn { display: flex; flex-direction: column; gap: 12px; padding-bottom: 14px; border-bottom: 1px dashed var(--line-2); }
+.turn:last-child { border-bottom: 0; }
+.turn-no { font-size: 11px; font-weight: 600; color: var(--accent); letter-spacing: .04em; }
 .chat-tips { color: var(--muted); font-size: 13px; }
 .chat-tips .chips { justify-content: flex-start; margin-top: 10px; }
 .chat-tips .chip { padding: 5px 12px; font-size: 13px; }
