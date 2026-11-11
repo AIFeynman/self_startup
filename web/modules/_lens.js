@@ -1,6 +1,6 @@
 // 判断卡：产品 / 设计 / 运营 / 工程 / 算法 / 增长的关键问题，按「目标 → 角度 → 手段 → 空间 → 好坏 → 反模式」组织，可带场景和 Agent 讨论（后端见 app/kb_lens.py）。
 // 路由：#kb/lens（全部）#kb/lens/<卡片 id>（展开某张）
-import { chatBusy } from '../chat.js';
+import { chatBusy, chatSnapshot } from '../chat.js';
 
 const CSS = `
 .ln-ask { display: grid; gap: 8px; padding: 14px 16px; }
@@ -33,10 +33,13 @@ export async function lensTab(body, ctx, focus = '') {
   const pick = h('select', { 'aria-label': '按哪张卡讨论' }, [h('option', { value: '' }, '不指定卡片，让 Agent 匹配'),
     ...data.domains.map((d) => h('optgroup', { label: d.name }, d.cards.map((c) => h('option', { value: c.id }, c.title))))]);
   const say = h('textarea', { 'aria-label': '你的场景和判断', placeholder: '写下你遇到的具体场景，和你自己的初步判断（往哪看、打算怎么做、觉得还有多大空间），Agent 按判断卡点评' });
-  const go = h('button', { onclick: () => {
+  const go = h('button', { onclick: async () => {
     if (!say.value.trim()) return ctx.toast('先写一个场景或问题', true);
-    discuss(ctx, all.find((c) => c.id === pick.value), say.value, true);
-    say.value = '';
+    go.disabled = true;
+    try {
+      if (await discuss(ctx, all.find((c) => c.id === pick.value), say.value, true)) say.value = '';
+    } catch (e) { ctx.toast(e.message, true); }
+    finally { go.disabled = false; }
   } }, [ui.icon('chat'), '和 Agent 讨论']);
   body.append(h('div.card.ln-ask', {}, [h('b', {}, '带着场景来练判断'), h('div.row', { style: { flexWrap: 'wrap', gap: '8px' } }, [pick]), say,
     h('div.row', {}, [h('span.muted', {}, '先写自己的判断再看点评，练得最快 · 对话自动保存，可在右侧续聊'), h('span.grow'), go])]));
@@ -74,8 +77,11 @@ export async function lensTab(body, ctx, focus = '') {
   if (focus) setTimeout(() => document.getElementById('ln-' + focus)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
 }
 
-function discuss(ctx, c, text, send) {
-  if (chatBusy()) return ctx.toast('当前回复还在生成，请先等它结束或点击停止', true);
+async function discuss(ctx, c, text, send) {
+  if (chatBusy()) { ctx.toast('当前回复还在生成，请先等它结束或点击停止', true); return false; }
   const opts = { module: 'kb', ref: 'lens:' + (c?.id || ''), title: c ? '判断卡 · ' + c.title : '判断卡' };
-  return ctx.openChat(send ? { ...opts, fresh: true, send: text } : { ...opts, prefill: text || '我的场景：\n我的判断：' });
+  const now = chatSnapshot();
+  const keepDraft = now.module === opts.module && now.ref === opts.ref && now.draft.trim();
+  await ctx.openChat(send ? { ...opts, fresh: true, send: text } : { ...opts, prefill: keepDraft ? '' : text || '我的场景：\n我的判断：' });
+  return true;
 }

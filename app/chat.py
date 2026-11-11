@@ -188,6 +188,8 @@ def chat(module: str, body: ChatIn):
 
         if think:
             prompt = "这是「今日一想」的分析讨论，只交换想法，不执行工程任务；不输出工程验收或自主决策汇报。\n用户这轮说：\n" + prompt
+        elif module == "kb" and (sess["ref"] or body.ref).startswith("lens:"):
+            prompt = "这是「判断卡」练习讨论：按卡片点评、给出你的判断，只推进最关键的一处；除非用户要求展开，正文不超过 300 个汉字。\n用户这轮说：\n" + prompt
 
         prompt += chat_images.prompt(images)
     except BaseException:

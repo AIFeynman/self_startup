@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from functools import cache
 from pathlib import Path
 
 DOMAINS = ["产品", "设计", "运营", "工程", "算法", "增长"]
@@ -19,14 +18,14 @@ PARTNER = """## 判断卡讨论：帮用户练判断，而不是讲课
 """
 
 
-@cache
 def cards() -> list[dict]:
     return json.loads(Path(__file__).with_name("kb_lens.json").read_text(encoding="utf-8"))
 
 
 def overview() -> dict:
+    cs = cards()
     return {"sections": [{"key": k, "name": n} for k, n in SECTIONS],
-            "domains": [{"name": d, "cards": [c for c in cards() if c["domain"] == d]} for d in DOMAINS]}
+            "domains": [{"name": d, "cards": [c for c in cs if c["domain"] == d]} for d in DOMAINS]}
 
 
 def get(cid: str) -> dict | None:
@@ -47,5 +46,6 @@ def context(cid: str) -> str:
     c = get(cid)
     if c:
         return PARTNER + "\n" + card_md(c)
-    index = "\n".join(f"- {d}：" + "；".join(f"{c['title']}（{c['id']}）" for c in cards() if c["domain"] == d) for d in DOMAINS)
+    cs = cards()
+    index = "\n".join(f"- {d}：" + "；".join(f"{c['title']}（{c['id']}）" for c in cs if c["domain"] == d) for d in DOMAINS)
     return PARTNER + "\n用户没有指定卡片。先判断用户的问题属于哪个领域、哪张卡，按那张卡的框架讨论；都不合适就按同样的五个部分临时搭一个框架。\n## 全部判断卡\n" + index
