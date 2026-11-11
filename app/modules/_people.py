@@ -543,6 +543,7 @@ BACKFILL_MAX = 90
 def backfill(run, model: str) -> list[str]:
     """给还没有中文一句话的条目补写；没信息量的推文标记隐藏（不删）。"""
     rows = db.rows("SELECT * FROM people_items WHERE json_extract(extra, '$.gist') IS NULL AND json_extract(extra, '$.low') IS NULL "
+                   "AND json_extract(extra, '$.gist_tried') IS NULL "
                    "ORDER BY first_seen DESC LIMIT ?", [BACKFILL_MAX])
     if not rows:
         return []
@@ -552,6 +553,8 @@ def backfill(run, model: str) -> list[str]:
         extra = dict(it["extra"])
         if it["id"] in gists:
             extra["gist"] = gists[it["id"]]
+        elif not errs:
+            extra["gist_tried"] = 1
         if it["channel"] == "x" and it["id"] in low:
             extra["low"] = 1
         if extra != it["extra"]:
