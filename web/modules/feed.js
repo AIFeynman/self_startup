@@ -4,7 +4,7 @@
 import { nowLocal, toMs, today } from '../api.js';
 import { peopleTab } from './_people.js';
 
-const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['hn', 'HN 精读'], ['video', '视频'], ['x_article', 'X 长文'], ['people', '人物'], ['saved', '已收藏']];
+const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['hn', 'HN 精读'], ['video', '视频'], ['x_article', 'X 长文'], ['people', '名人'], ['saved', '已收藏']];
 const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'hn', 'video', 'x_article'];
 const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论', video: '视频' };
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };

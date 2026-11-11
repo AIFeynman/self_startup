@@ -570,7 +570,7 @@ def summarize_and_notify() -> int:
         p = idx.get(pid, {"name": pid})
         return f"{p.get('zh') or p['name']}：" + "、".join(f"{CHANNELS[c][0]} {n}" for c, n in per[pid].items())
     body = "；".join(line(pid) for pid in order[:6]) + (f" 等 {len(order)} 人" if len(order) > 6 else "")
-    notify.notify("feed", f"人物新发声 {len(rows)} 条", body, link="#feed/people", kind="people")
+    notify.notify("feed", f"名人新发声 {len(rows)} 条", body, link="#feed/people", kind="people")
     db.execute(f"UPDATE people_items SET notified=1 WHERE id IN ({','.join('?' * len(rows))})", [r["id"] for r in rows])
     return len(rows)
 

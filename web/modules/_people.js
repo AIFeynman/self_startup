@@ -1,4 +1,4 @@
-// 信息推荐 ·「人物」：名单里的人最近在 X / YouTube / 播客 / 论文 / 新闻 / B站 的发声，按人归组（后端见 app/modules/_people.py）。
+// 信息推荐 ·「名人」：名单里的人最近在 X / YouTube / 播客 / 论文 / 新闻 / B站 的发声，按人归组（后端见 app/modules/_people.py）。
 // 路由：#feed/people
 const CSS = `
 .pp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
@@ -100,7 +100,7 @@ export function peopleTab(box, ctx, sub = '') {
       const r = await api.get('/api/feed/people?person=' + encodeURIComponent(state.person));
       const p = r.person || { name: state.person };
       box.replaceChildren(bar(r), h('div.card.pp-grp', {}, [
-        h('div.pp-who', {}, [h('a', { href: '#', onclick: (e) => { e.preventDefault(); state.view = 'all'; load(); } }, '← 全部人物'), h('b', {}, who(p)),
+        h('div.pp-who', {}, [h('a', { href: '#', onclick: (e) => { e.preventDefault(); state.view = 'all'; load(); } }, '← 全部名人'), h('b', {}, who(p)),
           h('span.pp-role', {}, p.role || ''), p.x ? h('a', { href: `https://x.com/${p.x}`, target: '_blank', rel: 'noopener' }, '@' + p.x) : null]),
         ...(r.items.length ? r.items.map((it) => row(it)) : [h('div.muted', {}, '还没搜到这个人的发声')])]));
       if (r.running) poll();
