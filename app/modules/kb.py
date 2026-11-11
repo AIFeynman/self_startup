@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 import re
 
-from .. import kb, kb_graph, kb_idea, kb_judge, kb_verify, kb_whynot
+from .. import kb, kb_graph, kb_idea, kb_judge, kb_lens, kb_verify, kb_whynot
 from . import _paper_add as paper_add, _paper_label as paper_label, _paper_maintain as paper_maintain, _paper_map as paper_map
 
 TITLE = "知识库"
@@ -49,9 +49,16 @@ def stats():
             "recent": [{k: d[k] for k in ("path", "type", "title", "date", "summary")} for d in recent]}
 
 
+@router.get("/lens")
+def lens():
+    return kb_lens.overview()
+
+
 def agent_context(ref: str) -> str:
     if ref.startswith("think:"):
         return kb_idea.context(int(ref.split(":")[1]))
+    if ref.startswith("lens:"):
+        return kb_lens.context(ref.removeprefix("lens:"))
     try:
         return (kb.read("GRAPH.md")[:4000] + "\n\n" + kb.read("INDEX.md")[:3000]
                 + "\n\n我的判断台账在 JUDGMENTS.md / judgments/（问题线、复查记录）。").strip()
