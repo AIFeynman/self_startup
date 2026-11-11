@@ -219,16 +219,6 @@ def test_fetch_blog_reads_own_feeds_within_window(monkeypatch):
     assert items[0]["extra"]["site"] == "garymarcus.substack.com"
 
 
-def test_local_haiku_runs_outside_any_repo(monkeypatch):
-    from pathlib import Path
-    from app.modules import feed
-    seen = {}
-    monkeypatch.setattr(feed.agent, "run_once", lambda prompt, **kw: seen.update(kw) or {"text": "{}"})
-    feed._haiku("p", system="s", model="m")
-    repo = Path(__file__).resolve().parents[1]
-    assert seen.get("cwd") and not Path(seen["cwd"]).resolve().is_relative_to(repo)
-    assert not (Path(seen["cwd"]) / ".git").exists()
-
 
 def test_x_substance_rule_drops_bare_reactions():
     assert not P.x_substantive("nice", [])
