@@ -93,6 +93,10 @@ a.fd-chip:hover { color: var(--accent); border-color: var(--accent); text-decora
 .fd-opts select { width: auto; font-size: 12px; padding: 3px 6px; border-radius: 8px; }
 .fd-opts select.on { border-color: var(--accent); color: var(--accent); }
 .fd-kbd kbd { margin: 0 1px; }
+.fd-event { margin-top: 6px; font-size: 12.5px; }
+.fd-event > summary { cursor: pointer; color: var(--muted); }
+.fd-event ul { margin: 6px 0 0; padding-left: 18px; }
+.fd-event li { margin: 4px 0; overflow-wrap: anywhere; }
 .fd-earlier { margin-top: 10px; }
 .fd-earlier > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; padding: 4px 2px; }
 .fd-earlier > summary span { margin-left: 10px; font-weight: 400; font-size: 12px; color: var(--muted); }
@@ -305,6 +309,7 @@ export default {
     const readingBox = h('div');
     const topBox = h('div');
     const earlierBox = h('div');
+    const groupBox = h('div');
     const tabs = h('div.tabs');
     const listBox = h('div.fd-list');
     const hnBar = h('div.fd-hnbar');
@@ -326,7 +331,7 @@ export default {
     const freshNote = h('span.fd-fresh');
     let fresh = null;   // { since, added, label }
     el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick, readingBox, waitBox,
-      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, earlierBox,
+      ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, groupBox, earlierBox,
       h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
@@ -769,6 +774,10 @@ export default {
     };
     const why = (x) => (x.why ? h('div.fd-why', { title: x.why }, [h('b', {}, '推荐理由'), x.why]) : null);
 
+    const eventBox = (x) => (x.event ? h('details.fd-event', {}, [
+      h('summary', {}, [h('b', {}, '同一事件'), ` · ${x.event.title} · 另有 ${x.event.n - 1} 条`]),
+      h('ul', {}, x.event.items.map((m) => h('li', {}, [h('a', { href: m.url, target: '_blank', rel: 'noopener' }, m.title), m.gist ? h('div.fd-gist', {}, m.gist) : null])))]) : null);
+
     function build(entry) {
       const { x, kind, i } = entry;
       let node;
@@ -781,6 +790,7 @@ export default {
             x.summary ? h('div.fd-sum', { title: x.summary }, x.summary) : null,
             paBox(entry),
             hnBox(entry),
+            eventBox(x),
             why(x),
             verdictBox(entry),
             h('div.fd-meta', {}, metaChips(x)),
@@ -795,6 +805,7 @@ export default {
             x.summary ? h('div.fd-sum', { title: x.summary, style: { fontSize: '13px' } }, x.summary) : null,
             paBox(entry),
             hnBox(entry),
+            eventBox(x),
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
               x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
@@ -836,7 +847,7 @@ export default {
           entry.el.remove(); entries.splice(idx, 1);
           if (sel >= entries.length) sel = entries.length - 1;
           if (entries[sel]) entries[sel].el.classList.add('fd-sel');
-          if (['wait', 'reading', 'earlier'].includes(entry.kind)) loadTop();
+          if (['wait', 'reading', 'earlier', 'group'].includes(entry.kind)) loadTop();
           toast('已隐藏，可在「已收藏」或 Agent 里恢复');
           return;
         }
@@ -957,16 +968,18 @@ export default {
       for (const e of picked) e.el.remove();
       const row = (kind) => (x, i) => ({ x, kind, i });
       const waits = r.waiting.map(row('wait')), readings = r.reading.map(row('reading')), tops = r.top.map(row('top')), earlier = r.earlier.map(row('earlier'));
-      entries = [...readings, ...waits, ...tops, ...earlier, ...entries.filter((e) => e.kind === 'list')];
+      const papers = r.papers.map(row('group')), repos = r.repos.map(row('group'));
+      entries = [...readings, ...waits, ...tops, ...papers, ...repos, ...earlier, ...entries.filter((e) => e.kind === 'list')];
       if (cur && cur.kind !== 'list') sel = entries.findIndex((e) => e.kind === cur.kind && e.x.id === cur.x.id);
       else if (cur) sel = entries.indexOf(cur);
       readingBox.replaceChildren(...(readings.length ? [ui.section(`在读 ${readings.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.fd-list', {}, readings.map(mount))] : []));
       waitBox.replaceChildren(...(waits.length ? [ui.section(`深度完成，待看 ${waits.length}`, '读了一部分进「在读」，读完的在列表筛选「深读过」里'), h('div.fd-list', {}, waits.map(mount))] : []));
       topBox.replaceChildren(tops.length ? h('div.fd-top', {}, tops.map(mount)) : ui.empty('还没有内容', '点右上角「刷新」抓取信息源'));
+      groupBox.replaceChildren(...[['论文', papers], ['开源项目', repos]].flatMap(([name, g]) => (g.length ? [ui.section(`${name}精选 ${g.length}`, '综合排序挤不进前 5 的，单独各留几条 · 不含已读'), h('div.fd-list', {}, g.map(mount))] : [])));
       earlierBox.replaceChildren(...(earlier.length ? [h('details.fd-earlier', {
         open: st.earlierOpen, ontoggle: (e) => { st.earlierOpen = e.target.open; },
       }, [h('summary', {}, [`之前的精选 ${earlier.length}`, h('span', {}, `被换下但还没处理 · 打开、深读、踩或隐藏后移除 · 7 天没处理退回列表`)]), h('div.fd-list', {}, earlier.map(mount))])] : []));
-      if (st.q) for (const e of [...waits, ...tops, ...earlier]) e.el.classList.toggle('fd-hidden', !matches(e.el));
+      if (st.q) for (const e of [...waits, ...tops, ...papers, ...repos, ...earlier]) e.el.classList.toggle('fd-hidden', !matches(e.el));
     }
     // 「全部」、综合排序、不限时间且无筛选时，列表从第 6 条开始，避免与精选重复
     const baseOffset = () => (!st.tab && !st.q && st.days === '0' && st.sort === 'score' && st.read === 'unread' && !fresh?.added ? TOP_N : 0);

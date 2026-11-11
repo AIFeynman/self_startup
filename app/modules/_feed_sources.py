@@ -155,6 +155,45 @@ def fetch_alphaxiv(days: int = 14, page_size: int = 60) -> list[dict]:
     return out
 
 
+ARXIV_CATS = ("cs.AI", "cs.CL", "cs.LG", "cs.CV", "cs.MA", "cs.SE", "cs.MM", "cs.HC", "cs.IR")
+
+
+def parse_arxiv_search(text: str, via: str, days: int = 10, now: datetime | None = None) -> list[dict]:
+    cutoff = _iso(_days_ago(days) if now is None else now - timedelta(days=days))[:10]
+    out = []
+    for e in feedparser.parse(text).entries:
+        m = re.search(r"arxiv\.org/abs/([^v\s]+(?:\.\d+)?)", e.get("id", ""))
+        date = (e.get("published") or "")[:10]
+        if not m or not e.get("title") or (date and date < cutoff):
+            continue
+        pid = m.group(1)
+        out.append({"id": f"arxiv:{pid}", "source": "arxiv", "type": "paper", "title": clean(e["title"], 200),
+                    "summary": clean(e.get("summary")), "url": f"https://arxiv.org/abs/{pid}", "date": date, "popularity": 0.0,
+                    "extra": {"via": via, "query": via}})
+    return out
+
+
+def fetch_arxiv_search(queries: list[str], days: int = 10, per_query: int = 8) -> tuple[list[dict], list[str]]:
+    """按搜索词查 arXiv 最近发的论文（HF / AlphaXiv 只给当天热榜，冷门方向的论文要靠搜）。接口要求两次请求间隔 3 秒。"""
+    cats = " OR ".join(f"cat:{c}" for c in ARXIV_CATS)
+    out: dict[str, dict] = {}
+    errs: list[str] = []
+    with _client() as c:
+        for i, q in enumerate(queries):
+            if i:
+                time.sleep(3)
+            try:
+                r = c.get("https://export.arxiv.org/api/query", params={
+                    "search_query": f'all:"{q}" AND ({cats})', "sortBy": "submittedDate", "sortOrder": "descending", "max_results": per_query})
+                r.raise_for_status()
+            except httpx.HTTPError as e:
+                errs.append(f"arxiv {q}: {type(e).__name__}")
+                continue
+            for it in parse_arxiv_search(r.text, q, days):
+                out.setdefault(it["id"], it)
+    return list(out.values()), errs
+
+
 def parse_arxiv_authors(page: str) -> str:
     m = re.search(r'class="ltx_authors"(.*?)(?=class="ltx_abstract"|<section)', page, re.S)
     return clean(f"<{m[1]}", 1500) if m else ""

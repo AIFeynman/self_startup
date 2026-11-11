@@ -27,7 +27,7 @@ async function boot() {
     h('div.nav-foot', {}, [h('a', { href: '#settings' }, [ui.icon('settings'), h('span', {}, '设置')]),
       h('span#engine-status', {}, Object.entries(meta.engines).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' '))]),
   );
-  window.addEventListener('hashchange', route);
+  window.addEventListener('hashchange', (e) => { trackOrigin(e); route(); });
   document.addEventListener('agent-done', loadRecent);
   document.addEventListener('chat-sessions-changed', loadRecent);
   await route();
@@ -172,6 +172,13 @@ async function loadRecent() {
     href: '#' + s.module, title: `${titleOf(s.module)} · ${s.title}`,
     onclick: () => setTimeout(() => openChat({ module: s.module, ref: s.ref, title: titleOf(s.module), sessionId: s.id }), 50),
   }, [ui.icon('chat'), (s.title || '对话')]))] : []));
+}
+
+window.__navOrigin = null;
+function trackOrigin(e) {
+  const mod = (u) => new URL(u).hash.slice(1).split('/')[0];
+  const from = e.oldURL && mod(e.oldURL);
+  if (from && from !== currentId() && from !== 'chat') window.__navOrigin = { hash: new URL(e.oldURL).hash, title: titleOf(from) };
 }
 
 let chatAfterRoute = null;

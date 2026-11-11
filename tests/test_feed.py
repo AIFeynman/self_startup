@@ -578,13 +578,13 @@ def test_same_event_merge():
 
 # ---------- 中文一句话 ----------
 
-def _gist_handler(calls):
-    def handler(req):
-        rows = json.loads(json.loads(req.content)["messages"][1]["content"])
-        calls.append(len(rows))
+def _gist_runner(calls):
+    def run(prompt, system="", model=""):
+        rows = json.loads(prompt)
+        calls.append((len(rows), model))
         items = [{"id": r["id"], "gist": f"中文概括{r['id']}"} for r in rows] + [{"id": "bogus", "gist": "不该出现"}]
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"items": items}, ensure_ascii=False)}}]})
-    return handler
+        return {"text": "好的：" + json.dumps({"items": items}, ensure_ascii=False)}
+    return run
 
 
 def test_gist_pick_and_generate(monkeypatch):
@@ -596,16 +596,16 @@ def test_gist_pick_and_generate(monkeypatch):
     assert g.is_chinese(zh["title"]) and not g.is_chinese("@a：Claude Code 插件 plugins I'd install on day one")
     todo = g.pick([a, b, c, zh], {"paper": [a]}, top=10, per_type=5)
     assert [x["id"] for x in todo] == ["a", "c"]                    # b 已有且没变；a 只算一次；c 标题变了重做
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    assert [x["id"] for x in g.pick([a, b, c], {}, top=1, per_type=1, limit=5)] == ["a", "c"]   # limit：top 之外的也补
     calls = []
-    many = [_it(f"i{n}", f"T{n}") for n in range(45)]
-    got, errs = g.generate(many, client=httpx.Client(transport=httpx.MockTransport(_gist_handler(calls))))
-    assert calls == [20, 20, 5] and len(got) == 45 and got["i3"] == "中文概括i3" and "bogus" not in got and not errs
+    many = [_it(f"i{n}", f"T{n}") for n in range(60)]
+    got, errs = g.generate(many, run=_gist_runner(calls))
+    assert calls == [(25, "claude-haiku-5-5"), (25, "claude-haiku-5-5"), (10, "claude-haiku-5-5")] and len(got) == 60 and got["i3"] == "中文概括i3" and "bogus" not in got and not errs
     assert g.fit("短句") == "短句"
     long = "有文章称 Anthropic 官方 Claude Code 的 VS Code 扩展在 Cursor 上含恶意代码，会创建后门并上传本地文件，影响大量开发者的机器安全与凭据，社区正在讨论如何排查与清理受影响的安装"
     assert g.fit(long).endswith("…") and len(g.fit(long)) <= g.MAX_CHARS + 1 and "，会创建" not in g.fit(long)[-6:]
-    monkeypatch.delenv("DEEPSEEK_API_KEY")
-    assert g.generate(many)[1][0].startswith("未配置 DEEPSEEK_API_KEY")
+    boom = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cli down"))   # noqa: E731
+    assert g.generate(many[:3], run=boom) == ({}, ["第 1 批：RuntimeError: cli down"])
 
 
 def test_gist_runs_only_on_full_refresh(client, monkeypatch):
@@ -1098,3 +1098,45 @@ def test_refresh_fills_institutions_from_arxiv_page(client, monkeypatch):
     calls.clear()
     feed.run_paper_affil(now=NOW)
     assert calls == []
+
+
+def test_event_group_and_collapse():
+    from app.modules import _feed_cluster as cl
+    xs = [{"id": f"twitter:{i}", "source": "twitter", "title": f"Fable 5.2 太强了 {i}", "url": f"u{i}", "date": "2026-11-10", "extra": {}} for i in range(4)]
+    xs.append({"id": "twitter:9", "source": "twitter", "title": "别的事", "url": "u9", "date": "2026-11-10", "extra": {}})
+
+    def run(prompt, system="", model=""):
+        return {"text": '说明 {"events": [{"title": "Fable 5.2 发布", "ids": ["twitter:0", "twitter:1", "twitter:2", "twitter:9", "bogus"]},'
+                        '{"title": "太小", "ids": ["twitter:3"]}]}'}
+
+    groups = cl.group(xs, run=run)
+    assert len(groups) == 1 and groups[0]["ids"] == ["twitter:0", "twitter:1", "twitter:2", "twitter:9"]
+    for x in xs:
+        if x["id"] in groups[0]["ids"]:
+            x["extra"] = {"event": groups[0]["key"], "event_title": groups[0]["title"], "gist": "概括"}
+    out = cl.collapse(xs)
+    assert [x["id"] for x in out] == ["twitter:0", "twitter:3"]
+    ev = out[0]["event"]
+    assert ev["n"] == 4 and ev["title"] == "Fable 5.2 发布" and [m["id"] for m in ev["items"]] == ["twitter:1", "twitter:2", "twitter:9"]
+    assert cl.group(xs[:2], run=run) == []
+
+
+def test_parse_arxiv_search():
+    atom = ('<feed xmlns="http://www.w3.org/2005/Atom">'
+            '<entry><id>http://arxiv.org/abs/2611.01234v2</id><title>Agentic\n Video</title><summary>s</summary><published>2026-11-08T10:00:00Z</published></entry>'
+            '<entry><id>http://arxiv.org/abs/2501.00001v1</id><title>Old</title><summary>s</summary><published>2025-01-01T00:00:00Z</published></entry></feed>')
+    got = src.parse_arxiv_search(atom, "agentic", days=10, now=datetime(2026, 11, 10, tzinfo=timezone.utc))
+    assert [g["id"] for g in got] == ["arxiv:2611.01234"] and got[0]["type"] == "paper" and got[0]["title"] == "Agentic Video"
+
+
+def test_picks_has_paper_and_repo_groups(client, monkeypatch):
+    from app.modules import feed
+    fake = [_it(f"hn:{i}", f"Claude agent news {i}", pop=500 - i) for i in range(8)]
+    fake += [{**_it(f"arxiv:{i}", f"Agent paper {i}", pop=5), "source": "arxiv", "type": "paper"} for i in range(3)]
+    fake += [{**_it(f"github:{i}", f"agent repo {i}", pop=5), "source": "github", "type": "repo"} for i in range(3)]
+    monkeypatch.setattr(feed, "_collectors", lambda stats=None: {"hn": lambda: fake})
+    client.post("/api/feed/refresh", json={"sources": ["hn"], "wait": True})
+    r = client.get("/api/feed/picks").json()
+    assert {x["type"] for x in r["papers"]} <= {"paper"} and {x["type"] for x in r["repos"]} <= {"repo"}
+    top = {x["id"] for x in r["top"]}
+    assert not top & {x["id"] for x in r["papers"] + r["repos"]}

@@ -131,6 +131,6 @@ def test_x_article_tab(client):
 def test_gists_cover_x_article_tab(client, monkeypatch):
     from app.modules import _feed_gist as gist
     seen = {}
-    monkeypatch.setattr(gist, "pick", lambda top, tabs, n, m: seen.update(tabs) or [])
+    monkeypatch.setattr(gist, "pick", lambda top, tabs, n, m, limit=0: seen.update(tabs) or [])
     feed.run_gists()
     assert "x_article" in seen and "repo" in seen

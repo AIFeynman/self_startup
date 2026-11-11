@@ -697,7 +697,8 @@ function bindBackKey(el) {
     const a = document.activeElement;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(a?.tagName) || a?.isContentEditable) return;
     e.preventDefault();
-    if (history.length > 1) history.back(); else location.hash = '#learn';
+    const o = window.__navOrigin;
+    if (o && !o.hash.startsWith('#learn')) history.back(); else location.hash = '#learn';
   };
   document.addEventListener('keydown', window.__lnBackKey);
 }
@@ -706,7 +707,7 @@ async function renderItem(el, ctx, iid) {
   const { api, h, md, toast, ui, openChat } = ctx;
   bindBackKey(el);
   let it;
-  try { it = await api.get(`/api/learn/items/${iid}`); } catch { el.append(back(h, ui), ui.empty('条目不存在')); return; }
+  try { it = await api.get(`/api/learn/items/${iid}`); } catch { el.append(backToOrigin(h, ui), ui.empty('条目不存在')); return; }
   watchJob(ctx, it.job_id, it.status);
   const busy = BUSY.includes(it.status);
   const isHtml = /\.html?$/i.test(it.output_path || '');
@@ -715,7 +716,7 @@ async function renderItem(el, ctx, iid) {
   const chat = () => openChat({ module: 'learn', ref, title: '追问：' + (it.title || it.url).slice(0, 20) });
   const ddTab = it.kind === 'github' && ctx.sub[2] === 'deepdive';
 
-  el.append(back(h, ui), h('div.ln-head', {}, ui.pageHead(it.title || it.url, h('span', {}, [
+  el.append(backToOrigin(h, ui), h('div.ln-head', {}, ui.pageHead(it.title || it.url, h('span', {}, [
     badge(h, it.kind), ' ', h('a', { href: it.url.startsWith('http') ? it.url : '#learn', target: '_blank', rel: 'noopener' }, it.url),
     ` · ${(it.created_at || '').slice(0, 10)}`, it.focus ? ` · 关注：${it.focus}` : '']), [
     it.status !== 'done' ? tag(h, it.status) : null,
@@ -736,8 +737,8 @@ async function renderItem(el, ctx, iid) {
   // GitHub 项目：深读笔记 / Deep Dive 两个标签（#learn/item/<id>/deepdive）
   if (it.kind === 'github') {
     el.append(h('div.ln-tabs2', {}, [
-      h('button' + (ddTab ? '' : '.on'), { onclick: () => { location.hash = `#learn/item/${it.id}`; } }, '深读笔记'),
-      h('button' + (ddTab ? '.on' : ''), { title: '自己拉仓库、写测试、做实验的深度解读（点了才生成）', onclick: () => { location.hash = `#learn/item/${it.id}/deepdive`; } },
+      h('button' + (ddTab ? '' : '.on'), { onclick: () => { location.replace(`#learn/item/${it.id}`); } }, '深读笔记'),
+      h('button' + (ddTab ? '.on' : ''), { title: '自己拉仓库、写测试、做实验的深度解读（点了才生成）', onclick: () => { location.replace(`#learn/item/${it.id}/deepdive`); } },
         ['Deep Dive', it.dd_status === 'running' ? h('span.muted.dots', { style: { marginLeft: '6px' } }, '生成中') : it.dd_status === 'done' ? (!ddTab && !it.dd_opened_at ? unreadTag(h) : ' ✓') : '']),
     ]));
   }
@@ -1099,6 +1100,12 @@ function qaCard(ctx, it, x, onChange, readonly = false) {
 }
 
 const back = (h, ui, href = '#learn', label = '深度学习') => h('a.ln-back', { href }, [ui.icon('arrow'), label]);
+
+const backToOrigin = (h, ui) => {
+  const o = window.__navOrigin;
+  if (!o || o.hash.startsWith('#learn')) return back(h, ui);
+  return h('a.ln-back', { href: o.hash, onclick: (e) => { e.preventDefault(); history.back(); } }, [ui.icon('arrow'), o.title]);
+};
 
 // ---------- 计划详情 ----------
 async function renderPlan(el, ctx, pid) {
