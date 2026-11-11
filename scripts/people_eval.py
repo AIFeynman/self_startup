@@ -201,9 +201,9 @@ def main():
         cached = Path(a.ref_from) / f"pool_{ch}.json" if a.ref_from else None
         ref = json.loads(cached.read_text()) if cached and cached.exists() else REFS[ch](pool)
         poolset = {it["id"]: it for it in ref + raw}
-        if ch in ("x", "blog"):
+        if ch in ("x", "blog", "paper"):
             for it in poolset.values():
-                labels.setdefault(it["id"], {"voice": True, "event": it["id"], "note": "本人账号", "by": "rule"})
+                labels.setdefault(it["id"], {"voice": True, "event": it["id"], "note": "本人账号 / 作者精确匹配", "by": "rule"})
         else:
             labels = gold_label(list(poolset.values()), labels)
         lab_file.write_text(json.dumps(labels, ensure_ascii=False, indent=1))
