@@ -1,0 +1,1815 @@
+[
+ {
+  "id": "sundar",
+  "name": "Sundar Pichai",
+  "zh": "",
+  "aliases": [],
+  "x": "sundarpichai",
+  "tier": 1,
+  "group": "Google",
+  "role": "Alphabet / Google CEO",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "koray",
+  "name": "Koray Kavukcuoglu",
+  "zh": "",
+  "aliases": [],
+  "x": "koraykv",
+  "tier": 1,
+  "group": "Google",
+  "role": "Google DeepMind 负责人（SVP）",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "demis",
+  "name": "Demis Hassabis",
+  "zh": "",
+  "aliases": [],
+  "x": "demishassabis",
+  "tier": 1,
+  "group": "Google",
+  "role": "DeepMind 董事长 · Alphabet 首席科学家",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "logan",
+  "name": "Logan Kilpatrick",
+  "zh": "",
+  "aliases": [],
+  "x": "OfficialLoganK",
+  "tier": 1,
+  "group": "Google",
+  "role": "Google AI Studio / Gemini API 产品负责人",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "woodward",
+  "name": "Josh Woodward",
+  "zh": "",
+  "aliases": [],
+  "x": "joshwoodward",
+  "tier": 1,
+  "group": "Google",
+  "role": "Google Labs / Gemini App VP",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "dario",
+  "name": "Dario Amodei",
+  "zh": "",
+  "aliases": [],
+  "x": "DarioAmodei",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic CEO",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "krieger",
+  "name": "Mike Krieger",
+  "zh": "",
+  "aliases": [],
+  "x": "mikeyk",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic Labs 联合负责人（前 CPO）",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "vora",
+  "name": "Ami Vora",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic CPO",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "patil",
+  "name": "Rahul Patil",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic CTO（前 Stripe CTO）",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "cherny",
+  "name": "Boris Cherny",
+  "zh": "",
+  "aliases": [],
+  "x": "bcherny",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Claude Code 负责人",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "daniela",
+  "name": "Daniela Amodei",
+  "zh": "",
+  "aliases": [],
+  "x": "DanielaAmodei",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic 总裁 · 联合创始人",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "jumper",
+  "name": "John Jumper",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic（2026-06 从 Google DeepMind 加入）",
+  "orgs": [
+   "Alphabet",
+   "Anthropic",
+   "Claude",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "sholto",
+  "name": "Sholto Douglas",
+  "zh": "",
+  "aliases": [],
+  "x": "_sholtodouglas",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic 研究员",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "clark",
+  "name": "Jack Clark",
+  "zh": "",
+  "aliases": [],
+  "x": "jackclarkSF",
+  "tier": 1,
+  "group": "Anthropic",
+  "role": "Anthropic 联合创始人 · 政策负责人",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "altman",
+  "name": "Sam Altman",
+  "zh": "",
+  "aliases": [],
+  "x": "sama",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "OpenAI CEO",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "brockman",
+  "name": "Greg Brockman",
+  "zh": "",
+  "aliases": [],
+  "x": "gdb",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "OpenAI 总裁，主管产品战略与日常运营",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "pachocki",
+  "name": "Jakub Pachocki",
+  "zh": "",
+  "aliases": [],
+  "x": "merettm",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "OpenAI 首席科学家",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "markchen",
+  "name": "Mark Chen",
+  "zh": "",
+  "aliases": [],
+  "x": "markchen90",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "OpenAI 首席研究官",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "shazeer",
+  "name": "Noam Shazeer",
+  "zh": "",
+  "aliases": [],
+  "x": "NoamShazeer",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "OpenAI 架构研究负责人（2026-06 从 Gemini 联合负责人跳槽）",
+  "orgs": [
+   "Alphabet",
+   "ChatGPT",
+   "Codex",
+   "DeepMind",
+   "Gemini",
+   "Google",
+   "OpenAI"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "tibo",
+  "name": "Thibault Sottiaux",
+  "zh": "",
+  "aliases": [],
+  "x": "thsottiaux",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "OpenAI 核心产品与平台负责人（ChatGPT、Codex、API）",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "turley",
+  "name": "Nick Turley",
+  "zh": "",
+  "aliases": [],
+  "x": "nickaturley",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "ChatGPT 产品负责人",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "catwu",
+  "name": "Cat Wu",
+  "zh": "",
+  "aliases": [],
+  "x": "_catwu",
+  "tier": 1,
+  "group": "OpenAI",
+  "role": "OpenAI 核心产品 PM 负责人（前 Claude Code 产品负责人）",
+  "orgs": [
+   "Anthropic",
+   "ChatGPT",
+   "Claude",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "wang",
+  "name": "Alexandr Wang",
+  "zh": "",
+  "aliases": [],
+  "x": "alexandr_wang",
+  "tier": 1,
+  "group": "Meta（Muse）",
+  "role": "Meta 首席 AI 官 · MSL 负责人",
+  "orgs": [
+   "Llama",
+   "Meta",
+   "Muse"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "friedman",
+  "name": "Nat Friedman",
+  "zh": "",
+  "aliases": [],
+  "x": "natfriedman",
+  "tier": 1,
+  "group": "Meta（Muse）",
+  "role": "MSL 产品与应用研究负责人",
+  "orgs": [
+   "Llama",
+   "Meta",
+   "Muse"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "zhao",
+  "name": "Shengjia Zhao",
+  "zh": "赵晟佳",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "Meta（Muse）",
+  "role": "MSL 首席科学家",
+  "orgs": [
+   "Llama",
+   "Meta",
+   "Muse"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "zuck",
+  "name": "Mark Zuckerberg",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "Meta（Muse）",
+  "role": "Meta CEO",
+  "orgs": [
+   "Llama",
+   "Meta",
+   "Muse"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "musk",
+  "name": "Elon Musk",
+  "zh": "",
+  "aliases": [],
+  "x": "elonmusk",
+  "tier": 1,
+  "group": "xAI（Grok）",
+  "role": "xAI 创始人（已并入 SpaceX 体系）",
+  "orgs": [
+   "Grok",
+   "SpaceX",
+   "xAI"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "nicolls",
+  "name": "Michael Nicolls",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "xAI（Grok）",
+  "role": "xAI 总裁 / CEO（说法不一）",
+  "orgs": [
+   "Grok",
+   "SpaceX",
+   "xAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "xiaohong",
+  "name": "Red Xiao",
+  "zh": "肖弘",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "Manus",
+  "role": "Manus CEO",
+  "orgs": [
+   "Manus"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "peak",
+  "name": "Peak Ji",
+  "zh": "季逸超",
+  "aliases": [],
+  "x": "peakji",
+  "tier": 1,
+  "group": "Manus",
+  "role": "Manus 联合创始人 · 首席科学家",
+  "orgs": [
+   "Manus"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "feifei",
+  "name": "Fei-Fei Li",
+  "zh": "李飞飞",
+  "aliases": [],
+  "x": "drfeifei",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "斯坦福教授 · World Labs CEO",
+  "orgs": [
+   "Stanford",
+   "World Labs",
+   "斯坦福"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "dean",
+  "name": "Jeff Dean",
+  "zh": "",
+  "aliases": [],
+  "x": "JeffDean",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "Discovery Loop 联合创始人（前 Google 首席科学家）",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Discovery Loop",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "karpathy",
+  "name": "Andrej Karpathy",
+  "zh": "",
+  "aliases": [],
+  "x": "karpathy",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "Eureka Labs 创始人",
+  "orgs": [
+   "Eureka"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "hinton",
+  "name": "Geoffrey Hinton",
+  "zh": "",
+  "aliases": [],
+  "x": "geoffreyhinton",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "多伦多大学名誉教授 · 诺贝尔奖得主",
+  "orgs": [],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "bengio",
+  "name": "Yoshua Bengio",
+  "zh": "",
+  "aliases": [],
+  "x": "Yoshua_Bengio",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "蒙特利尔大学 · LawZero 创始人",
+  "orgs": [
+   "LawZero"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "lecun",
+  "name": "Yann LeCun",
+  "zh": "",
+  "aliases": [],
+  "x": "ylecun",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "AMI Labs 执行董事长（2025 年底离开 Meta）",
+  "orgs": [
+   "AMI Labs",
+   "LeCun",
+   "Llama",
+   "Meta",
+   "Muse"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "ilya",
+  "name": "Ilya Sutskever",
+  "zh": "",
+  "aliases": [],
+  "x": "ilyasut",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "SSI 创始人",
+  "orgs": [
+   "SSI",
+   "Safe Superintelligence"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "ng",
+  "name": "Andrew Ng",
+  "zh": "吴恩达",
+  "aliases": [],
+  "x": "AndrewYNg",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "DeepLearning.AI · AI Fund",
+  "orgs": [],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "sutton",
+  "name": "Richard Sutton",
+  "zh": "",
+  "aliases": [],
+  "x": "RichardSSutton",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "阿尔伯塔大学 · 图灵奖得主",
+  "orgs": [
+   "Alberta",
+   "reinforcement",
+   "RL",
+   "Turing",
+   "Bitter Lesson",
+   "Keen",
+   "AI"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "vinyals",
+  "name": "Oriol Vinyals",
+  "zh": "",
+  "aliases": [],
+  "x": "OriolVinyalsML",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "Discovery Loop 联合创始人（前 Gemini 技术负责人）",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Discovery Loop",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "nbrown",
+  "name": "Noam Brown",
+  "zh": "",
+  "aliases": [],
+  "x": "polynoamial",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "OpenAI 推理研究负责人",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "silver",
+  "name": "David Silver",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "Ineffable Intelligence 创始人（前 DeepMind 强化学习负责人）",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "schulman",
+  "name": "John Schulman",
+  "zh": "",
+  "aliases": [],
+  "x": "johnschulman2",
+  "tier": 1,
+  "group": "研究权威",
+  "role": "Thinking Machines 首席科学家",
+  "orgs": [
+   "Thinking Machines"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "weil",
+  "name": "Kevin Weil",
+  "zh": "",
+  "aliases": [],
+  "x": "kevinweil",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "前 OpenAI 科学副总裁，2026-04 离开",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "peebles",
+  "name": "Bill Peebles",
+  "zh": "",
+  "aliases": [],
+  "x": "billpeeb",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "前 OpenAI Sora 负责人，2026-04 离开",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "lightcap",
+  "name": "Brad Lightcap",
+  "zh": "",
+  "aliases": [],
+  "x": "bradlightcap",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "前 OpenAI COO，2026-08 离开创业",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "simo",
+  "name": "Fidji Simo",
+  "zh": "",
+  "aliases": [],
+  "x": "fidjissimo",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "前 OpenAI 应用 CEO，2026-07 改为兼职顾问",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "achiam",
+  "name": "Joshua Achiam",
+  "zh": "",
+  "aliases": [],
+  "x": "jachiam0",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "前 OpenAI 首席未来学家，2026-07 离开",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "quocle",
+  "name": "Quoc Le",
+  "zh": "",
+  "aliases": [],
+  "x": "quocleix",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "Discovery Loop 联合创始人（前 Google）",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Discovery Loop",
+   "Gemini",
+   "Google"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "ghemawat",
+  "name": "Sanjay Ghemawat",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "Discovery Loop 联合创始人（前 Google）",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Discovery Loop",
+   "Gemini",
+   "Google"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "dennyzhou",
+  "name": "Denny Zhou",
+  "zh": "",
+  "aliases": [],
+  "x": "denny_zhou",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "Meta（前 Google Brain 推理团队创始人）",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google",
+   "Llama",
+   "Meta",
+   "Muse"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "jimmyba",
+  "name": "Jimmy Ba",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "xAI 联合创始人，2026-02 离开",
+  "orgs": [
+   "Grok",
+   "SpaceX",
+   "xAI"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "tonywu",
+  "name": "Tony Wu",
+  "zh": "吴宇怀",
+  "aliases": [],
+  "x": "Yuhu_ai_",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "xAI 联合创始人，2026-02 离开",
+  "orgs": [
+   "Grok",
+   "SpaceX",
+   "xAI"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "chaplot",
+  "name": "Devendra Chaplot",
+  "zh": "",
+  "aliases": [],
+  "x": "dchaplot",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "xAI（2026-03 从 Thinking Machines 加入）",
+  "orgs": [
+   "Grok",
+   "SpaceX",
+   "Thinking Machines",
+   "xAI"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "junyang",
+  "name": "林俊旸",
+  "zh": "林俊旸",
+  "aliases": [],
+  "x": "JustinLin610",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "前通义千问技术负责人，已离职",
+  "orgs": [
+   "Alibaba",
+   "Qwen",
+   "千问",
+   "通义",
+   "阿里"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "coxon",
+  "name": "Jacob Coxon",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 1,
+  "group": "2026 年离职 / 创业",
+  "role": "前 Anthropic 预训练研究员，2026-09 公开辞职",
+  "orgs": [
+   "Anthropic",
+   "Claude"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "murati",
+  "name": "Mira Murati",
+  "zh": "",
+  "aliases": [],
+  "x": "miramurati",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Thinking Machines CEO",
+  "orgs": [
+   "Thinking Machines"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "aravind",
+  "name": "Aravind Srinivas",
+  "zh": "",
+  "aliases": [],
+  "x": "AravSrinivas",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Perplexity CEO",
+  "orgs": [
+   "Perplexity"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "truell",
+  "name": "Michael Truell",
+  "zh": "",
+  "aliases": [],
+  "x": "mntruell",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Cursor CEO",
+  "orgs": [
+   "Anysphere",
+   "Cursor"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "scottwu",
+  "name": "Scott Wu",
+  "zh": "",
+  "aliases": [],
+  "x": "ScottWu46",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Cognition（Devin / Windsurf）CEO",
+  "orgs": [
+   "Cognition",
+   "Devin",
+   "Windsurf"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "mensch",
+  "name": "Arthur Mensch",
+  "zh": "",
+  "aliases": [],
+  "x": "arthurmensch",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Mistral CEO",
+  "orgs": [
+   "Mistral"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "clem",
+  "name": "Clem Delangue",
+  "zh": "",
+  "aliases": [],
+  "x": "ClementDelangue",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Hugging Face CEO",
+  "orgs": [
+   "Hugging Face"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "amasad",
+  "name": "Amjad Masad",
+  "zh": "",
+  "aliases": [],
+  "x": "amasad",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Replit CEO",
+  "orgs": [
+   "Replit"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "btaylor",
+  "name": "Bret Taylor",
+  "zh": "",
+  "aliases": [],
+  "x": "btaylor",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Sierra CEO · OpenAI 董事长",
+  "orgs": [
+   "ChatGPT",
+   "Codex",
+   "OpenAI",
+   "Sierra"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "adcock",
+  "name": "Brett Adcock",
+  "zh": "",
+  "aliases": [],
+  "x": "adcock_brett",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Figure CEO",
+  "orgs": [
+   "Figure"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "cvalenzuela",
+  "name": "Cristóbal Valenzuela",
+  "zh": "",
+  "aliases": [],
+  "x": "c_valenzuelab",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Runway CEO",
+  "orgs": [
+   "Runway"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "lilian",
+  "name": "Lilian Weng",
+  "zh": "",
+  "aliases": [],
+  "x": "lilianweng",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Thinking Machines 联合创始人",
+  "orgs": [
+   "Thinking Machines"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "lebrun",
+  "name": "Alex LeBrun",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "AMI Labs CEO",
+  "orgs": [
+   "AMI Labs",
+   "LeCun"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "azalia",
+  "name": "Azalia Mirhoseini",
+  "zh": "",
+  "aliases": [],
+  "x": "Azaliamirh",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Ricursive Intelligence 联合创始人",
+  "orgs": [
+   "Ricursive"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "goldie",
+  "name": "Anna Goldie",
+  "zh": "",
+  "aliases": [],
+  "x": "annadgoldie",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Ricursive Intelligence 联合创始人",
+  "orgs": [
+   "Ricursive"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "edwinchen",
+  "name": "Edwin Chen",
+  "zh": "",
+  "aliases": [],
+  "x": "echen",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Surge AI CEO",
+  "orgs": [
+   "Surge"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "sifre",
+  "name": "Laurent Sifre",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "H Company 联合创始人",
+  "orgs": [
+   "H Company",
+   "Holo"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "hausman",
+  "name": "Karol Hausman",
+  "zh": "",
+  "aliases": [],
+  "x": "hausman_k",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Physical Intelligence CEO",
+  "orgs": [
+   "Physical Intelligence"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "jagdeep",
+  "name": "Jagdeep Singh",
+  "zh": "",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "新兴 AI 公司负责人",
+  "role": "Rhoda AI 创始人",
+  "orgs": [
+   "Rhoda"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "yangzhilin",
+  "name": "杨植麟",
+  "zh": "杨植麟",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "月之暗面 董事长兼经理",
+  "orgs": [
+   "Kimi",
+   "Moonshot",
+   "月之暗面"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "liangwenfeng",
+  "name": "梁文锋",
+  "zh": "梁文锋",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "DeepSeek 创始人",
+  "orgs": [
+   "DeepSeek",
+   "深度求索"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "zhangpeng",
+  "name": "张鹏",
+  "zh": "张鹏",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "智谱 CEO",
+  "orgs": [
+   "GLM",
+   "Zhipu",
+   "智谱"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "tangjie",
+  "name": "唐杰",
+  "zh": "唐杰",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "清华大学教授 · 智谱发起人",
+  "orgs": [
+   "GLM",
+   "Tsinghua",
+   "Zhipu",
+   "智谱",
+   "清华"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "yanjunjie",
+  "name": "闫俊杰",
+  "zh": "闫俊杰",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "MiniMax 创始人兼 CEO",
+  "orgs": [
+   "MiniMax"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "jiangdaxin",
+  "name": "姜大昕",
+  "zh": "姜大昕",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "阶跃星辰 创始人",
+  "orgs": [
+   "StepFun",
+   "阶跃"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "yinqi",
+  "name": "印奇",
+  "zh": "印奇",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "阶跃星辰 董事长（2026-01 起）",
+  "orgs": [
+   "StepFun",
+   "阶跃"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "wuyonghui",
+  "name": "吴永辉",
+  "zh": "吴永辉",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "字节跳动 Seed 负责人",
+  "orgs": [
+   "ByteDance",
+   "Seed",
+   "字节",
+   "豆包"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "zhouchang",
+  "name": "周畅",
+  "zh": "周畅",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "字节 Seed 核心负责人之一",
+  "orgs": [
+   "ByteDance",
+   "Seed",
+   "字节",
+   "豆包"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "liangrubo",
+  "name": "梁汝波",
+  "zh": "梁汝波",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "字节跳动 CEO",
+  "orgs": [
+   "ByteDance",
+   "Seed",
+   "字节",
+   "豆包"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "shunyu",
+  "name": "姚顺雨",
+  "zh": "姚顺雨",
+  "aliases": [],
+  "x": "ShunyuYao12",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "腾讯首席 AI 科学家 · AI Infra 部负责人",
+  "orgs": [
+   "Tencent",
+   "混元",
+   "腾讯"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "eddiewu",
+  "name": "吴泳铭",
+  "zh": "吴泳铭",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "阿里巴巴 CEO",
+  "orgs": [
+   "Alibaba",
+   "Qwen",
+   "千问",
+   "通义",
+   "阿里"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "zhoujingren",
+  "name": "周靖人",
+  "zh": "周靖人",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "阿里云 CTO · 通义实验室负责人",
+  "orgs": [
+   "Alibaba",
+   "Qwen",
+   "千问",
+   "通义",
+   "阿里"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "dengtaihua",
+  "name": "邓泰华",
+  "zh": "邓泰华",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "中国 AI 公司负责人",
+  "role": "智元机器人 AgiBot CEO",
+  "orgs": [
+   "AgiBot",
+   "智元"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "percy",
+  "name": "Percy Liang",
+  "zh": "",
+  "aliases": [],
+  "x": "percyliang",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "斯坦福 · HELM",
+  "orgs": [
+   "Stanford",
+   "斯坦福"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "manning",
+  "name": "Christopher Manning",
+  "zh": "",
+  "aliases": [],
+  "x": "chrmanning",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "斯坦福 NLP",
+  "orgs": [
+   "Stanford",
+   "斯坦福"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "srush",
+  "name": "Sasha Rush",
+  "zh": "",
+  "aliases": [],
+  "x": "srush_nlp",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "Cornell",
+  "orgs": [],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "tridao",
+  "name": "Tri Dao",
+  "zh": "",
+  "aliases": [],
+  "x": "tri_dao",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "Princeton · Together AI",
+  "orgs": [
+   "Princeton",
+   "Together"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "lambert",
+  "name": "Nathan Lambert",
+  "zh": "",
+  "aliases": [],
+  "x": "natolambert",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "AI2 · Interconnects",
+  "orgs": [
+   "AI2",
+   "Interconnects"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "raschka",
+  "name": "Sebastian Raschka",
+  "zh": "",
+  "aliases": [],
+  "x": "rasbt",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "独立研究者",
+  "orgs": [],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "jimfan",
+  "name": "Jim Fan",
+  "zh": "",
+  "aliases": [],
+  "x": "DrJimFan",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "NVIDIA 具身智能",
+  "orgs": [
+   "NVIDIA",
+   "Nvidia"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "jasonwei",
+  "name": "Jason Wei",
+  "zh": "",
+  "aliases": [],
+  "x": "_jasonwei",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "推理与评测研究者",
+  "orgs": [
+   "OpenAI",
+   "Meta",
+   "chain-of-thought",
+   "reasoning",
+   "LLM"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "levine",
+  "name": "Sergey Levine",
+  "zh": "",
+  "aliases": [],
+  "x": "svlevine",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "UC Berkeley · Physical Intelligence",
+  "orgs": [
+   "Physical Intelligence"
+  ],
+  "strict": true,
+  "papers": true
+ },
+ {
+  "id": "neel",
+  "name": "Neel Nanda",
+  "zh": "",
+  "aliases": [],
+  "x": "NeelNanda5",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "Google DeepMind 可解释性",
+  "orgs": [
+   "Alphabet",
+   "DeepMind",
+   "Gemini",
+   "Google"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "chollet",
+  "name": "François Chollet",
+  "zh": "",
+  "aliases": [],
+  "x": "fchollet",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "ARC Prize · Ndea",
+  "orgs": [
+   "ARC Prize",
+   "Ndea"
+  ],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "mollick",
+  "name": "Ethan Mollick",
+  "zh": "",
+  "aliases": [],
+  "x": "emollick",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "沃顿商学院",
+  "orgs": [],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "marcus",
+  "name": "Gary Marcus",
+  "zh": "",
+  "aliases": [],
+  "x": "GaryMarcus",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "纽约大学名誉教授",
+  "orgs": [],
+  "strict": false,
+  "papers": true
+ },
+ {
+  "id": "simonw",
+  "name": "Simon Willison",
+  "zh": "",
+  "aliases": [],
+  "x": "simonw",
+  "tier": 2,
+  "group": "X / 学术活跃学者",
+  "role": "独立开发者",
+  "orgs": [],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "nadella",
+  "name": "Satya Nadella",
+  "zh": "",
+  "aliases": [],
+  "x": "satyanadella",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "Microsoft CEO",
+  "orgs": [
+   "Microsoft"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "suleyman",
+  "name": "Mustafa Suleyman",
+  "zh": "",
+  "aliases": [],
+  "x": "mustafasuleyman",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "Microsoft AI CEO",
+  "orgs": [
+   "Microsoft"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "jensen",
+  "name": "Jensen Huang",
+  "zh": "黄仁勋",
+  "aliases": [],
+  "x": "",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "NVIDIA CEO",
+  "orgs": [
+   "NVIDIA",
+   "Nvidia"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "ghodsi",
+  "name": "Ali Ghodsi",
+  "zh": "",
+  "aliases": [],
+  "x": "alighodsi",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "Databricks CEO",
+  "orgs": [
+   "Databricks"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "tobi",
+  "name": "Tobi Lütke",
+  "zh": "",
+  "aliases": [],
+  "x": "tobi",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "Shopify CEO",
+  "orgs": [
+   "Shopify"
+  ],
+  "strict": true,
+  "papers": false
+ },
+ {
+  "id": "pmarca",
+  "name": "Marc Andreessen",
+  "zh": "",
+  "aliases": [],
+  "x": "pmarca",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "a16z",
+  "orgs": [
+   "Andreessen",
+   "a16z"
+  ],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "eladgil",
+  "name": "Elad Gil",
+  "zh": "",
+  "aliases": [],
+  "x": "eladgil",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "投资人",
+  "orgs": [],
+  "strict": false,
+  "papers": false
+ },
+ {
+  "id": "sarahguo",
+  "name": "Sarah Guo",
+  "zh": "",
+  "aliases": [],
+  "x": "saranormous",
+  "tier": 2,
+  "group": "其他 AI 相关企业负责人与投资人",
+  "role": "Conviction · No Priors 主持人",
+  "orgs": [
+   "Conviction",
+   "No Priors"
+  ],
+  "strict": false,
+  "papers": false
+ }
+]

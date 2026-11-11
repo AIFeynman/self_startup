@@ -22,6 +22,7 @@ from . import _feed_follow as follow
 from . import _feed_cluster as cluster
 from . import _feed_gist as gist
 from . import _feed_hn as hnd
+from . import _people as people_mod
 from . import _feed_product as pa
 from . import _read_log
 from . import _feed_profile as prof
@@ -858,6 +859,28 @@ def follow_groups() -> list[dict]:
     return out
 
 
+class PeopleRefreshIn(BaseModel):
+    channels: list[str] = []
+
+
+@router.get("/people")
+def people_view(days: int = 1, person: str = ""):
+    return people_mod.view(days=days, person=person)
+
+
+@router.get("/people/status")
+def people_status():
+    return people_mod.status()
+
+
+@router.post("/people/refresh")
+def people_refresh(body: PeopleRefreshIn):
+    people_mod._init()
+    chans = body.channels or people_mod.manual_channels()
+    started = bool(chans) and people_mod.start(chans)
+    return {"started": started, **people_mod.status()}
+
+
 class FollowIn(BaseModel):
     group: str
     value: str
@@ -1373,6 +1396,10 @@ def _auto_loop():
                 threading.Thread(target=_profile_bg, daemon=True, name="feed-profile").start()
         except Exception as e:  # noqa: BLE001
             log.warning("feed profile check failed: %s", e)
+        try:
+            people_mod.start()               # 人物发声：各渠道到期才跑（X 3 小时、新闻 6 小时…）
+        except Exception as e:  # noqa: BLE001
+            log.warning("people check failed: %s", e)
         try:
             from . import _paper_maintain
             _paper_maintain.start()          # 论文库每周维护：到期才跑（paper.maintain_days）

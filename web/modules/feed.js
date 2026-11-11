@@ -2,8 +2,9 @@
 // 页面：深度完成待看 + 今日精选（前 5 条，编号行）+ 之前的精选（折叠）+ 分类 pill + 紧凑列表（无限加载）+ 一个多模式输入框（筛选 / 加兴趣 / 问 Agent）。
 // 键盘：↑↓ 移动选中，→ 详情（没解析过就开始深读），← 原文，j/k 切换类型，l 赞，s 收藏，x 隐藏。
 import { nowLocal, toMs, today } from '../api.js';
+import { peopleTab } from './_people.js';
 
-const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['hn', 'HN 精读'], ['video', '视频'], ['x_article', 'X 长文'], ['saved', '已收藏']];
+const TABS = [['', '全部'], ['paper', '论文'], ['blog', '博客'], ['podcast', '播客'], ['product', '产品'], ['repo', '项目'], ['discussion', '讨论'], ['hn', 'HN 精读'], ['video', '视频'], ['x_article', 'X 长文'], ['people', '人物'], ['saved', '已收藏']];
 const REFRESHABLE = ['paper', 'blog', 'podcast', 'product', 'repo', 'discussion', 'hn', 'video', 'x_article'];
 const TYPE_NAME = { paper: '论文', blog: '博客', podcast: '播客', product: '产品', repo: '项目', discussion: '讨论', video: '视频' };
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
@@ -247,6 +248,7 @@ export default {
     const { api, h, toast, ui, ask } = ctx;
     let backTo = history.state?.feedBack || null;
     if (backTo) { Object.assign(st, backTo.st); history.replaceState(null, '', location.href); }
+    if (ctx.sub?.[0] === 'people') st.tab = 'people';
     const [settings, status0] = await Promise.all([api.get('/api/settings'), api.get('/api/feed/status')]);
     let interests = [...(settings.feed?.interests || [])];
     let status = status0;
@@ -314,6 +316,7 @@ export default {
     const listBox = h('div.fd-list');
     const hnBar = h('div.fd-hnbar');
     const libBox = h('div.fd-lib');
+    const peopleBox = h('div.fd-people');
     const sentinel = h('div.fd-sentinel');
     const kbd = h('span.fd-kbd', { title: '↑↓ 选择 · → 详情（没解析过就开始深读）· ← 原文 · j/k 切换类型 · l 赞 · s 收藏 · / 输入' }, [h('kbd', {}, '↑'), h('kbd', {}, '↓'), ' 选择 · ', h('kbd', {}, '→'), ' 详情 · ',
       h('kbd', {}, '←'), ' 原文 · ', h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 切类型 · ', h('kbd', {}, 'l'), ' 赞 · ', h('kbd', {}, 's'), ' 收藏 · ', h('kbd', {}, '/'), ' 输入']);
@@ -332,7 +335,7 @@ export default {
     let fresh = null;   // { since, added, label }
     el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick, readingBox, waitBox,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, groupBox, earlierBox,
-      h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, sentinel);
+      h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, peopleBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
     function renderStatus() {
@@ -359,7 +362,7 @@ export default {
     // 分类页的「刷新本类」：只跑这个分类的来源（论文 → HF / AlphaXiv …）；已入库的同一条只更新不重复
     function renderTabRefresh() {
       const name = TABS.find(([id]) => id === st.tab)?.[1];
-      tabRefresh.hidden = !REFRESHABLE.includes(st.tab);
+      tabRefresh.style.display = REFRESHABLE.includes(st.tab) ? '' : 'none';
       const busy = status.running && status.scope === st.tab;
       tabRefresh.disabled = !!status.running;
       tabRefresh.title = status.running ? '正在刷新，稍等' : `只抓「${name}」的来源，抓新的、合并重复的`;
@@ -952,6 +955,7 @@ export default {
     function switchTab(id) {
       if (st.tab === id) return;
       st.tab = id; clearFresh(); renderTabs(); renderTabRefresh();
+      if (id !== 'people' && location.hash.startsWith('#feed/people')) history.replaceState(history.state, '', '#feed');
       return loadList();
     }
     async function stepTab(d) {
@@ -1029,6 +1033,17 @@ export default {
     async function loadList() {
       const seq = ++loadSeq;
       renderHnBar();
+      const people = st.tab === 'people';
+      peopleBox.style.display = people ? '' : 'none';
+      opts.style.display = kbd.style.display = people ? 'none' : '';
+      if (people) {
+        listBox.style.display = libBox.style.display = 'none';
+        entries = entries.filter((e) => e.kind !== 'list');
+        if (sel >= entries.length) sel = -1;
+        listBox.replaceChildren();
+        listOffset = listTotal = 0; renderSentinel();
+        return peopleTab(peopleBox, ctx, ctx.sub?.[0] === 'people' ? ctx.sub[1] || '' : '');
+      }
       listBox.style.display = libView() ? 'none' : '';
       libBox.style.display = libView() ? '' : 'none';
       if (libView()) {
