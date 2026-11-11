@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS people_items (
     notified INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_people_items_seen ON people_items(first_seen);
+CREATE TABLE IF NOT EXISTS people_rejected (      -- 判过「不是本人发声」的，回看窗口内不再重判
+    id TEXT PRIMARY KEY,
+    at TEXT
+);
 CREATE TABLE IF NOT EXISTS people_runs (
     channel TEXT PRIMARY KEY,
     at TEXT,
@@ -445,28 +449,41 @@ VOICE_SYSTEM = (
 )
 
 
-def voice_filter(items: list[dict], run, model: str = "claude-haiku-5-5") -> tuple[list[dict], list[str]]:
-    """留下本人发声的条目；某一批调用失败时这一批原样保留（宁可多收），错误另报。"""
+_judge_lock = threading.Lock()
+
+
+def voice_filter(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait: float = 5) -> tuple[list[dict], list[str], list[str]]:
+    """返回 (本人发声的条目, 判为不是的 id, 错误)。同一时刻只跑一个判断（本机 Claude 并发时容易返回异常）；一批失败等一会儿重试一次，
+    仍失败的这批这轮不收（还在回看窗口里，下一轮会重新抓、重新判断），错误另报。"""
     idx = by_id()
-    keep, errs = [], []
+    keep, rejected, errs = [], [], []
     for i in range(0, len(items), VOICE_BATCH):
         batch = items[i:i + VOICE_BATCH]
         rows = [{"id": it["id"], "channel": it["channel"], "people": [idx[p]["name"] + (f"（{idx[p]['zh']}）" if idx[p].get("zh") else "") + f"，{idx[p]['role']}"
-                                           for p in it["people"] if p in idx],
+                                                                for p in it["people"] if p in idx],
                  "title": it["title"], "summary": it["summary"][:300],
                  "source": it["extra"].get("uploader") or it["extra"].get("outlet") or it["extra"].get("show") or it["extra"].get("site") or ""}
                 for it in batch]
-        try:
-            text = run(json.dumps(rows, ensure_ascii=False), system=VOICE_SYSTEM, model=model)["text"]
-            m = re.search(r"\{.*\}", text or "", re.S)
-            got = {str(x.get("id")): bool(x.get("voice")) for x in (json.loads(m.group(0)).get("items") or []) if isinstance(x, dict)} if m else {}
-            if not got:
-                raise ValueError("没有解析出结果")
-            keep += [it for it in batch if got.get(it["id"], True)]
-        except Exception as e:  # noqa: BLE001
-            errs.append(f"本人发声判断第 {i // VOICE_BATCH + 1} 批：{type(e).__name__}: {str(e)[:100]}")
-            keep += batch
-    return keep, errs
+        got, last = {}, ""
+        for attempt in range(2):
+            try:
+                with _judge_lock:
+                    text = run(json.dumps(rows, ensure_ascii=False), system=VOICE_SYSTEM, model=model)["text"]
+                m = re.search(r"\{.*\}", text or "", re.S)
+                got = {str(x.get("id")): bool(x.get("voice")) for x in (json.loads(m.group(0)).get("items") or []) if isinstance(x, dict)} if m else {}
+                if got:
+                    break
+                last = f"没有解析出结果：{(text or '')[:80]!r}"
+            except Exception as e:  # noqa: BLE001
+                last = f"{type(e).__name__}: {str(e)[:100]}"
+            if attempt == 0 and retry_wait:
+                time.sleep(retry_wait)
+        if got:
+            keep += [it for it in batch if got.get(it["id"])]
+            rejected += [it["id"] for it in batch if got.get(it["id"]) is False]
+        else:
+            errs.append(f"本人发声判断第 {i // VOICE_BATCH + 1} 批（{len(batch)} 条，下轮重判）：{last}")
+    return keep, rejected, errs
 
 
 def _haiku_runner():
@@ -535,11 +552,16 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
         except Exception as e:  # noqa: BLE001
             items, errs = [], [f"{type(e).__name__}: {str(e)[:160]}"]
         if ch in JUDGED and items:
-            seen = {r["id"] for r in db.rows(f"SELECT id FROM people_items WHERE id IN ({','.join('?' * len(items))})",
-                                             [it["id"] for it in items])}
-            fresh = [it for it in items if it["id"] not in seen]
+            marks = ",".join("?" * len(items))
+            ids = [it["id"] for it in items]
+            seen = {r["id"] for r in db.rows(f"SELECT id FROM people_items WHERE id IN ({marks})", ids)}
+            rejected = {r["id"] for r in db.rows(f"SELECT id FROM people_rejected WHERE id IN ({marks})", ids)}
+            fresh = [it for it in items if it["id"] not in seen | rejected]
             runner, model = judge or _haiku_runner()
-            kept, verrs = voice_filter(fresh, runner, model)
+            kept, rejected_now, verrs = voice_filter(fresh, runner, model)
+            now = db.now()
+            for iid in rejected_now:
+                db.execute("INSERT OR REPLACE INTO people_rejected(id, at) VALUES(?, ?)", [iid, now])
             items = [it for it in items if it["id"] in seen] + kept
             errs = errs + verrs
         new = upsert(items)
@@ -550,6 +572,7 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
 
     with ThreadPoolExecutor(max(1, len(chans))) as ex:
         results = dict(ex.map(one, chans))
+    db.execute("DELETE FROM people_rejected WHERE at < ?", [(datetime.now() - timedelta(days=14)).isoformat(timespec="seconds")])
     summarize_and_notify()
     return results
 

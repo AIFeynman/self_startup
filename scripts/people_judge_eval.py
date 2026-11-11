@@ -30,7 +30,7 @@ def main():
         if not f.exists():
             continue
         pool = [it for it in json.loads(f.read_text()) if it["id"] in labels]
-        kept, errs = P.voice_filter(pool, run, a.model)
+        kept, _, errs = P.voice_filter(pool, run, a.model)
         keep = {it["id"] for it in kept}
         gold = {i for i in (it["id"] for it in pool) if labels[i]["voice"]}
         ev = lambda ids: {labels[i].get("event") or i for i in ids}

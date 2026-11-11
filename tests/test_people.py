@@ -26,6 +26,7 @@ def _person(pid):
 
 def _wipe():
     P._init()
+    db.execute("DELETE FROM people_rejected")
     db.execute("DELETE FROM people_items")
     db.execute("DELETE FROM people_runs")
 
@@ -146,13 +147,20 @@ def test_loud_x_accounts_are_searched_alone(monkeypatch):
 def test_voice_filter_drops_commentary_and_keeps_batch_on_failure():
     items = [P._item("news:1", "news", ["hinton"], "Hinton warns", "u", ""), P._item("news:2", "news", ["hinton"], "About Hinton", "u", "")]
     judge = lambda prompt, system, model: {"text": json.dumps({"items": [{"id": "news:1", "voice": True}, {"id": "news:2", "voice": False}]})}
-    kept, errs = P.voice_filter(items, judge)
-    assert [i["id"] for i in kept] == ["news:1"] and not errs
+    kept, rejected, errs = P.voice_filter(items, judge)
+    assert [i["id"] for i in kept] == ["news:1"] and rejected == ["news:2"] and not errs
+
+    calls = []
 
     def boom(*a, **k):
+        calls.append(1)
         raise RuntimeError("offline")
-    kept, errs = P.voice_filter(items, boom)
-    assert len(kept) == 2 and errs
+    kept, rejected, errs = P.voice_filter(items, boom, retry_wait=0)
+    assert kept == [] and rejected == [] and len(calls) == 2 and "下轮重判" in errs[0]
+
+    replies = iter(["busy", json.dumps({"items": [{"id": "news:1", "voice": True}, {"id": "news:2", "voice": False}]})])
+    kept, _, errs = P.voice_filter(items, lambda *a, **k: {"text": next(replies)}, retry_wait=0)
+    assert [i["id"] for i in kept] == ["news:1"] and not errs
 
 
 def test_run_merges_people_judges_new_only_and_notifies_once(monkeypatch):
@@ -161,7 +169,8 @@ def test_run_merges_people_judges_new_only_and_notifies_once(monkeypatch):
     monkeypatch.setattr(P.notify, "notify", lambda *a, **k: sent.append((a, k)) or 1)
     batches = [[P._item("youtube:v1", "youtube", ["karpathy"], "Karpathy talk", "u", "2026-11-10"),
                 P._item("youtube:v2", "youtube", ["karpathy"], "About Karpathy", "u", "2026-11-10")],
-               [P._item("youtube:v1", "youtube", ["feifei"], "Karpathy talk", "u", "2026-11-10")]]
+               [P._item("youtube:v1", "youtube", ["feifei"], "Karpathy talk", "u", "2026-11-10"),
+                P._item("youtube:v2", "youtube", ["karpathy"], "About Karpathy", "u", "2026-11-10")]]
     monkeypatch.setattr(P, "FETCHERS", {"youtube": lambda pool: (batches.pop(0), []), "x": lambda pool: ([], ["X boom"])})
     judged = []
 
@@ -174,6 +183,7 @@ def test_run_merges_people_judges_new_only_and_notifies_once(monkeypatch):
     assert len(sent) == 1 and "名人新发声 1 条" in sent[0][0][1]
     r = P.run(["youtube"], judge=(judge, "m"))
     assert judged == ["youtube:v1", "youtube:v2"] and r["youtube"]["new"] == 0 and len(sent) == 1
+    assert db.row("SELECT id FROM people_rejected WHERE id='youtube:v2'")
     row = db.row("SELECT people, notified FROM people_items WHERE id='youtube:v1'")
     assert json.loads(row["people"]) == ["feifei", "karpathy"] and row["notified"] == 1
     assert set(P.due()) == set(P.CHANNELS) - {"youtube", "x"}
