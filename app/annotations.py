@@ -208,7 +208,7 @@ def _answer(aid: int, mid: int, question: str, source: str) -> None:
         a = db.row("SELECT * FROM annotations WHERE id=?", [aid])
         engine = settings.get("engines.default", "claude")
         for ev in agent.run_stream(_prompt(a, question, source), engine=engine, system=SYSTEM,
-                                   session=a["engine_session"], add_dirs=[str(kb.KB_DIR)]):
+                                   session=a["engine_session"], add_dirs=[str(kb.KB_DIR)], readonly=True):
             if ev["type"] == "session":
                 session = ev["id"]
             elif ev["type"] == "text":  # 边写边存，页面轮询时能看到进度
