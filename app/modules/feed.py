@@ -972,9 +972,6 @@ def _still_open(x: dict) -> bool:
     return (not x["deep"] or x["deep"]["status"] == "failed") and x["feedback"].get("vote", 0) >= 0
 
 
-PICKS_GROUP_N = 4
-
-
 @router.get("/picks")
 def picks():
     """页面顶部四组：waiting 深读完还没开始读、reading 读了一部分没读完、top 今日精选（打开页面时算，并记下来）、earlier 被换下但还没处理的精选。"""
@@ -992,12 +989,7 @@ def picks():
     cutoff = _iso(now - timedelta(days=PICKS_KEEP_DAYS))
     shown = {r["item_id"]: r["last_at"] for r in db.rows("SELECT item_id, last_at FROM feed_picks WHERE last_at>=?", [cutoff])}
     earlier = sorted((x for x in rest[rk.PICKS_N:] if x["id"] in shown and _still_open(x)), key=lambda x: shown[x["id"]], reverse=True)
-    taken = {x["id"] for x in top}
-    by_type = lambda t: [x for x in rest[rk.PICKS_N:] if x["type"] == t and x["id"] not in taken][:PICKS_GROUP_N]   # noqa: E731
-    grouped = {x["id"] for t in ("paper", "repo") for x in by_type(t)}
-    earlier = [x for x in earlier if x["id"] not in grouped]
-    return {k: [_public(x) for x in v] for k, v in (("waiting", waiting), ("reading", reading), ("top", top), ("earlier", earlier),
-                                                    ("papers", by_type("paper")), ("repos", by_type("repo")))}
+    return {k: [_public(x) for x in v] for k, v in (("waiting", waiting), ("reading", reading), ("top", top), ("earlier", earlier))}
 
 
 class FeedbackIn(BaseModel):
