@@ -215,3 +215,14 @@ def test_fetch_blog_reads_own_feeds_within_window(monkeypatch):
     items, errs = P.fetch_blog([_person("marcus"), _person("hinton")])
     assert not errs and [i["title"] for i in items] == ["New essay"] and items[0]["people"] == ["marcus"]
     assert items[0]["extra"]["site"] == "garymarcus.substack.com"
+
+
+def test_local_haiku_runs_outside_any_repo(monkeypatch):
+    from pathlib import Path
+    from app.modules import feed
+    seen = {}
+    monkeypatch.setattr(feed.agent, "run_once", lambda prompt, **kw: seen.update(kw) or {"text": "{}"})
+    feed._haiku("p", system="s", model="m")
+    repo = Path(__file__).resolve().parents[1]
+    assert seen.get("cwd") and not Path(seen["cwd"]).resolve().is_relative_to(repo)
+    assert not (Path(seen["cwd"]) / ".git").exists()
