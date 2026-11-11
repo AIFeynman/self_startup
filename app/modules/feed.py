@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import re
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -658,8 +657,7 @@ def _patch_extra(item_id: str, patch: dict) -> None:
 
 
 def _haiku(prompt: str, system: str = "", model: str = "") -> dict:
-    # 在临时目录起：本机 Claude 的 Stop hook（~/.agents/scripts/finish_check）发现仓库里有未推送的提交会拦下回复
-    r = agent.run_once(prompt, engine="claude", system=system, model=model, readonly=True, fallback=False, cwd=tempfile.gettempdir())
+    r = agent.run_once(prompt, engine="claude", system=system, model=model, readonly=True, fallback=False)
     if not (r.get("text") or "").strip():
         raise RuntimeError((r.get("log") or "本机 Claude 没有返回内容")[-200:])
     return r

@@ -234,3 +234,12 @@ def test_chat_on_default_engine_uses_module_model(client, monkeypatch):
     monkeypatch.setattr(agent, "run_stream", fake_stream)
     client.post("/api/chat/vision", json={"message": "你是哪个模型", "ref": "vision:overview"}).text
     assert seen[-1]["model"] == "claude-sonnet-5-5"
+
+
+def test_readonly_claude_runs_skip_user_hooks():
+    import json as _json
+    from app import agent
+    ro = agent._claude_cmd("p", "", "", [], readonly=True)
+    assert _json.loads(ro[ro.index("--settings") + 1]).get("disableAllHooks") is True
+    rw = agent._claude_cmd("p", "", "", [], readonly=False)
+    assert not _json.loads(rw[rw.index("--settings") + 1]).get("disableAllHooks")

@@ -98,6 +98,8 @@ def _claude_cmd(prompt: str, system: str, session: str, add_dirs: list[str], mod
     if readonly:  # 只读板块工具只留这几个（子 Agent、Bash 都不给，curl 能调写接口）；回复要快，边生成边出字，也不加载用不上的 MCP
         cmd += ["--tools", ",".join(READONLY_TOOLS), "--allowedTools", *READONLY_TOOLS, *[f"mcp__{name}" for name in mcp or {}],
                 "--include-partial-messages", "--strict-mcp-config"]
+        # 只读会话不改仓库：用户级 Stop hook（finish_check）会因仓库里别人留下的未推送提交拦下回复
+        cmd += ["--settings", json.dumps({"disableAllHooks": True})]
         if mcp:
             cmd += ["--mcp-config", json.dumps({"mcpServers": mcp}, ensure_ascii=False)]
     else:
