@@ -41,12 +41,13 @@ def test_comment_ask_followup_and_kb(client, monkeypatch):
     assert t["engine_session"] == "s-1"
     prompt, kw = calls[0]
     assert "「τ-bench」" in prompt and "…τ-bench…全文" in prompt and kw["session"] == "" and "阅读助手" in kw["system"]
+    assert kw["readonly"] is True
 
     # 追问：续接会话，不再塞全文
     client.post(f"/api/annotations/{a['id']}/msgs", json={"text": "和 SWE-bench 比呢？", "ask": True, "source": "全文"})
     t = _wait_answer(client, a["id"])
     prompt, kw = calls[1]
-    assert kw["session"] == "s-1" and "和 SWE-bench 比呢？" in prompt and "全文" not in prompt
+    assert kw["session"] == "s-1" and "和 SWE-bench 比呢？" in prompt and "全文" not in prompt and kw["readonly"] is True
     assert [m["role"] for m in t["msgs"]] == ["user", "assistant", "user", "assistant"]
 
     # 解决、同步进知识库
