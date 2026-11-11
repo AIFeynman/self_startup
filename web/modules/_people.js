@@ -26,9 +26,9 @@ const CSS = `
 @media (max-width: 640px) { .pp-it { grid-template-columns: minmax(0, 1fr) auto; } .pp-it .pp-ch { grid-column: 1 / -1; justify-self: start; } }
 `;
 
-const CH = { x: 'X', youtube: 'YouTube', podcast: '播客', paper: '论文', news: '新闻', bili: 'B站' };
+const CH = { x: 'X', blog: '博客', youtube: 'YouTube', podcast: '播客', paper: '论文', news: '新闻', bili: 'B站' };
 // 视频和播客深读时才转写：播客传音频直链，按视频走字幕 / whisper
-const DEEP = new Set(['youtube', 'podcast', 'paper', 'news', 'bili']);
+const DEEP = new Set(['blog', 'youtube', 'podcast', 'paper', 'news', 'bili']);
 const state = { view: 'today', person: '' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
@@ -55,7 +55,7 @@ export function peopleTab(box, ctx, sub = '') {
     } catch (e) { btn.disabled = false; toast('开始深读失败：' + e.message, true); }
   }
 
-  const meta = (it) => [it.date ? it.date.slice(5, 16).replace('T', ' ') : '', it.extra.uploader || it.extra.outlet || it.extra.show || '',
+  const meta = (it) => [it.date ? it.date.slice(5, 16).replace('T', ' ') : '', it.extra.uploader || it.extra.outlet || it.extra.show || it.extra.site || '',
     it.channel === 'x' && it.popularity ? `${it.popularity} 赞` : ''].filter(Boolean).join(' · ');
   const row = (it, showPeople = false, idx = {}) => {
     const b = DEEP.has(it.channel) ? h('button.ghost.sm', { onclick: (e) => deep(it, e.currentTarget) }, '深读') : h('span');

@@ -47,18 +47,12 @@ CREATE TABLE IF NOT EXISTS people_runs (
 """
 
 # 渠道：名称、多少小时跑一次（YouTube 搜索 100 配额 / 次，一轮约 2000 配额，8 小时一轮；iTunes 每人一次请求，半天一轮）
-CHANNELS = {"x": ("X", 3), "news": ("新闻", 6), "youtube": ("YouTube", 8), "podcast": ("播客", 12),
+CHANNELS = {"x": ("X", 3), "blog": ("博客", 6), "news": ("新闻", 6), "youtube": ("YouTube", 8), "podcast": ("播客", 12),
             "paper": ("论文", 12), "bili": ("B站", 12)}
-LOOKBACK_DAYS = {"x": 2, "news": 2, "youtube": 3, "podcast": 4, "paper": 5, "bili": 4}
+LOOKBACK_DAYS = {"x": 2, "blog": 4, "news": 2, "youtube": 3, "podcast": 4, "paper": 5, "bili": 4}
 X_CHUNK, YT_CHUNK, ARXIV_CHUNK = 6, 10, 10
 # 发帖量大的账号单独一组搜：一次请求只有一页（约 20 条），同组发得多的会把别人挤掉
 X_SOLO = {"musk", "marcus", "mollick", "altman", "aravind", "wang", "simonw", "lambert", "raschka", "pmarca", "clem", "amasad"}
-
-STATEMENT_RE = re.compile(
-    r"\b(?:interview\w*|says?|said|tells?|told|warns?|predicts?|believes?|argues?|podcast|keynote|speech|talks?|"
-    r"testif\w*|op-ed|essay|writes|wrote|letter|memo|conversation|explains?|reveals?|admits?|calls? for|thinks|"
-    r"according to|claims?|announces?|unveils?|on why|on how|Q&A|fireside)\b"
-    r"|访谈|专访|对话|表示|称|演讲|发言|直言|认为|谈|回应|撰文|致信|内部信|采访|发布会|圆桌|分享", re.I)
 
 _lock = threading.Lock()
 _state: dict = {"running": False, "channels": [], "started": ""}
@@ -99,8 +93,16 @@ def _name_res(pid: str) -> list[re.Pattern]:
     return out
 
 
+@cache
+def _title_res(pid: str) -> list[re.Pattern]:
+    return [re.compile(re.escape(t).replace(r"\ ", r"\s*"), re.I) for t in by_id()[pid].get("titles", [])]
+
+
 def mentions(p: dict, text: str) -> bool:
-    """文本里出现了这个人：名字（中英文、别名）命中；常见名还要求同时出现他的机构词。"""
+    """文本里出现了这个人：名字（中英文、别名）命中，常见名还要求同时出现他的机构词；
+    或者出现了只指向他的头衔（如 Anthropic CEO）。"""
+    if any(r.search(text) for r in _title_res(p["id"])):
+        return True
     if not any(r.search(text) for r in _name_res(p["id"])):
         return False
     if p.get("strict"):
@@ -165,7 +167,7 @@ VIDEO_JUNK_RE = re.compile(r"#shorts|\bshorts?\b|AI短片|\breacts?\b|\breaction
 
 
 # 搜索量太大的名字单独一组搜，免得把同组其他人挤出 50 条结果
-SOLO = {"musk", "altman", "zuck", "jensen", "sundar", "nadella", "hinton", "feifei", "ng", "lecun"}
+SOLO = {"musk", "altman", "dario", "wang", "zuck", "jensen", "sundar", "nadella", "hinton", "feifei", "ng", "lecun"}
 
 
 def yt_chunks(pool: list[dict]) -> list[list[tuple[str, dict]]]:
@@ -252,7 +254,7 @@ def fetch_podcast(pool: list[dict], pause: float = 2.5) -> tuple[list[dict], lis
                 time.sleep(pause)
             try:
                 r = c.get("https://itunes.apple.com/search", params={
-                    "term": term, "entity": "podcastEpisode", "limit": 25, "country": "cn" if is_zh(term) else "us"})
+                    "term": term, "entity": "podcastEpisode", "limit": 200, "country": "cn" if is_zh(term) else "us"})
                 r.raise_for_status()
                 res = r.json().get("results", [])
             except (httpx.HTTPError, ValueError) as e:
@@ -315,9 +317,12 @@ def fetch_paper(pool: list[dict], pause: float = 3.0) -> tuple[list[dict], list[
     return list(found.values()), errs
 
 
-# ---------- 新闻：Google News RSS 按人名搜最近 1 天，只留本人发声（访谈、表态、演讲、撰文）的标题 ----------
-def news_url(name: str) -> str:
-    q = quote(f'"{name}" when:1d')
+# ---------- 新闻：Google News RSS 按人名搜最近 1 天，标题里出现本人的都收，是不是本人发声交给 Haiku 判断 ----------
+NEWS_WINDOW = "1d"
+
+
+def news_url(name: str, window: str = "") -> str:
+    q = quote(f'"{name}" when:{window or NEWS_WINDOW}')
     if is_zh(name):
         return f"https://news.google.com/rss/search?q={q}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
     return f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
@@ -330,7 +335,7 @@ def news_items(p: dict, text: str) -> list[dict]:
         title = re.sub(r"\s+-\s+[^-]+$", "", e.get("title", ""))
         tm = e.get("published_parsed")
         date = time.strftime("%Y-%m-%dT%H:%M:%S", tm) if tm else ""
-        if (date and date < since) or not STATEMENT_RE.search(title) or not mentions(p, title):
+        if (date and date < since) or not mentions(p, title):
             continue
         link = e.get("link", "")
         out.append(_item("news:" + hashlib.sha1(title.lower().encode()).hexdigest()[:16], "news", [p["id"]], title, link, date,
@@ -358,6 +363,33 @@ def fetch_news(pool: list[dict]) -> tuple[list[dict], list[str]]:
                     hit = found.setdefault(it["id"], it)
                     hit["people"] = sorted(set(hit["people"]) | set(it["people"]))
     return list(found.values()), errs
+
+
+# ---------- 博客：本人的博客 / Substack / 周报 RSS，发的就是本人的话，不用再判断 ----------
+def fetch_blog(pool: list[dict]) -> tuple[list[dict], list[str]]:
+    since = _cutoff("blog")
+    out, errs = [], []
+    with src._client() as c:
+        def one(p):
+            try:
+                r = c.get(p["rss"], headers={"User-Agent": src.BROWSER_UA})
+                r.raise_for_status()
+                return p, r.text, None
+            except httpx.HTTPError as e:
+                return p, "", f"博客 {p['name']}: {type(e).__name__}"
+        with ThreadPoolExecutor(4) as ex:
+            for p, text, err in ex.map(one, [p for p in pool if p.get("rss")]):
+                if err:
+                    errs.append(err)
+                for e in feedparser.parse(text).entries:
+                    tm = e.get("published_parsed") or e.get("updated_parsed")
+                    date = time.strftime("%Y-%m-%dT%H:%M:%S", tm) if tm else ""
+                    link = e.get("link", "")
+                    if not link or date < since:
+                        continue
+                    out.append(_item("blog:" + hashlib.sha1(link.encode()).hexdigest()[:16], "blog", [p["id"]], e.get("title", ""),
+                                     link, date, re.sub(r"<[^>]+>", " ", e.get("summary", "")), site=p["rss"].split("/")[2]))
+    return out, errs
 
 
 # ---------- B站：经公共 RSSHub 按中文名搜视频（实例常不可用，失败不影响其他渠道） ----------
@@ -402,10 +434,12 @@ def fetch_bili(pool: list[dict], bases: list[str] | None = None) -> tuple[list[d
 JUDGED = {"youtube", "news", "podcast", "bili"}
 VOICE_BATCH = 30
 VOICE_SYSTEM = (
-    "你在帮用户追踪 AI 领域人物本人的发声。每条输入是一个视频或新闻标题，以及它关联的人物。\n"
-    "判断这条是不是该人物本人的发声：本人出镜的访谈、演讲、播客、发布会、听证会、本人撰文，或者报道本人明确说了什么、宣布了什么。\n"
-    "不算本人发声：以他为话题的评论、事件解读、八卦、传记、盘点、股价或公司新闻、粉丝剪辑、只是提到他的名字；"
-    "标题里有他的名字也不代表是他在说，要看是不是他本人在讲、或报道的是他本人的原话。拿不准时判 false。\n"
+    "你在帮用户发现 AI 领域人物新的原始发声。每条输入是一条新闻 / 视频 / 播客（channel 标明），以及它关联的人物（带身份）和来源（source）。\n"
+    "voice=true：本人新出镜或出声的访谈、演讲、播客、发布会、听证会；本人撰文或署名论文；"
+    "报道本人新说了什么、宣布了什么、他的团队新发布了什么的新闻（媒体是谁都可以，channel=news 时这类报道都算）。\n"
+    "voice=false：同名的其他人；以他为话题的评论、解读、八卦、传记、盘点；股价或公司新闻；"
+    "channel 为 youtube / podcast / bili 时，source 是翻译、解读、搬运、剪辑类频道，或节目语言不是中文或英文的；Shorts、AI 配音；"
+    "明显是旧内容的重发；多条不相关新闻的合集；只是提到名字。标题里有他的名字不代表是他在说，拿不准时判 false。\n"
     '只输出 JSON：{"items": [{"id": "<原样返回>", "voice": true 或 false}]}，每条输入都要有输出。'
 )
 
@@ -416,10 +450,11 @@ def voice_filter(items: list[dict], run, model: str = "claude-haiku-5-5") -> tup
     keep, errs = [], []
     for i in range(0, len(items), VOICE_BATCH):
         batch = items[i:i + VOICE_BATCH]
-        rows = [{"id": it["id"], "people": [idx[p]["name"] + (f"（{idx[p]['zh']}）" if idx[p].get("zh") else "") + f"，{idx[p]['role']}"
+        rows = [{"id": it["id"], "channel": it["channel"], "people": [idx[p]["name"] + (f"（{idx[p]['zh']}）" if idx[p].get("zh") else "") + f"，{idx[p]['role']}"
                                            for p in it["people"] if p in idx],
                  "title": it["title"], "summary": it["summary"][:300],
-                 "source": it["extra"].get("uploader") or it["extra"].get("outlet") or ""} for it in batch]
+                 "source": it["extra"].get("uploader") or it["extra"].get("outlet") or it["extra"].get("show") or it["extra"].get("site") or ""}
+                for it in batch]
         try:
             text = run(json.dumps(rows, ensure_ascii=False), system=VOICE_SYSTEM, model=model)["text"]
             m = re.search(r"\{.*\}", text or "", re.S)
@@ -438,7 +473,7 @@ def _haiku_runner():
     return _haiku, str(cfg("local_model"))
 
 
-FETCHERS = {"x": fetch_x, "youtube": fetch_youtube, "podcast": fetch_podcast, "paper": fetch_paper,
+FETCHERS = {"x": fetch_x, "blog": fetch_blog, "youtube": fetch_youtube, "podcast": fetch_podcast, "paper": fetch_paper,
             "news": fetch_news, "bili": fetch_bili}
 
 

@@ -44,6 +44,9 @@ def test_mentions_uses_names_aliases_and_org_for_common_names():
     assert P.mentions(feifei, "李飞飞谈空间智能") and P.mentions(feifei, "Fei-Fei Li at Stanford")
     assert not P.mentions(tony, "Tony Wu wins local chess cup")
     assert P.mentions(tony, "Tony Wu, xAI co-founder, on math reasoning")
+    assert P.mentions(_person("dario"), "Anthropic CEO predicts AI could help end major diseases")
+    assert P.mentions(_person("yanjunjie"), "MiniMax CEO：低推理成本就是护城河")
+    assert not P.mentions(_person("dario"), "OpenAI CEO on compute")
 
 
 def test_fetch_x_maps_authors_and_drops_old(monkeypatch):
@@ -106,14 +109,16 @@ def test_fetch_paper_matches_exact_author(monkeypatch):
     assert not errs and [i["id"] for i in items] == ["arxiv:2611.00001"] and items[0]["people"] == ["neel"]
 
 
-def test_news_items_keep_statements_only():
+def test_news_items_keep_titles_naming_the_person_within_window():
     pub = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    old = (datetime.now(timezone.utc) - timedelta(days=9)).strftime("%a, %d %b %Y %H:%M:%S GMT")
     rss = f"""<rss><channel>
-      <item><title>Geoffrey Hinton warns of AI cyberattacks - Outlet</title><link>https://n/1</link><pubDate>{pub}</pubDate></item>
-      <item><title>Geoffrey Hinton's house for sale - Outlet</title><link>https://n/2</link><pubDate>{pub}</pubDate></item>
+      <item><title>Geoffrey Hinton likens AI risks to Chernobyl - Outlet</title><link>https://n/1</link><pubDate>{pub}</pubDate></item>
+      <item><title>Yoshua Bengio on safety - Outlet</title><link>https://n/2</link><pubDate>{pub}</pubDate></item>
+      <item><title>Geoffrey Hinton wins prize - Outlet</title><link>https://n/3</link><pubDate>{old}</pubDate></item>
     </channel></rss>"""
     items = P.news_items(_person("hinton"), rss)
-    assert [i["title"] for i in items] == ["Geoffrey Hinton warns of AI cyberattacks"]
+    assert [i["title"] for i in items] == ["Geoffrey Hinton likens AI risks to Chernobyl"]
     assert "hl=zh-CN" in P.news_url("杨植麟") and "hl=en-US" in P.news_url("Geoffrey Hinton")
     assert P.search_names(_person("ng")) == ["Andrew Ng", "吴恩达"] and P.search_names(_person("yangzhilin")) == ["杨植麟"]
 
@@ -188,3 +193,15 @@ def test_people_api(client, monkeypatch):
     assert calls == [["x"]]
     db.execute("INSERT OR REPLACE INTO people_runs(channel, at) VALUES('youtube', ?)", [db.now()])
     assert "youtube" not in P.manual_channels() and "x" in P.manual_channels()
+
+
+def test_fetch_blog_reads_own_feeds_within_window(monkeypatch):
+    pub = lambda d: (datetime.now(timezone.utc) - timedelta(days=d)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    rss = f"""<rss><channel>
+      <item><title>New essay</title><link>https://garymarcus.substack.com/p/new</link><pubDate>{pub(1)}</pubDate></item>
+      <item><title>Old essay</title><link>https://garymarcus.substack.com/p/old</link><pubDate>{pub(30)}</pubDate></item>
+    </channel></rss>"""
+    _mock(monkeypatch, lambda req: httpx.Response(200, text=rss))
+    items, errs = P.fetch_blog([_person("marcus"), _person("hinton")])
+    assert not errs and [i["title"] for i in items] == ["New essay"] and items[0]["people"] == ["marcus"]
+    assert items[0]["extra"]["site"] == "garymarcus.substack.com"
