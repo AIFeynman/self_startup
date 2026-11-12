@@ -596,6 +596,16 @@ def test_item_prompts_require_choice_quiz(tmp_path, kind, depth):
     assert f"{tmp_path}/qa.json" in p and "4 道选择题 + 1 道开放题" in p and "最多 2 道" in p
 
 
+def test_video_prompt_asks_for_a_story_not_a_fact_list(tmp_path):
+    """视频笔记要让没看视频的人读懂：先交代背景和出场的论文 / 人，问题写成因果链，做法逐个说清补了上一步哪个缺口。"""
+    it = {"id": 1, "kind": "video", "depth": "", "url": "https://www.youtube.com/watch?v=x", "focus": ""}
+    p = learn.item_prompt(it, tmp_path)
+    for must in ("## 讲清楚这件事", "### 背景", "### 问题", "### 做法", "### 结论与局限", "## 出场的论文 / 人",
+                 "第一次出现", "补上一步哪个缺口", "和谁比", "两屏", "3 句话复述", "讲者的观点", "**加粗**"):
+        assert must in p, must
+    assert "## 旁白解析" not in p
+
+
 ITEM_QUIZ = {"questions": [
     {"id": "q1", "type": "choice", "q": "pass^k 衡量什么？", "options": ["单次成功率", "k 次都成功的稳定性", "延迟", "成本"], "answer": 1,
      "explain": "见 §3：k 次全部成功。", "section": "作者在说什么", "dim": "理解"},
