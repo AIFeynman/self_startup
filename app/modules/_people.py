@@ -785,7 +785,7 @@ def is_translation(it: dict) -> bool:
     return not any(idx.get(p, {}).get("native_zh") for p in it["people"])
 
 
-PIN_DAYS, PIN_MAX, PIN_MIN_VIDEO = 7, 12, 600
+PIN_MAX, PIN_MIN_VIDEO = 12, 600
 
 
 def is_core(it: dict) -> bool:
@@ -798,10 +798,12 @@ def is_core(it: dict) -> bool:
     return ch == "x" and extra.get("x_article") == "own"
 
 
-def pinned(idx: dict) -> list[dict]:
-    since = (datetime.now() - timedelta(days=PIN_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
-    rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL "
-                                    "AND channel IN ('blog', 'paper', 'podcast', 'youtube', 'bili', 'x')", [since])]
+def pinned(idx: dict, days: int) -> list[dict]:
+    """所选天数内发布的核心内容（没有发布时间的按发现时间）：晚抓到的旧内容不算进「今天」。"""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+    rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND COALESCE(NULLIF(date,''), first_seen)>=? "
+                                    "AND json_extract(extra, '$.low') IS NULL "
+                                    "AND channel IN ('blog', 'paper', 'podcast', 'youtube', 'bili', 'x')", [since, since])]
     core = [r for r in rs if is_core(r) and not is_translation(r)]
     tier = lambda r: min((idx.get(p, {}).get("tier", 3) for p in r["people"]), default=3)
     core.sort(key=lambda r: r["date"] or r["first_seen"] or "", reverse=True)
@@ -840,7 +842,7 @@ def view(days: int = 1, person: str = "", batch: int = 0, limit: int = 300) -> d
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
     rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                                     [since, limit])]
-    pins = pinned(idx)
+    pins = pinned(idx, days)
     pin_ids = {r["id"] for r in pins}
     groups: dict[str, list] = {}
     for r in rs:
