@@ -37,6 +37,9 @@ const CSS = `
 .ln-badge.github { background: var(--dark); color: var(--bg); }
 .ln-badge.article { background: var(--ok-soft); color: var(--ok); }
 .ln-badge.video { background: var(--warn-soft, var(--accent-soft)); color: var(--warn, var(--accent)); }
+.ln-starf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.ln-starf button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; color: var(--muted); }
+.ln-starf button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .ln-kcount { margin-left: 6px; font-size: 11.5px; opacity: .6; font-variant-numeric: tabular-nums; }
 .ln-reads .ln-rd { display: grid; grid-template-columns: 7.5em 3em 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
 .ln-reads .ln-rd:first-of-type { border-top: 0; }
@@ -642,21 +645,33 @@ function planCard(p, ctx) {
 // 深读记录按类型分类：论文 / 项目 / 文章 / 视频；只显示有内容的分类，选中的分类在本次打开期间记住
 const KINDS = [['', '全部'], ['paper', '论文'], ['github', '项目'], ['article', '文章'], ['video', '视频']];
 const kindOf = (it) => (BADGE[it.kind] ? it.kind : 'paper');
+// 按自己打的星筛：找回喜欢的文章；筛星时高分在前
+const STARS = [[0, '全部评分'], [1, '★ 已评分'], [4, '★4 以上'], [5, '★5']];
 let itemKind = '';
+let itemStar = 0;
 function itemList(items, ctx) {
   const { h } = ctx;
-  const count = (k) => (k ? items.filter((it) => kindOf(it) === k).length : items.length);
+  const ofKind = (k) => (k ? items.filter((it) => kindOf(it) === k) : items);
+  const count = (k) => ofKind(k).length;
   const kinds = KINDS.filter(([k]) => count(k));
   if (!kinds.some(([k]) => k === itemKind)) itemKind = '';
+  const rated = items.some((it) => it.rating > 0);
+  if (!rated) itemStar = 0;
   const tabs = h('div.tabs');
+  const stars = h('div.ln-starf');
   const grid = h('div.grid');
   const render = () => {
     tabs.replaceChildren(...kinds.map(([k, name]) => h('button' + (itemKind === k ? '.active' : ''), { onclick: () => { itemKind = k; render(); } },
       [name, h('span.ln-kcount', {}, String(count(k)))])));
-    grid.replaceChildren(...items.filter((it) => !itemKind || kindOf(it) === itemKind).map((it) => itemCard(it, ctx)));
+    const pool = ofKind(itemKind);
+    const atLeast = (n) => pool.filter((it) => (it.rating || 0) >= n);
+    stars.replaceChildren(...STARS.map(([n, name]) => h('button' + (itemStar === n ? '.on' : ''), { onclick: () => { itemStar = n; render(); } },
+      [name, h('span.ln-kcount', {}, String(n ? atLeast(n).length : pool.length))])));
+    const shown = itemStar ? atLeast(itemStar).sort((a, b) => b.rating - a.rating) : pool;
+    grid.replaceChildren(...(shown.length ? shown.map((it) => itemCard(it, ctx)) : [h('div.muted', {}, '这个分类下还没有这个星级的文章')]));
   };
   render();
-  return h('div', {}, kinds.length > 2 ? [tabs, grid] : [grid]);
+  return h('div', {}, [kinds.length > 2 ? tabs : null, rated ? stars : null, grid].filter(Boolean));
 }
 
 const isReading = (it) => it.status === 'done' && it.read_pos > 0 && !it.finished_at;
