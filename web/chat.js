@@ -14,7 +14,7 @@ const TIPS = {
   research: ['调研一下：', '对比一下最近的 AI 编程工具', '把最近的调研结论汇总一下'],
   learn: ['给我做一个学习计划：', '深读这篇论文：', '根据我的反馈调整学习计划'],
   agents: ['哪些会话在等我？', '总结各 Agent 进展', '卡住的怎么处理？'],
-  talk: ['我有个想法想理一理：', '帮我想想这件事该不该做：', '我卡在一个问题上：'],
+  talk: ['一起脑暴：', '我有个想法想理一理：', '帮我判断这件事值不值得做：'],
   kb: ['我之前关于 Agent 评测记过什么？', '汇总我这周的问题与经验', '我调研过哪些产品？'],
   wealth: ['现在这几个标的该加还是拿着，为什么？', '美团现在该卖多少股？', '这两个价位是怎么算出来的：'],
 };
@@ -78,12 +78,10 @@ function render(sessions) {
   root.innerHTML = '';
   sessSel = h('select', { title: '历史对话', onchange: async (e) => { state.sessionId = e.target.value ? +e.target.value : null; await loadMessages(); } },
     [h('option', { value: '' }, '＋ 新对话'), ...sessions.map((s) => h('option', { value: s.id, selected: s.id === state.sessionId }, (s.title || '对话').slice(0, 18)))]);
-  const think = state.module === 'kb' && state.ref.startsWith('think:');
-  engineSel = h('select', { title: think ? '今日一想固定使用本机 Opus 5.5' : '引擎', disabled: think }, [h('option', { value: '' }, '默认引擎'), h('option', { value: 'claude' }, 'Claude Code'), h('option', { value: 'codex' }, 'Codex')]);
-  if (think) { engineSel.value = 'claude'; engineSel.selectedOptions[0].textContent = 'Opus 5.5'; }
+  engineSel = h('select', { title: '引擎' }, [h('option', { value: '' }, '默认引擎'), h('option', { value: 'claude' }, 'Claude Code'), h('option', { value: 'codex' }, 'Codex')]);
   log = noteZone(h('div.chat-log'), chatSource);
   const talk = state.module === 'talk';
-  pictures = think ? imagePicker({ label: '聊天图片', onChange: () => box?.update() }) : null;
+  pictures = talk ? imagePicker({ label: '聊天图片', onChange: () => box?.update() }) : null;
   box = composer({ clearOnSend: true, hasContent: () => Boolean(pictures?.value().length), placeholder: talk ? '接着说…' : '问点什么，或让它直接帮你改…', hint: 'Enter 发送 · Shift+Enter 换行', voiceAutoSend: talk, onSubmit: (t) => submit(t) });
   if (pictures) { box.insertBefore(pictures.el, box.lastChild); pictures.bind(box); }
   const wideBtn = h('button.icon.chat-wide', { title: '加宽 / 还原（也可以拖左边缘调宽度）', onclick: () => toggleWide(wideBtn) }, icon('expand'));
@@ -130,7 +128,7 @@ function chatSource() {
 
 function tips() {
   return h('div.chat-tips', {}, [
-    h('div', {}, state.module === 'talk' ? '我能看到今天的事项和你的本地知识库。这里只讨论，不会改动任何数据。' : '我能看到这个板块的当前数据和你的本地知识库，可以直接帮你查、改、记。'),
+    h('div', {}, state.module === 'talk' ? '脑暴、理思路、做判断都行，直接说。我能看到今天的事项和你的本地知识库，只讨论不改数据；聊完会自动整理成议题卡。' : '我能看到这个板块的当前数据和你的本地知识库，可以直接帮你查、改、记。'),
     chips((TIPS[state.module] || []).map((t) => ({ label: t, onClick: () => (t.endsWith('：') ? box.setValue(t) : submit(t)) })), { left: true }),
   ]);
 }

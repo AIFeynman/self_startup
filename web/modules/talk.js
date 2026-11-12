@@ -1,7 +1,9 @@
-// 讨论：说出想法，Agent 在右侧对话面板里帮忙理思路、给建议（只读）；讨论完「整理」，确认后再存。
+// 讨论：语音或打字直接聊，脑暴、理思路、做判断都行（Agent 自己判断，只读）。聊完自动整理成「议题卡」存档（后端见 app/modules/talk.py）；
+// 结论记进判断台账、下一步加到今天事项由人点。下面还有框架库（判断卡）。路由：#talk、#talk/t/<议题 id>
 import { startCall } from '../voice_rt.js';
+import { framesSection } from './_frames.js';
 
-const OPENERS = ['我有个想法想理一理：', '帮我想想这件事该不该做：', '我卡在一个问题上：'];
+const OPENERS = ['一起脑暴：', '我有个想法想理一理：', '帮我判断这件事值不值得做：', '我卡在一个问题上：'];
 const DOING_NOW = (m) => {
   if (m.talk === 'listening') return '在听';
   if (m.talk === 'speaking') return '在说';
@@ -62,8 +64,65 @@ function toolPermissions(tools, { api, h, toast }) {
   }));
 }
 
+const SECS = [['goal', '目标'], ['lenses', '看问题的角度'], ['options', '可选方案'], ['headroom', '空间判断'], ['quality', '怎么算做好'], ['risks', '风险和反模式']];
+
+function topicCard(t, { api, h, ui, toast, openChat }, { open = false, onChange }) {
+  const c = t.card;
+  const el = h('div.card.tp-card' + (open ? '.open' : ''), { id: 'tp-' + t.id });
+  const resume = () => openChat({ module: 'talk', title: '讨论 · ' + t.title, sessionId: t.session_id });
+  const head = () => [
+    h('div.tp-meta', {}, [c.mode ? h('span.tag', {}, c.mode) : null, t.frame ? h('span.tag.gray', { title: '讨论套用的判断卡' }, t.frame.title) : null,
+      h('span.muted', {}, (t.updated_at || '').slice(5, 16).replace('T', ' '))]),
+    h('div.tp-q', {}, t.title),
+    c.goal ? h('div.tp-goal', {}, c.goal) : null,
+  ];
+  const collapsed = () => el.replaceChildren(...head(),
+    c.conclusions.length ? h('div.tp-concl', {}, [h('b', {}, '结论：'), c.conclusions[0], c.conclusions.length > 1 ? h('span.muted', {}, ` 等 ${c.conclusions.length} 条`) : null]) : null,
+    h('div.tp-acts', {}, [h('button.ghost.sm', { onclick: (e) => { e.stopPropagation(); expanded(); } }, '展开议题卡'),
+      h('button.ghost.sm', { onclick: (e) => { e.stopPropagation(); resume(); } }, [ui.icon('chat'), '接着聊'])]));
+  const recorded = new Set(t.judgments.map((j) => j.text));
+  const expanded = () => {
+    const secs = SECS.filter(([k]) => (k === 'goal' ? false : c[k]?.length)).map(([k, name]) => h('div.tp-sec', {}, [h('h4', {}, name),
+      h('ul', {}, c[k].map((x) => h('li', {}, k === 'options' ? [h('b', {}, x.name), x.how ? '：' + x.how : ''] : x)))]));
+    const concl = c.conclusions.map((x) => {
+      const btn = recorded.has(x) ? h('span.tag.ok', {}, '已记进台账') : h('button.ghost.sm', { title: '作为你自己的判断记进知识库 · 判断台账，到期会提醒复查', onclick: async () => {
+        btn.disabled = true;
+        try { t = await api.post(`/api/talk/topics/${t.id}/judgments`, { text: x }); recorded.add(x); btn.replaceWith(h('span.tag.ok', {}, '已记进台账')); toast('记进判断台账了'); }
+        catch (e) { btn.disabled = false; toast(e.message, true); }
+      } }, '记进台账');
+      return h('li.tp-li', {}, [h('span', {}, x), btn]);
+    });
+    const steps = c.next_steps.map((x) => ({ x, box: h('input', { type: 'checkbox', checked: true }) }));
+    const addSteps = h('button.sm', { onclick: async () => {
+      const picked = steps.filter((s) => s.box.checked).map((s) => s.x);
+      if (!picked.length) return toast('先勾选要加的下一步', true);
+      addSteps.disabled = true;
+      try { const r = await api.post(`/api/talk/topics/${t.id}/tasks`, { next_steps: picked }); toast(`今天的事项共 ${r.task_ids.length} 件来自这次讨论`); }
+      catch (e) { toast(e.message, true); }
+      addSteps.disabled = false;
+    } }, '加到今天的事项');
+    const redo = h('button.ghost.sm', { onclick: async () => {
+      redo.disabled = true; redo.textContent = '整理中…';
+      try { await api.post('/api/talk/topics/refresh', { session_id: t.session_id }); onChange(t.id); }
+      catch (e) { toast('整理失败：' + e.message, true); redo.disabled = false; redo.textContent = '重新整理'; }
+    } }, '重新整理');
+    el.classList.add('open');
+    el.replaceChildren(...head(),
+      secs.length ? h('div.tp-secs', {}, secs) : null,
+      concl.length ? h('div.tp-sec', {}, [h('h4', {}, '结论'), h('ul', {}, concl)]) : null,
+      c.open_questions.length ? h('div.tp-sec', {}, [h('h4', {}, '待定问题'), h('ul', {}, c.open_questions.map((x) => h('li', {}, x)))]) : null,
+      steps.length ? h('div.tp-sec', {}, [h('h4', {}, '下一步'), ...steps.map((s) => h('label.tp-step', {}, [s.box, s.x])), addSteps]) : null,
+      h('div.tp-acts', {}, [h('button.sm', { onclick: resume }, [ui.icon('chat'), '接着聊']), redo, h('span.grow'),
+        h('button.ghost.sm', { onclick: () => { el.classList.remove('open'); collapsed(); } }, '收起')]));
+  };
+  el.addEventListener('click', () => { if (!el.classList.contains('open')) expanded(); });
+  if (open) expanded(); else collapsed();
+  return el;
+}
+
 export default {
-  async render(el, { api, h, md, ui, toast, openChat, refresh }) {
+  async render(el, ctx) {
+    const { api, h, md, ui, toast, openChat, refresh, sub } = ctx;
     // 一次通话里说的每句都接着同一个对话
     let calling = false, called = false;
     const start = (text) => { openChat({ module: 'talk', title: '讨论', fresh: !called, send: text }); called = calling; };
@@ -75,7 +134,6 @@ export default {
       onVoiceCall: (on) => { calling = on; called = false; if (on) { fetch('/api/chat/warm/talk', { method: 'POST' }).catch(() => {}); fetch('/api/voice/speak/prepare', { method: 'POST' }).catch(() => {}); } },
       onSubmit: (t) => { start(t); },
     });
-    const draftWrap = h('div');
 
     // 实时通话：连不上或中途断了，退回上面输入框的本地通话，下一句接着说
     const callWrap = h('div.rt-call');
@@ -131,66 +189,38 @@ export default {
     if (rtInfo?.configured) callWrap.append(h('div.rt-bar', {}, [callBtn, chip]), rtLog);
 
     el.append(
-      ui.pageHead('讨论', '把没想清楚的事说出来。这里只讨论，不改数据；要留下的结论，整理确认后再保存'),
+      ui.pageHead('讨论', '脑暴、理思路、做判断都在这里，语音或打字直接聊，不用选类型。聊完自动整理成议题卡存档'),
       callWrap,
       box,
       ui.chips(OPENERS.map((t) => ({ label: t, onClick: () => box.setValue(t) }))),
-      draftWrap,
     );
 
-    const showDraft = (s) => {
-      draftWrap.replaceChildren();
-      const title = h('input', { type: 'text', value: s.title });
-      const content = h('textarea', { value: s.content });
-      const steps = s.next_steps.map((t) => ({ check: h('input', { type: 'checkbox', checked: true }), text: h('input', { type: 'text', value: t }) }));
-      const save = h('button.primary', { onclick: async () => {
-        save.disabled = true;
-        try {
-          const r = await api.post(`/api/talk/summaries/${s.id}/save`, { title: title.value, content: content.value,
-            next_steps: steps.filter((x) => x.check.checked).map((x) => x.text.value) });
-          toast(`已存入知识库${r.task_ids.length ? `，加了 ${r.task_ids.length} 件今天的事项` : ''}`);
-          refresh();
-        } catch (e) { toast('保存失败：' + e.message); save.disabled = false; }
-      } }, s.next_steps.length ? '确认保存' : '存入知识库');
-      draftWrap.append(ui.section('整理结果', '改好再存，不存就不会写入'), h('div.card.talk-draft', {}, [
-        title, content,
-        steps.length ? h('div.muted', {}, '勾选的下一步会加到今天的事项') : null,
-        ...steps.map((x) => h('label', {}, [x.check, x.text])),
-        h('div.acts', {}, [save, h('button.ghost', { onclick: () => draftWrap.replaceChildren() }, '先不存')]),
-      ]));
-      draftWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    };
-
-    const organize = async (id, btn) => {
-      btn.disabled = true; btn.textContent = '整理中…';
-      try {
-        showDraft(await api.post('/api/talk/organize', { session_id: id }));
-      } catch (e) { toast('整理失败：' + e.message); }
-      btn.disabled = false; btn.textContent = '整理';
-    };
-
-    const [sessions, saved, calls, tools, usage] = await Promise.all([api.get('/api/chat/talk/sessions'), api.get('/api/talk/summaries?limit=50'),
+    const [sessions, topics, calls, tools, usage] = await Promise.all([api.get('/api/chat/talk/sessions'), api.get('/api/talk/topics?limit=100'),
       api.get('/api/voice/calls').catch(() => []), api.get('/api/voice/tools').catch(() => []), api.get('/api/voice/calls/usage').catch(() => ({}))]);
     const resumeCall = (c) => {
       if (hangup) { toast('先挂断现在这通电话'); return; }
       startRt(c.id);
       callWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     };
+    const focus = sub?.[0] === 't' ? +sub[1] : 0;
+    const topicOf = Object.fromEntries(topics.map((t) => [t.session_id, t]));
+    const pending = sessions.filter((s) => !topicOf[s.id] || (s.updated_at || '') > (topicOf[s.id].updated_at || '')).slice(0, 8);
+    const now = async (s, btn) => {
+      btn.disabled = true; btn.textContent = '整理中…';
+      try { const t = await api.post('/api/talk/topics/refresh', { session_id: s.id }); location.hash = `#talk/t/${t.id}`; }
+      catch (e) { toast('整理失败：' + e.message, true); btn.disabled = false; btn.textContent = '现在整理'; }
+    };
+    if (pending.length) el.append(ui.section('还在聊 / 待整理', '最后一句话之后闲置 5 分钟会自动整理成议题卡'), h('div.card', {}, pending.map((s) => {
+      const btn = h('button.sm.ghost', { onclick: () => now(s, btn) }, '现在整理');
+      return h('div.talk-row', {}, [h('a.t', { href: '#talk', onclick: (e) => { e.preventDefault(); open(s.id); } }, s.title || '讨论'),
+        h('span.muted', {}, (s.updated_at || '').slice(5, 16).replace('T', ' ')), topicOf[s.id] ? h('span.muted', {}, '有新内容') : null, btn]);
+    })));
+    el.append(ui.section('议题', topics.length ? `${topics.length} 个 · 每次讨论一张，接着聊会更新同一张` : ''),
+      topics.length ? h('div.tp-list', {}, topics.map((t) => topicCard(t, ctx, { open: t.id === focus, onChange: (id) => { location.hash = `#talk/t/${id}`; refresh(); } })))
+        : ui.empty('还没有议题', '说一句话就能开始，聊完自动整理成议题卡'));
+    if (focus) setTimeout(() => document.getElementById('tp-' + focus)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    el.append(await framesSection(ctx));
     if (calls.length) el.append(ui.section('历史通话', `录音和全部内容都只存在本机，共占 ${mb(usage.bytes)}`), callHistory(calls, { api, h, md, toast, onResume: resumeCall, onDeleted: () => (hangup ? toast('删好了') : refresh()) }));
     if (tools.length) el.append(ui.section('通话工具权限', '关掉的工具从下一通电话起不给模型，通话中调用也不执行'), toolPermissions(tools, { api, h, toast }));
-    const savedOf = (id) => saved.find((s) => s.session_id === id && s.saved_at);
-    const pendingOf = (id) => saved.find((s) => s.session_id === id && !s.saved_at);
-    if (!sessions.length) { el.append(ui.empty('还没有讨论', '说一句话就能开始')); return; }
-    el.append(ui.section('最近的讨论'), h('div.card', {}, sessions.slice(0, 20).map((s) => {
-      const btn = h('button.sm', { onclick: () => organize(s.id, btn) }, '整理');
-      const draft = !savedOf(s.id) && pendingOf(s.id);
-      return h('div.talk-row', {}, [
-        h('a.t', { href: '#talk', onclick: (e) => { e.preventDefault(); open(s.id); } }, s.title || '讨论'),
-        h('span.muted', {}, (s.updated_at || '').slice(5, 16).replace('T', ' ')),
-        savedOf(s.id) ? h('span.muted', {}, '已保存') : null,
-        draft ? h('button.sm.ghost', { onclick: () => showDraft(draft) }, '看草稿') : null,
-        btn,
-      ]);
-    })));
   },
 };
