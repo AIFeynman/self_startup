@@ -221,6 +221,38 @@ def test_answer_survives_a_later_background_task_note():
     assert '{"steps": []}' in done["text"] and "后台核对跑完了" in done["text"]
 
 
+def test_answer_kept_when_stop_hook_asks_again():
+    import json
+    from types import SimpleNamespace
+
+    from app import agent
+    lines = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "先看一下资料"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "## 变了什么\n解读卡正文"}]}},
+        {"type": "user", "message": {"content": [{"type": "text", "text": "Stop hook feedback: 收尾检查发现：有 19 个提交没有推到任何远程分支"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "这 19 个提交不是我的，我不推送"}]}},
+        {"type": "result", "result": "这 19 个提交不是我的，我不推送", "session_id": "s"},
+    ]
+    proc = SimpleNamespace(stdout=[json.dumps(x, ensure_ascii=False) + "\n" for x in lines], returncode=0, stderr=None, wait=lambda: 0)
+    evs = list(agent._read("claude", proc, agent._parse_claude))
+    done = next(e for e in evs if e["type"] == "done")
+    assert done["text"] == "## 变了什么\n解读卡正文"
+    assert any(e["type"] == "tool" and "收尾钩子" in e["text"] for e in evs)
+
+
+def test_runs_inside_platform_dir_do_not_see_platform_repo(tmp_path):
+    import subprocess
+
+    from app import agent, db
+    inside = db.ROOT / "data"
+    env = agent._child_env("claude", str(inside))
+    assert env["GIT_CEILING_DIRECTORIES"] == str(db.ROOT)
+    r = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=inside, env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "GIT_CEILING_DIRECTORIES" not in agent._child_env("claude", str(tmp_path))
+    assert "GIT_CEILING_DIRECTORIES" not in agent._child_env("claude", str(db.ROOT))
+
+
 def test_chat_on_default_engine_uses_module_model(client, monkeypatch):
     from app import agent, settings
     real = settings.get

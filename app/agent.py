@@ -144,6 +144,10 @@ def _parse_claude(obj: dict) -> list[dict]:
                 inp = block.get("input", {})
                 brief = inp.get("command") or inp.get("file_path") or inp.get("pattern") or inp.get("url") or inp.get("query") or ""
                 out.append({"type": "tool", "text": f"{block.get('name')}: {str(brief)[:200]}"})
+    elif t == "user" and isinstance(obj.get("message", {}).get("content"), list):
+        for block in obj["message"]["content"]:
+            if block.get("type") == "text" and str(block.get("text", "")).startswith("Stop hook feedback"):
+                out.append({"type": "hook", "text": block["text"]})
     elif t == "stream_event":
         delta = obj.get("event", {}).get("delta", {})
         if delta.get("type") == "text_delta" and delta.get("text"):
@@ -209,10 +213,14 @@ def _proxy_up(url: str) -> bool:
         return False
 
 
-def _child_env(engine: str = "") -> dict:
+def _child_env(engine: str = "", cwd: str = "") -> dict:
     # 子进程不继承数据目录，避免 Agent 在项目里跑测试/服务时写进真实数据库
     drop = ("SELF_STARTUP_DATA", *GATEWAY_ENV) if engine == "claude" else ("SELF_STARTUP_DATA",)
     env = {k: v for k, v in clean_env().items() if k not in drop}
+    # 在平台目录里（data/ 下的工作区、深读目录）跑的任务看不到平台仓库：否则用户的收尾检查钩子会拿线上分支没推的提交追问，最后一轮回答顶掉正文
+    here = Path(cwd).resolve() if cwd else None
+    if here and here != ROOT.resolve() and ROOT.resolve() in here.parents:
+        env["GIT_CEILING_DIRECTORIES"] = str(ROOT)
     # engines.<engine>.proxy：给该引擎单独指定代理（如 http://127.0.0.1:12001）；代理没开时直连，不让任务卡在重连
     proxy = settings.get(f"engines.{engine}.proxy", "") if engine else ""
     if proxy and _proxy_up(proxy):
@@ -257,7 +265,7 @@ def warm_up(*, system: str = "", session: str = "", add_dirs: list[str] | None =
     _drop_warm()
     try:
         proc = subprocess.Popen(cmd, cwd=_workspace(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, bufsize=1, env=_child_env("claude"), start_new_session=True)
+                                text=True, bufsize=1, env=_child_env("claude", _workspace()), start_new_session=True)
     except OSError as e:
         log.warning("预热失败：%s", e)
         return
@@ -291,7 +299,7 @@ def _run(engine: str, cmd: list[str], cwd: str, on_proc=None, proc=None) -> Iter
     try:
         proc = proc or subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, text=True, bufsize=1,
-                                        env=_child_env(engine), start_new_session=True)  # 自成进程组，停的时候连它起的子进程一起停
+                                        env=_child_env(engine, cwd), start_new_session=True)  # 自成进程组，停的时候连它起的子进程一起停
     except FileNotFoundError as e:
         yield {"type": "error", "text": f"{engine} 未安装: {e}", "fatal": True}
         return
@@ -318,6 +326,7 @@ def stop(proc) -> None:
 def _read(engine: str, proc, parse) -> Iterator[dict]:
     texts: list[str] = []
     final = ""  # Claude 的 result 只含最终回答，不含过程中的旁白；开过后台任务时 CLI 会多发一个 result，正式回答在前面那个
+    answered = ""  # 收尾钩子追问前的最后一段回答：钩子让它再答一轮时，result 只剩对钩子的回复
     errored = False
     assert proc.stdout
     for line in proc.stdout:
@@ -333,6 +342,10 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
                 texts.append(ev["text"])
             if ev["type"] == "error":
                 errored = True
+            if ev["type"] == "hook":
+                answered = answered or (texts[-1] if texts else "")
+                yield {"type": "tool", "text": "收尾钩子追问：" + ev["text"][:200]}
+                continue
             if ev["type"] == "result":
                 final = f"{final}\n\n{ev['text']}" if final and ev["text"] else final or ev["text"]
                 continue
@@ -344,6 +357,8 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
         err = (proc.stderr.read() if proc.stderr else "")[-1500:]
         yield {"type": "error", "text": f"{engine} 退出码 {proc.returncode}: {err}", "fatal": True}
         return
+    if answered:
+        final = answered
     if not final and texts:
         # Codex 的最后一条 agent_message 是最终回答
         final = texts[-1] if engine == "codex" else "\n\n".join(texts)
