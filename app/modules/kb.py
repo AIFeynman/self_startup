@@ -2,17 +2,16 @@
 import json
 import subprocess
 import threading
-from typing import Literal
 
 import httpx
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 import re
 
-from .. import kb, kb_graph, kb_idea, kb_judge, kb_lens, kb_verify, kb_whynot
+from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
 from . import _paper_add as paper_add, _paper_label as paper_label, _paper_maintain as paper_maintain, _paper_map as paper_map
 
 TITLE = "知识库"
@@ -49,16 +48,7 @@ def stats():
             "recent": [{k: d[k] for k in ("path", "type", "title", "date", "summary")} for d in recent]}
 
 
-@router.get("/lens")
-def lens():
-    return kb_lens.overview()
-
-
 def agent_context(ref: str) -> str:
-    if ref.startswith("think:"):
-        return kb_idea.context(int(ref.split(":")[1]))
-    if ref.startswith("lens:"):
-        return kb_lens.context(ref.removeprefix("lens:"))
     try:
         return (kb.read("GRAPH.md")[:4000] + "\n\n" + kb.read("INDEX.md")[:3000]
                 + "\n\n我的判断台账在 JUDGMENTS.md / judgments/（问题线、复查记录）。").strip()
@@ -175,79 +165,6 @@ def judgment_review(body: ReviewIn):
 
 class RecheckIn(BaseModel):
     sid: str
-
-
-@router.get("/think/latest")
-def think_latest():
-    return kb_idea.latest()
-
-
-@router.post("/think")
-def think_start(body: RecheckIn):
-    t = kb_idea.start(body.sid)
-    if not t:
-        raise HTTPException(404, "judgment not found")
-    return t
-
-
-class ThinkNewIn(BaseModel):
-    question: str = ""
-    stance: str = ""
-    mode: Literal["brainstorm", "idea", "judgment"] = "judgment"
-    images: list[str] = Field(default_factory=list, max_length=4)
-
-
-@router.post("/think/new")
-def think_new(body: ThinkNewIn):
-    try:
-        return kb_idea.ask(body.question, body.stance, body.mode, body.images)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@router.get("/think/history")
-def think_history(q: str = "", mode: Literal["", "brainstorm", "idea", "judgment"] = "", limit: int = 20, offset: int = 0):
-    if not 1 <= limit <= 100 or offset < 0:
-        raise HTTPException(400, "invalid pagination")
-    return kb_idea.history(q, mode, limit, offset)
-
-
-@router.get("/think/{tid}")
-def think_get(tid: int):
-    t = kb_idea.get(tid)
-    if not t:
-        raise HTTPException(404, "think not found")
-    return t
-
-
-@router.delete("/think/{tid}")
-def think_delete(tid: int):
-    try:
-        deleted = kb_idea.delete(tid)
-    except RuntimeError as e:
-        raise HTTPException(409, str(e))
-    if not deleted:
-        raise HTTPException(404, "think not found")
-    return {"ok": True}
-
-
-class ThinkRecordIn(BaseModel):
-    text: str
-    type: str = ""
-    confidence: str = ""
-    due: str = ""
-
-
-@router.post("/think/{tid}/record")
-def think_record(tid: int, body: ThinkRecordIn):
-    try:
-        t = kb_idea.record(tid, body.text, body.type, body.confidence, body.due)
-    except ValueError:
-        raise HTTPException(400, "empty")
-    if not t:
-        raise HTTPException(404, "think not found")
-    kb_graph.schedule_refresh()
-    return {"ok": True, "sid": t["judgment"]["sid"], "think": t}
 
 
 @router.post("/judgments/verify")

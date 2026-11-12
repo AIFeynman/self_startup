@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import agent, chat_images, db, jobs, kb, kb_idea, modules
+from . import agent, chat_images, db, jobs, kb, modules
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -148,14 +148,6 @@ def chat(module: str, body: ChatIn):
         raise HTTPException(400, "请填写消息或添加图片")
     with db._lock:
         sess = db.row("SELECT * FROM chat_sessions WHERE id=?", [body.session_id]) if body.session_id else None
-        ref = (sess["ref"] or body.ref) if sess else body.ref
-        if module == "kb" and ref.startswith("think:"):
-            try:
-                topic = kb_idea.get(int(ref.split(":")[1]))
-            except ValueError:
-                raise HTTPException(400, "invalid topic")
-            if not topic:
-                raise HTTPException(404, "think not found")
         if not sess:
             sid = db.insert("chat_sessions", {"module": module, "ref": body.ref, "engine": body.engine or "",
                                               "title": body.message[:40], "created_at": db.now(), "updated_at": db.now()})
@@ -177,19 +169,9 @@ def chat(module: str, body: ChatIn):
         # 每轮都带上最新数据快照，让 Agent 看到平台的当前状态
         ctx, dirs = _context(module, sess["ref"] or body.ref)
         system = agent.build_system(module, ctx)
-        think = module == "kb" and (sess["ref"] or body.ref).startswith("think:")
-        engine_session = sess["engine_session"] if not think or sess["engine"] in ("", "claude") else ""
-        engine = "claude" if think else (sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"]))
-        if think and sess["engine"] not in ("", "claude"):
-            prior = db.rows("SELECT role,content FROM chat_messages WHERE session_id=? AND id<? AND role IN ('user','assistant') ORDER BY id", [sid, message_id])
-            if prior:
-                transcript = json.dumps(prior, ensure_ascii=False)
-                prompt = f"以下是同一话题此前的讨论记录，仅作背景：\n{transcript}\n\n用户现在接着说：\n{prompt}"
-
-        if think:
-            prompt = "这是「今日一想」的分析讨论，只交换想法，不执行工程任务；不输出工程验收或自主决策汇报。\n用户这轮说：\n" + prompt
-        elif module == "kb" and (sess["ref"] or body.ref).startswith("lens:"):
-            prompt = "这是「判断卡」练习讨论：按卡片点评、给出你的判断，只推进最关键的一处；除非用户要求展开，正文不超过 300 个汉字。\n用户这轮说：\n" + prompt
+        talk = module == "talk"  # 讨论：边生成边存，刷新页面也看得到已经说出来的部分
+        engine_session = sess["engine_session"]
+        engine = sess["engine"] if sess["engine_session"] else (body.engine or sess["engine"])
 
         prompt += chat_images.prompt(images)
     except BaseException:
@@ -226,8 +208,7 @@ def chat(module: str, body: ChatIn):
 
         run = agent.run_stream(prompt, engine=engine, system=system,
                                session=engine_session, add_dirs=dirs,
-                               model=kb_idea.MODEL if think else agent.module_model(module, engine),
-                               fallback=not think,
+                               model=agent.module_model(module, engine),
                                readonly=getattr(mod, "CHAT_READONLY", False), on_proc=on_proc)
         for ev in run:
             if sid in _stopping:  # 不往下读：进程被杀后的报错不是真错，也不该回退到备选引擎
@@ -242,13 +223,13 @@ def chat(module: str, body: ChatIn):
                 live = ""
             if ev["type"] == "session":
                 eng_session = ev["id"]
-                if think:
+                if talk:
                     db.update("chat_sessions", sid, {"engine": engine, "engine_session": eng_session, "updated_at": db.now()})
             elif ev["type"] == "done":
                 final, used = ev["text"], ev["engine"]
             elif ev["type"] == "tool":
                 db.insert("chat_messages", {"session_id": sid, "role": "tool", "content": ev["text"], "created_at": db.now()})
-            if think and ev["type"] in ("text", "done"):
+            if talk and ev["type"] in ("text", "done"):
                 visible = final or "\n\n".join(said).strip()
                 if visible:
                     save_reply(visible)
