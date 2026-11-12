@@ -601,7 +601,7 @@ def test_video_prompt_asks_for_a_story_not_a_fact_list(tmp_path):
     it = {"id": 1, "kind": "video", "depth": "", "url": "https://www.youtube.com/watch?v=x", "focus": ""}
     p = learn.item_prompt(it, tmp_path)
     for must in ("## 讲清楚这件事", "### 背景", "### 问题", "### 做法", "### 结论与局限", "## 出场的论文 / 人",
-                 "第一次出现", "补上一步哪个缺口", "和谁比", "两屏", "3 句话复述"):
+                 "第一次出现", "补上一步哪个缺口", "和谁比", "两屏", "3 句话复述", "讲者的观点", "**加粗**"):
         assert must in p, must
     assert "## 旁白解析" not in p
 
