@@ -19,6 +19,7 @@ import httpx
 
 from .. import db, notify
 from . import _feed_sources as src
+from . import _reads
 
 log = logging.getLogger(__name__)
 
@@ -685,8 +686,9 @@ def summarize_and_notify() -> int:
         p = idx.get(pid, {"name": pid})
         return f"{p.get('zh') or p['name']}：" + "、".join(f"{CHANNELS[c][0]} {n}" for c, n in per[pid].items())
     body = "；".join(line(pid) for pid in order[:6]) + (f" 等 {len(order)} 人" if len(order) > 6 else "")
-    notify.notify("feed", f"名人新发声 {len(rows)} 条", body, link="#feed/people", kind="people")
-    db.execute(f"UPDATE people_items SET notified=1 WHERE id IN ({','.join('?' * len(rows))})", [r["id"] for r in rows])
+    batch = (db.row("SELECT MAX(notified) AS n FROM people_items")["n"] or 0) + 1
+    notify.notify("feed", f"名人新发声 {len(rows)} 条", body, link=f"#feed/people/batch/{batch}", kind="people")
+    db.execute(f"UPDATE people_items SET notified=? WHERE id IN ({','.join('?' * len(rows))})", [batch] + [r["id"] for r in rows])
     return len(rows)
 
 
@@ -757,14 +759,34 @@ def pinned(idx: dict) -> list[dict]:
     return core[:PIN_MAX]
 
 
-def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
-    """days 天内新发现的发声，按人归组；person 给定时返回这个人的全部时间线。"""
+def deep_url(it: dict) -> str:
+    """深读用的链接：播客走音频直链，其他用原链接（和前端「深读」按钮一致）。"""
+    return it["extra"].get("audio") or it["url"] if it["channel"] == "podcast" else it["url"]
+
+
+def with_learn(items: list[dict]) -> list[dict]:
+    """已经点过深读的条目带上深读条目的 id 和状态，前端据此显示「解析中 / 看笔记」。"""
+    learned = db.rows("SELECT id, url, status FROM learn_items WHERE status!='failed' ORDER BY id DESC")
+    for it in items:
+        url = deep_url(it)
+        if old := next((r for r in learned if _reads._same(r["url"], url)), None):
+            it["learn"] = {"id": old["id"], "status": old["status"]}
+    return items
+
+
+def view(days: int = 1, person: str = "", batch: int = 0, limit: int = 300) -> dict:
+    """days 天内新发现的发声，按人归组；person 给定时返回这个人的全部时间线；batch 给定时返回那一条提醒里的发声。"""
     _init()
     idx = by_id()
     if person:
         rs = db.rows("SELECT * FROM people_items WHERE people LIKE ? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                      [f'%"{person}"%', limit])
-        return {"person": idx.get(person), "items": [it for it in map(_row, rs) if not is_translation(it)], **status()}
+        return {"person": idx.get(person), "items": with_learn([it for it in map(_row, rs) if not is_translation(it)]), **status()}
+    if batch:
+        rs = [it for it in map(_row, db.rows("SELECT * FROM people_items WHERE notified=? AND json_extract(extra, '$.low') IS NULL "
+                                              "ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC", [batch])) if not is_translation(it)]
+        rs.sort(key=lambda it: min((idx.get(p, {}).get("tier", 3) for p in it["people"]), default=3))
+        return {"batch": with_learn(rs), "people": people(), **status()}
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
     rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
                                     [since, limit])]
@@ -782,5 +804,6 @@ def view(days: int = 1, person: str = "", limit: int = 300) -> dict:
         long_form = sum(1 for r in groups[pid] if r["channel"] != "x")
         return (idx.get(pid, {}).get("tier", 3), -long_form, -len(groups[pid]))
     order = sorted(groups, key=rank)
+    with_learn(pins + rs)
     return {"pinned": pins, "groups": [{"person": idx.get(pid) or {"id": pid, "name": pid}, "items": groups[pid]} for pid in order],
             "people": [{**p, "total": counts.get(p["id"], 0)} for p in people()], **status()}

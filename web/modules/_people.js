@@ -1,5 +1,5 @@
 // 信息推荐 ·「名人」：名单里的人最近在 X / YouTube / 播客 / 论文 / 新闻 / B站 的发声，按人归组（后端见 app/modules/_people.py）。
-// 路由：#feed/people
+// 路由：#feed/people、#feed/people/<人物 id>、#feed/people/batch/<提醒批次>（点提醒进来，只看那一次提醒里的发声）
 const CSS = `
 .pp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
 .pp-chans { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); }
@@ -20,26 +20,35 @@ const CSS = `
 .pp-it .s { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pp-ch { font-size: 11.5px; border-radius: 6px; padding: 1px 7px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
 .pp-pin { border-color: var(--accent); }
-.pp-pin > b { display: block; margin-bottom: 4px; }
-.pp-pin > b small { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
+.pp-pin > b, .pp-batch > b { display: block; margin-bottom: 4px; }
+.pp-batch { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pp-pin > b small, .pp-batch > b small { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
 .pp-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .pp-people button { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 12px; color: var(--text); }
 .pp-people button:hover { border-color: var(--accent); }
 .pp-people small { display: block; color: var(--muted); font-size: 12px; }
 .pp-more { font-size: 12.5px; }
+.pp-it a.pp-done, .pp-it a.muted { font-size: 12.5px; white-space: nowrap; }
 @media (max-width: 640px) { .pp-it { grid-template-columns: minmax(0, 1fr) auto; } .pp-it .pp-ch { grid-column: 1 / -1; justify-self: start; } }
 `;
 
 const CH = { x: 'X', blog: '博客', youtube: 'YouTube', podcast: '播客', paper: '论文', news: '新闻', bili: 'B站' };
 // 视频和播客深读时才转写：播客传音频直链，按视频走字幕 / whisper
 const DEEP = new Set(['blog', 'youtube', 'podcast', 'paper', 'news', 'bili']);
-const state = { view: 'today', person: '' };
+const state = { view: 'today', person: '', batch: '' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
-export function peopleTab(box, ctx, sub = '') {
+export function peopleTab(box, ctx, sub = []) {
   const { api, h, ui, toast } = ctx;
   if (!document.getElementById('pp-style')) document.head.append(h('style#pp-style', {}, CSS));
-  if (sub) { state.view = 'person'; state.person = sub; }
+  if (sub[0] === 'batch' && sub[1]) { state.view = 'batch'; state.batch = sub[1]; }
+  else if (sub[0]) { state.view = 'person'; state.person = sub[0]; }
+  else if (state.view === 'batch') state.view = 'today';
+  const go = (view, person = '') => {
+    state.view = view; state.person = person;
+    if (location.hash !== '#feed/people') history.replaceState(history.state, '', '#feed/people');
+    load();
+  };
   let polling = false;
 
   const ago = (t) => {
@@ -54,15 +63,22 @@ export function peopleTab(box, ctx, sub = '') {
     try {
       const audio = it.channel === 'podcast' && /^https?:\/\//i.test(it.extra.audio || '');
       const r = await api.post('/api/learn/items', audio ? { url: it.extra.audio, kind: 'video', reuse: true } : { url: it.url, reuse: true });
+      it.learn = { id: r.id, status: r.status };
       if (r.status === 'done') location.hash = `#learn/item/${r.id}`;
-      else { btn.textContent = '解析中'; toast('已开始深读，完成后会提醒'); }
+      else { btn.replaceWith(deepBtn(it)); toast('已开始深读，解析完会弹提醒（含系统通知）'); }
     } catch (e) { btn.disabled = false; toast('开始深读失败：' + e.message, true); }
   }
 
   const meta = (it) => [it.date ? it.date.slice(5, 16).replace('T', ' ') : '', it.extra.uploader || it.extra.outlet || it.extra.show || it.extra.site || '',
     it.channel === 'x' && it.popularity ? `${it.popularity} 赞` : ''].filter(Boolean).join(' · ');
+  const deepBtn = (it) => {
+    if (!DEEP.has(it.channel)) return h('span');
+    if (it.learn?.status === 'done') return h('a.pp-done', { href: `#learn/item/${it.learn.id}`, title: '已经深读过，打开笔记' }, '看笔记');
+    if (it.learn) return h('a.muted', { href: `#learn/item/${it.learn.id}`, title: '深读解析中，完成后会提醒' }, '解析中');
+    return h('button.ghost.sm', { onclick: (e) => deep(it, e.currentTarget) }, '深读');
+  };
   const row = (it, showPeople = false, idx = {}) => {
-    const b = DEEP.has(it.channel) ? h('button.ghost.sm', { onclick: (e) => deep(it, e.currentTarget) }, '深读') : h('span');
+    const b = deepBtn(it);
     return h('div.pp-it', {}, [
       h('span.pp-ch', {}, CH[it.channel] || it.channel),
       h('div.t', {}, [h('a', { href: safeUrl(it.url), target: '_blank', rel: 'noopener' }, it.title),
@@ -73,7 +89,7 @@ export function peopleTab(box, ctx, sub = '') {
   };
 
   function bar(s) {
-    const seg = (id, name) => h('button' + (state.view === id ? '.on' : ''), { onclick: () => { state.view = id; state.person = ''; load(); } }, name);
+    const seg = (id, name) => h('button' + (state.view === id ? '.on' : ''), { onclick: () => go(id) }, name);
     const refresh = h('button.ghost.sm', { disabled: s.running, onclick: async () => {
       try {
         const r = await api.post('/api/feed/people/refresh', { channels: [] });
@@ -104,16 +120,27 @@ export function peopleTab(box, ctx, sub = '') {
       const r = await api.get('/api/feed/people?person=' + encodeURIComponent(state.person));
       const p = r.person || { name: state.person };
       box.replaceChildren(bar(r), h('div.card.pp-grp', {}, [
-        h('div.pp-who', {}, [h('a', { href: '#', onclick: (e) => { e.preventDefault(); state.view = 'all'; load(); } }, '← 全部名人'), h('b', {}, who(p)),
+        h('div.pp-who', {}, [h('a', { href: '#', onclick: (e) => { e.preventDefault(); go('all'); } }, '← 全部名人'), h('b', {}, who(p)),
           h('span.pp-role', {}, p.role || ''), p.x ? h('a', { href: `https://x.com/${p.x}`, target: '_blank', rel: 'noopener' }, '@' + p.x) : null]),
         ...(r.items.length ? r.items.map((it) => row(it)) : [h('div.muted', {}, '还没搜到这个人的发声')])]));
+      if (r.running) poll();
+      return;
+    }
+    if (state.view === 'batch') {
+      const r = await api.get('/api/feed/people?batch=' + encodeURIComponent(state.batch));
+      const idx = Object.fromEntries(r.people.map((p) => [p.id, p]));
+      box.replaceChildren(bar(r), h('div.card.pp-grp.pp-batch', {}, [
+        h('b', {}, ['这次提醒的发声', h('small', {}, `${r.batch.length} 条 · Tier1 在前`)]),
+        ...(r.batch.length ? r.batch.map((it) => row(it, true, idx)) : [h('div.muted', {}, '这次提醒里的条目已经被过滤掉了')]),
+        h('a.pp-more', { href: '#', onclick: (e) => { e.preventDefault(); go('today'); } }, '看今天全部 →')]));
+      box.scrollIntoView({ block: 'start' });
       if (r.running) poll();
       return;
     }
     const days = state.view === 'week' ? 7 : state.view === 'all' ? 30 : 1;
     const r = await api.get('/api/feed/people?days=' + days);
     const idx = Object.fromEntries(r.people.map((p) => [p.id, p]));
-    const open = (pid) => { state.view = 'person'; state.person = pid; load(); };
+    const open = (pid) => go('person', pid);
     if (state.view === 'all') {
       const ps = [...r.people].sort((a, b) => a.tier - b.tier || b.total - a.total);
       box.replaceChildren(bar(r), h('div.pp-people', {}, ps.map((p) => h('button', { onclick: () => open(p.id) }, [

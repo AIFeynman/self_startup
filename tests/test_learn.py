@@ -956,3 +956,17 @@ def test_existing_opened_items_split_into_finished_and_reading(client):
     assert rows[old]["finished_at"] == "2026-10-01 09:00:00"
     assert rows[fill]["finished_at"] == "backfill"
     assert rows[new]["finished_at"] == "" and rows[fresh]["finished_at"] == ""
+
+
+def test_finished_deep_read_sends_system_notification(monkeypatch):
+    sent = []
+    monkeypatch.setattr(learn.notify, "system", lambda title, body="": sent.append((title, body)) or True)
+    iid = db.insert("learn_items", {"kind": "article", "url": "https://example.com/finish-notify", "title": "Fable 5.2 and Jagged AGI",
+                                    "status": "running", "created_at": db.now()})
+    out = learn._item_dir(db.row("SELECT * FROM learn_items WHERE id=?", [iid]))
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "note.md").write_text("# 笔记\n\n正文", "utf-8")
+    learn._finish_item(iid, {"status": "done", "output": ""})
+    assert sent == [("深读完成", "Fable 5.2 and Jagged AGI")]
+    learn._finish_item(iid, {"status": "failed", "output": ""})
+    assert sent[-1] == ("深读失败", "Fable 5.2 and Jagged AGI")

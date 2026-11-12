@@ -864,8 +864,8 @@ class PeopleRefreshIn(BaseModel):
 
 
 @router.get("/people")
-def people_view(days: int = 1, person: str = ""):
-    return people_mod.view(days=days, person=person)
+def people_view(days: int = 1, person: str = "", batch: int = 0):
+    return people_mod.view(days=days, person=person, batch=batch)
 
 
 @router.get("/people/status")
