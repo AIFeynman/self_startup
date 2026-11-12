@@ -147,7 +147,7 @@ export function peopleTab(box, ctx, sub = []) {
         h('b', {}, who(p)), h('small', {}, `Tier${p.tier} · ${p.group} · ${p.total} 条`)]))));
     } else {
       const n = r.groups.reduce((s, g) => s + g.items.length, 0);
-      const pin = r.pinned.length ? h('div.card.pp-grp.pp-pin', {}, [h('b', {}, ['置顶 · 核心长文与视频', h('small', {}, `近 7 天 ${r.pinned.length} 条 · 博客长文、X 长文、论文、本人出镜的访谈 / 演讲 / 播客`)]),
+      const pin = r.pinned.length ? h('div.card.pp-grp.pp-pin', {}, [h('b', {}, ['置顶 · 核心长文与视频', h('small', {}, `${days === 1 ? '最近 24 小时发布' : '近 7 天发布'} ${r.pinned.length} 条 · 博客长文、X 长文、论文、本人出镜的访谈 / 演讲 / 播客`)]),
         ...r.pinned.map((it) => row(it, true, idx))]) : null;
       box.replaceChildren(bar(r), pin || '', r.groups.length ? h('div.muted', { style: { fontSize: '12.5px', margin: '0 0 8px' } },
         `${days === 1 ? '最近 24 小时' : '最近 7 天'}其他新发现 ${r.groups.length} 人 · ${n} 条 · Tier1 在前`) : pin ? '' : ui.empty('这段时间还没发现新发声', '点「立即搜一轮」，或等自动搜索（X 每 3 小时，其他渠道 6–12 小时）'),

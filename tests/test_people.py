@@ -239,7 +239,7 @@ def test_news_later_batches_see_what_earlier_batches_kept(monkeypatch):
 
 def test_people_api(client, monkeypatch):
     _wipe()
-    P.upsert([P._item("arxiv:1", "paper", ["neel", "hinton"], "Paper", "https://arxiv.org/abs/1", "2026-11-10")])
+    P.upsert([P._item("arxiv:1", "paper", ["neel", "hinton"], "Paper", "https://arxiv.org/abs/1", db.now())])
     r = client.get("/api/feed/people?days=1").json()
     assert [it["id"] for it in r["pinned"]] == ["arxiv:1"] and r["groups"] == []
     assert {c["id"] for c in r["channels"]} == set(P.CHANNELS)
@@ -251,6 +251,15 @@ def test_people_api(client, monkeypatch):
     assert calls == [["x"]]
     db.execute("INSERT OR REPLACE INTO people_runs(channel, at) VALUES('youtube', ?)", [db.now()])
     assert "youtube" not in P.manual_channels() and "x" in P.manual_channels()
+
+
+def test_pinned_follows_chosen_days_by_publish_date(client):
+    _wipe()
+    old = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S")
+    P.upsert([P._item("arxiv:new", "paper", ["hinton"], "New paper", "u", db.now()),
+              P._item("arxiv:old", "paper", ["hinton"], "Found today, published 3 days ago", "u", old)])
+    assert [it["id"] for it in client.get("/api/feed/people?days=1").json()["pinned"]] == ["arxiv:new"]
+    assert [it["id"] for it in client.get("/api/feed/people?days=7").json()["pinned"]] == ["arxiv:new", "arxiv:old"]
 
 
 def test_fetch_blog_reads_own_feeds_within_window(monkeypatch):
@@ -312,13 +321,14 @@ def test_run_adds_gists_drops_low_tweets_and_backfills(monkeypatch):
 
 def test_view_pins_core_long_form_and_video():
     _wipe()
-    P.upsert([P._item("blog:1", "blog", ["marcus"], "Essay", "u", "2026-11-10"),
-              P._item("youtube:long", "youtube", ["dario"], "Dario interview", "u", "2026-11-10", seconds=3600),
-              P._item("youtube:short", "youtube", ["dario"], "Dario clip", "u", "2026-11-10", seconds=300),
-              P._item("podcast:1", "podcast", ["yanjunjie"], "访谈", "u", "2026-11-09"),
-              P._item("twitter:art", "x", ["karpathy"], "@karpathy：long read", "u", "2026-11-10", x_article="own"),
-              P._item("twitter:plain", "x", ["karpathy"], "@karpathy：a thought", "u", "2026-11-10"),
-              P._item("news:1", "news", ["hinton"], "Hinton warns", "u", "2026-11-10")])
+    now = db.now()
+    P.upsert([P._item("blog:1", "blog", ["marcus"], "Essay", "u", now),
+              P._item("youtube:long", "youtube", ["dario"], "Dario interview", "u", now, seconds=3600),
+              P._item("youtube:short", "youtube", ["dario"], "Dario clip", "u", now, seconds=300),
+              P._item("podcast:1", "podcast", ["yanjunjie"], "访谈", "u", now),
+              P._item("twitter:art", "x", ["karpathy"], "@karpathy：long read", "u", now, x_article="own"),
+              P._item("twitter:plain", "x", ["karpathy"], "@karpathy：a thought", "u", now),
+              P._item("news:1", "news", ["hinton"], "Hinton warns", "u", now)])
     r = P.view(days=1)
     pinned = [it["id"] for it in r["pinned"]]
     assert set(pinned) == {"blog:1", "youtube:long", "podcast:1", "twitter:art"}
