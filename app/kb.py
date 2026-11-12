@@ -154,16 +154,34 @@ def _note_sources(n: dict) -> str:
                    + (f"\n> {s['quote']}" if s.get("quote") else "") for i, s in enumerate(src))
 
 
+def _thread_md(n: dict, follow: list[dict]) -> str:
+    """便签主题线：线头之后的续写按时间接在后面，一条线一篇。"""
+    if not follow:
+        return ""
+    states = {"open": "进行中", "clear": "已想清", "paused": "搁置"}
+    head = f"\n\n## 主题线（{len(follow) + 1} 条 · {states.get(n.get('thread_state') or '', '进行中')}）"
+    gist = f"\n\n目前想法：{n['thread_gist']}" if n.get("thread_gist") else ""
+    items = "".join(f"\n\n### {c['date']} 续写\n{c['title']}" + (f"\n{c['content']}" if c["content"] else "") + _note_sources(c) for c in follow)
+    return head + gist + items
+
+
 def _notes() -> list[dict]:
     if not _has("review_notes"):
         return []
     kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想", "review": "复盘"}
+    rows = db.rows("SELECT * FROM review_notes ORDER BY id")
+    follow: dict[int, list[dict]] = {}
+    for n in sorted(rows, key=lambda r: (r.get("created_at") or "", r["id"])):
+        if n.get("thread_id"):
+            follow.setdefault(n["thread_id"], []).append(n)
     return [_doc("note", n["id"], n["title"] or _first_lines(n["content"], 1)[:40],
-                 f"类型：{kinds.get(n['kind'], n['kind'])} · 日期：{n['date']}{' · 我写的便签' if n.get('author') == 'me' else ''}\n\n{n['content']}{_note_sources(n)}",
-                 date=n["date"], updated=n.get("updated_at") or "", tags=_tags(n["tags"]) + [kinds.get(n["kind"], n["kind"])],
-                 status=n["kind"], summary=_first_lines(n["content"]) or n["title"],
+                 f"类型：{kinds.get(n['kind'], n['kind'])} · 日期：{n['date']}{' · 我写的便签' if n.get('author') == 'me' else ''}\n\n{n['content']}{_note_sources(n)}"
+                 + _thread_md(n, follow.get(n["id"], [])),
+                 date=n["date"], updated=max([n.get("updated_at") or ""] + [c.get("updated_at") or "" for c in follow.get(n["id"], [])]),
+                 tags=_tags(n["tags"]) + [kinds.get(n["kind"], n["kind"])] + (["主题线"] if n["id"] in follow else []),
+                 status=n["kind"], summary=n.get("thread_gist") or _first_lines(n["content"]) or n["title"],
                  path=f"notes/{n['date']}-{n['id']}-{_slug(n['title'] or n['content'][:20])}.md")
-            for n in db.rows("SELECT * FROM review_notes ORDER BY id")]
+            for n in rows if not n.get("thread_id")]
 
 
 def _research() -> list[dict]:

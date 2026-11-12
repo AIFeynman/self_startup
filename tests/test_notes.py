@@ -245,3 +245,58 @@ def test_old_deep_read_discussions_backfilled_once(client):
 def annotations_default():
     from app import annotations
     return annotations.DEFAULT_QUESTION
+
+
+def test_continue_a_note_as_a_thread(client):
+    _clean()
+    root = client.post("/api/notes", json={"text": "做内容的动效，什么生成方式最合适"}).json()
+    a = client.post("/api/notes", json={"text": "先试 Lottie 模板", "thread": root["id"]}).json()
+    b = client.post("/api/notes", json={"text": "HyperFrames 更灵活", "thread": a["id"]}).json()  # 续写续写的那条，也挂到线头
+    assert a["thread_id"] == root["id"] and b["thread_id"] == root["id"]
+    assert client.post("/api/notes", json={"text": "x", "thread": 999999}).status_code == 404
+    wall = client.get("/api/notes").json()
+    th = wall["threads"]
+    assert len(th) == 1 and th[0]["id"] == root["id"] and th[0]["count"] == 3 and th[0]["state"] == "open"
+    t = client.get(f"/api/notes/threads/{root['id']}").json()
+    assert [n["title"] for n in t["items"]] == ["做内容的动效，什么生成方式最合适", "先试 Lottie 模板", "HyperFrames 更灵活"]
+    t = client.patch(f"/api/notes/threads/{root['id']}", json={"state": "clear", "gist": "先 HyperFrames，Lottie 做兜底"}).json()
+    assert t["state"] == "clear" and t["gist"] == "先 HyperFrames，Lottie 做兜底"
+    assert client.patch(f"/api/notes/threads/{root['id']}", json={"state": "nope"}).status_code == 400
+    assert client.get(f"/api/notes/threads/{a['id']}").json()["id"] == root["id"]
+    # 删掉线头：最早的续写接任线头，状态和目前想法跟过去
+    client.delete(f"/api/notes/{root['id']}")
+    t = client.get(f"/api/notes/threads/{a['id']}").json()
+    assert t["id"] == a["id"] and [n["id"] for n in t["items"]] == [a["id"], b["id"]] and t["gist"] == "先 HyperFrames，Lottie 做兜底"
+    # 线头移回系统记录：同样交给下一条
+    client.patch(f"/api/notes/{a['id']}", json={"author": "system"})
+    assert client.get(f"/api/notes/threads/{b['id']}").json()["id"] == b["id"]
+
+
+def test_new_note_suggests_threads_it_may_continue(client):
+    _clean()
+    root = client.post("/api/notes", json={"text": "做内容的动效，什么生成方式最合适"}).json()
+    client.post("/api/notes", json={"text": "周末去爬山"})
+    hits = client.get("/api/notes/suggest", params={"text": "动效生成还可以用 Remotion"}).json()
+    assert [x["id"] for x in hits] == [root["id"]]
+    assert client.get("/api/notes/suggest", params={"text": "买菜"}).json() == []
+
+
+def test_kb_merges_a_thread_into_one_doc(client):
+    from app import kb
+    _clean()
+    root = client.post("/api/notes", json={"text": "动效生成怎么选"}).json()
+    client.post("/api/notes", json={"text": "补充：模板太死板", "thread": root["id"]})
+    client.patch(f"/api/notes/threads/{root['id']}", json={"gist": "倾向代码生成"})
+    docs = [d for d in kb._notes() if "动效生成怎么选" in d["body"] or "模板太死板" in d["body"]]
+    assert len(docs) == 1 and "模板太死板" in docs[0]["body"] and "倾向代码生成" in docs[0]["body"]
+
+
+def test_agent_summarizes_a_thread_only_when_asked(client, monkeypatch):
+    from app import agent
+    _clean()
+    root = client.post("/api/notes", json={"text": "动效生成怎么选"}).json()
+    client.post("/api/notes", json={"text": "模板太死板", "thread": root["id"]})
+    seen = []
+    monkeypatch.setattr(agent, "run_once", lambda p, **k: seen.append((p, k)) or {"text": "倾向代码生成，模板只做兜底。", "session": "", "engine": "claude", "log": ""})
+    t = client.post(f"/api/notes/threads/{root['id']}/summarize").json()
+    assert t["gist"] == "倾向代码生成，模板只做兜底。" and "模板太死板" in seen[0][0] and seen[0][1]["readonly"]

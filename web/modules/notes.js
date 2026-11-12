@@ -1,31 +1,36 @@
 // 便签：用户自己写的灵感和感想，按天贴在时间线上。类型可以自己加，便签之间可以连线，可以引用来源文章。
+// 任意一张可以「续写」成主题线：续写的便签照常贴在写下的那天，标出属于哪条线；右侧看整条线、写目前想法、拿去讨论。
 // 系统记的问题与经验在「复盘」；数据都在 review_notes，靠 author 区分。
 import { kindChips, kindColor } from '../ui.js';
 import { noteHtml } from '../api.js';
 import { FOCUS_KEY } from './_annotate.js';
 
 const KIND_KEY = 'note-kind'; // 上次选的类型
+const THREADS = '__threads'; // 筛选：只看主题线
 const short = (t, n = 18) => (t.length > n ? t.slice(0, n) + '…' : t);
 const WEEK = '日一二三四五六';
 const dayLabel = (s) => { const d = new Date(s + 'T12:00:00'); return { day: `${d.getMonth() + 1}月${d.getDate()}日`, week: `周${WEEK[d.getDay()]}` }; };
 
 export default {
-  async render(el, { api, h, toast, ui, sub }) {
+  async render(el, { api, h, toast, ui, sub, openChat }) {
     injectStyle();
-    let notes = [], links = [], kinds = [], rels = [];
+    let notes = [], links = [], kinds = [], rels = [], threads = [], states = {};
+    let toThread = null, hints = [];
     let selected = +sub?.[0] || null, linking = false, filter = '', query = '';
     let composeKind = (() => { try { return localStorage.getItem(KIND_KEY) || 'spark'; } catch { return 'spark'; } })();
     let pending = [], pickingCompose = false, pickingNote = false;
 
     const load = async () => {
       const r = await api.get('/api/notes');
-      ({ notes, links, kinds, rels } = r);
+      ({ notes, links, kinds, rels, threads, states } = r);
       if (selected && !notes.some((n) => n.id === selected)) selected = null;
       paint();
     };
     const labelOf = (k) => kinds.find((x) => x.key === k)?.label || k;
     const linksOf = (id) => links.filter((l) => l.a === id || l.b === id);
-    const matches = (n) => (!filter || n.kind === filter) && (!query
+    const threadOf = (n) => threads.find((t) => t.id === (n.thread_id || n.id));
+    const rootTitle = (n) => notes.find((x) => x.id === n.thread_id)?.title || '主题线';
+    const matches = (n) => (!filter || filter === THREADS || n.kind === filter) && (!query
       || `${n.text} ${n.tags} ${n.sources.map((s) => s.title).join(' ')}`.toLowerCase().includes(query.toLowerCase()));
 
     // ---------- 引用文章 ----------
@@ -57,24 +62,36 @@ export default {
     const ta = h('textarea', { rows: 2, placeholder: '突然想到什么，写下来…  Enter 贴上墙，Shift+Enter 换行，#标签' });
     const compKinds = h('div.sn-row');
     const compSrc = h('div');
+    const compThread = h('div.sn-row');
     const post = async () => {
       const text = ta.value.trim();
       if (!text) return;
       try {
-        const n = await api.post('/api/notes', { text, kind: composeKind, sources: pending });
-        ta.value = ''; pending = []; pickingCompose = false;
+        const n = await api.post('/api/notes', { text, kind: composeKind, sources: pending, thread: toThread?.id });
+        ta.value = ''; pending = []; pickingCompose = false; toThread = null; hints = [];
         selected = n.id;
         try { localStorage.setItem(KIND_KEY, composeKind); } catch { /* ignore */ }
         await load();
       } catch (e) { toast(e.message, true); }
     };
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); post(); } });
+    ta.addEventListener('input', () => {  // 写着写着像在接某条想法，就提示接上去
+      clearTimeout(ta._t);
+      ta._t = setTimeout(async () => {
+        const text = ta.value.trim();
+        hints = text.length < 4 || toThread ? [] : await api.get(`/api/notes/suggest?text=${encodeURIComponent(text)}`).catch(() => []);
+        paintCompose();
+      }, 400);
+    });
     function paintCompose() {
       compKinds.replaceChildren(
         kindChips(kinds, composeKind, (k) => { composeKind = k; paintCompose(); }),
         h('button.sn-chip.add', { onclick: () => { pickingCompose = !pickingCompose; paintCompose(); } }, '+ 引用文章'),
         h('button.primary.sm.sn-post', { onclick: post }, '贴上墙'),
       );
+      compThread.replaceChildren(...(toThread ? [h('span.sn-to', {}, [`续写到「${short(toThread.title, 24)}」`, h('button.sn-x', { onclick: () => { toThread = null; paintCompose(); } }, '不接')])]
+        : hints.map((t) => h('button.sn-chip.sn-hintchip', { title: '这句像在接着这个想法写，点一下就挂到它的主题线上', onclick: () => { toThread = t; hints = []; paintCompose(); } },
+          `接到「${short(t.title, 20)}」${t.count > 1 ? ` · ${t.count} 条` : ''}？`))));
       compSrc.replaceChildren(...pending.map((s, i) => srcRow(s, () => { pending.splice(i, 1); paintCompose(); })),
         ...(pickingCompose ? [picker((s) => { pending.push(s); pickingCompose = false; paintCompose(); })] : []));
     }
@@ -87,6 +104,7 @@ export default {
       const used = kinds.filter((k) => k.count);
       const pick = (key) => { filter = key; selected = null; linking = false; paint(); };
       filters.replaceChildren(search, h('button.sn-chip' + (!filter ? '.on' : ''), { onclick: () => pick('') }, `全部 ${notes.length}`),
+        threads.length ? h('button.sn-chip' + (filter === THREADS ? '.on' : ''), { onclick: () => pick(THREADS) }, `主题线 ${threads.length}`) : null,
         ...used.map((k) => h('button.sn-chip' + (filter === k.key ? '.on' : ''), { onclick: () => pick(k.key) },
           [h(`i.kc${kindColor(k.key, kinds)}`), `${k.label} ${k.count}`])));
     }
@@ -101,7 +119,9 @@ export default {
       return h(`button.sn-note.sn-c${kindColor(n.kind, kinds)}${state}`, { 'data-note': n.id, onclick: () => clickNote(n.id) }, [
         h('span.txt', {}, noteHtml(n.text)),
         n.sources.length ? h('span.src', {}, `出处：${short(n.sources[0].title)}${n.sources.length > 1 ? ` 等 ${n.sources.length} 篇` : ''}`) : null,
+        n.thread_id ? h('span.sn-cont', {}, `续 ·「${short(rootTitle(n), 14)}」`) : null,
         h('span.meta', {}, [h('em', {}, labelOf(n.kind)), h('span', {}, (n.created_at || '').slice(11, 16)),
+          !n.thread_id && threadOf(n) ? h('span.sn-thread', { title: '这张是一条主题线的开头' }, `线 · ${threadOf(n).count} 条`) : null,
           n.tags ? h('span', {}, n.tags.split(',').filter(Boolean).map((t) => '#' + t).join(' ')) : null,
           h('span.grow'), cnt ? h('span', {}, `↔ ${cnt}`) : null]),
       ]);
@@ -121,6 +141,16 @@ export default {
       paintBoard(); paintSide();
     }
     function paintBoard() {
+      if (filter === THREADS) {
+        const q = query.toLowerCase();
+        const list = threads.filter((t) => !q || `${t.title} ${t.gist}`.toLowerCase().includes(q));
+        days.replaceChildren(h('div.sn-threads', {}, list.length ? list.map((t) => h('button.sn-tcard' + (t.id === selected ? '.sel' : ''), { onclick: () => clickNote(t.id) }, [
+          h('div.sn-tmeta', {}, [h('span.tag' + (t.state === 'clear' ? '.ok' : t.state === 'paused' ? '.gray' : ''), {}, states[t.state] || '进行中'),
+            h('span', {}, `${t.count} 条 · 最近 ${(t.last || '').slice(5, 10)}`)]),
+          h('b', {}, t.title), t.gist ? h('span.muted', {}, '目前想法：' + t.gist) : null])) : [ui.empty('没有符合条件的主题线')]));
+        requestAnimationFrame(drawLines);
+        return;
+      }
       const shown = notes.filter(matches);
       const dates = [...new Set(shown.map((n) => n.date))];
       days.replaceChildren(...(dates.length ? dates.map((d) => {
@@ -176,6 +206,7 @@ export default {
       }).filter(Boolean);
       side.replaceChildren(
         h('div', {}, [h('div.sn-label', {}, `${n.date} ${(n.created_at || '').slice(11, 16)}`), edit, saveBtn]),
+        threadBox(n),
         h('div', {}, [h('div.sn-label', {}, '类型'), kindChips(kinds, n.kind, (k) => patch(n.id, { kind: k }))]),
         h('div', {}, [h('div.sn-label', {}, `来源文章（${n.sources.length}）`),
           ...n.sources.map((s, i) => srcRow(s, () => patch(n.id, { sources: n.sources.filter((_, j) => j !== i) }))),
@@ -191,11 +222,52 @@ export default {
       );
     }
 
+    // ---------- 主题线：续写、目前想法、状态、拿去讨论 ----------
+    function threadBox(n) {
+      const rootId = n.thread_id || n.id;
+      const root = notes.find((x) => x.id === rootId) || n;
+      const th = threadOf(n);
+      const items = th ? notes.filter((x) => x.id === rootId || x.thread_id === rootId).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '')) : [];
+      const more = h('textarea', { rows: 2, placeholder: th ? '接着这条线写一句新想法…  Enter 续写' : '对这个想法有补充？写下来就成了一条主题线  Enter 续写', 'aria-label': '续写' });
+      const add = async () => {
+        const text = more.value.trim();
+        if (!text) return;
+        try { await api.post('/api/notes', { text, kind: root.kind, thread: rootId }); selected = rootId; toast('续写好了'); await load(); }
+        catch (e) { toast(e.message, true); }
+      };
+      more.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); add(); } });
+      const box = h('div.sn-tbox', {}, [h('div.sn-label', {}, th ? `主题线 · ${th.count} 条` : '续写')]);
+      if (th) {
+        const setState = h('select', { 'aria-label': '主题线状态', onchange: () => threadPatch(rootId, { state: setState.value }) },
+          Object.entries(states).map(([k, v]) => h('option', { value: k, selected: (th.state || 'open') === k }, v)));
+        const gist = h('textarea', { rows: 2, value: th.gist || '', placeholder: '目前想法：已经倾向什么、还在纠结什么', 'aria-label': '目前想法' });
+        const saveGist = h('button.sm', { hidden: true, onclick: () => threadPatch(rootId, { gist: gist.value }) }, '保存');
+        const fit = () => { gist.style.height = 'auto'; gist.style.height = `${gist.scrollHeight + gist.offsetHeight - gist.clientHeight}px`; };
+        new ResizeObserver(fit).observe(gist);
+        gist.oninput = () => { saveGist.hidden = gist.value === (th.gist || ''); fit(); };
+        const sum = h('button.ghost.sm', { title: '把这条线发给 Agent 归纳成两三句（只在点的时候发）', onclick: async () => {
+          sum.disabled = true; sum.textContent = '归纳中…';
+          try { await api.post(`/api/notes/threads/${rootId}/summarize`, {}); await load(); }
+          catch (e) { toast('归纳失败：' + e.message, true); sum.disabled = false; sum.textContent = '让 Agent 归纳'; }
+        } }, '让 Agent 归纳');
+        const md = items.map((x) => `- ${x.date} ${x.text}`).join('\n');
+        box.append(h('div.sn-row', {}, [setState, sum,
+            h('button.ghost.sm', { onclick: () => openChat({ module: 'talk', title: '讨论 · ' + short(root.title, 20), fresh: true,
+              prefill: `我在便签里围绕「${root.title}」陆续写了这些：\n${md}${th.gist ? `\n目前想法：${th.gist}` : ''}\n\n想接着聊：` }) }, '拿去讨论')]),
+          gist, saveGist,
+          h('div.sn-titems', {}, items.map((x) => h('a' + (x.id === n.id ? '.on' : ''), { href: `#notes/${x.id}`, onclick: (e) => { e.preventDefault(); selected = x.id; paintBoard(); paintSide(); } },
+            [h('span', {}, x.date.slice(5)), short(x.text, 60)]))));
+      }
+      box.append(more, h('button.ghost.sm', { onclick: add }, '续写'));
+      return box;
+    }
+    const threadPatch = async (id, d) => { try { await api.patch(`/api/notes/threads/${id}`, d); await load(); } catch (e) { toast(e.message, true); } };
+
     function paint() { paintCompose(); paintFilters(); paintBoard(); paintSide(); }
 
     el.append(
       ui.pageHead('便签', '只放你自己写的。任何页面按 ⌘K 都能记，读文章时会带上出处；系统记的问题与经验在复盘里'),
-      h('div.card.sn-composer', {}, [ta, compKinds, compSrc]),
+      h('div.card.sn-composer', {}, [ta, compThread, compKinds, compSrc]),
       filters,
       h('div.sn-work', {}, [board, side]),
     );
@@ -274,6 +346,22 @@ function injectStyle() {
   .sn-picker input { width: 100%; min-width: 0; }
   .sn-pick { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 400; overflow-wrap: anywhere; color: var(--text); }
   .sn-pick:hover { background: var(--accent-soft); }
+  .sn-note .sn-cont { font-size: 11.5px; color: #5c5247; font-weight: 600; }
+  .sn-note .meta .sn-thread { background: rgba(255,255,255,.55); border-radius: 99px; padding: 0 7px; font-weight: 600; }
+  .sn-to { display: inline-flex; gap: 8px; align-items: center; background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 2px 12px; font-size: 13px; }
+  .sn-hintchip { border-style: dashed; color: var(--accent); }
+  .sn-tbox { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .sn-tbox select { width: auto; font-size: 12.5px; padding: 2px 6px; }
+  .sn-titems { display: grid; gap: 2px; max-height: 260px; overflow-y: auto; }
+  .sn-titems a { display: grid; grid-template-columns: 3.4em minmax(0, 1fr); gap: 6px; color: var(--text); font-size: 13px; padding: 4px 6px; border-radius: 6px; }
+  .sn-titems a span { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sn-titems a.on, .sn-titems a:hover { background: var(--accent-soft); text-decoration: none; }
+  .sn-threads { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding-block: 14px; }
+  .sn-tcard { display: grid; gap: 6px; text-align: left; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--panel); border-radius: 10px; padding: 12px 14px; color: var(--text); font-weight: 400; }
+  .sn-tcard:hover, .sn-tcard.sel { border-color: var(--accent); }
+  .sn-tcard b { font: 600 15px/1.45 var(--serif); }
+  .sn-tcard .muted { font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .sn-tmeta { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
   @media (max-width: 900px) { .sn-work { grid-template-columns: minmax(0, 1fr); } .sn-side { position: static; max-height: none; order: -1; } .sn-side.idle { display: none; } }
   @media (max-width: 480px) {
     .sn-day { grid-template-columns: minmax(0, 1fr); gap: 8px; }
