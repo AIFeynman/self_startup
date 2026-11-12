@@ -27,6 +27,10 @@ CHAT_READONLY = True  # 语音可能听错，讨论时 Agent 只能读；写入�
 IDLE_MIN = 5          # 最后一句话之后这么久没动静，就算聊完了，开始整理
 SWEEP_S = 120
 SWEEP_MAX = 3         # 每轮最多整理几次讨论，别一下占满模型
+SWEEP_DAYS = 2        # 只自动整理最近的讨论；更早的（含上线前的旧讨论）在页面上点「现在整理」
+_busy: set[int] = set()
+_failed: dict[int, str] = {}  # 整理失败的会话 → 当时最后一句的时间；有新话再试，不每轮重试
+_lock = threading.Lock()
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS talk_topics (
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER UNIQUE, title TEXT, card TEXT, note_id INTEGER,
@@ -116,17 +120,35 @@ def _archive(title: str, card: dict, old: dict | None) -> int:
     return review.api_add_note(review.NoteIn(kind="insight", title=title, content=content, tags="讨论"))["id"]
 
 
+def _last_said(session_id: int) -> str:
+    return (db.row("SELECT MAX(created_at) AS t FROM chat_messages WHERE session_id=? AND role IN ('user','assistant','fast')",
+                   [session_id]) or {}).get("t") or ""
+
+
 def organize(session_id: int) -> dict:
-    """把一次讨论整理成议题卡并存档；同一次讨论再整理就更新原来那张。"""
+    """把一次讨论整理成议题卡并存档；同一次讨论再整理就更新原来那张。
+    卡片的 updated_at 记成整理时最后一句话的时间：整理期间又说的话比它新，下一轮还会再整理。"""
+    with _lock:
+        if session_id in _busy:
+            raise HTTPException(409, "这次讨论正在整理，稍等一下")
+        _busy.add(session_id)
+    try:
+        return _organize(session_id)
+    finally:
+        with _lock:
+            _busy.discard(session_id)
+
+
+def _organize(session_id: int) -> dict:
+    last = _last_said(session_id)
     transcript = _transcript(session_id)
     if not transcript:
         raise HTTPException(400, "这个讨论还没有内容")
     r = agent.run_once(TOPIC_PROMPT.format(frames=kb_lens.index(), transcript=transcript), readonly=True, model=agent.module_model("talk"))
     d = _parse_card(r["text"])
     old = _row(db.row("SELECT * FROM talk_topics WHERE session_id=?", [session_id]))
-    now = db.now()
-    tid = old["id"] if old else db.insert("talk_topics", {"session_id": session_id, "created_at": now})
-    db.update("talk_topics", tid, {"title": d["title"], "card": json.dumps(d["card"], ensure_ascii=False), "updated_at": now,
+    tid = old["id"] if old else db.insert("talk_topics", {"session_id": session_id, "created_at": db.now()})
+    db.update("talk_topics", tid, {"title": d["title"], "card": json.dumps(d["card"], ensure_ascii=False), "updated_at": last,
                                    "note_id": _archive(d["title"], d["card"], old)})
     db.update("chat_sessions", session_id, {"title": d["title"]})
     return _row(db.row("SELECT * FROM talk_topics WHERE id=?", [tid]))
@@ -135,17 +157,19 @@ def organize(session_id: int) -> dict:
 def sweep() -> list[int]:
     """聊完（最后一句之后闲置 IDLE_MIN 分钟）且有新内容的讨论，整理成议题卡。返回整理了的会话。"""
     cutoff = (datetime.now() - timedelta(minutes=IDLE_MIN)).strftime("%Y-%m-%dT%H:%M:%S")
-    since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+    since = (datetime.now() - timedelta(days=SWEEP_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
     rows = db.rows("SELECT s.id, MAX(m.created_at) AS last, t.updated_at AS done FROM chat_sessions s "
                    "JOIN chat_messages m ON m.session_id=s.id AND m.role IN ('user','assistant','fast') "
                    "LEFT JOIN talk_topics t ON t.session_id=s.id WHERE s.module='talk' GROUP BY s.id "
-                   "HAVING last<=? AND last>=? AND (done IS NULL OR last>done) ORDER BY last DESC LIMIT ?", [cutoff, since, SWEEP_MAX])
+                   "HAVING last<=? AND last>=? AND (done IS NULL OR last>done) ORDER BY last DESC", [cutoff, since])
     done = []
-    for r in rows:
+    for r in [r for r in rows if _failed.get(r["id"]) != r["last"]][:SWEEP_MAX]:
         try:
             organize(r["id"])
             done.append(r["id"])
+            _failed.pop(r["id"], None)
         except Exception:  # noqa: BLE001
+            _failed[r["id"]] = r["last"]
             log.warning("讨论 %s 整理失败", r["id"], exc_info=True)
     return done
 

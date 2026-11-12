@@ -168,14 +168,13 @@ def test_idle_discussion_becomes_topic_card_and_is_archived(client, monkeypatch)
     assert t["frame"] == {"id": "prod-worth", "title": "这个需求值不值得做"}
     note = db.row("SELECT kind, tags, content FROM review_notes WHERE id=?", [t["note_id"]])
     assert note["kind"] == "insight" and "讨论" in note["tags"] and "先拆成半天一件" in note["content"] and "拆得过碎" in note["content"]
-    assert t["judgments"] == [] and not db.row("SELECT 1 FROM sqlite_master WHERE name='kb_judgments'") or \
-        not db.rows("SELECT id FROM kb_judgments WHERE text='先拆成半天一件'")
+    assert t["judgments"] == []
+    assert not db.row("SELECT 1 FROM sqlite_master WHERE name='kb_judgments'") or not db.rows("SELECT id FROM kb_judgments WHERE text='先拆成半天一件'")
     assert not db.rows("SELECT id FROM tasks WHERE title='写任务清单'")
     assert fresh not in [x["session_id"] for x in client.get("/api/talk/topics").json()]
     # 没有新内容不重跑；接着聊了再整理：更新同一张卡和同一条笔记
     assert talk.sweep() == [] and len(calls) == 1
     later = (datetime.now() - timedelta(minutes=talk.IDLE_MIN, seconds=30)).strftime("%Y-%m-%dT%H:%M:%S")
-    db.execute("UPDATE talk_topics SET updated_at=? WHERE session_id=?", [old, sid])
     db.insert("chat_messages", {"session_id": sid, "role": "user", "content": "还是拆细", "created_at": later})
     _model(monkeypatch, {**CARD, "conclusions": ["先拆成半天一件", "每天收尾对一次"]})
     assert talk.sweep() == [sid]
@@ -183,6 +182,33 @@ def test_idle_discussion_becomes_topic_card_and_is_archived(client, monkeypatch)
     assert len([x for x in topics if x["session_id"] == sid]) == 1
     assert topics[0]["card"]["conclusions"] == ["先拆成半天一件", "每天收尾对一次"]
     assert db.row("SELECT count(*) AS n FROM review_notes WHERE tags LIKE '%讨论%'")["n"] == 1
+
+
+def test_failed_or_old_discussions_are_not_retried_every_sweep(client, monkeypatch):
+    from app import agent, db
+    from app.modules import talk
+    idle = (datetime.now() - timedelta(minutes=talk.IDLE_MIN + 1)).strftime("%Y-%m-%dT%H:%M:%S")
+    ancient = (datetime.now() - timedelta(days=talk.SWEEP_DAYS + 1)).strftime("%Y-%m-%dT%H:%M:%S")
+    db.execute("DELETE FROM chat_sessions WHERE module='talk'")
+    bad = _talk_session(db, "说不清的话", at=idle)
+    old = _talk_session(db, "很久以前的闲聊", at=ancient)
+    calls = []
+    monkeypatch.setattr(agent, "run_once", lambda p, **k: calls.append(p) or {"text": "不是 JSON", "session": "", "engine": "claude", "log": ""})
+    assert talk.sweep() == [] and talk.sweep() == [] and len(calls) == 1
+    db.insert("chat_messages", {"session_id": bad, "role": "user", "content": "补一句", "created_at": (datetime.fromisoformat(idle) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S")})
+    _model(monkeypatch)
+    assert talk.sweep() == [bad] and old not in [t["session_id"] for t in client.get("/api/talk/topics").json()]
+
+
+def test_same_discussion_is_not_organized_twice_at_once(client):
+    from app import db
+    from app.modules import talk
+    sid = _talk_session(db, "x")
+    talk._busy.add(sid)
+    try:
+        assert client.post("/api/talk/topics/refresh", json={"session_id": sid}).status_code == 409
+    finally:
+        talk._busy.discard(sid)
 
 
 def test_conclusion_goes_to_ledger_only_when_clicked(client, monkeypatch):
