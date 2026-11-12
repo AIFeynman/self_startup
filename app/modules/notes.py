@@ -259,6 +259,8 @@ def api_patch(nid: int, body: PatchIn):
         d["sources"] = json.dumps(clean_sources(body.sources), ensure_ascii=False)
     if body.author == "system":  # 不是自己写的：退回「问题与经验」，类型要落回系统认识的那几种
         d["author"] = "system"
+        _hand_over(_get(nid))
+        d["thread_id"] = None
         kind = d.get("kind") or db.row("SELECT kind FROM review_notes WHERE id=?", [nid])["kind"]
         d["kind"] = kind if kind in review.NOTE_KINDS else "lesson"
         db.execute("DELETE FROM note_links WHERE a=? OR b=?", [nid, nid])
@@ -268,13 +270,16 @@ def api_patch(nid: int, body: PatchIn):
 
 @router.delete("/{nid}")
 def api_delete(nid: int):
-    """删线头时，最早的那条续写接任线头，状态和目前想法跟过去。"""
-    n = _get(nid)
-    heir = db.row("SELECT id FROM review_notes WHERE thread_id=? ORDER BY created_at, id LIMIT 1", [nid])
+    _hand_over(_get(nid))
+    return review.api_del_note(nid)
+
+
+def _hand_over(n: dict) -> None:
+    """线头要删掉或移出便签时，最早的那条续写接任线头，状态和目前想法跟过去。"""
+    heir = db.row("SELECT id FROM review_notes WHERE thread_id=? ORDER BY created_at, id LIMIT 1", [n["id"]])
     if heir:
         db.update("review_notes", heir["id"], {"thread_id": None, "thread_state": n["thread_state"], "thread_gist": n["thread_gist"]})
-        db.execute("UPDATE review_notes SET thread_id=? WHERE thread_id=?", [heir["id"], nid])
-    return review.api_del_note(nid)
+        db.execute("UPDATE review_notes SET thread_id=? WHERE thread_id=?", [heir["id"], n["id"]])
 
 
 # ---------- 关系 ----------

@@ -267,6 +267,9 @@ def test_continue_a_note_as_a_thread(client):
     client.delete(f"/api/notes/{root['id']}")
     t = client.get(f"/api/notes/threads/{a['id']}").json()
     assert t["id"] == a["id"] and [n["id"] for n in t["items"]] == [a["id"], b["id"]] and t["gist"] == "先 HyperFrames，Lottie 做兜底"
+    # 线头移回系统记录：同样交给下一条
+    client.patch(f"/api/notes/{a['id']}", json={"author": "system"})
+    assert client.get(f"/api/notes/threads/{b['id']}").json()["id"] == b["id"]
 
 
 def test_new_note_suggests_threads_it_may_continue(client):
