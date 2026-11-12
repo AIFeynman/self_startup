@@ -557,14 +557,15 @@ GIST_SYSTEM = (
     "你是 AI 资讯编辑，帮读者扫一眼就知道 AI 名人这条发声讲了什么。每条输入是一条推文 / 博客 / 新闻 / 视频 / 播客 / 论文，带关联人物。\n"
     "gist：一句中文介绍，不超过 40 个汉字。先说是谁、在哪、做了什么（发帖 / 撰文 / 访谈 / 演讲 / 论文），再点出最关键的一个观点或信息；"
     "只根据给出的标题、简介、来源写，不补充、不猜测没给出的事实和数字；专有名词保留原文；不要「这条」「该推文」开头，不评价好坏。\n"
-    "keep：有没有信息量。纯寒暄、点赞、附和、表情、一两个词、没有上下文看不懂的回复、只有一个链接判 false；其余 true。\n"
-    '只输出 JSON：{"items": [{"id": "<原样返回>", "gist": "<一句话>", "keep": true 或 false}]}，每条输入都要有输出。'
+    '只输出 JSON：{"items": [{"id": "<原样返回>", "gist": "<一句话>"}]}，每条输入都要有输出。'
 )
+VALUE_MIN = 0.35
+X_PER_PERSON_DAY = 3
 
 
-def annotate(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait: float = 5) -> tuple[dict[str, str], set[str], list[str]]:
-    """返回 ({id: 中文一句话}, 没信息量的 id, 错误)。失败的批次这轮不写，之后补写。"""
-    gists, low, errs = {}, set(), []
+def annotate(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait: float = 5) -> tuple[dict[str, str], list[str]]:
+    """返回 ({id: 中文一句话}, 错误)。失败的批次这轮不写，之后补写。"""
+    gists, errs = {}, []
     for i in range(0, len(items), VOICE_BATCH):
         batch = items[i:i + VOICE_BATCH]
         got, err = _ask(_rows_for_model(batch), GIST_SYSTEM, run, model, retry_wait)
@@ -575,9 +576,59 @@ def annotate(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait
             x = got.get(it["id"]) or {}
             if str(x.get("gist") or "").strip():
                 gists[it["id"]] = gist_fit(str(x["gist"]))
-            if x.get("keep") is False:
-                low.add(it["id"])
-    return gists, low, errs
+    return gists, errs
+
+
+def screen(items: list[dict]) -> tuple[dict[str, float], list[str]]:
+    """Jev 判每条是不是干货，返回 ({id: 概率}, 错误)。没配 key 或失败的不打分（照常显示）。"""
+    from . import _feed_judge as J
+    idx = by_id()
+    who = lambda it: "；".join(f"{idx[p]['name']}，{idx[p]['role']}" for p in it["people"] if p in idx) + f" · channel={it['channel']}"
+    todo = [({"id": it["id"], "source": "people", "title": it["title"], "summary": it["summary"], "url": it["url"]}, "value", who(it)) for it in items]
+    got, errs = J.judge(todo)
+    return {i: v["judge_value"] for i, v in got.items() if "judge_value" in v}, errs
+
+
+def low_ids(items: list[dict], scores: dict[str, float], taken: dict[tuple[str, str], int] | None = None, day=lambda it: db.today()) -> set[str]:
+    """分量不够的，加上推特里同一人同一天超过前几条的（按分量、热度挑）。taken 是这些人当天已经显示的推特条数。"""
+    low = {it["id"] for it in items if scores.get(it["id"], 1) < VALUE_MIN}
+    taken = dict(taken or {})
+    xs = sorted((it for it in items if it["channel"] == "x" and it["id"] not in low),
+                key=lambda it: (scores.get(it["id"], VALUE_MIN), it["popularity"]), reverse=True)
+    for it in xs:
+        keys = [(p, day(it)) for p in it["people"]] or [("", day(it))]
+        if all(taken.get(k, 0) >= X_PER_PERSON_DAY for k in keys):
+            low.add(it["id"])
+            continue
+        for k in keys:
+            taken[k] = taken.get(k, 0) + 1
+    return low
+
+
+def _x_taken_today() -> dict[tuple[str, str], int]:
+    today = db.today()
+    taken: dict[tuple[str, str], int] = {}
+    for r in db.rows("SELECT people FROM people_items WHERE channel='x' AND first_seen>=? AND json_extract(extra, '$.low') IS NULL", [today]):
+        for p in json.loads(r["people"]):
+            taken[(p, today)] = taken.get((p, today), 0) + 1
+    return taken
+
+
+def _hide(ids) -> None:
+    for r in db.rows(f"SELECT id, extra FROM people_items WHERE id IN ({','.join('?' * len(ids))})", list(ids)) if ids else []:
+        db.execute("UPDATE people_items SET extra=? WHERE id=?", [json.dumps({**json.loads(r["extra"] or "{}"), "low": 1}, ensure_ascii=False), r["id"]])
+
+
+def rescreen(days: float = 2) -> tuple[list[str], list[str]]:
+    """按现在的标准重判最近 days 天还在显示的条目，不够格的标记隐藏（不删）。返回 (隐藏的 id, 错误)。"""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+    items = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL "
+                                       "ORDER BY first_seen", [since])]
+    scores, errs = screen(items)
+    low = low_ids(items, scores, day=lambda it: it["first_seen"][:10])
+    hidden = [it["id"] for it in items if it["id"] in low]
+    _hide(hidden)
+    return hidden, errs
 
 
 def gist_fit(text: str) -> str:
@@ -589,22 +640,20 @@ BACKFILL_MAX = 90
 
 
 def backfill(run, model: str) -> list[str]:
-    """给还没有中文一句话的条目补写；没信息量的推文标记隐藏（不删）。"""
+    """给还没有中文一句话的条目补写；是不是干货由 Jev 在入库时判。"""
     rows = db.rows("SELECT * FROM people_items WHERE json_extract(extra, '$.gist') IS NULL AND json_extract(extra, '$.low') IS NULL "
                    "AND json_extract(extra, '$.gist_tried') IS NULL "
                    "ORDER BY first_seen DESC LIMIT ?", [BACKFILL_MAX])
     if not rows:
         return []
     items = [_row(r) for r in rows]
-    gists, low, errs = annotate(items, run, model)
+    gists, errs = annotate(items, run, model)
     for it in items:
         extra = dict(it["extra"])
         if it["id"] in gists:
             extra["gist"] = gists[it["id"]]
         elif not errs:
             extra["gist_tried"] = 1
-        if it["channel"] == "x" and it["id"] in low:
-            extra["low"] = 1
         if extra != it["extra"]:
             db.execute("UPDATE people_items SET extra=? WHERE id=?", [json.dumps(extra, ensure_ascii=False), it["id"]])
     return errs
@@ -697,13 +746,15 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
                                                [it["id"] for it in items])}
             fresh = [it for it in items if it["id"] not in stored]
             runner, model = judge or _haiku_runner()
-            gists, low, gerrs = annotate(fresh, runner, model)
+            gists, gerrs = annotate(fresh, runner, model)
+            scores, jerrs = screen(fresh)
+            low = low_ids(fresh, scores, _x_taken_today() if ch == "x" else None)
             for it in fresh:
                 if it["id"] in gists:
                     it["extra"]["gist"] = gists[it["id"]]
-            if ch == "x":
-                items = [it for it in items if it["id"] not in low]
-            errs = errs + gerrs
+                if it["id"] in low:
+                    it["extra"]["low"] = 1
+            errs = errs + gerrs + [f"Jev 干货判断：{e}" for e in jerrs]
         new = upsert(items)
         db.execute("INSERT INTO people_runs(channel, at, count, new, errors) VALUES(?,?,?,?,?) "
                    "ON CONFLICT(channel) DO UPDATE SET at=excluded.at, count=excluded.count, new=excluded.new, errors=excluded.errors",
@@ -722,7 +773,7 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
 
 def summarize_and_notify() -> int:
     """把还没提醒过的新发声汇总成一条提醒：按人列出各渠道条数，Tier1 在前。"""
-    rows = db.rows("SELECT id, channel, people FROM people_items WHERE notified=0")
+    rows = db.rows("SELECT id, channel, people FROM people_items WHERE notified=0 AND json_extract(extra, '$.low') IS NULL")
     if not rows:
         return 0
     idx = by_id()
