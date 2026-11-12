@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS review_notes (
     created_at  TEXT,
     updated_at  TEXT,
     author      TEXT DEFAULT 'system',         -- system：Agent / 系统记的；me：用户自己写的（便签）
-    sources     TEXT DEFAULT '[]'              -- 引用的文章，见 notes.py
+    sources     TEXT DEFAULT '[]',             -- 引用的文章，见 notes.py
+    thread_id   INTEGER,                       -- 便签的主题线：续写的那条记线头 id；线头和单张便签为空
+    thread_state TEXT DEFAULT '',              -- 线头上记：open 进行中 / clear 已想清 / paused 搁置
+    thread_gist TEXT DEFAULT ''                -- 线头上记：目前想法
 );
 CREATE INDEX IF NOT EXISTS idx_review_notes_date ON review_notes(date);
 CREATE TABLE IF NOT EXISTS review_agent_stats (

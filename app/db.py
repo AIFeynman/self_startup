@@ -158,7 +158,8 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
         # 便签：老库的 review_notes 补上「谁写的」和引用来源（已有记录都算系统记的）
         note_cols = {r[1] for r in c.execute("PRAGMA table_info(review_notes)")}
         if note_cols:
-            for col, typ in (("author", "TEXT DEFAULT 'system'"), ("sources", "TEXT DEFAULT '[]'")):
+            for col, typ in (("author", "TEXT DEFAULT 'system'"), ("sources", "TEXT DEFAULT '[]'"), ("thread_id", "INTEGER"),
+                             ("thread_state", "TEXT DEFAULT ''"), ("thread_gist", "TEXT DEFAULT ''")):
                 if col not in note_cols:
                     c.execute(f"ALTER TABLE review_notes ADD COLUMN {col} {typ}")
         c.commit()

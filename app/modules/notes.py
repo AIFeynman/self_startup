@@ -1,4 +1,5 @@
 """便签：用户自己写的灵感、感想、想法（和系统记的「问题与经验」分开），按时间线贴在墙上，可以自定义类型、互相连线、引用来源文章。
+任意一张可以续写成「主题线」：续写的便签 thread_id 指向线头（只有一层），线头上记状态和目前想法；知识库里一条线合成一篇。
 
 数据还在 review_notes 表（author='me'），这样知识库、搜索照常能读到，但不进概念抽取（不发给大模型）；sources 是引用的文章 JSON：
 [{doc, title, link, type, quote}]，doc 和批注用的是同一套材料标识；note_links 是便签之间的关系。
@@ -14,7 +15,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db, kb, tasks
+from .. import agent, db, kb, tasks
 from . import review
 
 log = logging.getLogger(__name__)
@@ -83,11 +84,101 @@ def kinds() -> list[dict]:
     return out + [{"key": k, "label": k, "builtin": False, "count": v} for k, v in sorted(used.items())]
 
 
+THREAD_STATES = {"open": "进行中", "clear": "已想清", "paused": "搁置"}
+
+
+def threads() -> list[dict]:
+    """有续写的线头，按最近一次续写排。"""
+    return db.rows("SELECT r.id, r.title, r.thread_state AS state, r.thread_gist AS gist, COUNT(c.id) + 1 AS count, "
+                   "MAX(c.created_at) AS last FROM review_notes r JOIN review_notes c ON c.thread_id=r.id "
+                   "WHERE r.author='me' GROUP BY r.id ORDER BY last DESC")
+
+
 @router.get("")
 def wall(q: str = "", kind: str = "", limit: int = 500):
     notes = [_full(n) for n in review.list_notes(q=q, kind=kind, author="me", limit=limit)]
     links = db.rows("SELECT id, a, b, rel FROM note_links ORDER BY id")
-    return {"notes": notes, "links": links, "kinds": kinds(), "rels": list(RELS)}
+    return {"notes": notes, "links": links, "kinds": kinds(), "rels": list(RELS), "threads": threads(), "states": THREAD_STATES}
+
+
+def _root(nid: int) -> dict:
+    n = _get(nid)
+    return _get(n["thread_id"]) if n.get("thread_id") else n
+
+
+def thread(nid: int) -> dict:
+    root = _root(nid)
+    items = [_full(root)] + [_full(n) for n in db.rows("SELECT * FROM review_notes WHERE thread_id=? ORDER BY created_at, id", [root["id"]])]
+    return {"id": root["id"], "title": root["title"], "state": root["thread_state"] or "", "gist": root["thread_gist"] or "", "items": items}
+
+
+@router.get("/threads/{nid}")
+def api_thread(nid: int):
+    return thread(nid)
+
+
+class ThreadIn(BaseModel):
+    state: str | None = None
+    gist: str | None = None
+
+
+@router.patch("/threads/{nid}")
+def api_thread_patch(nid: int, body: ThreadIn):
+    root = _root(nid)
+    d = {}
+    if body.state is not None:
+        if body.state not in THREAD_STATES:
+            raise HTTPException(400, "状态不对")
+        d["thread_state"] = body.state
+    if body.gist is not None:
+        d["thread_gist"] = body.gist.strip()[:2000]
+    if d:
+        db.update("review_notes", root["id"], d)
+    return thread(root["id"])
+
+
+SUMMARIZE_PROMPT = """下面是用户围绕同一个想法陆续写下的便签，按时间排列。用两三句话归纳用户目前的想法：已经倾向什么、还在纠结什么、下一步想试什么。
+用第一人称「我」写（这是用户自己的想法记录），只根据便签内容，不加新观点，不用标题和列表，只输出归纳的文字。
+
+{items}"""
+
+
+@router.post("/threads/{nid}/summarize")
+def api_thread_summarize(nid: int):
+    """用户点了才把这条线发给模型（便签平时不发给大模型）。"""
+    t = thread(nid)
+    items = "\n".join(f"- {n['date']} {n['text']}" for n in t["items"])
+    r = agent.run_once(SUMMARIZE_PROMPT.format(items=items), readonly=True, model=agent.module_model("notes"))
+    gist = (r.get("text") or "").strip()
+    if not gist:
+        raise HTTPException(502, "归纳失败，再试一次")
+    return api_thread_patch(t["id"], ThreadIn(gist=gist))
+
+
+def _grams(text: str) -> set[str]:
+    """中文按相邻两字、英文按单词切，用来粗略判断两句话是不是在说同一件事。"""
+    out = set()
+    for run in re.findall(r"[\u4e00-\u9fff]+|[a-zA-Z][a-zA-Z0-9]+", text.lower()):
+        out |= {run[i:i + 2] for i in range(len(run) - 1)} if "\u4e00" <= run[0] <= "\u9fff" else {run}
+    return out
+
+
+@router.get("/suggest")
+def suggest(text: str, limit: int = 3):
+    """写新便签时，看它像不像在续写某条已有的想法（本地比对，不调模型）。"""
+    mine = _grams(text)
+    if len(mine) < 2:
+        return []
+    since = (Date.today() - timedelta(days=120)).isoformat()
+    counts = {t["id"]: t["count"] for t in threads()}
+    hits = []
+    for n in db.rows("SELECT id, title, content FROM review_notes WHERE author='me' AND thread_id IS NULL AND kind!='review' AND date>=?", [since]):
+        other = _grams(f"{n['title']} {n['content']}")
+        shared = len(mine & other)
+        score = shared / (len(mine) * len(other)) ** 0.5 if other else 0  # 按两边长度折中，长篇便签不会什么都像
+        if shared >= 2 and score >= 0.15:
+            hits.append((score, {"id": n["id"], "title": n["title"], "count": counts.get(n["id"], 1)}))
+    return [x for _, x in sorted(hits, key=lambda h: -h[0])[:limit]]
 
 
 @router.get("/kinds")
@@ -95,8 +186,10 @@ def api_kinds():
     return kinds()
 
 
-def add(text: str, kind: str = "", sources: list[dict] | None = None, date: str | None = None) -> dict:
-    """贴一张便签。文字里写了前缀（问题: / 自定义类型:）以前缀为准，否则用选的类型，都没有归「灵感」。"""
+def add(text: str, kind: str = "", sources: list[dict] | None = None, date: str | None = None, thread: int | None = None) -> dict:
+    """贴一张便签。文字里写了前缀（问题: / 自定义类型:）以前缀为准，否则用选的类型，都没有归「灵感」。
+    thread：续写哪张便签（续写的续写也挂到线头）。"""
+    root = _root(thread) if thread else None
     custom = [k["key"] for k in kinds() if not k["builtin"]]
     parsed = review.parse_quick_note(text, review.normalize_kind(kind), custom)
     if not parsed["title"]:
@@ -104,7 +197,9 @@ def add(text: str, kind: str = "", sources: list[dict] | None = None, date: str 
     now = db.now()
     nid = db.insert("review_notes", {**parsed, "date": review._day(date), "author": "me",
                                      "sources": json.dumps(clean_sources(sources), ensure_ascii=False),
-                                     "created_at": now, "updated_at": now})
+                                     "thread_id": root["id"] if root else None, "created_at": now, "updated_at": now})
+    if root and not root.get("thread_state"):
+        db.update("review_notes", root["id"], {"thread_state": "open"})
     return _full(db.row("SELECT * FROM review_notes WHERE id=?", [nid]))
 
 
@@ -113,11 +208,12 @@ class AddIn(BaseModel):
     kind: str = ""
     sources: list[dict] = []
     date: str | None = None
+    thread: int | None = None
 
 
 @router.post("")
 def api_add(body: AddIn):
-    return add(body.text, body.kind, body.sources, body.date)
+    return add(body.text, body.kind, body.sources, body.date, body.thread)
 
 
 ISSUE_ASPECT = "有问题的"
@@ -172,7 +268,12 @@ def api_patch(nid: int, body: PatchIn):
 
 @router.delete("/{nid}")
 def api_delete(nid: int):
-    _get(nid)
+    """删线头时，最早的那条续写接任线头，状态和目前想法跟过去。"""
+    n = _get(nid)
+    heir = db.row("SELECT id FROM review_notes WHERE thread_id=? ORDER BY created_at, id LIMIT 1", [nid])
+    if heir:
+        db.update("review_notes", heir["id"], {"thread_id": None, "thread_state": n["thread_state"], "thread_gist": n["thread_gist"]})
+        db.execute("UPDATE review_notes SET thread_id=? WHERE thread_id=?", [heir["id"], nid])
     return review.api_del_note(nid)
 
 
@@ -319,4 +420,8 @@ def agent_context(ref: str) -> str:
     lines = ["用户最近的便签（用户自己写的灵感和想法）："]
     for n in review.list_notes(author="me", limit=30):
         lines.append(f"- {n['date']} [{review.KIND_LABEL.get(n['kind'], n['kind'])}] {n['title']}")
+    th = threads()[:10]
+    if th:
+        lines.append("\n用户在持续想的主题线（线头 · 条数 · 目前想法）：")
+        lines += [f"- {t['title']} · {t['count']} 条 · {THREAD_STATES.get(t['state'] or 'open')}" + (f" · {t['gist']}" if t["gist"] else "") for t in th]
     return "\n".join(lines)
