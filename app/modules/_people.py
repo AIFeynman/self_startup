@@ -464,7 +464,7 @@ VOICE_SYSTEM = (
 _judge_lock = threading.Lock()
 
 
-def _ask(rows: list[dict], system: str, run, model: str, retry_wait: float) -> tuple[dict[str, dict], str]:
+def _ask(rows: list[dict] | dict, system: str, run, model: str, retry_wait: float) -> tuple[dict[str, dict], str]:
     """把一批条目交给本机小模型，返回 ({id: 输出}, 错误)。同一时刻只跑一个（本机 Claude 并发时容易返回异常），失败等一会儿重试一次。"""
     last = ""
     for attempt in range(2):
@@ -504,6 +504,52 @@ def voice_filter(items: list[dict], run, model: str = "claude-haiku-5-5", retry_
         keep += [it for it in batch if (got.get(it["id"]) or {}).get("voice")]
         rejected += [it["id"] for it in batch if it["id"] in got and got[it["id"]].get("voice") is False]
     return keep, rejected, errs
+
+
+# ---------- 新闻再筛一道：同一件事多家媒体报道只留最早一条；和 AI 认知无关的（八卦、私事、汽车销量、客套话）不收 ----------
+NEWS_RECENT_DAYS = 2
+NEWS_RECENT_MAX = 80
+NEWS_SYSTEM = (
+    "你在帮用户筛 AI 名人的新闻。输入 JSON 里 recent 是最近已经收下的新闻，items 是这一轮新来的（按时间从早到晚）。对 items 里每条给两个判断：\n"
+    "worth：对理解 AI 有没有分量。true：本人关于 AI、模型、算力、科研、AI 产业和社会影响的观点、预测、判断、警告；本人宣布或确认的模型、产品、研究、合作、战略。"
+    "false：私生活、婚外情、丑闻、官司、政治和社会争议表态；对某个人的客套、玩笑、夸赞或招揽（比如说请某人来工作是荣幸）；"
+    "身价、股价、薪酬；和 AI 无关的业务（汽车交付与订单、火箭、社交平台运营等）；只是转述别人观点的评论文章。拿不准时判 false。\n"
+    "dup_of：如果这条和 recent 里或 items 里更早的某条讲的是同一件事（同一次讲话、同一个发布、同一个表态，换了媒体、换了语言、换了标题角度都算），"
+    "给出那条的 id；不是重复给 null。只能指向 recent 或本批更早的条目。\n"
+    '只输出 JSON：{"items": [{"id": "<原样返回>", "worth": true 或 false, "dup_of": "<id>" 或 null}]}，每条 items 都要有输出。'
+)
+
+
+def _recent_news() -> list[dict]:
+    since = (datetime.now() - timedelta(days=NEWS_RECENT_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = db.rows("SELECT id, title, extra FROM people_items WHERE channel='news' AND first_seen>=? AND json_extract(extra, '$.low') IS NULL "
+                   "ORDER BY first_seen DESC LIMIT ?", [since, NEWS_RECENT_MAX])
+    return [{"id": r["id"], "title": r["title"], "gist": json.loads(r["extra"] or "{}").get("gist", "")} for r in reversed(rows)]
+
+
+def news_triage(items: list[dict], run, model: str = "claude-haiku-5-5", retry_wait: float = 5) -> tuple[list[dict], list[str], list[str]]:
+    """返回 (留下的新闻, 不收的 id, 错误)。一批失败的这轮不收也不记拒绝，下一轮重判。"""
+    items = sorted(items, key=lambda it: it["date"] or "")
+    recent = _recent_news()
+    known = {r["id"] for r in recent}
+    keep, drop, errs = [], [], []
+    for i in range(0, len(items), VOICE_BATCH):
+        batch = items[i:i + VOICE_BATCH]
+        rows = [{**r, "date": it["date"]} for r, it in zip(_rows_for_model(batch), batch)]
+        got, err = _ask({"recent": recent, "items": rows}, NEWS_SYSTEM, run, model, retry_wait)
+        if not got:
+            errs.append(f"新闻去重第 {i // VOICE_BATCH + 1} 批（{len(batch)} 条，下轮重判）：{err}")
+            continue
+        for it in batch:
+            x = got.get(it["id"])
+            if x is None:
+                continue
+            if x.get("worth") is False or str(x.get("dup_of") or "") in known:
+                drop.append(it["id"])
+            else:
+                keep.append(it)
+                known.add(it["id"])
+    return keep, drop, errs
 
 
 GIST_SYSTEM = (
@@ -637,6 +683,9 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
             fresh = [it for it in items if it["id"] not in seen | rejected]
             runner, model = judge or _haiku_runner()
             kept, rejected_now, verrs = voice_filter(fresh, runner, model)
+            if ch == "news" and kept:
+                kept, dropped, nerrs = news_triage(kept, runner, model)
+                rejected_now, verrs = rejected_now + dropped, verrs + nerrs
             now = db.now()
             for iid in rejected_now:
                 db.execute("INSERT OR REPLACE INTO people_rejected(id, at) VALUES(?, ?)", [iid, now])

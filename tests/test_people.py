@@ -191,6 +191,37 @@ def test_run_merges_people_judges_new_only_and_notifies_once(monkeypatch):
     assert set(P.due()) == set(P.CHANNELS) - {"youtube", "x"}
 
 
+def test_news_keeps_one_report_per_story_and_drops_gossip(monkeypatch):
+    _wipe()
+    monkeypatch.setattr(P.notify, "notify", lambda *a, **k: 1)
+    P.upsert([P._item("news:old", "news", ["dario"], "Dario: AI will cure cancer in 10 years", "u", "2026-11-11")])
+    fetched = [P._item("news:" + k, "news", [pid], t, "u", d) for k, pid, t, d in [
+        ("same", "dario", "Cancer will be history in 10 years: Anthropic CEO", "2026-11-12T01:00:00"),
+        ("gossip", "musk", "Musk says hiring Jensen Huang would be an honor", "2026-11-12T02:00:00"),
+        ("first", "altman", "Altman warns Samsung of double-counted AI demand", "2026-11-12T03:00:00"),
+        ("again", "altman", "Sam Altman: AI demand double counted", "2026-11-12T04:00:00"),
+        ("lost", "altman", "Altman on devices", "2026-11-12T05:00:00")]]
+    monkeypatch.setattr(P, "FETCHERS", {"news": lambda pool: (list(fetched), [])})
+    verdict = {"news:same": {"worth": True, "dup_of": "news:old"}, "news:gossip": {"worth": False},
+               "news:first": {"worth": True}, "news:again": {"worth": True, "dup_of": "news:first"},
+               "news:lost": {"worth": True, "dup_of": "news:nowhere"}}
+    seen = {}
+
+    def judge(prompt, system, model):
+        d = json.loads(prompt)
+        if system == P.NEWS_SYSTEM:
+            seen["recent"] = [r["id"] for r in d["recent"]]
+            seen["order"] = [r["id"] for r in d["items"]]
+            return {"text": json.dumps({"items": [{"id": r["id"], **verdict[r["id"]]} for r in d["items"]]})}
+        return {"text": json.dumps({"items": [{"id": r["id"], "voice": True, "gist": "一句话", "keep": True} for r in d]})}
+    r = P.run(["news"], judge=(judge, "m"))
+    assert seen["recent"] == ["news:old"]
+    assert seen["order"] == ["news:same", "news:gossip", "news:first", "news:again", "news:lost"]
+    assert r["news"]["new"] == 2
+    assert {x["id"] for x in db.rows("SELECT id FROM people_items")} == {"news:old", "news:first", "news:lost"}
+    assert {x["id"] for x in db.rows("SELECT id FROM people_rejected")} == {"news:same", "news:gossip", "news:again"}
+
+
 def test_people_api(client, monkeypatch):
     _wipe()
     P.upsert([P._item("arxiv:1", "paper", ["neel", "hinton"], "Paper", "https://arxiv.org/abs/1", "2026-11-10")])
