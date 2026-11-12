@@ -73,6 +73,22 @@ def list_notifications(module: str = "", limit: int = 50):
     return _decode(db.rows("SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (min(limit, 500),)))
 
 
+@router.get("/history")
+def history(limit: int = 80):
+    """消息中心：弹过的提醒（通知 + 后台任务完成 / 失败）按时间倒序放一处，错过了也能找回来。"""
+    from . import jobs
+    limit = min(limit, 300)
+    out = [{"at": n["created_at"], "title": n["title"], "body": n["body"], "link": n["link"], "module": n["module"], "failed": False}
+           for n in db.rows("SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,))]
+    for j in db.rows("SELECT id, module, ref, status, finished_at FROM jobs WHERE status IN ('done','failed') AND finished_at IS NOT NULL "
+                     "ORDER BY finished_at DESC LIMIT ?", (limit,)):
+        title, link, kind = jobs.describe(j)
+        ok = j["status"] == "done"
+        out.append({"at": j["finished_at"], "title": f"{kind}{'完成' if ok else '失败'}", "body": title, "link": link,
+                    "module": j["module"], "failed": not ok})
+    return sorted(out, key=lambda x: x["at"] or "", reverse=True)[:limit]
+
+
 @router.get("/since")
 def since(after: int = -1):
     """页面轮询：after<0（刚打开页面）只返回当前最大 id，不把旧通知全弹一遍；之后带上次的 last 来取新的。"""

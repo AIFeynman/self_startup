@@ -243,3 +243,22 @@ def test_readonly_claude_runs_skip_user_hooks():
     assert _json.loads(ro[ro.index("--settings") + 1]).get("disableAllHooks") is True
     rw = agent._claude_cmd("p", "", "", [], readonly=False)
     assert not _json.loads(rw[rw.index("--settings") + 1]).get("disableAllHooks")
+
+
+def test_message_history_merges_notifications_and_finished_jobs(client):
+    from app import db, notify
+    db.execute("DELETE FROM notifications")
+    db.execute("DELETE FROM jobs")
+    db.insert("notifications", {"module": "feed", "kind": "people", "title": "名人新发声 3 条", "body": "Sundar：X 1", "reasons": [],
+                                 "link": "#feed/people/batch/2", "system": 0, "created_at": "2026-11-12T09:00:00"})
+    db.insert("jobs", {"module": "learn", "ref": "learn:item:7", "engine": "claude", "prompt": "p", "status": "done",
+                       "created_at": "2026-11-12T08:00:00", "finished_at": "2026-11-12T10:00:00"})
+    db.insert("jobs", {"module": "learn", "ref": "learn:item:8", "engine": "claude", "prompt": "p", "status": "running",
+                       "created_at": "2026-11-12T08:00:00"})
+    db.insert("jobs", {"module": "learn", "ref": "learn:item:9", "engine": "claude", "prompt": "p", "status": "paused",
+                       "created_at": "2026-11-12T08:00:00", "finished_at": "2026-11-12T11:00:00"})
+    items = client.get("/api/notify/history").json()
+    assert [(i["title"], i["link"], i["at"]) for i in items] == [
+        ("深读笔记完成", "#learn/item/7", "2026-11-12T10:00:00"),
+        ("名人新发声 3 条", "#feed/people/batch/2", "2026-11-12T09:00:00")]
+    assert items[1]["body"] == "Sundar：X 1" and not items[0]["failed"]

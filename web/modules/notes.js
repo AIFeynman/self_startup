@@ -85,8 +85,9 @@ export default {
       oninput: () => { query = search.value.trim(); paintBoard(); } });
     function paintFilters() {
       const used = kinds.filter((k) => k.count);
-      filters.replaceChildren(search, h('button.sn-chip' + (!filter ? '.on' : ''), { onclick: () => { filter = ''; paint(); } }, `全部 ${notes.length}`),
-        ...used.map((k) => h('button.sn-chip' + (filter === k.key ? '.on' : ''), { onclick: () => { filter = k.key; paint(); } },
+      const pick = (key) => { filter = key; selected = null; linking = false; paint(); };
+      filters.replaceChildren(search, h('button.sn-chip' + (!filter ? '.on' : ''), { onclick: () => pick('') }, `全部 ${notes.length}`),
+        ...used.map((k) => h('button.sn-chip' + (filter === k.key ? '.on' : ''), { onclick: () => pick(k.key) },
           [h(`i.kc${kindColor(k.key, kinds)}`), `${k.label} ${k.count}`])));
     }
     const lines = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

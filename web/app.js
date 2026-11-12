@@ -24,6 +24,7 @@ async function boot() {
     h('button.new-chat', { onclick: () => openChat({ module: currentId(), title: titleOf(currentId()), fresh: true }) }, [ui.icon('plus'), '新对话']),
     h('nav#nav-links', {}, meta.modules.filter((m) => !m.page).map((m) => h('a', { href: '#' + m.id, 'data-id': m.id }, [ui.icon(ICONS[m.id] || 'spark'), h('span', {}, m.title)]))),
     h('div.nav-sec#recent'),
+    h('div.nav-msg', {}, h('a#nav-inbox', { href: '#inbox', title: '弹过的提醒都在这里' }, [ui.icon('bell'), h('span', {}, '消息')])),
     h('div.nav-foot', {}, [h('a', { href: '#settings' }, [ui.icon('settings'), h('span', {}, '设置')]),
       h('span#engine-status', {}, Object.entries(meta.engines).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' '))]),
   );
@@ -36,6 +37,7 @@ async function boot() {
   watchApprovals();
   watchUpdates();
   watchNotifications();
+  watchInbox();
   restoreChat();
 }
 
@@ -192,12 +194,13 @@ async function route() {
     return;
   }
   const id = currentId();
-  document.querySelectorAll('#nav-links a, .nav-foot a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+  document.querySelectorAll('#nav-links a, .nav-msg a, .nav-foot a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
   page.innerHTML = '';
   const wrap = h('div.page-wrap');
   page.append(wrap);
   page.scrollTop = 0;
   if (id === 'settings') return renderSettings(wrap);
+  if (id === 'inbox') return renderInbox(wrap);
   const m = meta.modules.find((x) => x.id === id);
   if (!m) { wrap.append(ui.empty('未知页面')); return; }
   if (m.page) { location.replace('#' + m.page); return; }
@@ -215,6 +218,43 @@ async function route() {
     console.error(e);
     wrap.append(h('pre.error', {}, `加载板块 ${id} 失败：${e.message}`));
   }
+}
+
+// 消息中心：弹过的提醒（通知 + 后台任务完成 / 失败）都留一份，点开跳过去；侧栏「消息」上显示没看过的条数
+const INBOX_SEEN = 'inbox-seen';
+const inboxSeen = () => { try { return localStorage.getItem(INBOX_SEEN) || ''; } catch { return ''; } };
+async function paintInboxBadge() {
+  const a = document.getElementById('nav-inbox');
+  const items = await api.get('/api/notify/history?limit=100').catch(() => null);
+  if (!a || !items) return;
+  a.querySelector('.nav-badge')?.remove();
+  const seen = inboxSeen();
+  if (!seen) { try { if (items[0]) localStorage.setItem(INBOX_SEEN, items[0].at); } catch { /* 只是未读标记 */ } return; }
+  const n = items.filter((x) => x.at > seen).length;
+  if (n && currentId() !== 'inbox') a.append(h('span.nav-badge', { title: `${n} 条没看过` }, n > 99 ? '99+' : String(n)));
+}
+function watchInbox() {
+  paintInboxBadge();
+  window.addEventListener('notify', paintInboxBadge);
+  document.addEventListener('job-done', paintInboxBadge);
+  setInterval(() => { if (!document.hidden) paintInboxBadge(); }, 60000);
+}
+
+async function renderInbox(wrap) {
+  const items = await api.get('/api/notify/history?limit=200');
+  const seen = inboxSeen();
+  try { if (items[0]) localStorage.setItem(INBOX_SEEN, items[0].at); } catch { /* 只是未读标记 */ }
+  paintInboxBadge();
+  const day = (t) => (t || '').slice(0, 10);
+  const days = [...new Set(items.map((x) => day(x.at)))];
+  wrap.append(ui.pageHead('消息', '弹过的提醒都在这里：信息推荐、名人发声、深读完成、后台任务……点一条直接打开'),
+    items.length ? h('div.inbox', {}, days.map((d) => h('div.inbox-day', {}, [h('div.inbox-date', {}, d),
+      ...items.filter((x) => day(x.at) === d).map((x) => h(`${x.link ? 'a' : 'div'}.inbox-it${x.at > seen ? '.new' : ''}${x.failed ? '.err' : ''}`, {
+        href: x.link || undefined }, [
+        h('span.inbox-time', {}, (x.at || '').slice(11, 16)),
+        h('div.inbox-txt', {}, [h('b', {}, x.title), x.body ? h('span', {}, x.body) : null]),
+        x.link ? h('span.inbox-go', {}, '打开 →') : null,
+      ]))]))) : ui.empty('还没有消息', '信息推荐、深读、后台任务的提醒都会留在这里'));
 }
 
 async function renderSettings(wrap) {
