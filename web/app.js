@@ -183,6 +183,23 @@ function trackOrigin(e) {
   if (from && from !== currentId() && from !== 'chat') window.__navOrigin = { hash: new URL(e.oldURL).hash, title: titleOf(from) };
 }
 
+const IMPORT_TRIES = 10, IMPORT_WAIT_MS = 2000;
+// 合并上线后服务会自动重启几秒，这时切板块会取不到文件：等一会儿换个版本号重取，切走了就不再取
+async function importModule(id, wrap) {
+  for (let i = 1; ; i++) {
+    try {
+      const mod = await import(`./modules/${id}.js?v=${Date.now()}`);
+      wrap.replaceChildren();
+      return mod;
+    } catch (e) {
+      if (e.name !== 'TypeError' || i >= IMPORT_TRIES || !wrap.isConnected) throw e;
+      wrap.replaceChildren(h('div.muted', {}, '服务可能在重启，稍等几秒自动重试…'));
+      await new Promise((r) => setTimeout(r, IMPORT_WAIT_MS));
+      if (!wrap.isConnected) throw e;
+    }
+  }
+}
+
 let chatAfterRoute = null;
 async function route() {
   const jump = /^#chat\/(\d+)$/.exec(location.hash); // 便签出处里的对话链接：回到那个板块，打开那段对话
@@ -210,7 +227,7 @@ async function route() {
   const refresh = async () => { wrap.innerHTML = ''; await mod.default.render(wrap, ctx); };
   const ctx = { api, h, md, toast, field, ui, openChat, ask, refresh, module: id, title: m.title, sub: location.hash.slice(1).split('/').slice(1) };
   try {
-    mod = await import(`./modules/${id}.js?v=${Date.now()}`);
+    mod = await importModule(id, wrap);
     if (chatAfterRoute) { const s = chatAfterRoute; chatAfterRoute = null; openChat({ module: s.module, ref: s.ref, title: titleOf(s.module), sessionId: s.id }); }
     else openChat({ module: id, title: m.title, expand: false });
     await mod.default.render(wrap, ctx);
