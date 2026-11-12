@@ -34,7 +34,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from .. import agent, db, jobs, settings, tasks
+from .. import agent, db, jobs, notify, settings, tasks
 from ..db import ROOT
 from . import _book as bookparse
 from . import _deepdive
@@ -1119,6 +1119,7 @@ def _finish_item(iid: int, job: dict) -> None:
         data["title"] = _reads.md_title(main.read_text("utf-8", errors="replace"))
     db.update("learn_items", iid, data)
     _reads.sync_task(iid)
+    notify.system("深读完成" if ok else "深读失败", data.get("title") or it["title"] or it["url"])
 
 
 # ---------- A2. Deep Dive（GitHub 项目，按需生成） ----------

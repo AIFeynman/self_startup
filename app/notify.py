@@ -34,9 +34,14 @@ router = APIRouter(prefix="/api/notify", tags=["notify"])
 
 def notify(module: str, title: str, body: str = "", reasons: list[str] | None = None, link: str = "", kind: str = "",
            subtitle: str = "") -> int:
-    sent = bool(settings.get("notify.system", True)) and system_notify(title, body, subtitle)
+    sent = system(title, body, subtitle)
     return db.insert("notifications", {"module": module, "kind": kind, "title": title, "body": body, "reasons": reasons or [],
                                        "link": link, "system": int(sent), "created_at": db.now()})
+
+
+def system(title: str, body: str = "", subtitle: str = "") -> bool:
+    """只发 Mac 系统通知、不进页内提醒（页内已有别的提醒时用，比如后台任务结束）。"""
+    return bool(settings.get("notify.system", True)) and system_notify(title, body, subtitle)
 
 
 def system_notify(title: str, body: str, subtitle: str = "") -> bool:

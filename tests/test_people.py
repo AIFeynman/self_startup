@@ -302,3 +302,33 @@ def test_translations_are_dropped_and_hidden(monkeypatch):
     assert "podcast:new" not in ids and "podcast:ok" in ids
     shown = {it["id"] for it in P.view(days=30)["pinned"]} | {it["id"] for g in P.view(days=30)["groups"] for it in g["items"]}
     assert "podcast:old" not in shown and "podcast:ok" in shown
+
+
+def test_notification_opens_its_own_batch(client, monkeypatch):
+    _wipe()
+    sent = []
+    monkeypatch.setattr(P.notify, "notify", lambda *a, **k: sent.append(k["link"]) or 1)
+    P.upsert([P._item("twitter:a", "x", ["sundar"], "@sundarpichai：Gemini Decision 1", "u", "2026-11-11"),
+              P._item("news:a", "news", ["hinton"], "Hinton warns", "u", "2026-11-11")])
+    P.summarize_and_notify()
+    P.upsert([P._item("twitter:b", "x", ["karpathy"], "@karpathy：later", "u", "2026-11-11")])
+    P.summarize_and_notify()
+    first, second = (int(link.rsplit("/", 1)[1]) for link in sent)
+    assert sent[0].startswith("#feed/people/batch/") and first != second
+    r = client.get(f"/api/feed/people?batch={first}").json()
+    assert [it["id"] for it in r["batch"]] == ["twitter:a", "news:a"]
+    assert [it["id"] for it in client.get(f"/api/feed/people?batch={second}").json()["batch"]] == ["twitter:b"]
+
+
+def test_view_marks_items_already_deep_read():
+    _wipe()
+    P.upsert([P._item("blog:1", "blog", ["marcus"], "Essay", "https://garymarcus.substack.com/p/x", "2026-11-10"),
+              P._item("podcast:1", "podcast", ["amasad"], "Talk", "https://podcasts.apple.com/x", "2026-11-10", audio="https://cdn/a.mp3"),
+              P._item("news:1", "news", ["hinton"], "Hinton warns", "https://news/x", "2026-11-10")])
+    done = db.insert("learn_items", {"kind": "article", "url": "https://garymarcus.substack.com/p/x", "status": "done", "created_at": db.now()})
+    running = db.insert("learn_items", {"kind": "video", "url": "https://cdn/a.mp3", "status": "running", "created_at": db.now()})
+    r = P.view(days=1)
+    items = {it["id"]: it for it in r["pinned"] + [i for g in r["groups"] for i in g["items"]]}
+    assert items["blog:1"]["learn"] == {"id": done, "status": "done"}
+    assert items["podcast:1"]["learn"] == {"id": running, "status": "running"}
+    assert "learn" not in items["news:1"]

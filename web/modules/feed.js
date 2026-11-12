@@ -1042,7 +1042,7 @@ export default {
         if (sel >= entries.length) sel = -1;
         listBox.replaceChildren();
         listOffset = listTotal = 0; renderSentinel();
-        return peopleTab(peopleBox, ctx, ctx.sub?.[0] === 'people' ? ctx.sub[1] || '' : '');
+        return peopleTab(peopleBox, ctx, ctx.sub?.[0] === 'people' ? ctx.sub.slice(1) : []);
       }
       listBox.style.display = libView() ? 'none' : '';
       libBox.style.display = libView() ? '' : 'none';
