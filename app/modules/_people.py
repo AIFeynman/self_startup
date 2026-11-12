@@ -549,6 +549,7 @@ def news_triage(items: list[dict], run, model: str = "claude-haiku-5-5", retry_w
             else:
                 keep.append(it)
                 known.add(it["id"])
+                recent.append({"id": it["id"], "title": it["title"], "gist": ""})
     return keep, drop, errs
 
 
