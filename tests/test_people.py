@@ -222,6 +222,21 @@ def test_news_keeps_one_report_per_story_and_drops_gossip(monkeypatch):
     assert {x["id"] for x in db.rows("SELECT id FROM people_rejected")} == {"news:same", "news:gossip", "news:again"}
 
 
+def test_news_later_batches_see_what_earlier_batches_kept(monkeypatch):
+    _wipe()
+    monkeypatch.setattr(P, "VOICE_BATCH", 1)
+    items = [P._item("news:a", "news", ["altman"], "A", "u", "2026-11-12T01:00:00"),
+             P._item("news:b", "news", ["altman"], "A again", "u", "2026-11-12T02:00:00")]
+    seen = []
+
+    def judge(prompt, system, model):
+        d = json.loads(prompt)
+        seen.append([r["id"] for r in d["recent"]])
+        return {"text": json.dumps({"items": [{"id": r["id"], "worth": True, "dup_of": "news:a" if r["id"] == "news:b" else None} for r in d["items"]]})}
+    keep, drop, _ = P.news_triage(items, judge, retry_wait=0)
+    assert seen == [[], ["news:a"]] and [it["id"] for it in keep] == ["news:a"] and drop == ["news:b"]
+
+
 def test_people_api(client, monkeypatch):
     _wipe()
     P.upsert([P._item("arxiv:1", "paper", ["neel", "hinton"], "Paper", "https://arxiv.org/abs/1", "2026-11-10")])
