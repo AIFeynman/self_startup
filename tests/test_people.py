@@ -68,11 +68,12 @@ def test_fetch_x_maps_authors_and_drops_old(monkeypatch):
     assert all(q.count("from:") <= P.X_CHUNK for q in seen)
 
 
-def test_fetch_youtube_keeps_own_talks_and_drops_shorts_and_unrelated(monkeypatch):
+def test_fetch_youtube_keeps_own_talks_and_clips_and_drops_shorts_and_unrelated(monkeypatch):
     sn = lambda t, ch="UCother": {"title": t, "description": "", "publishedAt": _iso(0.5), "channelId": ch, "channelTitle": "c",
                                   "defaultAudioLanguage": "en"}
     vids = {"a": (sn("Andrej Karpathy: full interview on agents"), "PT1H2M"), "b": (sn("Andrej Karpathy #shorts"), "PT50S"),
-            "c": (sn("Cooking pasta at home"), "PT20M"), "d": (sn("Weekly roundup", "UCtrusted"), "PT30M")}
+            "c": (sn("Cooking pasta at home"), "PT20M"), "d": (sn("Weekly roundup", "UCtrusted"), "PT30M"),
+            "e": (sn("Andrej Karpathy on coding agents at the summit"), "PT2M10S"), "f": (sn("Andrej Karpathy on agents"), "PT50S")}
     vids["d"][0]["description"] = "with Andrej Karpathy"
 
     def handler(req):
@@ -84,7 +85,7 @@ def test_fetch_youtube_keeps_own_talks_and_drops_shorts_and_unrelated(monkeypatc
     _mock(monkeypatch, handler)
     monkeypatch.setattr(P, "trusted_channels", lambda: {"UCtrusted"})
     items, errs = P.fetch_youtube([_person("karpathy")], key="k")
-    assert not errs and sorted(i["id"] for i in items) == ["youtube:a", "youtube:d"]
+    assert not errs and sorted(i["id"] for i in items) == ["youtube:a", "youtube:d", "youtube:e"]
     assert all(i["people"] == ["karpathy"] for i in items)
 
 
