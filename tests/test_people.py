@@ -2,10 +2,13 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import pytest
 
 from app import db
 from app.modules import _feed_sources as src
 from app.modules import _people as P
+
+_real_screen = P.screen
 
 
 def _iso(days_ago=0.0):
@@ -285,38 +288,91 @@ def test_x_substance_rule_drops_bare_reactions():
     assert P.x_substantive("开源模型的护城河在产品层而不是模型层", [])
 
 
-def test_annotate_writes_chinese_gist_and_flags_low_content():
+@pytest.fixture(autouse=True)
+def _no_jev(monkeypatch):
+    monkeypatch.setattr(P, "screen", lambda items: ({}, []))
+
+
+def test_annotate_writes_chinese_gist():
     items = [P._item("twitter:1", "x", ["karpathy"], "@karpathy：nice job", "u", ""),
              P._item("blog:1", "blog", ["marcus"], "Just say no to Anthropic's IPO", "u", "")]
-    reply = {"items": [{"id": "twitter:1", "gist": "Karpathy 点赞", "keep": False},
-                       {"id": "blog:1", "gist": "Marcus 撰文反对 Anthropic 上市", "keep": True}]}
-    gists, low, errs = P.annotate(items, lambda *a, **k: {"text": json.dumps(reply, ensure_ascii=False)})
-    assert gists == {"twitter:1": "Karpathy 点赞", "blog:1": "Marcus 撰文反对 Anthropic 上市"} and low == {"twitter:1"} and not errs
+    reply = {"items": [{"id": "twitter:1", "gist": "Karpathy 点赞"}, {"id": "blog:1", "gist": "Marcus 撰文反对 Anthropic 上市"}]}
+    gists, errs = P.annotate(items, lambda *a, **k: {"text": json.dumps(reply, ensure_ascii=False)})
+    assert gists == {"twitter:1": "Karpathy 点赞", "blog:1": "Marcus 撰文反对 Anthropic 上市"} and not errs
 
     def boom(*a, **k):
         raise RuntimeError("offline")
-    gists, low, errs = P.annotate(items, boom, retry_wait=0)
-    assert gists == {} and low == set() and errs
+    gists, errs = P.annotate(items, boom, retry_wait=0)
+    assert gists == {} and errs
 
 
-def test_run_adds_gists_drops_low_tweets_and_backfills(monkeypatch):
+def test_screen_asks_jev_whether_each_item_is_substance(monkeypatch):
+    from app.modules import _feed_judge as J
+    seen = []
+
+    def judge(todo):
+        seen.extend(todo)
+        return {"twitter:1": {"judge_value": 0.1}}, ["第 1 批少返回 1 条"]
+    monkeypatch.setattr(J, "judge", judge)
+    items = [P._item("twitter:1", "x", ["marcus"], "@GaryMarcus：lutnick needs to go jail.", "u", ""),
+             P._item("blog:1", "blog", ["marcus"], "Essay", "u", "")]
+    scores, errs = _real_screen(items)
+    assert scores == {"twitter:1": 0.1} and errs
+    assert [(it["id"], kind) for it, kind, _ in seen] == [("twitter:1", "value"), ("blog:1", "value")]
+    assert seen[0][0]["source"] == "people" and "Gary Marcus" in seen[0][2] and "channel=x" in seen[0][2]
+    assert "people" in J.Q_VALUE
+
+
+def _gist_judge(prompt, system, model):
+    return {"text": json.dumps({"items": [{"id": r["id"], "voice": True, "gist": "中文：" + r["title"][:10]} for r in json.loads(prompt)]},
+                               ensure_ascii=False)}
+
+
+def _jev(monkeypatch, scores):
+    monkeypatch.setattr(P, "screen", lambda items: ({it["id"]: scores.get(it["id"], 0.9) for it in items}, []))
+
+
+def test_run_hides_items_jev_says_are_not_substance_and_backfills(monkeypatch):
     _wipe()
     monkeypatch.setattr(P.notify, "notify", lambda *a, **k: 1)
-    P.upsert([P._item("blog:old", "blog", ["marcus"], "Old essay without gist", "u", "2026-11-09"),
-              P._item("twitter:old", "x", ["marcus"], "@GaryMarcus：lol, indeed so", "u", "2026-11-09")])
+    _jev(monkeypatch, {"twitter:b": 0.2, "blog:gossip": 0.05})
+    P.upsert([P._item("blog:old", "blog", ["marcus"], "Old essay without gist", "u", "2026-11-09")])
     monkeypatch.setattr(P, "FETCHERS", {"x": lambda pool: ([P._item("twitter:a", "x", ["karpathy"], "@karpathy：thoughts on agents and memory", "u", "2026-11-10"),
-                                                           P._item("twitter:b", "x", ["karpathy"], "@karpathy：this is so great honestly", "u", "2026-11-10")], [])})
-
-    def judge(prompt, system, model):
-        rows = json.loads(prompt)
-        return {"text": json.dumps({"items": [{"id": r["id"], "gist": "中文：" + r["title"][:10], "keep": r["id"] in ("twitter:a", "blog:old")} for r in rows]},
-                                   ensure_ascii=False)}
-    P.run(["x"], judge=(judge, "m"))
+                                                           P._item("twitter:b", "x", ["karpathy"], "@karpathy：this is so great honestly", "u", "2026-11-10")], []),
+                                        "blog": lambda pool: ([P._item("blog:gossip", "blog", ["marcus"], "Jensen is reportedly about to get fired", "u", "2026-11-10")], [])})
+    P.run(["x", "blog"], judge=(_gist_judge, "m"))
     ids = {r["id"]: json.loads(r["extra"]) for r in db.rows("SELECT id, extra FROM people_items")}
-    assert "twitter:b" not in ids and ids["twitter:a"]["gist"].startswith("中文：")
-    assert ids["blog:old"]["gist"].startswith("中文：") and ids["twitter:old"].get("low") == 1
-    shown = [it["id"] for g in P.view(days=30)["groups"] for it in g["items"]]
-    assert "twitter:old" not in shown and "twitter:a" in shown
+    assert ids["twitter:a"]["gist"].startswith("中文：") and "low" not in ids["twitter:a"]
+    assert ids["twitter:b"].get("low") == 1 and ids["blog:gossip"].get("low") == 1
+    assert ids["blog:old"]["gist"].startswith("中文：")
+    shown = [it["id"] for g in P.view(days=30)["groups"] for it in g["items"]] + [it["id"] for it in P.view(days=30)["pinned"]]
+    assert set(shown) & {"twitter:b", "blog:gossip"} == set() and "twitter:a" in shown
+
+
+def test_x_keeps_only_a_few_best_posts_per_person_per_day(monkeypatch):
+    _wipe()
+    sent = []
+    monkeypatch.setattr(P.notify, "notify", lambda *a, **k: sent.append(a[1]) or 1)
+    _jev(monkeypatch, {"twitter:m1": 0.95, "twitter:m2": 0.6, "twitter:m3": 0.9, "twitter:m4": 0.7, "twitter:m5": 0.55})
+    P.upsert([P._item("twitter:m0", "x", ["marcus"], "@GaryMarcus：earlier today", "u", "2026-11-12")])
+    posts = [P._item(f"twitter:m{i}", "x", ["marcus"], f"@GaryMarcus：take {i}", "u", "2026-11-12", popularity=i) for i in range(1, 6)]
+    monkeypatch.setattr(P, "FETCHERS", {"x": lambda pool: (posts + [P._item("twitter:k", "x", ["karpathy"], "@karpathy：one post", "u", "2026-11-12")], [])})
+    P.run(["x"], judge=(_gist_judge, "m"))
+    visible = {r["id"] for r in db.rows("SELECT id FROM people_items WHERE json_extract(extra, '$.low') IS NULL")}
+    assert visible == {"twitter:m0", "twitter:m1", "twitter:m3", "twitter:k"}
+    assert sent[-1] == "名人新发声 4 条"
+
+
+def test_rescreen_hides_recent_items_that_fall_short(monkeypatch):
+    _wipe()
+    _jev(monkeypatch, {"twitter:r1": 0.03})
+    P.upsert([P._item("twitter:r1", "x", ["marcus"], "@GaryMarcus：lutnick needs to go jail.", "u", "2026-11-12"),
+              P._item("twitter:r2", "x", ["demis"], "@demishassabis：AlphaGenome 2", "u", "2026-11-12"),
+              P._item("news:r3", "news", ["altman"], "Altman on compute", "u", "2026-11-12")])
+    hidden, errs = P.rescreen(days=2)
+    assert hidden == ["twitter:r1"] and not errs
+    visible = {r["id"] for r in db.rows("SELECT id FROM people_items WHERE json_extract(extra, '$.low') IS NULL")}
+    assert visible == {"twitter:r2", "news:r3"}
 
 
 def test_view_pins_core_long_form_and_video():
