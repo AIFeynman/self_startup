@@ -69,7 +69,12 @@ export function peopleTab(box, ctx, sub = []) {
     } catch (e) { btn.disabled = false; toast('开始深读失败：' + e.message, true); }
   }
 
-  const meta = (it) => [it.date ? it.date.slice(5, 16).replace('T', ' ') : '', it.extra.uploader || it.extra.outlet || it.extra.show || it.extra.site || '',
+  const when = (d) => {
+    if (!/(Z|[+-]\d\d:\d\d)$/.test(d)) return d.slice(5, 16).replace('T', ' ');
+    const t = new Date(d), p = (n) => String(n).padStart(2, '0');
+    return `${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`;
+  };
+  const meta = (it) => [it.date ? when(it.date) : '', it.extra.uploader || it.extra.outlet || it.extra.show || it.extra.site || '',
     it.channel === 'x' && it.popularity ? `${it.popularity} 赞` : ''].filter(Boolean).join(' · ');
   const deepBtn = (it) => {
     if (!DEEP.has(it.channel)) return h('span');
