@@ -265,6 +265,20 @@ def test_pinned_follows_chosen_days_by_publish_date(client):
     assert [it["id"] for it in client.get("/api/feed/people?days=7").json()["pinned"]] == ["arxiv:new", "arxiv:old"]
 
 
+def test_today_lists_only_items_published_in_last_day(client):
+    _wipe()
+    utc = lambda h: (datetime.now(timezone.utc) - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    P.upsert([P._item("twitter:fresh", "x", ["karpathy"], "@karpathy：fresh thought on agents", "u", utc(2)),
+              P._item("twitter:stale", "x", ["karpathy"], "@karpathy：posted yesterday, found today", "u", utc(30)),
+              P._item("news:stale", "news", ["hinton"], "Hinton old interview", "u",
+                      (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")),
+              P._item("news:undated", "news", ["hinton"], "Hinton undated", "u", "")])
+    day = {it["id"] for g in client.get("/api/feed/people?days=1").json()["groups"] for it in g["items"]}
+    assert day == {"twitter:fresh", "news:undated"}
+    week = {it["id"] for g in client.get("/api/feed/people?days=7").json()["groups"] for it in g["items"]}
+    assert week == {"twitter:fresh", "twitter:stale", "news:stale", "news:undated"}
+
+
 def test_fetch_blog_reads_own_feeds_within_window(monkeypatch):
     pub = lambda d: (datetime.now(timezone.utc) - timedelta(days=d)).strftime("%a, %d %b %Y %H:%M:%S GMT")
     rss = f"""<rss><channel>
@@ -434,9 +448,9 @@ def test_notification_opens_its_own_batch(client, monkeypatch):
 
 def test_view_marks_items_already_deep_read():
     _wipe()
-    P.upsert([P._item("blog:1", "blog", ["marcus"], "Essay", "https://garymarcus.substack.com/p/x", "2026-11-10"),
-              P._item("podcast:1", "podcast", ["amasad"], "Talk", "https://podcasts.apple.com/x", "2026-11-10", audio="https://cdn/a.mp3"),
-              P._item("news:1", "news", ["hinton"], "Hinton warns", "https://news/x", "2026-11-10")])
+    P.upsert([P._item("blog:1", "blog", ["marcus"], "Essay", "https://garymarcus.substack.com/p/x", db.today()),
+              P._item("podcast:1", "podcast", ["amasad"], "Talk", "https://podcasts.apple.com/x", db.today(), audio="https://cdn/a.mp3"),
+              P._item("news:1", "news", ["hinton"], "Hinton warns", "https://news/x", db.today())])
     done = db.insert("learn_items", {"kind": "article", "url": "https://garymarcus.substack.com/p/x", "status": "done", "created_at": db.now()})
     running = db.insert("learn_items", {"kind": "video", "url": "https://cdn/a.mp3", "status": "running", "created_at": db.now()})
     r = P.view(days=1)

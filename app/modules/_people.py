@@ -849,12 +849,23 @@ def is_core(it: dict) -> bool:
     return ch == "x" and extra.get("x_article") == "own"
 
 
+def published(it: dict) -> str:
+    """发布时间（本地时间 ISO）；X 的时间带 +00:00 要换成本地再比；没有发布时间的按发现时间。"""
+    try:
+        d = datetime.fromisoformat(it.get("date") or "")
+    except ValueError:
+        return it.get("first_seen") or ""
+    if d.tzinfo:
+        d = d.astimezone().replace(tzinfo=None)
+    return d.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def pinned(idx: dict, days: int) -> list[dict]:
     """所选天数内发布的核心内容（没有发布时间的按发现时间）：晚抓到的旧内容不算进「今天」。"""
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND COALESCE(NULLIF(date,''), first_seen)>=? "
-                                    "AND json_extract(extra, '$.low') IS NULL "
-                                    "AND channel IN ('blog', 'paper', 'podcast', 'youtube', 'bili', 'x')", [since, since])]
+    rs = [r for r in map(_row, db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL "
+                                        "AND channel IN ('blog', 'paper', 'podcast', 'youtube', 'bili', 'x')", [since]))
+          if published(r) >= since]
     core = [r for r in rs if is_core(r) and not is_translation(r)]
     tier = lambda r: min((idx.get(p, {}).get("tier", 3) for p in r["people"]), default=3)
     core.sort(key=lambda r: r["date"] or r["first_seen"] or "", reverse=True)
@@ -891,8 +902,9 @@ def view(days: int = 1, person: str = "", batch: int = 0, limit: int = 300) -> d
         rs.sort(key=lambda it: min((idx.get(p, {}).get("tier", 3) for p in it["people"]), default=3))
         return {"batch": with_learn(rs), "people": people(), **status()}
     since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    rs = [_row(r) for r in db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?",
-                                    [since, limit])]
+    rs = [r for r in map(_row, db.rows("SELECT * FROM people_items WHERE first_seen>=? AND json_extract(extra, '$.low') IS NULL "
+                                        "ORDER BY COALESCE(NULLIF(date,''), first_seen) DESC LIMIT ?", [since, limit]))
+          if published(r) >= since]
     pins = pinned(idx, days)
     pin_ids = {r["id"] for r in pins}
     groups: dict[str, list] = {}
