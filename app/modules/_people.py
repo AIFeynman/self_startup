@@ -179,6 +179,8 @@ def fetch_x(pool: list[dict]) -> tuple[list[dict], list[str]]:
 
 
 # ---------- YouTube：人名用 "A"|"B" 合并搜索，按发布时间取最近的；只留本人出镜的访谈 / 演讲 ----------
+# 人物发声要收新闻台、节目方剪出的几分钟访谈片段，下限比信息推荐（8 分钟）低，只挡 Shorts；是不是本人在说交给后面的判断
+MIN_SECONDS = 90
 VIDEO_JUNK_RE = re.compile(r"#shorts|\bshorts?\b|AI短片|\breacts?\b|\breaction\b|compilation|\bmeme|婚外情|出轨", re.I)
 
 
@@ -199,7 +201,7 @@ def trusted_channels() -> set[str]:
 
 def video_ok(sn: dict, secs: int, pids_in_title: list[str], trusted: set[str]) -> bool:
     title = sn.get("title") or ""
-    if VIDEO_JUNK_RE.search(title) or (secs and secs < src.YT_MIN_SECONDS) or not src.yt_lang_ok(sn):
+    if VIDEO_JUNK_RE.search(title) or (secs and secs < MIN_SECONDS) or not src.yt_lang_ok(sn):
         return False
     if sn.get("channelId") in trusted:
         return True
@@ -456,6 +458,8 @@ VOICE_SYSTEM = (
     "voice=false：同名的其他人；以他为话题的评论、解读、八卦、丑闻、传记、盘点；股价或公司新闻；"
     "他名下公司的项目、交易、动态（除非报道的是他本人的原话或亲自宣布）；"
     "channel 为 youtube / podcast / bili 时，source 是翻译、解读、搬运、剪辑类频道，或节目语言不是中文或英文的；Shorts、AI 配音；"
+    "channel=youtube 时，只有 source 是本人或其机构的频道、请他做客的节目、活动主办方、或报道他新发言的新闻媒体才算，"
+    "其他个人、教育、讲座合集、地方台重播等频道上传的演讲 / 路演 / 讲座视频（哪怕是完整原片）都算搬运；"
     "明显是旧内容的重发；多条不相关新闻的合集；只是提到名字。标题里有他的名字不代表是他在说，拿不准时判 false。\n"
     '只输出 JSON：{"items": [{"id": "<原样返回>", "voice": true 或 false}]}，每条输入都要有输出。'
 )
