@@ -395,11 +395,11 @@ def process_page(src: dict, status: int, ctype: str, body: str, rebase: bool = F
                               date=db.today(), type_hint="pricing", **base):
                 new += 1
     elif src["kind"] == "changelog":
-        blocks = [e for b in snap.added_blocks(old, text) for e in snap.split_entries(b)] if old else snap.recent_entries(text)
-        for b in blocks[:30]:  # 一次改版冒出几十块多半是页面重排，只收前 30 块，其余靠分类去噪
+        entries = snap.new_entries(old, text) if old else [(b, snap.find_date(b)) for b in snap.recent_entries(text)]
+        for b, d in entries[:30]:  # 一次改版冒出几十块多半是页面重排，只收前 30 块，其余靠分类去噪
             key = f"snap:{sid}:{sha1(b.encode()).hexdigest()[:16]}"
             if _add_candidate(src["company_id"], "snapshot", key, title=snap.entry_title(b), text=b[:snap.BLOCK_MAX],
-                              url=src["url"], date=snap.find_date(b) or db.today(), **base):
+                              url=src["url"], date=d or db.today(), **base):
                 new += 1
     _save_snapshot(sid, text, h, structure, new)
     db.update("intel_source", sid, {**upd, "last_ok": db.now(), "last_err": "", "last_hash": h})
