@@ -48,12 +48,37 @@ def test_extract_and_diff():
     t1 = snap.extract_text(CHANGELOG_V1, "text/html")
     assert "Login" not in t1 and "## Changelog" in t1  # 只取 main
     t2 = snap.extract_text(CHANGELOG_V2, "text/html")
-    added = snap.added_blocks(t1, t2)
-    assert len(added) == 1 and "Agent Teams" in added[0]
-    assert snap.find_date(added[0]) == TODAY
+    added = snap.new_entries(t1, t2)
+    assert len(added) == 1 and "Agent Teams" in added[0][0] and added[0][1] == TODAY
     # 首次快照只收近 14 天的条目
     recent = snap.recent_entries(t1)
     assert len(recent) == 1 and "background agents" in recent[0]
+
+
+OPENAI_V1 = """## Changelog
+## November, 2026
+Nov 5
+Feature
+Use GPT-6-Cyber to investigate vulnerabilities, reproduce them in an authorized test environment, and verify fixes.
+## October, 2025
+Oct 6
+Feature
+gpt-5-pro
+Released GPT-5 Pro, a version of GPT-5 that uses more compute to think harder and provide consistently better answers.
+Oct 1
+Update
+Released the old batch endpoint for every organization on every plan without waitlist."""
+
+
+def test_changelog_rewording_and_yearless_dates_are_not_news():
+    today = datetime(2026, 11, 13)
+    v2 = (OPENAI_V1.replace("GPT-6-Cyber", "GPT-6 Cyber").replace("GPT-5 Pro,", "GPT-5 pro,")
+          .replace("Released the old batch endpoint", "Released the legacy batch endpoint with a new retention window"))
+    assert snap.new_entries(OPENAI_V1, v2, today) == []  # 改写的是去年 10 月的旧条目：日期按所在月份标题算出来，过期不收
+    v3 = v2.replace("## November, 2026\n", "## November, 2026\nNov 12\nFeature\nReleased GPT-6 mini for fast low-cost agents across the API and Batch.\n")
+    v4 = v2.replace("gpt-5-pro\n", "gpt-5-pro\no3-deep-research-2026-11-10\n").replace("Released GPT-5 pro,", "Deprecated o3-deep-research-2026-11-10 in favor of GPT-5 pro,")
+    assert snap.new_entries(v2, v4, today) == []  # 模型名里的日期不是条目日期
+    assert snap.new_entries(v2, v3, today) == [("Nov 12\nFeature\nReleased GPT-6 mini for fast low-cost agents across the API and Batch.", "2026-11-12")]
 
 
 def test_verify_prices_drops_invented_numbers():

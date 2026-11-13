@@ -170,7 +170,7 @@ def split_entries(block: str) -> list[str]:
     """一个新增块里可能是好几条更新：按日期行 / 二级标题切开；切不开就整块一条。"""
     parts, cur = [], []
     for ln in block.splitlines():
-        if cur and (find_date(ln) and len(ln) < 80 or ln.startswith("## ")):
+        if cur and (find_date(ln) and len(ln) < 80 or _SHORT_RE.match(ln) or ln.startswith("## ")):
             parts.append("\n".join(cur))
             cur = []
         cur.append(ln)
@@ -208,6 +208,66 @@ def find_date(text: str) -> str:
         except (ValueError, KeyError):
             continue
     return ""
+
+
+_MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
+_SHORT_RE = re.compile(rf"^(?:## )?({_MONTHS})[a-z]*\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?$", re.I)
+_MONTH_YEAR_RE = re.compile(rf"^(?:## )?(?:{_MONTHS})[a-z]*\.?,?\s+(20\d\d)$", re.I)
+
+
+def _fold(line: str) -> str:
+    return re.sub(r"[\W_]+", "", line.lower())
+
+
+def _heading_date(line: str) -> str:
+    """像日期标题的行（「## 2026-11-12」「November 6, 2026」）→ 日期；「o3-deep-research-2025-06-26」这种模型名里的日期不算。"""
+    if len(line) >= 80:
+        return ""
+    for rx in _DATE_RES:
+        if (m := rx.search(line)) and not re.match(r"[\w-]", line[m.start() - 1:m.start()]):
+            return find_date(m[0])
+    return ""
+
+
+def _date_at(lines: list[str], j: int, today: datetime) -> str:
+    """第 j 行所属条目的日期：往上找日期行；「Oct 6」这种不带年份的，用上方「October, 2025」标题补年份，没有就取不晚于今天的那年。"""
+    md = None
+    for ln in reversed(lines[:j + 1]):
+        full = _heading_date(ln)
+        if full:
+            return full if md is None else f"{full[:4]}-{md[0]:02d}-{md[1]:02d}"
+        if md is None and (m := _SHORT_RE.match(ln.strip())):
+            md = (_MON[m[1][:3].lower()], int(m[2]))
+        elif md and (m := _MONTH_YEAR_RE.match(ln.strip())):
+            return f"{m[1]}-{md[0]:02d}-{md[1]:02d}"
+    if md is None:
+        return ""
+    y = today.year - (1 if (md[0], md[1]) > (today.month, today.day) else 0)
+    return f"{y}-{md[0]:02d}-{md[1]:02d}"
+
+
+def new_entries(old: str, new: str, today: datetime | None = None, days: int = FIRST_DAYS) -> list[tuple[str, str]]:
+    """新版比旧版多出来的条目 → [(正文, 日期)]。只改了大小写 / 连字符 / 标点的旧行不算；日期早于 days 天前的旧条目被改写也不算。"""
+    today = today or datetime.now()
+    cutoff = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+    a, b = old.splitlines(), new.splitlines()
+    seen = {_fold(ln) for ln in a}
+    out = []
+    for op, _i1, _i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op not in ("insert", "replace") or all(_fold(ln) in seen for ln in b[j1:j2]):
+            continue
+        block = "\n".join(b[j1:j2]).strip()
+        if len(re.sub(r"\s+", "", block)) < MIN_ADDED:
+            continue
+        j = j1
+        for e in split_entries(block[:BLOCK_MAX * 2]):
+            first = e.splitlines()[0]
+            while j < j2 and b[j].strip() != first.strip():
+                j += 1
+            d = _date_at(b, min(j, j2 - 1), today) or find_date(e)
+            if not d or d >= cutoff:
+                out.append((e, d))
+    return out
 
 
 def recent_entries(text: str, days: int = FIRST_DAYS, today: datetime | None = None) -> list[str]:
