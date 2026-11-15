@@ -14,12 +14,20 @@ const CSS = `
 .tr-chip { padding: 0 7px; border-radius: 6px; background: var(--bg-2); font: 600 11.5px/18px var(--font); }
 .tr-chip.boost { background: var(--accent-soft); color: var(--accent); }
 .tr-side { grid-column: 2; grid-row: 1 / span 3; align-self: center; font-size: 12.5px; white-space: nowrap; }
+.tr-side a { color: var(--muted); }
 .tr-t3 { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
 .tr-t3 a { padding: 4px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tr-int { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .tr-readtag { display: none; padding: 0 6px; border-radius: 6px; background: var(--bg-2); color: var(--muted); }
 .tr-isread .tr-readtag { display: inline-block; }
 .tr-isread .tr-t { color: var(--muted); font-weight: 500; }
+.tr-deep { padding: 3px 12px; font-size: 12.5px; border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+.tr-deep:hover { background: var(--accent-soft); }
+.tr-deep.busy { border-color: var(--line-2); color: var(--muted); cursor: default; }
+.tr-deep.busy:hover { background: transparent; }
+.tr-deep.done { border-color: var(--ok); color: var(--ok); }
+.tr-deep.failed { border-color: var(--err); color: var(--err); }
+.tr-side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 @media (max-width: 720px) { .tr-row { grid-template-columns: 1fr; } .tr-side { grid-column: 1; grid-row: auto; } }
 `;
 
@@ -27,7 +35,8 @@ const day = (s) => (s || '').slice(5, 10);
 
 export default {
   async render(el, ctx) {
-    const { api, h, ui } = ctx;
+    const { api, h, ui, toast } = ctx;
+    const rows = new Map();
     const body = h('div');
     const load = async (refresh) => {
       body.replaceChildren(ui.empty('正在分级…'));
@@ -43,6 +52,36 @@ export default {
           : api.post('/api/feed/click', { id: c.read_ref });
       call.catch(() => { c.read = false; node.classList.remove('tr-isread'); });
     };
+    // 深读与信息推荐同一套：POST /api/learn/items 后台解析，完成后再点打开 #learn/item/<id>，状态存在学习模块里
+    const setDeep = (c, st, node) => { c.deep_read = st; node.querySelector('.tr-deep')?.replaceWith(deepBtn(c, node)); };
+    const deepGo = async (c, node) => {
+      const old = c.deep_read;
+      if (old?.status === 'done') { location.hash = `#learn/item/${old.id}`; return; }
+      if (old && old.status !== 'failed') { toast('正在解析，完成后会提醒'); return; }
+      setDeep(c, { status: 'queued' }, node);
+      try {
+        const it = await api.post('/api/learn/items', { url: c.url, reuse: true });
+        setDeep(c, { id: it.id, status: it.status }, node);
+        if (it.status !== 'done') toast('已开始深度解析，完成后会提醒');
+      } catch (e) { setDeep(c, old, node); toast('开始深读失败：' + e.message, true); }
+    };
+    const deepBtn = (c, node) => {
+      const d = c.deep_read, s = d?.status;
+      if (s === 'done' && d.reading) return h('button.tr-deep.done', { title: '回到上次读到的位置', onclick: () => deepGo(c, node) }, `接着读 ${Math.round(d.pos * 100)}%`);
+      if (s === 'done') return h('button.tr-deep.done', { title: '打开解析结果', onclick: () => deepGo(c, node) }, '深度完成');
+      if (s === 'failed') return h('button.tr-deep.failed', { title: '上次解析失败，点击重试', onclick: () => deepGo(c, node) }, '解析失败，重试');
+      if (s) return h('button.tr-deep.busy', { disabled: true, title: '后台解析中，完成后会提醒，可以继续看别的' }, '解析中');
+      return h('button.tr-deep', { title: '后台开始深度解析，不离开当前页', onclick: () => deepGo(c, node) }, '深读');
+    };
+    const onDeepDone = async ({ detail: j }) => {
+      if (!el.isConnected) return document.removeEventListener('job-done', onDeepDone);
+      const iid = +/^learn:item:(\d+)$/.exec(j.ref || '')?.[1];
+      if (!iid) return;
+      await new Promise((r) => setTimeout(r, 1500));
+      const d = await api.get('/api/tiers/items');
+      for (const n of [...d.t1, ...d.t2]) { const hit = rows.get(n.id); if (hit && n.deep_read) setDeep(hit.c, n.deep_read, hit.node); }
+    };
+    document.addEventListener('job-done', onDeepDone);
     const row = (c) => {
       const node = h('div.tr-row' + (c.read ? '.tr-isread' : ''), {}, [
         h('a.tr-t', { href: c.href || c.url, onclick: () => markRead(c, node), ...(c.href ? {} : { target: '_blank', rel: 'noopener' }) }, c.title),
@@ -54,8 +93,13 @@ export default {
           h('span.tr-readtag', {}, '已读'),
           h('span', {}, c.source), h('span', {}, day(c.date)), h('span', {}, c.why.join(' · ')),
         ]),
-        c.href && c.url ? h('a.tr-side', { href: c.url, target: '_blank', rel: 'noopener', onclick: () => markRead(c, node) }, '原文 ↗') : null,
+        h('div.tr-side', {}, [
+          c.url ? h('span.tr-deep-slot') : null,
+          c.href && c.url ? h('a', { href: c.url, target: '_blank', rel: 'noopener', onclick: () => markRead(c, node) }, '原文 ↗') : null,
+        ]),
       ]);
+      node.querySelector('.tr-deep-slot')?.replaceWith(deepBtn(c, node));
+      rows.set(c.id, { c, node });
       return node;
     };
     const group = (cards) => {

@@ -22,7 +22,7 @@ router = APIRouter()
 T1_DAYS, T2_DAYS, T2_LIMIT = 3, 3, 40     # Tier1 不限条数；Tier2 总量上限 40（实际由各类名额决定）；论文日期只到天，窗口都按 3 天
 EVENT_SCORE = {"S": 10.0, "A": 8.0, "B": 6.0}
 CASE_SCORE = 8.0
-CASE_T1_TOTAL = 15                        # 增长案例满分 15；只有满分且和 AI 相关才进 Tier1，其余放 Tier2
+CASE_T1_TOTAL = 15                        # 增长案例满分 15 才有资格；进 Tier1 还要 Jev 认可（AI 相关且有可复用做法），其余放 Tier2
 T2_PER_CAT = {"*": 3, "launch": 6, "paper": 5, "trending": 4, "author": 6, "interest": 3, "top": 3, "product": 3, "case": 2}   # Tier2 每类上限，硬名额，不回填
 T2_ORDER = ["launch", "paper", "trending", "author", "interest", "top", "product", "case"]
 T2_DEEP_FLOOR = 0.3                       # Tier2 里已有深读分的卡片，低于它的回到 Tier3
@@ -70,10 +70,6 @@ def _event_cards(now: datetime) -> list[dict]:
     return out
 
 
-def case_tier(total: int, text: str) -> int:
-    return 1 if (total or 0) >= CASE_T1_TOTAL and tr.AI_CASE.search(text) else 2
-
-
 def _tweet(r: dict) -> bool:
     return r["source"] == "twitter" or "x.com/" in (r["url"] or "") or "twitter.com/" in (r["url"] or "")
 
@@ -83,11 +79,23 @@ def _case_cards(now: datetime) -> list[dict]:
     rows = db.rows("SELECT c.id, c.day, c.company, i.title, i.url, i.one_line, i.source, i.total, c.item_id FROM intel_growth_case c "
                    "JOIN intel_growth_item i ON i.id = c.item_id WHERE c.status = 'done' AND c.complete = 1 AND c.day >= ? "
                    "AND c.id IN (SELECT max(id) FROM intel_growth_case GROUP BY item_id)", (since,))
-    rows = [r for r in rows if case_tier(r["total"], f"{r['title']} {r['one_line'] or ''}") == 1 or (r["total"] >= CASE_T1_TOTAL and not _tweet(r))]
-    return [{"id": f"case:{r['id']}", "kind": "case", "tier": case_tier(r["total"], f"{r['title']} {r['one_line'] or ''}"), "cat": "case", "cat_label": tr.CATS["case"][1], "boosted": False,
+    return [{"id": f"case:{r['id']}", "kind": "case", "tier": 2, "cat": "case", "cat_label": tr.CATS["case"][1], "boosted": False,
              "read_ref": r["item_id"], "why": [f"增长 Case 卡已写完 · 评分 {r['total']}/15"], "title": r["title"], "gist": r["one_line"] or "", "summary": "", "url": r["url"],
              "href": f"#intel/g/{r['id']}", "date": r["day"], "source": f"增长 Case · {r['company'] or r['source']}", "score": CASE_SCORE}
-            for r in rows]
+            for r in rows if (r["total"] or 0) >= CASE_T1_TOTAL]
+
+
+def apply_case(cards: list[dict], scores: dict[str, float]) -> None:
+    """增长案例满分后再交给 Jev：AI 相关且有可复用做法的进 Tier1（带分排序），其余留 Tier2。"""
+    for c in cards:
+        p = scores.get(c["id"])
+        if p is None:
+            continue
+        c["deep"] = p
+        if p >= tj.CASE_YES:
+            c.update(tier=1, why=[f"Jev 案例 {p:.2f}"] + c["why"], score=c["score"] + 10)
+        else:
+            c["why"] = [f"Jev 案例 {p:.2f}，不够进 Tier1"] + c["why"]
 
 
 def balance(cards: list[dict], limit: int, per_cat: int | dict) -> list[dict]:
@@ -185,6 +193,11 @@ def build(now: datetime | None = None) -> dict:
         if deep_eligible(it, r["cat"]):
             judged.append(it)
     judge_errors = []
+    case_cards = [c for c in cards if c["kind"] == "case"]
+    case_scores, case_errors = tj.scores([{"id": c["id"], "source": "growth", "type": "blog", "title": c["title"], "summary": c["gist"], "url": c["url"],
+                                            "extra": {"author": c["source"].split(" · ")[-1]}} for c in case_cards], "case")
+    judge_errors += case_errors
+    apply_case(case_cards, case_scores)
     if judged:
         judged.sort(key=lambda i: -(i.get("score") or 0))
         scores, judge_errors = tj.scores(judged[:DEEP_MAX], "deep")
@@ -206,10 +219,15 @@ def build(now: datetime | None = None) -> dict:
 
 
 def with_read(data: dict) -> dict:
-    """已读状态和信息推荐、产品雷达共用 read_log，每次返回时现算（分级结果有缓存，已读不能跟着缓存）。"""
+    """已读状态和信息推荐、产品雷达共用 read_log，深读状态取自学习模块，每次返回时现算（分级结果有缓存，这些不能跟着缓存）。"""
     refs = {"feed": _read_log.refs("feed"), "event": _read_log.refs("intel_event"), "case": _read_log.refs("growth")}
     urls = _read_log.urls("feed")
-    mark = lambda c: {**c, "read": str(c["read_ref"]) in refs[c["kind"]] or (c["kind"] == "feed" and rk.norm_url(c["url"]) in urls)}
+    deeps = feed._deep_latest()
+
+    def mark(c):
+        d = deeps.get(rk.norm_url(c["url"])) if c["url"] else None
+        read = str(c["read_ref"]) in refs[c["kind"]] or (c["kind"] == "feed" and rk.norm_url(c["url"]) in urls) or bool(d and d.get("finished_at"))
+        return {**c, "read": read, "deep_read": feed.deep_state(d) if d else None}
     return {**data, "t1": [mark(c) for c in data["t1"]], "t2": [mark(c) for c in data["t2"]]}
 
 

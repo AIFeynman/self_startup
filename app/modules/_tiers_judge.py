@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS tiers_scores (
 );
 """
 DEEP_YES, DEEP_NO = 0.62, 0.5    # 深读分 ≥0.62 进 Tier1；规则判 Tier1 但 <0.5 的降到 Tier2；中间保持规则结果
+CASE_YES = 0.7
 PICK_FLOOR = 0.6                 # Tier2 的扫一眼分低于它的不进 Tier2（回到 Tier3）
 
 

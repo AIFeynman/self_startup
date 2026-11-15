@@ -169,11 +169,11 @@ def test_launch_is_never_tier1():
     assert tr.CATS["launch"][0] == 2
 
 
-def test_growth_case_needs_perfect_score_and_ai_to_reach_tier1():
+def test_growth_case_enters_tier1_only_when_jev_approves():
     from app.modules import tiers
-    assert tiers.case_tier(15, "How an AI agent app hit $1M ARR") == 1
-    assert tiers.case_tier(15, "How Tinder ran a paywall experiment") == 2
-    assert tiers.case_tier(14, "AI app growth") == 2
+    cards = [{"id": "case:1", "score": 8.0, "why": [], "tier": 2}, {"id": "case:2", "score": 8.0, "why": [], "tier": 2}, {"id": "case:3", "score": 8.0, "why": [], "tier": 2}]
+    tiers.apply_case(cards, {"case:1": 0.85, "case:2": 0.3})
+    assert [c["tier"] for c in cards] == [1, 2, 2] and cards[0]["deep"] == 0.85 and "Jev" in cards[1]["why"][0]
 
 
 def test_balance_hard_caps_each_category():
@@ -257,3 +257,12 @@ def test_read_flag_follows_shared_read_log(client):
     _read_log.log("intel_event", 7, "t", "#intel/e/7", "产品雷达")
     d = {"t1": [], "t2": [{"kind": "event", "read_ref": 7, "url": ""}, {"kind": "event", "read_ref": 8, "url": ""}]}
     assert [c["read"] for c in tiers.with_read(d)["t2"]] == [True, False]
+
+
+def test_read_view_carries_deep_read_state(client, monkeypatch):
+    from app.modules import feed, tiers
+    monkeypatch.setattr(feed, "_deep_latest", lambda: {"a.com/x": {"id": 5, "status": "done", "finished_at": "t", "read_pos": 0}})
+    d = {"t1": [{"kind": "feed", "read_ref": "z", "url": "https://a.com/x"}], "t2": [{"kind": "feed", "read_ref": "y", "url": ""}]}
+    out = tiers.with_read(d)
+    assert out["t1"][0]["read"] is True and out["t1"][0]["deep_read"]["id"] == 5
+    assert out["t2"][0]["deep_read"] is None

@@ -31,6 +31,9 @@ Q_DEEP = ("state.items.{k} 是一条候选内容（publisher / author 写了来�
           "agent skills 指南、harness 设计）；一手的研究成果或开源技术报告；有论证的深度访谈和长文。"
           "回答否：产品发布和功能公告、定价和套餐、客户案例、融资人事、营销推广、新闻转述、泛泛观点、清单合集、"
           "入门科普、个人体验或评测流水账、安装教程、没有细节的预告。")
+Q_CASE = ("state.items.{k} 是一个增长 / 产品案例（publisher 写了公司）。读者是做 AI 产品和 AI Agent 的工程师与产品人。回答是：AI 产品或 AI 能力驱动的增长案例，"
+          "讲清了具体做法、数据和可复用的机制（定价、激活、留存、分发、冷启动、Agent 产品的商业化）。"
+          "回答否：和 AI 无关的传统订阅 / 付费墙 / 广告变现故事、只有结果数字没有做法、个人励志和标题党、融资公关稿。")
 Q_PICK = {
     "paper": ("state.items.{k} 是一篇 AI 论文。读者是做 AI Agent 和大模型应用的工程师。回答是：提出了有实质贡献的新方法、系统或评测基准，"
               "结论清晰，对 agent、harness、记忆、工具调用、评测、推理工程、训练方法有参考价值。回答否：窄领域应用、增量调参、"
@@ -79,6 +82,8 @@ def _question(kind: str, k: str, it: dict, org: str) -> str:
         return Q_PICK[pick_type(it)].format(k=k)
     if kind == "deep":
         return Q_DEEP.format(k=k)
+    if kind == "case":
+        return Q_CASE.format(k=k)
     if kind == "value":
         return Q_VALUE.get(it.get("source"), Q_VALUE["reddit"]).format(k=k)
     return Q_IMPORTANT.format(k=k, org=org)
@@ -110,7 +115,7 @@ def _state(it: dict, org: str) -> dict:
 
 
 def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = None) -> tuple[dict[str, dict], list[str]]:
-    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value" / "deep" / "pick"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
+    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value" / "deep" / "pick" / "case"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
     key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
     if not key:
         return {}, ["未配置 TYPESAFE_API_KEY（项目根目录 .env），Trending 是否 AI、官方内容是否重要、Reddit / 视频有没有干货改用关键词规则"]
