@@ -22,7 +22,7 @@ EVENT_SCORE = {"S": 10.0, "A": 8.0, "B": 6.0}
 CASE_SCORE = 8.0
 CASE_T1_TOTAL = 15                        # 增长案例满分 15；只有满分且和 AI 相关才进 Tier1，其余放 Tier2
 T2_PER_CAT = {"*": 5, "paper": 10, "trending": 8, "author": 10, "launch": 4, "update": 4, "case": 3}   # Tier2 每类上限，硬名额，不回填
-DEEP_CANDIDATES = {"official", "person", "update", "author", "interest"}   # 交给 Jev 判深读的类别；论文、项目、产品、案例不判
+DEEP_CANDIDATES = {"report", "repo", "official", "person", "update", "author", "interest"}   # 过了规则门槛、交给 Jev 打深读分的类别；论文、产品、案例不打
 DEEP_TYPES = {"blog", "podcast", "video", "discussion"}       # 论文、项目、产品不判深读
 DEEP_MAX = 150
 UPDATE_TYPES = {"launch", "model", "feature", "api", "pricing", "packaging", "deprecation"}
@@ -92,6 +92,8 @@ def balance(cards: list[dict], limit: int, per_cat: int | dict) -> list[dict]:
 
 def deep_eligible(it: dict, cat: str) -> bool:
     ex = it.get("extra") or {}
+    if cat in ("report", "repo"):
+        return True
     if cat not in DEEP_CANDIDATES or it["type"] not in DEEP_TYPES or it["source"] == "zhihu":
         return False
     return it["source"] != "twitter" or bool(ex.get("article_title")) or cat == "person"
@@ -104,6 +106,7 @@ def apply_deep(feed_cards: list[dict], scores: dict[str, float]) -> None:
         if p is None or c["cat"] not in DEEP_CANDIDATES:
             continue
         tag = f"Jev 深读 {p:.2f}"
+        c["deep"] = p
         if c["tier"] == 2 and p >= tj.DEEP_YES:
             c.update(tier=1, cat="deep", cat_label=tr.CATS["deep"][1], why=[tag] + c["why"], score=c["score"] + 10)
         elif c["tier"] == 1 and p < tj.DEEP_NO:
@@ -137,7 +140,7 @@ def build(now: datetime | None = None) -> dict:
         judged.sort(key=lambda i: -(i.get("score") or 0))
         scores, judge_errors = tj.deep_scores(judged[:DEEP_MAX])
         apply_deep(cards, scores)
-    t1 = sorted((c for c in cards if c["tier"] == 1), key=lambda c: -c["score"])
+    t1 = sorted((c for c in cards if c["tier"] == 1), key=lambda c: (-c.get("deep", 0), -c["score"]))
     t2 = sorted((c for c in cards if c["tier"] == 2), key=lambda c: -c["score"])
     t2_shown = balance(t2, T2_LIMIT, T2_PER_CAT)
     return {"generated": now.isoformat(timespec="seconds"), "windows": {"t1_days": T1_DAYS, "t2_days": T2_DAYS, "t2_limit": T2_LIMIT},

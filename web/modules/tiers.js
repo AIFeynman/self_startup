@@ -35,6 +35,7 @@ export default {
       h('a.tr-t', { href: c.href || c.url, ...(c.href ? {} : { target: '_blank', rel: 'noopener' }) }, c.title),
       c.gist || c.summary ? h('div.tr-sum', {}, c.gist || c.summary) : null,
       h('div.tr-meta', {}, [
+        c.deep != null ? h('span.tr-chip.boost', {}, `深读分 ${c.deep.toFixed(2)}`) : null,
         c.boosted ? h('span.tr-chip.boost', {}, '兴趣提权') : null,
         h('span', {}, c.source), h('span', {}, day(c.date)), h('span', {}, c.why.join(' · ')),
       ]),
