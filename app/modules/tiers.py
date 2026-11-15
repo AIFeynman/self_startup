@@ -160,11 +160,11 @@ def apply_deep(feed_cards: list[dict], scores: dict[str, float]) -> None:
         p = scores.get(c["id"])
         if p is None or c["cat"] not in DEEP_CANDIDATES:
             continue
-        tag = f"Jev 深读 {p:.2f}"
+        tag = f"Jev {'项目' if c['cat'] == 'repo' else '深读'} {p:.2f}"
         c["deep"] = p
         if c["tier"] == 2 and p >= tj.DEEP_YES:
             c.update(tier=1, cat="deep", cat_label=tr.CATS["deep"][1], why=[tag] + c["why"], score=c["score"] + 10)
-        elif c["tier"] == 1 and p < tj.DEEP_NO:
+        elif c["tier"] == 1 and p < (tj.PICK_FLOOR if c["cat"] == "repo" else tj.DEEP_NO):
             c.update(tier=2, boosted=False, why=[f"{tag}，不适合精读，降到 Tier2"] + c["why"])
         else:
             c["why"] = [tag] + c["why"]
@@ -200,8 +200,12 @@ def build(now: datetime | None = None) -> dict:
     apply_case(case_cards, case_scores)
     if judged:
         judged.sort(key=lambda i: -(i.get("score") or 0))
-        scores, judge_errors = tj.scores(judged[:DEEP_MAX], "deep")
-        apply_deep(cards, scores)
+        top = judged[:DEEP_MAX]
+        repo_ids = {c["id"] for c in cards if c["cat"] == "repo"}
+        scores, judge_errors = tj.scores([i for i in top if i["id"] not in repo_ids], "deep")
+        repo_scores, repo_errors = tj.scores([i for i in top if i["id"] in repo_ids], "pick")
+        judge_errors += repo_errors
+        apply_deep(cards, scores | repo_scores)
     t1 = sorted((c for c in cards if c["tier"] == 1), key=lambda c: (-c.get("deep", 0), -c["score"]))
     t2_cards = [c for c in cards if c["tier"] == 2]
     plain = [c for c in t2_cards if c["kind"] == "feed" and c.get("deep") is None]

@@ -17,7 +17,8 @@ LABS = {name: re.compile(p, re.I) for name, p in {
     "DeepSeek": r"DeepSeek", "Qwen": r"Qwen|Alibaba|Tongyi", "Kimi": r"Kimi|Moonshot", "MiniMax": r"MiniMax",
     "Z.AI": r"\bZ\.ai\b|Zhipu|智谱|\bGLM\b|THUDM", "Mistral": r"Mistral", "Meta": r"\bLlama\b|Meta AI|Meta Superintelligence",
 }.items()}
-LAB_GITHUB = {"deepseek-ai", "qwenlm", "moonshotai", "minimax-ai", "zai-org", "thudm", "mistralai"}
+LAB_GITHUB = {"deepseek-ai", "qwenlm", "moonshotai", "minimax-ai", "zai-org", "thudm", "mistralai",
+              "openai", "anthropics", "google", "googlechrome", "chromedevtools", "google-deepmind", "alibaba", "microsoft", "huggingface", "nvidia", "meta-llama", "facebookresearch"}
 TECH_REPORT = re.compile(r"technical report|tech report|技术报告", re.I)
 DEEP_URL = re.compile(r"/(?:research|engineering|safety|alignment|interpretability|science)\b|research\.google|deepmind\.google/(?:research|science)", re.I)
 AI_CASE = re.compile(r"\bAI\b|\bLLM|GPT|Claude|\bagents?\b|人工智能", re.I)

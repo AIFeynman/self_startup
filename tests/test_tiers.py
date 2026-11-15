@@ -266,3 +266,9 @@ def test_read_view_carries_deep_read_state(client, monkeypatch):
     out = tiers.with_read(d)
     assert out["t1"][0]["read"] is True and out["t1"][0]["deep_read"]["id"] == 5
     assert out["t2"][0]["deep_read"] is None
+
+
+def test_top_lab_trending_repo_is_tier1_candidate():
+    it = _it("github", "repo", "codex-security", summary="OpenAI's Codex Security CLI and TypeScript SDK for agents", url="https://github.com/openai/codex-security",
+             repo="openai/codex-security", trending="daily", pop=0.83)
+    assert _cls(it) == (1, "repo")
