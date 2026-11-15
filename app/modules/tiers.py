@@ -8,11 +8,13 @@ from fastapi import APIRouter
 
 from .. import db
 from . import _feed_rank as rk
+from . import _tiers_judge as tj
 from . import _tiers_rules as tr
 from . import feed
 
 TITLE = "分级"
 ORDER = 31
+SCHEMA = tj.SCHEMA
 router = APIRouter()
 
 T1_DAYS, T2_DAYS, T2_LIMIT = 3, 3, 60     # Tier1 不限条数；Tier2 总量上限 60（实际由各类名额决定）；论文日期只到天，窗口都按 3 天
@@ -20,6 +22,9 @@ EVENT_SCORE = {"S": 10.0, "A": 8.0, "B": 6.0}
 CASE_SCORE = 8.0
 CASE_T1_TOTAL = 15                        # 增长案例满分 15；只有满分且和 AI 相关才进 Tier1，其余放 Tier2
 T2_PER_CAT = {"*": 5, "paper": 10, "trending": 8, "author": 10, "launch": 4, "update": 4, "case": 3}   # Tier2 每类上限，硬名额，不回填
+DEEP_CANDIDATES = {"official", "person", "update", "author", "interest"}   # 交给 Jev 判深读的类别；论文、项目、产品、案例不判
+DEEP_TYPES = {"blog", "podcast", "video", "discussion"}       # 论文、项目、产品不判深读
+DEEP_MAX = 150
 UPDATE_TYPES = {"launch", "model", "feature", "api", "pricing", "packaging", "deprecation"}
 CACHE_S = 60
 _cache: dict = {}
@@ -85,6 +90,28 @@ def balance(cards: list[dict], limit: int, per_cat: int | dict) -> list[dict]:
     return out[:limit]
 
 
+def deep_eligible(it: dict, cat: str) -> bool:
+    ex = it.get("extra") or {}
+    if cat not in DEEP_CANDIDATES or it["type"] not in DEEP_TYPES or it["source"] == "zhihu":
+        return False
+    return it["source"] != "twitter" or bool(ex.get("article_title")) or cat == "person"
+
+
+def apply_deep(feed_cards: list[dict], scores: dict[str, float]) -> None:
+    """规则给候选，Jev 定 Tier1：高分的升上来，规则选了但 Jev 不认的降到 Tier2。"""
+    for c in feed_cards:
+        p = scores.get(c["id"])
+        if p is None or c["cat"] not in DEEP_CANDIDATES:
+            continue
+        tag = f"Jev 深读 {p:.2f}"
+        if c["tier"] == 2 and p >= tj.DEEP_YES:
+            c.update(tier=1, cat="deep", cat_label=tr.CATS["deep"][1], why=[tag] + c["why"], score=c["score"] + 10)
+        elif c["tier"] == 1 and p < tj.DEEP_NO:
+            c.update(tier=2, boosted=False, why=[f"{tag}，不适合精读，降到 Tier2"] + c["why"])
+        else:
+            c["why"] = [tag] + c["why"]
+
+
 def build(now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     cards = _event_cards(now) + _case_cards(now)
@@ -92,6 +119,7 @@ def build(now: datetime | None = None) -> dict:
     t2_cut = now - timedelta(days=T2_DAYS)
     t1_cut = now - timedelta(days=T1_DAYS)
     scanned = unranked = 0
+    judged: list[dict] = []
     for it in feed._scored(False, True):
         t = rk.item_time(it, now)
         if not t or t <= t1_cut or it["norm_url"] in taken:
@@ -102,13 +130,20 @@ def build(now: datetime | None = None) -> dict:
             unranked += 1
             continue
         cards.append(_card(it, r))
+        if deep_eligible(it, r["cat"]):
+            judged.append(it)
+    judge_errors = []
+    if judged:
+        judged.sort(key=lambda i: -(i.get("score") or 0))
+        scores, judge_errors = tj.deep_scores(judged[:DEEP_MAX])
+        apply_deep(cards, scores)
     t1 = sorted((c for c in cards if c["tier"] == 1), key=lambda c: -c["score"])
     t2 = sorted((c for c in cards if c["tier"] == 2), key=lambda c: -c["score"])
     t2_shown = balance(t2, T2_LIMIT, T2_PER_CAT)
     return {"generated": now.isoformat(timespec="seconds"), "windows": {"t1_days": T1_DAYS, "t2_days": T2_DAYS, "t2_limit": T2_LIMIT},
             "t1": t1, "t2": t2_shown, "t2_more": max(0, len(t2) - len(t2_shown)),
             "t3": {"count": unranked, "scanned": scanned, "links": [{"label": "信息推荐", "href": "#feed"}, {"label": "产品雷达", "href": "#intel"}]},
-            "interests": list(tr.INTEREST_LINES)}
+            "interests": list(tr.INTEREST_LINES), "judge_errors": judge_errors}
 
 
 @router.get("/items")

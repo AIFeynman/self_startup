@@ -26,6 +26,11 @@ Q_AI = ("state.items.{k} 是 GitHub Trending 上的一个开源项目。它是�
 Q_IMPORTANT = ("state.items.{k} 是 {org} 官方发布的内容。它是否是实质性的更新：新模型、新产品或功能、开源项目、"
                "研究成果、技术或工程深度文章、重要的安全报告？客户案例、合作签约、行业方案推广、营销活动、招聘、"
                "公关表态这类内容回答否。")
+Q_DEEP = ("state.items.{k} 是一条候选内容（publisher / author 写了来源）。读者是做 AI Agent 和 AI 团队的工程师，只给值得专门花 20 分钟精读、读完能改变做法的内容。"
+          "回答是：讲清了架构、核心概念或原理的技术 / 工程 / 研究长文；官方或一线团队写的 agent 构建实践指南（怎么设计、有哪些组件、怎么权衡，例如常驻 agent 的核心原语、"
+          "agent skills 指南、harness 设计）；一手的研究成果或开源技术报告；有论证的深度访谈和长文。"
+          "回答否：产品发布和功能公告、定价和套餐、客户案例、融资人事、营销推广、新闻转述、泛泛观点、清单合集、"
+          "入门科普、个人体验或评测流水账、安装教程、没有细节的预告。")
 Q_VALUE = {
     "reddit": ("state.items.{k} 是 Reddit 上的一个帖子。它对一个关注 AI 的工程师是否有实际价值：亲身实践经验、"
                "教程或配置分享、实测 / 对比 / 基准、开源项目展示、对新论文 / 新模型 / 技术方向的有内容的讨论？"
@@ -55,6 +60,8 @@ Q_VALUE = {
 def _question(kind: str, k: str, it: dict, org: str) -> str:
     if kind == "ai":
         return Q_AI.format(k=k)
+    if kind == "deep":
+        return Q_DEEP.format(k=k)
     if kind == "value":
         return Q_VALUE.get(it.get("source"), Q_VALUE["reddit"]).format(k=k)
     return Q_IMPORTANT.format(k=k, org=org)
@@ -78,13 +85,15 @@ def _state(it: dict, org: str) -> dict:
     if it.get("source") in ("youtube", "bilibili"):
         row |= {"channel": ex.get("channel", ""), "views": int(it.get("popularity") or 0),
                 "minutes": round((ex.get("duration") or 0) / 60)}
+    if it.get("source") in ("twitter", "blog", "podcast"):
+        row["author"] = ex.get("author") or ex.get("channel") or ""
     if org:
         row["publisher"] = org
     return row
 
 
 def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = None) -> tuple[dict[str, dict], list[str]]:
-    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
+    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value" / "deep"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
     key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
     if not key:
         return {}, ["未配置 TYPESAFE_API_KEY（项目根目录 .env），Trending 是否 AI、官方内容是否重要、Reddit / 视频有没有干货改用关键词规则"]

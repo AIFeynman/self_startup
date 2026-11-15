@@ -194,3 +194,43 @@ def test_items_api_returns_tier_structure(client):
     d = client.get("/api/tiers/items?refresh=true").json()
     assert set(d) >= {"t1", "t2", "t2_more", "t3", "interests", "windows"}
     assert [l["href"] for l in d["t3"]["links"]] == ["#feed", "#intel"]
+
+
+def _card(cat, tier, id_="feed:1"):
+    return {"id": id_, "cat": cat, "tier": tier, "boosted": tier == 1, "why": ["规则"], "score": 1.0, "cat_label": ""}
+
+
+def test_deep_judge_promotes_tier2_update_to_tier1():
+    from app.modules import tiers
+    cards = [_card("update", 2)]
+    tiers.apply_deep(cards, {"feed:1": 0.9})
+    assert (cards[0]["tier"], cards[0]["cat"]) == (1, "deep")
+    assert "Jev" in cards[0]["why"][0]
+
+
+def test_deep_judge_demotes_rule_tier1_it_rejects():
+    from app.modules import tiers
+    cards = [_card("person", 1)]
+    tiers.apply_deep(cards, {"feed:1": 0.2})
+    assert (cards[0]["tier"], cards[0]["boosted"]) == (2, False)
+
+
+def test_deep_judge_middle_score_keeps_rule_result_and_skips_papers():
+    from app.modules import tiers
+    cards = [_card("update", 2, "a"), _card("paper", 2, "b")]
+    tiers.apply_deep(cards, {"a": 0.55, "b": 0.99})
+    assert [c["tier"] for c in cards] == [2, 2]
+
+
+def test_deep_scores_cache_by_content_and_survive_missing_key(client, monkeypatch):
+    from app.modules import _tiers_judge as tj
+    it = {"id": "feed:x", "source": "blog", "type": "blog", "title": "t", "summary": "s", "url": "https://claude.com/resources/articles/a", "extra": {}}
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    scores, errors = tj.deep_scores([it])
+    assert scores == {} and errors
+    calls = []
+    monkeypatch.setattr(tj.fj, "judge", lambda todo, client=None: (calls.append(len(todo)) or {todo[0][0]["id"]: {"judge_deep": 0.88}}, []))
+    assert tj.deep_scores([it])[0] == {"feed:x": 0.88}
+    assert tj.deep_scores([it])[0] == {"feed:x": 0.88}
+    assert calls == [1]
