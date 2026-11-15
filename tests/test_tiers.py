@@ -38,7 +38,7 @@ def test_official_blog_customer_story_is_dropped():
 
 def test_official_blog_mid_importance_is_product_update():
     it = _it(url="https://blog.google/products/x", title="Gemini Intelligence: New features", judge_important=0.6)
-    assert _cls(it) == (2, "update")
+    assert _cls(it) == (2, "launch")
 
 
 def test_org_new_repo_is_tier1():
@@ -139,7 +139,7 @@ def test_irrelevant_item_is_tier3():
 
 def test_official_product_announcement_is_tier2_not_tier1():
     it = _it(url="https://openai.com/index/introducing-chatgpt-wallet", title="Introducing ChatGPT Wallet", judge_important=0.88)
-    assert _cls(it) == (2, "update")
+    assert _cls(it) == (2, "launch")
 
 
 def test_org_paper_with_low_heat_is_tier2():
@@ -202,7 +202,7 @@ def _card(cat, tier, id_="feed:1"):
 
 def test_deep_judge_promotes_tier2_update_to_tier1():
     from app.modules import tiers
-    cards = [_card("update", 2)]
+    cards = [_card("launch", 2)]
     tiers.apply_deep(cards, {"feed:1": 0.9})
     assert (cards[0]["tier"], cards[0]["cat"]) == (1, "deep")
     assert "Jev" in cards[0]["why"][0]
@@ -217,7 +217,7 @@ def test_deep_judge_demotes_rule_tier1_it_rejects():
 
 def test_deep_judge_middle_score_keeps_rule_result_and_skips_papers():
     from app.modules import tiers
-    cards = [_card("update", 2, "a"), _card("paper", 2, "b")]
+    cards = [_card("launch", 2, "a"), _card("paper", 2, "b")]
     tiers.apply_deep(cards, {"a": 0.55, "b": 0.99})
     assert [c["tier"] for c in cards] == [2, 2]
 
@@ -227,10 +227,33 @@ def test_deep_scores_cache_by_content_and_survive_missing_key(client, monkeypatc
     it = {"id": "feed:x", "source": "blog", "type": "blog", "title": "t", "summary": "s", "url": "https://claude.com/resources/articles/a", "extra": {}}
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.delenv("JEV_API_KEY", raising=False)
-    scores, errors = tj.deep_scores([it])
+    scores, errors = tj.scores([it], "deep")
     assert scores == {} and errors
     calls = []
     monkeypatch.setattr(tj.fj, "judge", lambda todo, client=None: (calls.append(len(todo)) or {todo[0][0]["id"]: {"judge_deep": 0.88}}, []))
-    assert tj.deep_scores([it])[0] == {"feed:x": 0.88}
-    assert tj.deep_scores([it])[0] == {"feed:x": 0.88}
+    assert tj.scores([it], "deep")[0] == {"feed:x": 0.88}
+    assert tj.scores([it], "deep")[0] == {"feed:x": 0.88}
     assert calls == [1]
+
+
+def test_merge_same_news_keeps_highest_and_notes_merged():
+    from app.modules import tiers
+    cards = [{"title": "DeepMind 发布 Gemini 4 Hydrogen 模型", "score": 10, "why": ["a"], "source": "雷达 · Google"},
+             {"title": "GitHub Copilot 上线 Gemini 4 Hydrogen 模型", "score": 8, "why": ["b"], "source": "雷达 · GitHub"},
+             {"title": "Qwen 开源 qwen-code 终端编码代理", "score": 8, "why": ["c"], "source": "雷达 · Qwen"}]
+    out = tiers.merge_same_news(cards)
+    assert len(out) == 2 and any("合并同类" in w for w in out[0]["why"])
+
+
+def test_pick_floor_drops_low_scores_and_ranks_by_score():
+    from app.modules import tiers
+    cards = [{"id": "a", "score": 1, "why": []}, {"id": "b", "score": 1, "why": []}, {"id": "c", "score": 1, "why": [], "deep": 0.1}]
+    out = tiers.apply_pick(cards, {"a": 0.8, "b": 0.3})
+    assert [c["id"] for c in out] == ["a"]
+
+
+def test_read_flag_follows_shared_read_log(client):
+    from app.modules import _read_log, tiers
+    _read_log.log("intel_event", 7, "t", "#intel/e/7", "产品雷达")
+    d = {"t1": [], "t2": [{"kind": "event", "read_ref": 7, "url": ""}, {"kind": "event", "read_ref": 8, "url": ""}]}
+    assert [c["read"] for c in tiers.with_read(d)["t2"]] == [True, False]

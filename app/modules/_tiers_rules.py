@@ -9,8 +9,8 @@ from . import _people
 CATS = {
     "report": (1, "头部开源技术报告"), "official": (1, "官方深度文章"), "repo": (1, "头部机构开源项目"),
     "person": (1, "名人深度内容"), "case": (1, "增长 / 产品案例"), "deep": (1, "值得精读"),
-    "launch": (2, "重要产品发布"), "paper": (2, "热点论文"), "trending": (2, "增速快的项目"), "product": (2, "热点产品"),
-    "author": (2, "作者干货"), "update": (2, "产品重要更新"), "top": (2, "头部内容"), "interest": (2, "兴趣相关"),
+    "launch": (2, "产品发布与更新"), "paper": (2, "热点论文"), "trending": (2, "增速快的项目"), "product": (2, "热点产品"),
+    "author": (2, "作者干货"), "top": (2, "头部内容"), "interest": (2, "兴趣相关"),
 }
 
 LABS = {name: re.compile(p, re.I) for name, p in {
@@ -113,7 +113,7 @@ def _base(it: dict) -> tuple[str, str] | None:
         if imp is not None and imp >= OFFICIAL_DEEP and DEEP_URL.search(it.get("url") or ""):
             return "official", f"{org} 官方研究 / 工程文章，重要度 {imp:.2f}"
         if imp is None or imp >= OFFICIAL_UPDATE:
-            return "update", f"{org} 官方更新"
+            return "launch", f"{org} 官方更新"
         return None
     if src == "github":
         owner = _owner(it)

@@ -31,6 +31,17 @@ Q_DEEP = ("state.items.{k} 是一条候选内容（publisher / author 写了来�
           "agent skills 指南、harness 设计）；一手的研究成果或开源技术报告；有论证的深度访谈和长文。"
           "回答否：产品发布和功能公告、定价和套餐、客户案例、融资人事、营销推广、新闻转述、泛泛观点、清单合集、"
           "入门科普、个人体验或评测流水账、安装教程、没有细节的预告。")
+Q_PICK = {
+    "paper": ("state.items.{k} 是一篇 AI 论文。读者是做 AI Agent 和大模型应用的工程师。回答是：提出了有实质贡献的新方法、系统或评测基准，"
+              "结论清晰，对 agent、harness、记忆、工具调用、评测、推理工程、训练方法有参考价值。回答否：窄领域应用、增量调参、"
+              "纯理论推导、综述水文、只换个场景套用已有方法、结论空泛。"),
+    "repo": ("state.items.{k} 是 GitHub 上增速很快的一个项目。读者是做 AI Agent 和大模型应用的工程师。回答是：解决了真实的工程问题、"
+             "代码可直接用或有可借鉴的设计的 agent / LLM 基础设施和工具。回答否：薄封装和套壳、免费白嫖教程、资源清单合集、"
+             "个人 demo、荐股和赚钱类应用、模板仓库、只有 README 的概念项目。"),
+    "other": ("state.items.{k} 是一条候选内容（publisher / author 写了来源）。读者是做 AI Agent 和 AI 团队的工程师。回答是：有具体做法、数据、"
+              "论证的技术或产品干货，值得扫一眼。回答否：标题党和情绪表达、吹捧、安全通告和故障公告、单纯的产品发布转述、"
+              "清单合集、个人评测流水账、营销推广、没有细节的预告。"),
+}
 Q_VALUE = {
     "reddit": ("state.items.{k} 是 Reddit 上的一个帖子。它对一个关注 AI 的工程师是否有实际价值：亲身实践经验、"
                "教程或配置分享、实测 / 对比 / 基准、开源项目展示、对新论文 / 新模型 / 技术方向的有内容的讨论？"
@@ -57,9 +68,15 @@ Q_VALUE = {
 }
 
 
+def pick_type(it: dict) -> str:
+    return "paper" if it.get("type") == "paper" else "repo" if it.get("source") == "github" else "other"
+
+
 def _question(kind: str, k: str, it: dict, org: str) -> str:
     if kind == "ai":
         return Q_AI.format(k=k)
+    if kind == "pick":
+        return Q_PICK[pick_type(it)].format(k=k)
     if kind == "deep":
         return Q_DEEP.format(k=k)
     if kind == "value":
@@ -93,7 +110,7 @@ def _state(it: dict, org: str) -> dict:
 
 
 def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = None) -> tuple[dict[str, dict], list[str]]:
-    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value" / "deep"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
+    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value" / "deep" / "pick"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
     key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
     if not key:
         return {}, ["未配置 TYPESAFE_API_KEY（项目根目录 .env），Trending 是否 AI、官方内容是否重要、Reddit / 视频有没有干货改用关键词规则"]

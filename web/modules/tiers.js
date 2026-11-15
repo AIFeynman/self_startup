@@ -17,6 +17,9 @@ const CSS = `
 .tr-t3 { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
 .tr-t3 a { padding: 4px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tr-int { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.tr-readtag { display: none; padding: 0 6px; border-radius: 6px; background: var(--bg-2); color: var(--muted); }
+.tr-isread .tr-readtag { display: inline-block; }
+.tr-isread .tr-t { color: var(--muted); font-weight: 500; }
 @media (max-width: 720px) { .tr-row { grid-template-columns: 1fr; } .tr-side { grid-column: 1; grid-row: auto; } }
 `;
 
@@ -31,16 +34,30 @@ export default {
       const d = await api.get('/api/tiers/items' + (refresh ? '?refresh=true' : ''));
       body.replaceChildren(...view(d));
     };
-    const row = (c) => h('div.tr-row', {}, [
-      h('a.tr-t', { href: c.href || c.url, ...(c.href ? {} : { target: '_blank', rel: 'noopener' }) }, c.title),
-      c.gist || c.summary ? h('div.tr-sum', {}, c.gist || c.summary) : null,
-      h('div.tr-meta', {}, [
-        c.deep != null ? h('span.tr-chip.boost', {}, `深读分 ${c.deep.toFixed(2)}`) : null,
-        c.boosted ? h('span.tr-chip.boost', {}, '兴趣提权') : null,
-        h('span', {}, c.source), h('span', {}, day(c.date)), h('span', {}, c.why.join(' · ')),
-      ]),
-      c.href && c.url ? h('a.tr-side', { href: c.url, target: '_blank', rel: 'noopener' }, '原文 ↗') : null,
-    ]);
+    const markRead = (c, node) => {
+      if (c.read) return;
+      c.read = true;
+      node.classList.add('tr-isread');
+      const call = c.kind === 'event' ? api.post(`/api/intel/events/${c.read_ref}/read`, {})
+        : c.kind === 'case' ? api.post('/api/intel/growth/read', { item_id: c.read_ref })
+          : api.post('/api/feed/click', { id: c.read_ref });
+      call.catch(() => { c.read = false; node.classList.remove('tr-isread'); });
+    };
+    const row = (c) => {
+      const node = h('div.tr-row' + (c.read ? '.tr-isread' : ''), {}, [
+        h('a.tr-t', { href: c.href || c.url, onclick: () => markRead(c, node), ...(c.href ? {} : { target: '_blank', rel: 'noopener' }) }, c.title),
+        c.gist || c.summary ? h('div.tr-sum', {}, c.gist || c.summary) : null,
+        h('div.tr-meta', {}, [
+          c.deep != null ? h('span.tr-chip.boost', {}, `深读分 ${c.deep.toFixed(2)}`) : null,
+          c.pick != null ? h('span.tr-chip.boost', {}, `扫读分 ${c.pick.toFixed(2)}`) : null,
+          c.boosted ? h('span.tr-chip.boost', {}, '兴趣提权') : null,
+          h('span.tr-readtag', {}, '已读'),
+          h('span', {}, c.source), h('span', {}, day(c.date)), h('span', {}, c.why.join(' · ')),
+        ]),
+        c.href && c.url ? h('a.tr-side', { href: c.url, target: '_blank', rel: 'noopener', onclick: () => markRead(c, node) }, '原文 ↗') : null,
+      ]);
+      return node;
+    };
     const group = (cards) => {
       const by = new Map();
       cards.forEach((c) => by.set(c.cat_label, [...(by.get(c.cat_label) || []), c]));
