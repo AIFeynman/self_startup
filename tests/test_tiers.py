@@ -137,12 +137,57 @@ def test_irrelevant_item_is_tier3():
     assert _cls(_it("reddit", "discussion", "Best GPU for gaming?", pop=0.2))[0] == 3
 
 
-def test_balance_caps_each_category_before_filling():
+def test_official_product_announcement_is_tier2_not_tier1():
+    it = _it(url="https://openai.com/index/introducing-chatgpt-wallet", title="Introducing ChatGPT Wallet", judge_important=0.88)
+    assert _cls(it) == (2, "update")
+
+
+def test_org_paper_with_low_heat_is_tier2():
+    it = _it("arxiv", "paper", "Bandit-based LLM routing", pop=0.0, affil="Google Research")
+    assert _cls(it) == (2, "paper")
+
+
+def test_x_article_with_title_from_unknown_author_is_tier2():
+    it = _it("twitter", "discussion", "@someone：Goal Engineering", summary="x" * 190, author="someone", article_title="Goal Engineering", x_article=True, pop=0.4)
+    assert _cls(it) == (2, "author")
+
+
+def test_clickbait_x_post_without_article_title_is_dropped():
+    it = _it("twitter", "discussion", "@someone：this is wild..", summary="x" * 400, author="someone", x_article=True, pop=0.66)
+    assert _cls(it)[0] == 3
+
+
+def test_interest_does_not_promote_paper_or_x_article():
+    paper = _it("arxiv", "paper", "Agent harness design for coding agents", pop=0.9, affil="Google")
+    xart = _it("twitter", "discussion", "@someone：harness", summary="x" * 190, author="someone", article_title="Agent harness design", x_article=True, pop=0.7)
+    for it in (paper, xart):
+        r = tr.classify(it)
+        assert (r["tier"], r["boosted"]) == (2, False)
+
+
+def test_launch_is_never_tier1():
+    assert tr.CATS["launch"][0] == 2
+
+
+def test_growth_case_needs_perfect_score_and_ai_to_reach_tier1():
+    from app.modules import tiers
+    assert tiers.case_tier(15, "How an AI agent app hit $1M ARR") == 1
+    assert tiers.case_tier(15, "How Tinder ran a paywall experiment") == 2
+    assert tiers.case_tier(14, "AI app growth") == 2
+
+
+def test_balance_hard_caps_each_category():
     from app.modules import tiers
     cards = [{"cat": "update", "score": 9 - i * 0.1} for i in range(10)] + [{"cat": "paper", "score": 1.0}, {"cat": "top", "score": 0.5}]
     out = tiers.balance(cards, limit=8, per_cat=3)
-    cats = [c["cat"] for c in out]
-    assert "paper" in cats and "top" in cats and cats.count("update") == 6
+    assert sorted(c["cat"] for c in out) == ["paper", "top", "update", "update", "update"]
+
+
+def test_balance_accepts_per_category_caps():
+    from app.modules import tiers
+    cards = [{"cat": "paper", "score": 9 - i * 0.1} for i in range(10)] + [{"cat": "top", "score": 0.1}]
+    out = tiers.balance(cards, limit=9, per_cat={"*": 1, "paper": 4})
+    assert sorted(c["cat"] for c in out) == ["paper"] * 4 + ["top"]
 
 
 def test_items_api_returns_tier_structure(client):

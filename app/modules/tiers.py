@@ -15,10 +15,11 @@ TITLE = "分级"
 ORDER = 31
 router = APIRouter()
 
-T1_DAYS, T2_DAYS, T2_LIMIT = 3, 2, 20     # Tier1 不限条数、留 3 天；Tier2 取最近 2 天（论文日期只到天）的前 20 条
+T1_DAYS, T2_DAYS, T2_LIMIT = 3, 3, 60     # Tier1 不限条数；Tier2 总量上限 60（实际由各类名额决定）；论文日期只到天，窗口都按 3 天
 EVENT_SCORE = {"S": 10.0, "A": 8.0, "B": 6.0}
 CASE_SCORE = 8.0
-T2_PER_CAT = 5                            # Tier2 每类最多 5 条，没满的类让位给别的类，避免一类（如雷达更新）占满
+CASE_T1_TOTAL = 15                        # 增长案例满分 15；只有满分且和 AI 相关才进 Tier1，其余放 Tier2
+T2_PER_CAT = {"*": 5, "paper": 10, "trending": 8, "author": 10, "launch": 4, "update": 4, "case": 3}   # Tier2 每类上限，硬名额，不回填
 UPDATE_TYPES = {"launch", "model", "feature", "api", "pricing", "packaging", "deprecation"}
 CACHE_S = 60
 _cache: dict = {}
@@ -51,33 +52,37 @@ def _event_cards(now: datetime) -> list[dict]:
         srcs = _j(e["sources"], [])
         why = f"{e['company']} · {e['type']} · 雷达 {e['level']} 级"
         cat = "launch" if launch else "update"
-        out.append({"id": f"event:{e['id']}", "kind": "event", "tier": 1 if launch else 2, "cat": cat, "cat_label": tr.CATS[cat][1],
+        out.append({"id": f"event:{e['id']}", "kind": "event", "tier": 2, "cat": cat, "cat_label": tr.CATS[cat][1],
                     "boosted": False, "why": [why], "title": e["title"], "gist": "", "summary": e["summary"] or "",
                     "url": next((s.get("url") for s in srcs if s.get("official") and s.get("url")), srcs[0].get("url", "") if srcs else ""),
                     "href": f"#intel/e/{e['id']}", "date": e["date"], "source": f"产品雷达 · {e['company']}", "score": EVENT_SCORE[e["level"]]})
     return out
 
 
+def case_tier(total: int, text: str) -> int:
+    return 1 if (total or 0) >= CASE_T1_TOTAL and tr.AI_CASE.search(text) else 2
+
+
 def _case_cards(now: datetime) -> list[dict]:
     since = (now - timedelta(days=T1_DAYS)).strftime("%Y-%m-%d")
-    rows = db.rows("SELECT c.id, c.day, c.company, i.title, i.url, i.one_line, i.source FROM intel_growth_case c "
+    rows = db.rows("SELECT c.id, c.day, c.company, i.title, i.url, i.one_line, i.source, i.total FROM intel_growth_case c "
                    "JOIN intel_growth_item i ON i.id = c.item_id WHERE c.status = 'done' AND c.complete = 1 AND c.day >= ? "
                    "AND c.id IN (SELECT max(id) FROM intel_growth_case GROUP BY item_id)", (since,))
-    return [{"id": f"case:{r['id']}", "kind": "case", "tier": 1, "cat": "case", "cat_label": tr.CATS["case"][1], "boosted": False,
+    return [{"id": f"case:{r['id']}", "kind": "case", "tier": case_tier(r["total"], f"{r['title']} {r['one_line'] or ''}"), "cat": "case", "cat_label": tr.CATS["case"][1], "boosted": False,
              "why": ["增长 Case 卡已写完"], "title": r["title"], "gist": r["one_line"] or "", "summary": "", "url": r["url"],
              "href": f"#intel/g/{r['id']}", "date": r["day"], "source": f"增长 Case · {r['company'] or r['source']}", "score": CASE_SCORE}
             for r in rows]
 
 
-def balance(cards: list[dict], limit: int, per_cat: int) -> list[dict]:
-    """按分数取前 limit 条，但每类先限 per_cat 条；名额没用完再按分数补。"""
-    cards = sorted(cards, key=lambda c: -c["score"])
+def balance(cards: list[dict], limit: int, per_cat: int | dict) -> list[dict]:
+    """按分数取前 limit 条，每类最多 per_cat 条（可按类给字典，"*" 为默认），防止一类占满。"""
     seen: dict[str, int] = {}
-    first, rest = [], []
-    for c in cards:
+    out = []
+    for c in sorted(cards, key=lambda c: -c["score"]):
         seen[c["cat"]] = seen.get(c["cat"], 0) + 1
-        (first if seen[c["cat"]] <= per_cat else rest).append(c)
-    return sorted((first + rest)[:limit], key=lambda c: -c["score"])
+        if seen[c["cat"]] <= (per_cat if isinstance(per_cat, int) else per_cat.get(c["cat"], per_cat["*"])):
+            out.append(c)
+    return out[:limit]
 
 
 def build(now: datetime | None = None) -> dict:
@@ -99,8 +104,9 @@ def build(now: datetime | None = None) -> dict:
         cards.append(_card(it, r))
     t1 = sorted((c for c in cards if c["tier"] == 1), key=lambda c: -c["score"])
     t2 = sorted((c for c in cards if c["tier"] == 2), key=lambda c: -c["score"])
+    t2_shown = balance(t2, T2_LIMIT, T2_PER_CAT)
     return {"generated": now.isoformat(timespec="seconds"), "windows": {"t1_days": T1_DAYS, "t2_days": T2_DAYS, "t2_limit": T2_LIMIT},
-            "t1": t1, "t2": balance(t2, T2_LIMIT, T2_PER_CAT), "t2_more": max(0, len(t2) - T2_LIMIT),
+            "t1": t1, "t2": t2_shown, "t2_more": max(0, len(t2) - len(t2_shown)),
             "t3": {"count": unranked, "scanned": scanned, "links": [{"label": "信息推荐", "href": "#feed"}, {"label": "产品雷达", "href": "#intel"}]},
             "interests": list(tr.INTEREST_LINES)}
 

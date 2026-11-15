@@ -8,8 +8,8 @@ from . import _people
 
 CATS = {
     "report": (1, "头部开源技术报告"), "official": (1, "官方深度文章"), "repo": (1, "头部机构开源项目"),
-    "person": (1, "名人深度内容"), "launch": (1, "重要产品发布"), "case": (1, "增长 / 产品案例"),
-    "paper": (2, "热点论文"), "trending": (2, "增速快的项目"), "product": (2, "热点产品"),
+    "person": (1, "名人深度内容"), "case": (1, "增长 / 产品案例"),
+    "launch": (2, "重要产品发布"), "paper": (2, "热点论文"), "trending": (2, "增速快的项目"), "product": (2, "热点产品"),
     "author": (2, "作者干货"), "update": (2, "产品重要更新"), "top": (2, "头部内容"), "interest": (2, "兴趣相关"),
 }
 
@@ -19,6 +19,8 @@ LABS = {name: re.compile(p, re.I) for name, p in {
 }.items()}
 LAB_GITHUB = {"deepseek-ai", "qwenlm", "moonshotai", "minimax-ai", "zai-org", "thudm", "mistralai"}
 TECH_REPORT = re.compile(r"technical report|tech report|技术报告", re.I)
+DEEP_URL = re.compile(r"/(?:research|engineering|safety|alignment|interpretability|science)\b|research\.google|deepmind\.google/(?:research|science)", re.I)
+AI_CASE = re.compile(r"\bAI\b|\bLLM|GPT|Claude|\bagents?\b|人工智能", re.I)
 ANNOUNCE = re.compile(r"\b(?:launch(?:ing|ed)?|announc\w+|introducing|excited|thrilled|proud|rolling out|shipped|available (?:now|today|to)|now available|today we|out now)\b|发布|上线", re.I)
 
 OFFICIAL_DEEP, OFFICIAL_UPDATE = 0.8, 0.4     # 官方博客 judge_important：深度文章 / 值得扫一眼的更新，再低的是客户案例和 PR 稿
@@ -87,11 +89,9 @@ def interest_hit(it: dict, lines: dict[str, list[str]] = INTEREST_LINES) -> str:
 
 
 def long_form(it: dict) -> bool:
-    """兴趣提权到 Tier1 只给长文类：项目和短帖命中兴趣词不代表有干货。"""
-    ex = it.get("extra") or {}
-    if it["source"] == "twitter":
-        return bool(ex.get("x_article") or ex.get("article_title"))
-    return it["type"] in ("paper", "blog", "podcast", "video") and depth(it)
+    """兴趣提权到 Tier1 只给博客 / 播客 / 视频长内容：论文、项目、X 帖命中兴趣词不代表适合深读。"""
+    imp = (it.get("extra") or {}).get("judge_important")
+    return it["type"] in ("blog", "podcast", "video") and depth(it) and (imp is None or imp >= 0.7)
 
 
 def _org_repo(it: dict, org: str) -> tuple[str, str]:
@@ -110,8 +110,8 @@ def _base(it: dict) -> tuple[str, str] | None:
     if org := rk.official_org(it):
         if src == "github":
             return _org_repo(it, org)
-        if imp is not None and imp >= OFFICIAL_DEEP:
-            return "official", f"{org} 官方，重要度 {imp:.2f}"
+        if imp is not None and imp >= OFFICIAL_DEEP and DEEP_URL.search(it.get("url") or ""):
+            return "official", f"{org} 官方研究 / 工程文章，重要度 {imp:.2f}"
         if imp is None or imp >= OFFICIAL_UPDATE:
             return "update", f"{org} 官方更新"
         return None
@@ -119,16 +119,17 @@ def _base(it: dict) -> tuple[str, str] | None:
         owner = _owner(it)
         if owner in LAB_GITHUB and (ex.get("watch_org") or ex.get("trending")):
             return _org_repo(it, owner)
-        if ex.get("trending") or pop >= 0.9:
+        if ex.get("trending") or pop >= 0.7:
             return "trending", "增速快的项目"
         return None
     tier = person_tier(it)
     if tier and depth(it, INTERVIEW_STRICT_S if tier == 1 else INTERVIEW_S):
         return ("person", "名人深度内容") if tier == 1 else ("author", "作者干货")
     if typ == "paper":
-        if lab or (rk.paper_orgs(it) and pop >= POP_MID) or pop >= POP_TOP:
-            return "paper", f"{lab or '头部机构'}论文" if lab or pop < POP_TOP else "热点论文"
-        return None
+        orgs = rk.paper_orgs(it)
+        if lab or orgs:
+            return "paper", f"{lab or orgs[0]} 论文"
+        return ("paper", "热点论文") if pop >= POP_TOP else None
     if typ == "product":
         return ("product", "热点产品") if src in ("producthunt", "yc", "analysis") and pop >= POP_TOP else None
     if src == "hn":
@@ -141,8 +142,11 @@ def _base(it: dict) -> tuple[str, str] | None:
         return "author", "博客深度文章"
     if typ == "podcast":
         return "top", "播客新一期"
-    if src == "twitter" and depth(it) and pop >= POP_TOP:
-        return "author", "作者干货"
+    if src == "twitter":
+        if ex.get("article_title") and pop >= 0.3:
+            return "author", "X 深度长文"
+        if depth(it) and pop >= POP_TOP:
+            return "author", "作者干货"
     return None
 
 
