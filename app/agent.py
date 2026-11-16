@@ -189,16 +189,19 @@ _PROXY_KEYS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PR
 
 
 def clean_env(env: dict | None = None) -> dict:
-    """去掉从 Claude Code 会话里继承来的沙箱代理。
+    """去掉从 Claude Code 会话里继承来的沙箱代理和会话变量。
 
     平台在 Claude Code 会话里用 ./run.sh 启动时，会带上该会话的 HTTPS_PROXY=127.0.0.1:<port>；
     那个代理只放行 Anthropic 的域名，Codex 连 OpenAI 会一直 tls handshake eof，会话结束后代理没了 Claude 也会断。
-    只在确有 Claude Code 会话标记（CLAUDECODE）时去掉指向本机的代理，用户自己配的远程代理保留。"""
+    还会带上 CLAUDECODE / CLAUDE_CODE_*（含「登录由宿主会话续期」）：子进程里的 claude 就绑在那个会话上，
+    会话一结束登录过期，论文标注等后台调用只拿到报错正文。全部去掉，让子进程用本机自己的登录。
+    只在确有 Claude Code 会话标记（CLAUDECODE）时处理，用户自己配的远程代理保留。"""
     env = dict(os.environ if env is None else env)
     if env.get("CLAUDECODE"):
         for k in _PROXY_KEYS:
             if any(h in env.get(k, "") for h in ("://127.0.0.1:", "://localhost:", "://[::1]:")):
                 env.pop(k)
+        env = {k: v for k, v in env.items() if k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE_")}
     return env
 
 
