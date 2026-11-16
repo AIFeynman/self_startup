@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS review_notes (
     sources     TEXT DEFAULT '[]',             -- 引用的文章，见 notes.py
     thread_id   INTEGER,                       -- 便签的主题线：续写的那条记线头 id；线头和单张便签为空
     thread_state TEXT DEFAULT '',              -- 线头上记：open 进行中 / clear 已想清 / paused 搁置
-    thread_gist TEXT DEFAULT ''                -- 线头上记：目前想法
+    thread_gist TEXT DEFAULT '',               -- 线头上记：目前想法
+    more_kinds  TEXT DEFAULT ''                -- 便签除 kind（主类型）外的其他类型，逗号分隔
 );
 CREATE INDEX IF NOT EXISTS idx_review_notes_date ON review_notes(date);
 CREATE TABLE IF NOT EXISTS review_agent_stats (
@@ -560,7 +561,7 @@ def list_notes(date: str = "", q: str = "", kind: str = "", start: str = "", end
     if end:
         sql, args = sql + " AND date<=?", args + [end]
     if kind:
-        sql, args = sql + " AND kind=?", args + [kind]
+        sql, args = sql + " AND (kind=? OR ','||more_kinds||',' LIKE ?)", args + [kind, f"%,{kind},%"]
     if q:
         sql += " AND (title LIKE ? OR content LIKE ? OR tags LIKE ?)"
         args += [f"%{q}%"] * 3

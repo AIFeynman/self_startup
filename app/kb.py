@@ -168,17 +168,21 @@ def _thread_md(n: dict, follow: list[dict]) -> str:
 def _notes() -> list[dict]:
     if not _has("review_notes"):
         return []
-    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想", "review": "复盘"}
+    kinds = {"problem": "问题", "lesson": "经验", "insight": "洞察", "idea": "想法", "spark": "灵感", "feeling": "感想", "review": "复盘", "deep": "深度"}
+
+    def labels(n: dict) -> list[str]:
+        return [kinds.get(k, k) for k in [n["kind"], *(x for x in (n.get("more_kinds") or "").split(",") if x)]]
+
     rows = db.rows("SELECT * FROM review_notes ORDER BY id")
     follow: dict[int, list[dict]] = {}
     for n in sorted(rows, key=lambda r: (r.get("created_at") or "", r["id"])):
         if n.get("thread_id"):
             follow.setdefault(n["thread_id"], []).append(n)
     return [_doc("note", n["id"], n["title"] or _first_lines(n["content"], 1)[:40],
-                 f"类型：{kinds.get(n['kind'], n['kind'])} · 日期：{n['date']}{' · 我写的便签' if n.get('author') == 'me' else ''}\n\n{n['content']}{_note_sources(n)}"
+                 f"类型：{'、'.join(labels(n))} · 日期：{n['date']}{' · 我写的便签' if n.get('author') == 'me' else ''}\n\n{n['content']}{_note_sources(n)}"
                  + _thread_md(n, follow.get(n["id"], [])),
                  date=n["date"], updated=max([n.get("updated_at") or ""] + [c.get("updated_at") or "" for c in follow.get(n["id"], [])]),
-                 tags=_tags(n["tags"]) + [kinds.get(n["kind"], n["kind"])] + (["主题线"] if n["id"] in follow else []),
+                 tags=_tags(n["tags"]) + labels(n) + (["主题线"] if n["id"] in follow else []),
                  status=n["kind"], summary=n.get("thread_gist") or _first_lines(n["content"]) or n["title"],
                  path=f"notes/{n['date']}-{n['id']}-{_slug(n['title'] or n['content'][:20])}.md")
             for n in rows if not n.get("thread_id")]

@@ -5,7 +5,7 @@ import { kindChips, kindColor } from '../ui.js';
 import { noteHtml } from '../api.js';
 import { FOCUS_KEY } from './_annotate.js';
 
-const KIND_KEY = 'note-kind'; // 上次选的类型
+const KIND_KEY = 'note-kinds'; // 上次选的类型，逗号分隔
 const THREADS = '__threads'; // 筛选：只看主题线
 const short = (t, n = 18) => (t.length > n ? t.slice(0, n) + '…' : t);
 const WEEK = '日一二三四五六';
@@ -17,7 +17,9 @@ export default {
     let notes = [], links = [], kinds = [], rels = [], threads = [], states = {};
     let toThread = null, hints = [];
     let selected = +sub?.[0] || null, linking = false, filter = '', query = '';
-    let composeKind = (() => { try { return localStorage.getItem(KIND_KEY) || 'spark'; } catch { return 'spark'; } })();
+    let composeKinds = (() => { try { return (localStorage.getItem(KIND_KEY) || '').split(',').filter(Boolean); } catch { return []; } })();
+    if (!composeKinds.length) composeKinds = ['spark'];
+    const toggle = (list, k) => (list.includes(k) ? (list.length > 1 ? list.filter((x) => x !== k) : list) : [...list, k]);
     let pending = [], pickingCompose = false, pickingNote = false;
 
     const load = async () => {
@@ -30,7 +32,7 @@ export default {
     const linksOf = (id) => links.filter((l) => l.a === id || l.b === id);
     const threadOf = (n) => threads.find((t) => t.id === (n.thread_id || n.id));
     const rootTitle = (n) => notes.find((x) => x.id === n.thread_id)?.title || '主题线';
-    const matches = (n) => (!filter || filter === THREADS || n.kind === filter) && (!query
+    const matches = (n) => (!filter || filter === THREADS || n.kinds.includes(filter)) && (!query
       || `${n.text} ${n.tags} ${n.sources.map((s) => s.title).join(' ')}`.toLowerCase().includes(query.toLowerCase()));
 
     // ---------- 引用文章 ----------
@@ -67,10 +69,10 @@ export default {
       const text = ta.value.trim();
       if (!text) return;
       try {
-        const n = await api.post('/api/notes', { text, kind: composeKind, sources: pending, thread: toThread?.id });
+        const n = await api.post('/api/notes', { text, kinds: composeKinds, sources: pending, thread: toThread?.id });
         ta.value = ''; pending = []; pickingCompose = false; toThread = null; hints = [];
         selected = n.id;
-        try { localStorage.setItem(KIND_KEY, composeKind); } catch { /* ignore */ }
+        try { localStorage.setItem(KIND_KEY, composeKinds.join(',')); } catch { /* ignore */ }
         await load();
       } catch (e) { toast(e.message, true); }
     };
@@ -85,7 +87,7 @@ export default {
     });
     function paintCompose() {
       compKinds.replaceChildren(
-        kindChips(kinds, composeKind, (k) => { composeKind = k; paintCompose(); }),
+        kindChips(kinds, composeKinds, (k) => { composeKinds = toggle(composeKinds, k); paintCompose(); }),
         h('button.sn-chip.add', { onclick: () => { pickingCompose = !pickingCompose; paintCompose(); } }, '+ 引用文章'),
         h('button.primary.sm.sn-post', { onclick: post }, '贴上墙'),
       );
@@ -121,7 +123,7 @@ export default {
         n.sources[0]?.quote ? h('span.qt', {}, n.sources[0].quote.replace(/\s+/g, ' ').trim()) : null,
         n.sources.length ? h('span.src', {}, `出处：${short(n.sources[0].title)}${n.sources.length > 1 ? ` 等 ${n.sources.length} 篇` : ''}`) : null,
         n.thread_id ? h('span.sn-cont', {}, `续 ·「${short(rootTitle(n), 14)}」`) : null,
-        h('span.meta', {}, [h('em', {}, labelOf(n.kind)), h('span', {}, (n.created_at || '').slice(11, 16)),
+        h('span.meta', {}, [...n.kinds.map((k, i) => h(i ? `em.sn-k2.kc${kindColor(k, kinds)}` : 'em', {}, labelOf(k))), h('span', {}, (n.created_at || '').slice(11, 16)),
           !n.thread_id && threadOf(n) ? h('span.sn-thread', { title: '这张是一条主题线的开头' }, `线 · ${threadOf(n).count} 条`) : null,
           n.tags ? h('span', {}, n.tags.split(',').filter(Boolean).map((t) => '#' + t).join(' ')) : null,
           h('span.grow'), cnt ? h('span', {}, `↔ ${cnt}`) : null]),
@@ -212,7 +214,7 @@ export default {
       side.replaceChildren(
         h('div', {}, [h('div.sn-label', {}, `${n.date} ${(n.created_at || '').slice(11, 16)}`), edit, saveBtn]),
         threadBox(n),
-        h('div', {}, [h('div.sn-label', {}, '类型'), kindChips(kinds, n.kind, (k) => patch(n.id, { kind: k }))]),
+        h('div', {}, [h('div.sn-label', {}, '类型（可多选，第一个决定颜色）'), kindChips(kinds, n.kinds, (k) => patch(n.id, { kinds: toggle(n.kinds, k) }))]),
         h('div', {}, [h('div.sn-label', {}, `来源文章（${n.sources.length}）`),
           ...n.sources.map((s, i) => srcRow(s, () => patch(n.id, { sources: n.sources.filter((_, j) => j !== i) }))),
           pickingNote ? picker((s) => { pickingNote = false; patch(n.id, { sources: [...n.sources, s] }); })
@@ -237,7 +239,7 @@ export default {
       const add = async () => {
         const text = more.value.trim();
         if (!text) return;
-        try { await api.post('/api/notes', { text, kind: root.kind, thread: rootId }); selected = rootId; toast('续写好了'); await load(); }
+        try { await api.post('/api/notes', { text, kinds: root.kinds, thread: rootId }); selected = rootId; toast('续写好了'); await load(); }
         catch (e) { toast(e.message, true); }
       };
       more.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); add(); } });
@@ -329,6 +331,7 @@ function injectStyle() {
   .sn-note .src { font-size: 12px; color: #5c5247; border-top: 1px dashed rgba(60,40,20,.28); padding-top: 5px; overflow-wrap: anywhere; }
   .sn-note .meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11.5px; color: #5c5247; align-items: center; font-variant-numeric: tabular-nums; }
   .sn-note .meta em { font-style: normal; font-weight: 600; }
+  .sn-note .meta em.sn-k2 { font-weight: 500; padding: 0 6px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--text) 15%, transparent); }
   .sn-note .meta .grow { flex: 1; }
   .sn-c0 { background: var(--note-yellow); } .sn-c1 { background: var(--note-pink); } .sn-c2 { background: var(--note-blue); }
   .sn-c3 { background: var(--note-green); } .sn-c4 { background: var(--note-purple); } .sn-c5 { background: var(--note-sand); } .sn-c6 { background: var(--note-teal); }
