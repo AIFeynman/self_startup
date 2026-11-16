@@ -24,12 +24,12 @@ MANIFEST = ".manifest.json"
 TYPE_DIRS = {
     "daily": "daily", "note": "notes", "research": "research", "product": "products",
     "paper": "learn/papers", "papernote": "learn/paper-notes", "repo": "learn/repos", "plan": "learn/plans", "book": "learn/books", "feed": "feed", "annotation": "annotations",
-    "intel": "intel/events", "intelco": "intel/companies", "vision": "vision", "concept": "concepts",
+    "intel": "intel/events", "intelco": "intel/companies", "vision": "vision", "concept": "concepts", "xarticle": "x-articles",
 }
 TYPE_NAMES = {
     "daily": "每日记录", "note": "问题与经验", "research": "调研", "product": "产品体验",
     "paper": "论文深读", "papernote": "论文笔记", "repo": "项目解读", "plan": "学习计划", "book": "深度读书", "feed": "收藏的信息", "annotation": "阅读批注",
-    "intel": "产品变化解读", "intelco": "产品雷达公司", "vision": "视野解读", "concept": "概念", "thread": "问题线",
+    "intel": "产品变化解读", "intelco": "产品雷达公司", "vision": "视野解读", "concept": "概念", "thread": "问题线", "xarticle": "X 长文",
 }
 
 README = """# 本地知识库（自动生成，勿手改）
@@ -394,6 +394,23 @@ def _paper_notes() -> list[dict]:
     return out
 
 
+def _xarticles() -> list[dict]:
+    """X 长文库：AI 相关、非营销、已提炼的长文；质量分作标签（质量N）供筛选，不当入库门槛。"""
+    if not _has("x_art"):
+        return []
+    from .modules import _xart
+    out = []
+    for r in db.rows("SELECT * FROM x_art WHERE stage='scored' AND mkt=0 AND q>=1 ORDER BY posted_at DESC"):
+        dom = _xart.DOMAINS.get(r["domain"], "").split(" / ")[0].split("（")[0]
+        tags = [*json.loads(r["tags"] or "[]"), f"质量{r['q']}", r["kind"], dom]
+        body = [f"**摘要**：{r['summary']}", f"**可迁移的点**：{r['take']}" if r["take"] else "",
+                f"作者 @{r['user']} · 阅读 {r['views']} · 点赞 {r['likes']} · 粉丝 {r['fol']} · 类型 {r['kind']} · 领域 {dom} · 质量 {r['q']}/5",
+                f"原文：https://x.com/{r['user']}/status/{r['id']}", "\n## 正文节选\n" + (r["text"] or "")[:1500]]
+        out.append(_doc("xarticle", r["id"], r["title"], "\n\n".join(b for b in body if b), date=(r["day"] or ""), updated=(r["updated"] or ""),
+                        tags=tags, url=f"https://x.com/{r['user']}/status/{r['id']}", summary=r["summary"]))
+    return out
+
+
 def _intel() -> list[dict]:
     """产品雷达：有解读卡的事件一篇一个文件；每家公司一个时间线文件（含 C 级）。"""
     if not _has("intel_event"):
@@ -551,7 +568,7 @@ def _daily(docs: list[dict]) -> list[dict]:
 
 def build() -> list[dict]:
     docs: list[dict] = []
-    for fn in (_notes, _research, _products, _learn_items, _books, _plans, _feed_saved, _feed_hn, _paper_notes, _annotations, _intel, _vision):
+    for fn in (_notes, _research, _products, _learn_items, _books, _plans, _feed_saved, _feed_hn, _paper_notes, _annotations, _intel, _vision, _xarticles):
         try:
             docs += fn()
         except Exception:  # noqa: BLE001 —— 单类出错不影响其它
