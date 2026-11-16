@@ -41,7 +41,8 @@ const CSS = `
 @media (max-width: 720px) { .tr-row { grid-template-columns: 1fr; } .tr-side { grid-column: 1; grid-row: auto; } .tr-day > h2 { font-size: 19px; } }
 `;
 
-const day = (s) => (s || '').slice(5, 10);
+const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const day = (s) => (/T\d/.test(s || '') && !isNaN(new Date(s)) ? md(new Date(s)) : (s || '').slice(5, 10));
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const dayName = (d, today) => `${day(d)} ${WEEK[new Date(d + 'T12:00:00').getDay()]}${d === today ? ' · 今天' : ''}`;
 const RANGE_LABEL = { 1: '当天', 7: '近 7 天', 14: '近 14 天', 30: '近 30 天' };
