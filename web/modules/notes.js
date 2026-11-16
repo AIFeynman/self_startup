@@ -118,6 +118,7 @@ export default {
       const state = n.id === selected ? '.sel' : selected && !linking ? (related ? '.rel' : '.dim') : '';
       return h(`button.sn-note.sn-c${kindColor(n.kind, kinds)}${state}`, { 'data-note': n.id, onclick: () => clickNote(n.id) }, [
         h('span.txt', {}, noteHtml(n.text)),
+        n.sources[0]?.quote ? h('span.qt', {}, n.sources[0].quote.replace(/\s+/g, ' ').trim()) : null,
         n.sources.length ? h('span.src', {}, `出处：${short(n.sources[0].title)}${n.sources.length > 1 ? ` 等 ${n.sources.length} 篇` : ''}`) : null,
         n.thread_id ? h('span.sn-cont', {}, `续 ·「${short(rootTitle(n), 14)}」`) : null,
         h('span.meta', {}, [h('em', {}, labelOf(n.kind)), h('span', {}, (n.created_at || '').slice(11, 16)),
@@ -320,6 +321,7 @@ function injectStyle() {
   .sn-note::before { content: ""; position: absolute; top: -7px; left: 50%; width: 58px; height: 15px; margin-left: -29px; background: rgba(255,255,255,.5); box-shadow: 0 0 1px rgba(0,0,0,.2); }
   .sn-note .txt { flex: 1; font: 500 14px/1.6 var(--serif); overflow-wrap: anywhere; max-height: 14.4em; overflow: hidden; }
   .sn-note .txt .md { line-height: inherit; } .sn-note .txt p { margin: 0 0 .3em; } .sn-note .txt ol, .sn-note .txt ul { margin: 0 0 .3em; padding-left: 1.3em; }
+  .sn-note .qt { font: 13px/1.5 var(--serif); color: #5c5247; border-left: 2px solid rgba(60,40,20,.3); padding-left: 7px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
   .sn-note .src { font-size: 12px; color: #5c5247; border-top: 1px dashed rgba(60,40,20,.28); padding-top: 5px; overflow-wrap: anywhere; }
   .sn-note .meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11.5px; color: #5c5247; align-items: center; font-variant-numeric: tabular-nums; }
   .sn-note .meta em { font-style: normal; font-weight: 600; }

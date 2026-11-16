@@ -7,6 +7,7 @@
 export function annotate(ctx, body, { doc, title = '', link = '', source = '', compact = false, actions = [] }) {
   const { api, h, md, toast, ui } = ctx;
   injectStyle();
+  if (!doc.startsWith('review:')) window.__markReading?.(title || doc);
   const rail = h('div.an-rail');
   const wrap = h('div.an-wrap' + (compact ? '.compact' : ''), {}, [h('div.an-body', {}, body), rail]);
   wrap._src = { doc, title, link }; // ⌘K 快记时带上出处
@@ -100,13 +101,9 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     const open = threads.filter((t) => t.status !== 'resolved');
     const resolved = threads.length - open.length;
     const shown = showResolved ? threads : open;
-    // 按在正文里的位置排：全文的在最前，找不到原文的在最后
-    const pos = (t) => {
-      if (!t.quote) return -1;
-      const m = body.querySelector(`mark.an-hl[data-aid="${t.id}"]`);
-      return m ? m.getBoundingClientRect().top + window.scrollY : 1e9;
-    };
-    const sorted = [...shown].sort((a, b) => pos(a) - pos(b));
+    // 按提交顺序编号，最新的在最上：新问题和回答不用再滑动找
+    const no = new Map([...threads].sort((a, b) => a.id - b.id).map((t, i) => [t.id, i + 1]));
+    const sorted = [...shown].sort((a, b) => b.id - a.id);
     wrap.classList.toggle('has-threads', !!threads.length || !!composer);
     wrap.classList.toggle('rail-off', railOff);
     applyW(false);
@@ -124,7 +121,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
         compact ? null : h('button.sm.ghost.an-close', { title: '收起批注栏，正文更宽（划线评论时自动展开）', onclick: () => setRail(true) }, ui.icon('x')),
       ]),
       composer ? newCard() : null,
-      ...sorted.map((t) => card(t, lost.has(t.id))),
+      ...sorted.map((t) => card(t, lost.has(t.id), no.get(t.id))),
       !threads.length && !composer ? h('div.an-hint', {}, '选中正文里的文字，可以写评论或直接问 Claude；讨论会保存下来，也会同步进知识库。') : null,
     ].filter(Boolean));
     placeGrip();
@@ -150,6 +147,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
         await api.post('/api/annotations', { doc, title, link, quote: c.quote, prefix: c.prefix, suffix: c.suffix, text, ask, source, note_kind });
         composer = null;
         window.getSelection()?.removeAllRanges();
+        rail.scrollTop = 0;
         load();
         if (note_kind && (text || doc.startsWith('learn:'))) toast('已贴到便签');
       } catch (e) { toast(e.message, true); }
@@ -171,7 +169,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
     ]);
   }
 
-  function card(t, lost) {
+  function card(t, lost, no) {
     const pending = t.msgs.some((m) => m.status === 'pending');
     const ta = h('input', { type: 'text', placeholder: pending ? 'Claude 正在回答…' : '回复或追问（Enter 追问 Claude）', disabled: pending });
     const send = async (ask) => {
@@ -200,8 +198,8 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
       ]), { ...wrap._src, annotation_id: t.id }));
     const el = h('div.an-card' + (t.status === 'resolved' ? '.resolved' : ''), { 'data-aid': t.id }, [
       t.quote ? h('div.an-quote', { title: '在正文里定位', onclick: () => body.querySelector(`mark.an-hl[data-aid="${t.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }) },
-        [t.quote, lost ? h('span.tag', { style: { marginLeft: '6px' } }, '原文已变') : null])
-        : h('div.an-quote.all', {}, '针对全文'),
+        [h('b.an-no', {}, `#${no} `), t.quote, lost ? h('span.tag', { style: { marginLeft: '6px' } }, '原文已变') : null])
+        : h('div.an-quote.all', {}, [h('b.an-no', {}, `#${no} `), '针对全文']),
       ...msgs,
       h('div.an-reply', {}, [ta,
         h('button.sm.ghost', { title: '只记评论，不问 Claude', disabled: pending, onclick: () => send(false) }, ui.icon('chat')),
@@ -263,7 +261,9 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
 // 正文所有文字节点拼起来，去掉空白后匹配（划线时 toString 带的换行和 DOM 里的不一样），再映射回节点位置
 function textIndex(root) {
   const nodes = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  // 公式的 TeX 源码（<annotation>）不显示也选不中，不算进正文
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT,
+    { acceptNode: (n) => (n.parentElement?.closest('annotation') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
   let flat = '';
   for (let n = walker.nextNode(); n; n = walker.nextNode()) { nodes.push([n, flat.length]); flat += n.nodeValue; }
   let squeezed = '';
@@ -272,7 +272,8 @@ function textIndex(root) {
   return { nodes, flat, squeezed, map };
 }
 
-const squeeze = (s) => (s || '').replace(/\s+/g, '');
+// 划线 toString 里公式字母是数学斜体（𝑤），正文文字节点里是普通字母（w）：先折回普通字母再比
+const squeeze = (s) => (s || '').replace(/[\u{1D400}-\u{1D7FF}\u210E]/gu, (c) => c.normalize('NFKC')).replace(/\s+/g, '');
 
 function locate(root, t) {
   const idx = textIndex(root);
@@ -301,6 +302,7 @@ function wrapRange(root, start, end, decorate) {
     let n = node;
     const s = Math.max(0, start - off), e = Math.min(len, end - off);
     if (!n.nodeValue.slice(s, e).trim()) continue; // 段落之间的空白不包
+    if (n.parentElement?.closest('.katex-mathml')) continue; // 公式的无障碍副本看不见，只给显示出来的那份划线
     if (e < len) n.splitText(e);
     if (s > 0) n = n.splitText(s);
     const mark = document.createElement('mark');
@@ -391,6 +393,7 @@ function injectStyle() {
   .an-card.resolved { opacity: .65; }
   .an-quote { border-left: 3px solid var(--accent); padding: 1px 0 1px 8px; color: var(--muted); font-size: 12px; line-height: 1.5; cursor: pointer;
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .an-no { color: var(--accent); font-weight: 600; }
   .an-quote.all { border-left-color: var(--line-2); cursor: default; }
   .an-msg { line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
   .an-msg.ai { white-space: normal; background: var(--bg-2); border-radius: 8px; padding: 6px 8px; }

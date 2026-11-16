@@ -325,3 +325,11 @@ a.inbox-it:hover { border-color: var(--accent); text-decoration: none; }
 .nav-msg { margin-top: auto; }
 .nav-msg + .nav-foot { margin-top: 4px; }
 .nav-msg a { padding: 7px 12px; font-size: 14px; }
+
+#back-read { position: fixed; left: 268px; bottom: 18px; z-index: 40; display: inline-flex; align-items: center; gap: 6px; max-width: min(420px, calc(100vw - 300px));
+  padding: 7px 12px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line-2); box-shadow: 0 4px 14px rgba(0,0,0,.12); color: var(--text); font-size: 13px; text-decoration: none; }
+#back-read svg { transform: rotate(180deg); flex: none; }
+#back-read span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#back-read kbd { flex: none; font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+#back-read:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 720px) { #back-read { left: 12px; right: 12px; bottom: 12px; max-width: none; } #back-read kbd { display: none; } }
