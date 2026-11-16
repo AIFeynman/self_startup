@@ -52,6 +52,15 @@ def refs(kind: str) -> set[str]:
     return {r["ref"] for r in db.rows("SELECT DISTINCT ref FROM read_log WHERE kind=?", [kind])}
 
 
+def recent(limit: int, offset: int = 0) -> dict:
+    """打开过的条目，每条一行（最后打开的在前），times 是累计打开次数。"""
+    _ensure()
+    total = db.row("SELECT count(*) n FROM (SELECT 1 FROM read_log GROUP BY kind, ref)")["n"]
+    rows = db.rows("SELECT kind, ref, title, url, source, max(at) at, count(*) times FROM read_log "
+                   "GROUP BY kind, ref ORDER BY max(id) DESC LIMIT ? OFFSET ?", [limit, offset])
+    return {"items": rows, "total": total, "more": offset + len(rows) < total}
+
+
 def days(start: str, end: str) -> list[dict]:
     """按天分组（新的在前）；同一天重复打开同一条合成一行，times 是打开次数。"""
     _ensure()
