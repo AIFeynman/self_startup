@@ -26,6 +26,14 @@ const CSS = `
 .ln-pcard .next { font-size: 13px; margin-top: 8px; color: var(--text); }
 .ln-pcard .next b { color: var(--accent); font-weight: 500; margin-right: 4px; }
 .ln-icard { display: flex; flex-direction: column; }
+.ln-reads { display: flex; flex-direction: column; gap: 2px; }
+.ln-rday { font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+.ln-rrow { display: flex; align-items: baseline; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.ln-rrow a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ln-rrow a:hover { color: var(--accent); }
+.ln-rrow .src { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ln-rrow .at { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ln-rmore { margin-top: 10px; }
 .ln-icard h3 { font-size: 17px; line-height: 1.4; margin: 6px 0 6px; }
 .ln-icard .tldr { white-space: pre-line; font-size: 13px; color: var(--muted); flex: 1; }
 .ln-icard .foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
@@ -626,7 +634,8 @@ async function renderHome(el, ctx, scrollToPlans) {
   if (reading.length) el.append(ui.section(`在读 ${reading.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.grid', {}, reading.map((it) => itemCard(it, ctx))));
   el.append(plansSec,
     ui.section('论文与项目深读', items.length ? `${items.length} 篇` : ''),
-    items.length ? itemList(items, ctx) : ui.empty('还没有深读条目', '粘贴一个 arXiv / GitHub 链接试试'));
+    items.length ? itemList(items, ctx) : ui.empty('还没有深读条目', '粘贴一个 arXiv / GitHub 链接试试'),
+    readHistory(ctx));
   if (scrollToPlans) setTimeout(() => plansSec.scrollIntoView({ block: 'start' }), 0);
 }
 
@@ -672,6 +681,48 @@ function itemList(items, ctx) {
   };
   render();
   return h('div', {}, [kinds.length > 2 ? tabs : null, rated ? stars : null, grid].filter(Boolean));
+}
+
+// 阅读过的：信息推荐 / 产品雷达 / 增长 Case 里打开过的条目（只点外链也算），最后打开的在前
+const WEEK = '日一二三四五六';
+function dayLabel(d) {
+  const day = (n) => new Date(Date.now() - n * 864e5).toLocaleDateString('sv');
+  if (d === day(0)) return '今天';
+  if (d === day(1)) return '昨天';
+  return `${d.slice(5)} 周${WEEK[new Date(d + 'T12:00:00').getDay()]}`;
+}
+function readHistory(ctx) {
+  const { h, ui, api } = ctx;
+  const list = h('div.ln-reads');
+  const more = h('button.sm.outline.ln-rmore', { hidden: true }, '再看 30 条');
+  let head = ui.section('阅读过的', '');
+  let offset = 0, lastDay = '';
+  const row = (x) => {
+    const internal = (x.url || '').startsWith('#');
+    const href = internal || /^https?:\/\//i.test(x.url || '') ? x.url : '#';
+    return h('div.ln-rrow', {}, [
+      h('a', internal ? { href } : { href, target: '_blank', rel: 'noopener' }, x.title || x.url),
+      h('span.src', {}, x.source || ''),
+      h('span.at', { title: x.times > 1 ? `打开过 ${x.times} 次` : '' }, (x.times > 1 ? `×${x.times} · ` : '') + x.at.slice(11, 16))]);
+  };
+  const load = async () => {
+    more.disabled = true;
+    let r;
+    try { r = await api.get(`/api/learn/reads?limit=30&offset=${offset}`); } catch { more.disabled = false; return; }
+    for (const x of r.items) {
+      const d = x.at.slice(0, 10);
+      if (d !== lastDay) { list.append(h('div.ln-rday', {}, dayLabel(d))); lastDay = d; }
+      list.append(row(x));
+    }
+    offset += r.items.length;
+    head.replaceWith(head = ui.section('阅读过的', r.total ? `${r.total} 篇` : ''));
+    if (!r.total) list.replaceChildren(ui.empty('还没有阅读记录', '在信息推荐里点开的文章（包括只打开外链）会记在这里'));
+    more.disabled = false;
+    more.hidden = !r.more;
+  };
+  more.onclick = load;
+  load();
+  return h('div', {}, [head, list, more]);
 }
 
 const isReading = (it) => it.status === 'done' && it.read_pos > 0 && !it.finished_at;

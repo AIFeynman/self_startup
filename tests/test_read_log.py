@@ -128,3 +128,14 @@ def test_default_order_is_newest_day_first_then_recommendation_within_day(fresh)
     rows = fresh.get("/api/feed/items?limit=50").json()["items"]
     assert [x["id"] for x in rows] == ["hn:today_hot", "hn:today_cold", "hn:yday", "hn:old_hot"]
     assert rows[0]["day"] == rows[1]["day"] != rows[2]["day"]
+
+
+def test_history_lists_each_opened_item_once_newest_first(fresh):
+    feed.upsert([_item("hn:a", title="A"), _item("hn:b", title="B")])
+    for i in ("hn:b", "hn:a", "hn:b", "hn:a"):
+        fresh.post("/api/feed/click", json={"id": i})
+    r = fresh.get("/api/learn/reads?limit=1").json()
+    assert [(x["title"], x["times"], x["kind"]) for x in r["items"]] == [("A", 2, "feed")]
+    assert r["items"][0]["url"] == "https://e.x/hn:a" and r["more"] is True and r["total"] == 2
+    r = fresh.get("/api/learn/reads?limit=1&offset=1").json()
+    assert [x["title"] for x in r["items"]] == ["B"] and r["more"] is False

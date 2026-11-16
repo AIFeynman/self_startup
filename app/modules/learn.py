@@ -38,6 +38,7 @@ from .. import agent, db, jobs, notify, settings, tasks
 from ..db import ROOT
 from . import _book as bookparse
 from . import _deepdive
+from . import _read_log
 from . import _reads
 from . import _video
 
@@ -721,6 +722,12 @@ def import_chat_reads() -> list[int]:
     _imported = True
     _ensure_depth_col()
     return _reads.import_chat_reads(_out_root(), detect_kind, slugify, _tldr_from_md)
+
+
+@router.get("/reads")
+def opened_history(limit: int = 30, offset: int = 0):
+    """信息推荐 / 产品雷达 / 增长 Case 里打开过的条目（含只点了外链的）。"""
+    return _read_log.recent(max(1, min(limit, 200)), max(0, offset))
 
 
 @router.get("/items")
