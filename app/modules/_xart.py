@@ -47,6 +47,7 @@ MIN_WINDOW = 60
 START_STEP = 900
 VIEW_GATE = 500
 FULL_PER_DAY = 120
+TITLE_PER_DAY = 500
 FOL_EXCEPTION = 20000
 MIN_CHARS = 300
 DOMAINS = {
@@ -145,7 +146,10 @@ def gate() -> dict:
 
 
 def _vx(c: httpx.Client, row: dict) -> dict:
-    j = _get(c, f"{VX}/{row['user']}/status/{row['id']}", {}, headers={}, tries=3)
+    try:
+        j = _get(c, f"{VX}/{row['user']}/status/{row['id']}", {}, headers={}, tries=3)
+    except Exception:  # noqa: BLE001 —— vx 限流返回非 JSON，当作没取到，走重试
+        return {"title": "", "preview": ""}
     a = j.get("article") or {}
     return {"title": a.get("title") or "", "preview": a.get("preview_text") or ""}
 
@@ -163,7 +167,8 @@ def _blocks_text(a: dict) -> str:
 
 
 def titles(limit: int = 0, workers: int = 3) -> dict:
-    rows = db.rows("SELECT id,user,tries FROM x_art WHERE stage='found'" + (f" LIMIT {limit}" if limit else ""))
+    rows = db.rows("SELECT id,user,tries FROM (SELECT id,user,tries,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
+                   f"WHERE rk<={TITLE_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
     stat = {"vx": 0, "fallback": 0, "retry": 0, "drop": 0}
 
     def one(r):
