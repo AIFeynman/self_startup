@@ -327,7 +327,7 @@ def test_past_days_are_kept_once_final_and_today_keeps_updating(client, monkeypa
     monkeypatch.setattr(tiers, "build", lambda day, now=None: built.append(day) or real(day, now))
     db.execute("UPDATE tiers_days SET built_at = built_at - 7200")
     tiers.daily_tick()
-    assert sorted(built) == sorted(tiers.recent_days(db.today(), 2))
+    assert sorted(built) == sorted(tiers.recent_days(db.today(), tiers.OPEN_DAYS))
     assert db.row("SELECT data FROM tiers_days WHERE day=?", (old["day"],))["data"] == old["data"]
 
 
@@ -341,3 +341,16 @@ def test_missing_past_day_shows_pending_and_starts_backfill(client, monkeypatch)
     days = client.get("/api/tiers/items?days=7").json()["days"]
     assert "t1" in days[0] and all(x.get("pending") for x in days[1:])
     assert kicked
+
+
+def test_late_fetched_item_still_lands_on_its_publish_day(client, monkeypatch):
+    from app import db
+    from app.modules import feed, tiers
+    _no_judge(monkeypatch)
+    db.execute("DELETE FROM tiers_days")
+    tiers.daily_tick()
+    feed.upsert([_report_on(2, "LateTwo")])
+    db.execute("UPDATE tiers_days SET built_at = built_at - 7200")
+    tiers.daily_tick()
+    two_ago = client.get("/api/tiers/items?days=7").json()["days"][2]
+    assert "DeepSeek-LateTwo Technical Report" in [c["title"] for c in two_ago["t1"]]

@@ -1,6 +1,6 @@
 """分级：把信息推荐和产品雷达的内容按 Tier1 / Tier2 重排的独立流水线（验证通过前和现有两个板块并行，只读它们的数据）。
 Tier3 不重排，直接回到信息推荐和产品雷达的原列表。规则见 _tiers_rules.py。
-按天分级：每天只看当天（本地时区）发布的内容，结果按天存进 tiers_days；今天和昨天随新抓到的内容重算，更早的天算完定稿不再改。
+按天分级：每天只看当天（本地时区）发布的内容，结果按天存进 tiers_days；近 OPEN_DAYS 天随晚到的内容重算，更早的天算完定稿不再改。
 后台每小时跑一次 daily_tick，补齐近 30 天缺的天。"""
 import json
 import logging
@@ -48,8 +48,9 @@ NEWS_SKIP = {"launches", "launch", "introducing", "announces", "released", "rele
              "openai", "anthropic", "google", "deepmind", "github", "copilot", "perplexity", "deepseek", "microsoft", "nvidia", "claude"}
 UPDATE_TYPES = {"launch", "model", "feature", "api", "pricing", "packaging", "deprecation"}
 CACHE_S = 60                              # 页面上的今天最多 60 秒重算一次
-TICK_S = 3600                             # 后台每小时检查一次：今天和昨天超过 1 小时没算就重算
-_build_lock = threading.Lock()
+TICK_S = 3600                             # 后台每小时检查一次：没定稿的天超过 1 小时没算就重算
+OPEN_DAYS = 4                             # 今天和前 3 天不定稿：论文、博客常晚一两天才抓到，和原来 3 天窗口能接住的一样
+_build_locks: dict[str, threading.Lock] = {}
 _tick_lock = threading.Lock()
 
 
@@ -194,14 +195,14 @@ def build(day: str, now: datetime | None = None) -> dict:
     """只分级 day 当天（本地时区 0 点到 24 点）发布的内容。"""
     now = now or datetime.now(timezone.utc)
     start = datetime.strptime(day, "%Y-%m-%d").astimezone()
-    end = start + timedelta(days=1)
+    end = (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).astimezone()
     cards = _event_cards(day) + _case_cards(day)
     taken = {rk.norm_url(c["url"]) for c in cards if c["url"]}
     scanned = unranked = 0
     judged: list[dict] = []
     feed_items: list[dict] = []
     for it in feed._scored(False, True):
-        t = rk.item_time(it, now)
+        t = rk.item_time(it, now) if it.get("date") else _local(it.get("fetched_at"))
         if not t or not start <= t < end or it["norm_url"] in taken:
             continue
         scanned += 1
@@ -243,6 +244,14 @@ def build(day: str, now: datetime | None = None) -> dict:
             "judge_errors": judge_errors}
 
 
+def _local(s: str | None) -> datetime | None:
+    """db.now() 写的抓取时间是不带时区的本地时间。"""
+    try:
+        return datetime.fromisoformat(s).astimezone() if s else None
+    except ValueError:
+        return None
+
+
 def _stored(day: str) -> dict | None:
     return db.row("SELECT data, built_at, final FROM tiers_days WHERE day=?", (day,))
 
@@ -255,12 +264,12 @@ def day_result(day: str, today: str, max_age: float) -> dict:
     """存过且没过期就用存的；否则重算并存下。早于昨天的天算完即定稿（final），之后不再重算，历史结果不会被覆盖。"""
     r = _stored(day)
     if not _fresh(r, max_age):
-        with _build_lock:
+        with _build_locks.setdefault(day, threading.Lock()):
             r = _stored(day)
             if not _fresh(r, max_age):
                 data = build(day)
                 db.execute("INSERT OR REPLACE INTO tiers_days(day, data, built_at, final) VALUES (?,?,?,?)",
-                           (day, json.dumps(data, ensure_ascii=False), time.time(), int(day < recent_days(today, 2)[-1])))
+                           (day, json.dumps(data, ensure_ascii=False), time.time(), int(day < recent_days(today, OPEN_DAYS)[-1])))
                 return data
     return json.loads(r["data"])
 
@@ -312,15 +321,17 @@ def _marker():
 
 @router.get("/items")
 def items(days: int = 1, refresh: bool = False):
-    """days：1 / 7 / 14 / 30，从今天往前每天一组。今天现算（最多 60 秒一次）；过去的天读存好的，还没算的标 pending 并在后台补。"""
+    """days：1 / 7 / 14 / 30，从今天往前每天一组。今天现算（最多 60 秒一次）；过去的天读存好的，还没算的标 pending 并在后台补；
+    refresh 重算今天和范围内已存但没定稿的天。"""
     n = days if days in RANGES else 1
     today = db.today()
     mark = _marker()
     out = []
     for day in recent_days(today, n):
-        if day == today:
+        r = None if day == today else _stored(day)
+        if day == today or (refresh and r and not r["final"]):
             out.append(mark(day_result(day, today, 0 if refresh else CACHE_S)))
-        elif r := _stored(day):
+        elif r:
             out.append(mark(json.loads(r["data"])))
         else:
             out.append({"day": day, "pending": True})
