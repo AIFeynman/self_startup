@@ -33,8 +33,8 @@ router = APIRouter(prefix="/api/notify", tags=["notify"])
 
 
 def notify(module: str, title: str, body: str = "", reasons: list[str] | None = None, link: str = "", kind: str = "",
-           subtitle: str = "") -> int:
-    sent = system(title, body, subtitle)
+           subtitle: str = "", mac: bool = True) -> int:
+    sent = mac and system(title, body, subtitle)
     return db.insert("notifications", {"module": module, "kind": kind, "title": title, "body": body, "reasons": reasons or [],
                                        "link": link, "system": int(sent), "created_at": db.now()})
 
