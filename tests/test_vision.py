@@ -78,9 +78,9 @@ def test_revisions_append_and_latest_wins():
     assert [(r["value"], r["revision"]) for r in feb] == [(4.2, 0), (4.3, 1)]
 
 
-def test_overview_orders_themes_ai_first(client):
+def test_overview_orders_themes_macro_first(client):
     d = client.get("/api/vision/overview").json()
-    assert [t["id"] for t in d["themes"]] == ["ai", "fun", "life", "learn", "macro"]
+    assert [t["id"] for t in d["themes"]] == ["macro", "ai", "fun", "life", "learn"]
 
 
 @pytest.mark.parametrize("text", [

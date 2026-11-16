@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS vision_verdicts (
 
 SERIES: list[dict] = json.loads((Path(__file__).parent / "vision_series.json").read_text())
 BY_ID = {s["id"]: s for s in SERIES}
-THEMES = [("ai", "AI 发展"), ("fun", "吃喝玩乐"), ("life", "生活"), ("learn", "学习"), ("macro", "国家宏观与行业")]
+THEMES = [("macro", "国家宏观与行业"), ("ai", "AI 发展"), ("fun", "吃喝玩乐"), ("life", "生活"), ("learn", "学习")]
 CARDS_PER_DAY = 6
 MAX_ATTEMPTS = 3
 EXPIRE_DAYS = 120
@@ -364,12 +364,10 @@ def _hits() -> dict:
 
 @router.get("/overview")
 def overview():
-    since = (date.today() - timedelta(days=30)).isoformat()
-    cards = [_card(c) for c in db.rows("SELECT * FROM vision_cards WHERE status='done' AND created_at>=? ORDER BY score DESC, id DESC", [since])]
     pending = db.rows("SELECT p.*, v.actual, v.hit FROM vision_predictions p LEFT JOIN vision_verdicts v ON v.prediction_id=p.id "
                       "ORDER BY p.due_date LIMIT 50")
     return {"themes": [{"id": t, "title": n, "series": [_series_view(s) for s in SERIES if s["theme"] == t]} for t, n in THEMES],
-            "cards": cards, "predictions": pending, "hits": _hits(), "status": status()}
+            "predictions": pending, "hits": _hits(), "status": status()}
 
 
 @router.get("/series/{sid}")
@@ -381,7 +379,7 @@ def series(sid: str):
     cards = [_card(c) for c in db.rows("SELECT * FROM vision_cards WHERE series_id=? ORDER BY id DESC", [sid])]
     preds = db.rows("SELECT p.*, v.actual, v.hit, v.period AS verdict_period FROM vision_predictions p "
                     "LEFT JOIN vision_verdicts v ON v.prediction_id=p.id WHERE p.series_id=? ORDER BY p.id DESC", [sid])
-    return {**_series_view(cfg, spark=100000), "points": points(sid), "labels": labels(sid), "revisions": revisions, "cards": cards, "predictions": preds}
+    return {**_series_view(cfg, spark=100000), "points": points(sid), "labels": labels(sid), "revisions": revisions, "predictions": preds}
 
 
 @router.post("/refresh")
