@@ -1,7 +1,12 @@
 """分级：把信息推荐和产品雷达的内容按 Tier1 / Tier2 重排的独立流水线（验证通过前和现有两个板块并行，只读它们的数据）。
-Tier3 不重排，直接回到信息推荐和产品雷达的原列表。规则见 _tiers_rules.py。"""
+Tier3 不重排，直接回到信息推荐和产品雷达的原列表。规则见 _tiers_rules.py。
+按天分级：每天只看当天（本地时区）发布的内容，结果按天存进 tiers_days；今天和昨天随新抓到的内容重算，更早的天算完定稿不再改。
+后台每小时跑一次 daily_tick，补齐近 30 天缺的天。"""
 import json
+import logging
+import os
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -16,10 +21,19 @@ from . import feed
 
 TITLE = "分级"
 ORDER = 31
-SCHEMA = tj.SCHEMA
+SCHEMA = tj.SCHEMA + """
+CREATE TABLE IF NOT EXISTS tiers_days (
+  day TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  built_at REAL NOT NULL,
+  final INTEGER NOT NULL DEFAULT 0
+);
+"""
 router = APIRouter()
+log = logging.getLogger(__name__)
 
-T1_DAYS, T2_DAYS, T2_LIMIT = 3, 3, 40     # Tier1 不限条数；Tier2 总量上限 40（实际由各类名额决定）；论文日期只到天，窗口都按 3 天
+RANGES = (1, 7, 14, 30)                   # 页面可选的天数；后台按最长的补齐
+T2_LIMIT = 40                             # Tier1 不限条数；Tier2 每天总量上限 40（实际由各类名额决定）
 EVENT_SCORE = {"S": 10.0, "A": 8.0, "B": 6.0}
 CASE_SCORE = 8.0
 CASE_T1_TOTAL = 15                        # 增长案例满分 15 才有资格；进 Tier1 还要 Jev 认可（AI 相关且有可复用做法），其余放 Tier2
@@ -33,8 +47,10 @@ PICK_MAX = 250
 NEWS_SKIP = {"launches", "launch", "introducing", "announces", "released", "release", "with", "from", "that", "this", "available", "adds", "new", "now",
              "openai", "anthropic", "google", "deepmind", "github", "copilot", "perplexity", "deepseek", "microsoft", "nvidia", "claude"}
 UPDATE_TYPES = {"launch", "model", "feature", "api", "pricing", "packaging", "deprecation"}
-CACHE_S = 60
-_cache: dict = {}
+CACHE_S = 60                              # 页面上的今天最多 60 秒重算一次
+TICK_S = 3600                             # 后台每小时检查一次：今天和昨天超过 1 小时没算就重算
+_build_lock = threading.Lock()
+_tick_lock = threading.Lock()
 
 
 def _j(s, default):
@@ -52,10 +68,9 @@ def _card(it: dict, r: dict) -> dict:
             "href": "", "read_ref": it["id"], "date": it.get("date") or "", "source": rk.SOURCE_LABEL.get(it["source"], it["source"]), "score": it.get("score") or 0}
 
 
-def _event_cards(now: datetime) -> list[dict]:
-    since = (now - timedelta(days=T1_DAYS)).strftime("%Y-%m-%d")
+def _event_cards(day: str) -> list[dict]:
     rows = db.rows("SELECT e.id, e.title, e.summary, e.date, e.type, e.level, e.sources, c.name company, c.tier ctier FROM intel_event e "
-                   "JOIN intel_company c ON c.id = e.company_id WHERE e.merged_into IS NULL AND e.date >= ? AND e.level IN ('S','A','B')", (since,))
+                   "JOIN intel_company c ON c.id = e.company_id WHERE e.merged_into IS NULL AND e.date = ? AND e.level IN ('S','A','B')", (day,))
     out = []
     for e in rows:
         launch = e["level"] == "S" or (e["level"] == "A" and e["type"] == "launch" and e["ctier"] == 1)
@@ -74,11 +89,10 @@ def _tweet(r: dict) -> bool:
     return r["source"] == "twitter" or "x.com/" in (r["url"] or "") or "twitter.com/" in (r["url"] or "")
 
 
-def _case_cards(now: datetime) -> list[dict]:
-    since = (now - timedelta(days=T1_DAYS)).strftime("%Y-%m-%d")
+def _case_cards(day: str) -> list[dict]:
     rows = db.rows("SELECT c.id, c.day, c.company, i.title, i.url, i.one_line, i.source, i.total, c.item_id FROM intel_growth_case c "
-                   "JOIN intel_growth_item i ON i.id = c.item_id WHERE c.status = 'done' AND c.complete = 1 AND c.day >= ? "
-                   "AND c.id IN (SELECT max(id) FROM intel_growth_case GROUP BY item_id)", (since,))
+                   "JOIN intel_growth_item i ON i.id = c.item_id WHERE c.status = 'done' AND c.complete = 1 AND c.day = ? "
+                   "AND c.id IN (SELECT max(id) FROM intel_growth_case GROUP BY item_id)", (day,))
     return [{"id": f"case:{r['id']}", "kind": "case", "tier": 2, "cat": "case", "cat_label": tr.CATS["case"][1], "boosted": False,
              "read_ref": r["item_id"], "why": [f"增长 Case 卡已写完 · 评分 {r['total']}/15"], "title": r["title"], "gist": r["one_line"] or "", "summary": "", "url": r["url"],
              "href": f"#intel/g/{r['id']}", "date": r["day"], "source": f"增长 Case · {r['company'] or r['source']}", "score": CASE_SCORE}
@@ -170,22 +184,29 @@ def apply_deep(feed_cards: list[dict], scores: dict[str, float]) -> None:
             c["why"] = [tag] + c["why"]
 
 
-def build(now: datetime | None = None) -> dict:
+def recent_days(today: str, n: int) -> list[str]:
+    """today 往前 n 天（含今天），新的在前。"""
+    d = datetime.strptime(today, "%Y-%m-%d")
+    return [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n)]
+
+
+def build(day: str, now: datetime | None = None) -> dict:
+    """只分级 day 当天（本地时区 0 点到 24 点）发布的内容。"""
     now = now or datetime.now(timezone.utc)
-    cards = _event_cards(now) + _case_cards(now)
+    start = datetime.strptime(day, "%Y-%m-%d").astimezone()
+    end = start + timedelta(days=1)
+    cards = _event_cards(day) + _case_cards(day)
     taken = {rk.norm_url(c["url"]) for c in cards if c["url"]}
-    t2_cut = now - timedelta(days=T2_DAYS)
-    t1_cut = now - timedelta(days=T1_DAYS)
     scanned = unranked = 0
     judged: list[dict] = []
     feed_items: list[dict] = []
     for it in feed._scored(False, True):
         t = rk.item_time(it, now)
-        if not t or t <= t1_cut or it["norm_url"] in taken:
+        if not t or not start <= t < end or it["norm_url"] in taken:
             continue
         scanned += 1
         r = tr.classify(it)
-        if r["tier"] == 3 or (r["tier"] == 2 and t <= t2_cut):
+        if r["tier"] == 3:
             unranked += 1
             continue
         cards.append(_card(it, r))
@@ -216,14 +237,68 @@ def build(now: datetime | None = None) -> dict:
     t2_cards = [c for c in t2_cards if c["cat"] != "launch"] + merge_same_news([c for c in t2_cards if c["cat"] == "launch"])
     t2 = sorted(t2_cards, key=lambda c: -c["score"])
     t2_shown = sorted(balance(t2, T2_LIMIT, T2_PER_CAT), key=lambda c: (T2_ORDER.index(c["cat"]) if c["cat"] in T2_ORDER else 99, -c["score"]))
-    return {"generated": now.isoformat(timespec="seconds"), "windows": {"t1_days": T1_DAYS, "t2_days": T2_DAYS, "t2_limit": T2_LIMIT},
+    return {"day": day, "generated": now.isoformat(timespec="seconds"), "t2_limit": T2_LIMIT,
             "t1": t1, "t2": t2_shown, "t2_more": max(0, len(t2) - len(t2_shown)),
             "t3": {"count": unranked, "scanned": scanned, "links": [{"label": "信息推荐", "href": "#feed"}, {"label": "产品雷达", "href": "#intel"}]},
-            "interests": list(tr.INTEREST_LINES), "judge_errors": judge_errors}
+            "judge_errors": judge_errors}
 
 
-def with_read(data: dict) -> dict:
-    """已读状态和信息推荐、产品雷达共用 read_log，深读状态取自学习模块，每次返回时现算（分级结果有缓存，这些不能跟着缓存）。"""
+def _stored(day: str) -> dict | None:
+    return db.row("SELECT data, built_at, final FROM tiers_days WHERE day=?", (day,))
+
+
+def _fresh(r: dict | None, max_age: float) -> bool:
+    return bool(r) and (bool(r["final"]) or time.time() - r["built_at"] < max_age)
+
+
+def day_result(day: str, today: str, max_age: float) -> dict:
+    """存过且没过期就用存的；否则重算并存下。早于昨天的天算完即定稿（final），之后不再重算，历史结果不会被覆盖。"""
+    r = _stored(day)
+    if not _fresh(r, max_age):
+        with _build_lock:
+            r = _stored(day)
+            if not _fresh(r, max_age):
+                data = build(day)
+                db.execute("INSERT OR REPLACE INTO tiers_days(day, data, built_at, final) VALUES (?,?,?,?)",
+                           (day, json.dumps(data, ensure_ascii=False), time.time(), int(day < recent_days(today, 2)[-1])))
+                return data
+    return json.loads(r["data"])
+
+
+def daily_tick() -> None:
+    today = db.today()
+    for day in recent_days(today, max(RANGES)):
+        day_result(day, today, TICK_S - 60)
+
+
+def _tick_bg() -> None:
+    def run():
+        if not _tick_lock.acquire(blocking=False):
+            return
+        try:
+            daily_tick()
+        except Exception as e:  # noqa: BLE001
+            log.warning("tiers daily tick failed: %s", e)
+        finally:
+            _tick_lock.release()
+    threading.Thread(target=run, daemon=True, name="tiers-daily").start()
+
+
+def _loop():
+    time.sleep(150)  # 等信息推荐的排序先算好
+    while True:
+        _tick_bg()
+        time.sleep(TICK_S)
+
+
+def on_startup():
+    if os.environ.get("SELF_STARTUP_NO_AUTOREFRESH"):
+        return
+    threading.Thread(target=_loop, daemon=True, name="tiers-loop").start()
+
+
+def _marker():
+    """已读状态和信息推荐、产品雷达共用 read_log，深读状态取自学习模块，每次返回时现算（分级结果存库，这些不能跟着存）。"""
     refs = {"feed": _read_log.refs("feed"), "event": _read_log.refs("intel_event"), "case": _read_log.refs("growth")}
     urls = _read_log.urls("feed")
     deeps = feed._deep_latest()
@@ -232,16 +307,28 @@ def with_read(data: dict) -> dict:
         d = deeps.get(rk.norm_url(c["url"])) if c["url"] else None
         read = str(c["read_ref"]) in refs[c["kind"]] or (c["kind"] == "feed" and rk.norm_url(c["url"]) in urls) or bool(d and d.get("finished_at"))
         return {**c, "read": read, "deep_read": feed.deep_state(d) if d else None}
-    return {**data, "t1": [mark(c) for c in data["t1"]], "t2": [mark(c) for c in data["t2"]]}
+    return lambda data: {**data, "t1": [mark(c) for c in data["t1"]], "t2": [mark(c) for c in data["t2"]]}
 
 
 @router.get("/items")
-def items(refresh: bool = False):
-    if refresh or not _cache or time.monotonic() - _cache["at"] > CACHE_S:
-        _cache.update(at=time.monotonic(), data=build())
-    return with_read(_cache["data"])
+def items(days: int = 1, refresh: bool = False):
+    """days：1 / 7 / 14 / 30，从今天往前每天一组。今天现算（最多 60 秒一次）；过去的天读存好的，还没算的标 pending 并在后台补。"""
+    n = days if days in RANGES else 1
+    today = db.today()
+    mark = _marker()
+    out = []
+    for day in recent_days(today, n):
+        if day == today:
+            out.append(mark(day_result(day, today, 0 if refresh else CACHE_S)))
+        elif r := _stored(day):
+            out.append(mark(json.loads(r["data"])))
+        else:
+            out.append({"day": day, "pending": True})
+    if any(x.get("pending") for x in out):
+        _tick_bg()
+    return {"range": n, "range_options": list(RANGES), "today": today, "days": out, "interests": list(tr.INTEREST_LINES)}
 
 
 def agent_context(ref: str) -> str:
-    d = items()
-    return f"分级：Tier1 {len(d['t1'])} 条、Tier2 {len(d['t2'])} 条（另有 {d['t2_more']} 条超出上限）。Tier1：" + "；".join(c["title"] for c in d["t1"][:8])
+    d = day_result(db.today(), db.today(), CACHE_S)
+    return f"分级（今天）：Tier1 {len(d['t1'])} 条、Tier2 {len(d['t2'])} 条（另有 {d['t2_more']} 条超出上限）。Tier1：" + "；".join(c["title"] for c in d["t1"][:8])

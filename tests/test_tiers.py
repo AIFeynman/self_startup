@@ -192,8 +192,10 @@ def test_balance_accepts_per_category_caps():
 
 def test_items_api_returns_tier_structure(client):
     d = client.get("/api/tiers/items?refresh=true").json()
-    assert set(d) >= {"t1", "t2", "t2_more", "t3", "interests", "windows"}
-    assert [l["href"] for l in d["t3"]["links"]] == ["#feed", "#intel"]
+    assert set(d) >= {"days", "range", "range_options", "interests"}
+    assert d["range_options"] == [1, 7, 14, 30]
+    assert set(d["days"][0]) >= {"day", "t1", "t2", "t2_more", "t3"}
+    assert [l["href"] for l in d["days"][0]["t3"]["links"]] == ["#feed", "#intel"]
 
 
 def _card(cat, tier, id_="feed:1"):
@@ -256,14 +258,14 @@ def test_read_flag_follows_shared_read_log(client):
     from app.modules import _read_log, tiers
     _read_log.log("intel_event", 7, "t", "#intel/e/7", "产品雷达")
     d = {"t1": [], "t2": [{"kind": "event", "read_ref": 7, "url": ""}, {"kind": "event", "read_ref": 8, "url": ""}]}
-    assert [c["read"] for c in tiers.with_read(d)["t2"]] == [True, False]
+    assert [c["read"] for c in tiers._marker()(d)["t2"]] == [True, False]
 
 
 def test_read_view_carries_deep_read_state(client, monkeypatch):
     from app.modules import feed, tiers
     monkeypatch.setattr(feed, "_deep_latest", lambda: {"a.com/x": {"id": 5, "status": "done", "finished_at": "t", "read_pos": 0}})
     d = {"t1": [{"kind": "feed", "read_ref": "z", "url": "https://a.com/x"}], "t2": [{"kind": "feed", "read_ref": "y", "url": ""}]}
-    out = tiers.with_read(d)
+    out = tiers._marker()(d)
     assert out["t1"][0]["read"] is True and out["t1"][0]["deep_read"]["id"] == 5
     assert out["t2"][0]["deep_read"] is None
 
@@ -272,3 +274,70 @@ def test_top_lab_trending_repo_is_tier1_candidate():
     it = _it("github", "repo", "codex-security", summary="OpenAI's Codex Security CLI and TypeScript SDK for agents", url="https://github.com/openai/codex-security",
              repo="openai/codex-security", trending="daily", pop=0.83)
     assert _cls(it) == (1, "repo")
+
+
+def _report_on(day_offset: int, name: str) -> dict:
+    from datetime import datetime, timedelta, timezone
+    noon = (datetime.now().replace(hour=12, minute=0, second=0, microsecond=0) - timedelta(days=day_offset)).astimezone(timezone.utc)
+    return {"id": f"arxiv:range-{name}", "source": "arxiv", "type": "paper", "title": f"DeepSeek-{name} Technical Report",
+            "url": f"https://arxiv.org/abs/range-{name}", "date": noon.isoformat(timespec="seconds"), "extra": {"affil": "DeepSeek-AI"}}
+
+
+def _no_judge(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+
+
+def test_items_default_to_today_and_ranges_show_each_past_day(client, monkeypatch):
+    from app import db
+    from app.modules import feed, tiers
+    _no_judge(monkeypatch)
+    db.execute("DELETE FROM tiers_days")
+    feed.upsert([_report_on(0, "Today"), _report_on(3, "ThreeAgo"), _report_on(20, "TwentyAgo")])
+    tiers.daily_tick()
+
+    d = client.get("/api/tiers/items").json()
+    assert [x["day"] for x in d["days"]] == [db.today()]
+    assert "DeepSeek-Today Technical Report" in [c["title"] for c in d["days"][0]["t1"]]
+    assert "DeepSeek-ThreeAgo Technical Report" not in [c["title"] for c in d["days"][0]["t1"]]
+
+    week = client.get("/api/tiers/items?days=7").json()["days"]
+    assert len(week) == 7 and week[0]["day"] == db.today() and week[0]["day"] > week[-1]["day"]
+    assert [c["title"] for c in week[3]["t1"] if "range" in c["url"]] == ["DeepSeek-ThreeAgo Technical Report"]
+    month = client.get("/api/tiers/items?days=30").json()["days"]
+    assert len(month) == 30
+    assert [c["title"] for c in month[20]["t1"] if "range" in c["url"]] == ["DeepSeek-TwentyAgo Technical Report"]
+    assert len(client.get("/api/tiers/items?days=14").json()["days"]) == 14
+
+
+def test_past_days_are_kept_once_final_and_today_keeps_updating(client, monkeypatch):
+    from app import db
+    from app.modules import tiers
+    _no_judge(monkeypatch)
+    db.execute("DELETE FROM tiers_days")
+    tiers.daily_tick()
+    assert db.row("SELECT count(*) n FROM tiers_days")["n"] == 30
+    old = db.row("SELECT * FROM tiers_days ORDER BY day LIMIT 1")
+    assert old["final"] == 1
+    today = db.row("SELECT * FROM tiers_days WHERE day=?", (db.today(),))
+    assert today["final"] == 0
+
+    built = []
+    real = tiers.build
+    monkeypatch.setattr(tiers, "build", lambda day, now=None: built.append(day) or real(day, now))
+    db.execute("UPDATE tiers_days SET built_at = built_at - 7200")
+    tiers.daily_tick()
+    assert sorted(built) == sorted(tiers.recent_days(db.today(), 2))
+    assert db.row("SELECT data FROM tiers_days WHERE day=?", (old["day"],))["data"] == old["data"]
+
+
+def test_missing_past_day_shows_pending_and_starts_backfill(client, monkeypatch):
+    from app import db
+    from app.modules import tiers
+    _no_judge(monkeypatch)
+    db.execute("DELETE FROM tiers_days")
+    kicked = []
+    monkeypatch.setattr(tiers, "_tick_bg", lambda: kicked.append(1))
+    days = client.get("/api/tiers/items?days=7").json()["days"]
+    assert "t1" in days[0] and all(x.get("pending") for x in days[1:])
+    assert kicked

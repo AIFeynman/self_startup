@@ -1,4 +1,4 @@
-// 分级：Tier1（不限条数的重点）+ Tier2（限量）按类别展示；Tier3 回到信息推荐和产品雷达的原列表。独立于信息推荐，验证通过后再切换。
+// 分级：按天分级，默认看今天；可切近 7 / 14 / 30 天，按天倒序看每天的 Tier1 / Tier2。Tier3 回到信息推荐和产品雷达的原列表。
 const CSS = `
 .tr-sec { margin: 22px 0 8px; display: flex; align-items: baseline; gap: 10px; }
 .tr-sec h3 { margin: 0; font: 700 20px var(--serif); }
@@ -28,21 +28,45 @@ const CSS = `
 .tr-deep.done { border-color: var(--ok); color: var(--ok); }
 .tr-deep.failed { border-color: var(--err); color: var(--err); }
 .tr-side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-@media (max-width: 720px) { .tr-row { grid-template-columns: 1fr; } .tr-side { grid-column: 1; grid-row: auto; } }
+.tr-range { margin: 4px 0 0; }
+.tr-day { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line-2); }
+.tr-day:first-of-type { border-top: none; padding-top: 0; }
+.tr-day > h2 { margin: 0; font: 700 22px var(--serif); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.tr-day > h2 span { color: var(--muted); font: 500 12.5px var(--font); }
+.tr-day details > summary { cursor: pointer; list-style: none; }
+.tr-day details > summary::-webkit-details-marker { display: none; }
+.tr-day details > summary h3::before { content: '▸ '; color: var(--muted); }
+.tr-day details[open] > summary h3::before { content: '▾ '; }
+.tr-pending { color: var(--muted); padding: 10px 0; font-size: 13px; }
+@media (max-width: 720px) { .tr-row { grid-template-columns: 1fr; } .tr-side { grid-column: 1; grid-row: auto; } .tr-day > h2 { font-size: 19px; } }
 `;
 
 const day = (s) => (s || '').slice(5, 10);
+const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const dayName = (d, today) => `${day(d)} ${WEEK[new Date(d + 'T12:00:00').getDay()]}${d === today ? ' · 今天' : ''}`;
+const RANGE_LABEL = { 1: '当天', 7: '近 7 天', 14: '近 14 天', 30: '近 30 天' };
 
 export default {
   async render(el, ctx) {
     const { api, h, ui, toast } = ctx;
     const rows = new Map();
     const body = h('div');
+    const rangeBar = h('div.tabs.tr-range');
+    let range = 1, seq = 0, retry = null;
+    const url = (refresh) => `/api/tiers/items?days=${range}` + (refresh ? '&refresh=true' : '');
     const load = async (refresh) => {
-      body.replaceChildren(ui.empty('正在分级…'));
-      const d = await api.get('/api/tiers/items' + (refresh ? '?refresh=true' : ''));
-      body.replaceChildren(...view(d));
+      const my = ++seq;
+      clearTimeout(retry);
+      body.replaceChildren(ui.empty(range === 1 ? '正在分级…' : `正在读取${RANGE_LABEL[range]}的分级…`));
+      const d = await api.get(url(refresh));
+      if (my !== seq) return;
+      rows.clear();
+      body.replaceChildren(...(range === 1 ? today(d) : history(d)));
+      if (d.days.some((x) => x.pending)) retry = setTimeout(() => el.isConnected && my === seq && load(false), 8000);
     };
+    const drawRange = (opts) => rangeBar.replaceChildren(...opts.map((n) => h('button' + (n === range ? '.active' : ''), {
+      onclick: () => { if (n === range) return; range = n; drawRange(opts); load(false); },
+    }, RANGE_LABEL[n])));
     const markRead = (c, node) => {
       if (c.read) return;
       c.read = true;
@@ -78,8 +102,8 @@ export default {
       const iid = +/^learn:item:(\d+)$/.exec(j.ref || '')?.[1];
       if (!iid) return;
       await new Promise((r) => setTimeout(r, 1500));
-      const d = await api.get('/api/tiers/items');
-      for (const n of [...d.t1, ...d.t2]) { const hit = rows.get(n.id); if (hit && n.deep_read) setDeep(hit.c, n.deep_read, hit.node); }
+      const d = await api.get(url(false));
+      for (const n of d.days.flatMap((x) => [...(x.t1 || []), ...(x.t2 || [])])) { const hit = rows.get(n.id); if (hit && n.deep_read) setDeep(hit.c, n.deep_read, hit.node); }
     };
     document.addEventListener('job-done', onDeepDone);
     const row = (c) => {
@@ -107,18 +131,48 @@ export default {
       cards.forEach((c) => by.set(c.cat_label, [...(by.get(c.cat_label) || []), c]));
       return [...by].flatMap(([label, list]) => [h('div.tr-cat', {}, `${label} · ${list.length}`), h('div.tr-list', {}, list.map(row))]);
     };
-    const view = (d) => [
-      h('div.tr-sec', {}, [h('h3', {}, 'Tier 1'), h('span', {}, `${d.t1.length} 条 · 近 ${d.windows.t1_days} 天 · 达标全收，不限条数`)]),
-      ...(d.t1.length ? group(d.t1) : [ui.empty('近几天没有达到 Tier1 门槛的内容')]),
-      h('div.tr-sec', {}, [h('h3', {}, 'Tier 2'), h('span', {}, `${d.t2.length} 条 · 近 ${d.windows.t2_days} 天` + (d.t2_more ? ` · 另有 ${d.t2_more} 条超出上限` : ''))]),
-      ...(d.t2.length ? group(d.t2) : [ui.empty('没有 Tier2 内容')]),
-      h('div.tr-sec', {}, [h('h3', {}, 'Tier 3'), h('span', {}, `其余 ${d.t3.count} 条（共扫描 ${d.t3.scanned} 条），在原列表里快速浏览和筛选，排序不变`)]),
-      h('div.tr-t3', {}, [h('span', {}, '去看：'), ...d.t3.links.map((l) => h('a', { href: l.href }, l.label))]),
+    const tier3 = (count, scanned, links) => [
+      h('div.tr-sec', {}, [h('h3', {}, 'Tier 3'), h('span', {}, `其余 ${count} 条（共扫描 ${scanned} 条），在原列表里快速浏览和筛选，排序不变`)]),
+      h('div.tr-t3', {}, [h('span', {}, '去看：'), ...links.map((l) => h('a', { href: l.href }, l.label))]),
+    ];
+    const interests = (d) => [
       h('div.tr-sec', {}, [h('h3', {}, '兴趣线'), h('span', {}, '命中的 Tier2 内容进入榜单；长文类可提到 Tier1')]),
       h('div.tr-int', {}, d.interests.map((i) => h('span.tr-chip', {}, i))),
     ];
+    const t2head = (x) => h('div.tr-sec', {}, [h('h3', {}, 'Tier 2'), h('span', {}, `${x.t2.length} 条` + (x.t2_more ? ` · 另有 ${x.t2_more} 条超出上限` : ''))]);
+    const today = (d) => {
+      const x = d.days[0];
+      return [
+        h('div.tr-sec', {}, [h('h3', {}, 'Tier 1'), h('span', {}, `${x.t1.length} 条 · ${dayName(x.day, d.today)} · 达标全收，不限条数`)]),
+        ...(x.t1.length ? group(x.t1) : [ui.empty('今天还没有达到 Tier1 门槛的内容，可以切到近 7 天看历史')]),
+        t2head(x),
+        ...(x.t2.length ? group(x.t2) : [ui.empty('今天还没有 Tier2 内容')]),
+        ...tier3(x.t3.count, x.t3.scanned, x.t3.links),
+        ...interests(d),
+      ];
+    };
+    const history = (d) => {
+      const done = d.days.filter((x) => !x.pending);
+      const n1 = done.reduce((a, x) => a + x.t1.length, 0), n2 = done.reduce((a, x) => a + x.t2.length, 0);
+      const pend = d.days.length - done.length;
+      const head = h('div.tr-sec', {}, [h('h3', {}, RANGE_LABEL[d.range]), h('span', {},
+        `Tier1 共 ${n1} 条 · Tier2 共 ${n2} 条 · 每天一组，新的在前` + (pend ? ` · ${pend} 天还在后台生成，稍后自动刷新` : ''))]);
+      const dayBlock = (x) => {
+        if (x.pending) return h('section.tr-day', {}, [h('h2', {}, dayName(x.day, d.today)), h('div.tr-pending', {}, '这一天的分级还在后台生成…')]);
+        return h('section.tr-day', {}, [
+          h('h2', {}, [dayName(x.day, d.today), h('span', {}, `Tier1 ${x.t1.length} 条 · Tier2 ${x.t2.length} 条 · Tier3 ${x.t3.count} 条`)]),
+          h('div.tr-sec', {}, [h('h3', {}, 'Tier 1'), h('span', {}, `${x.t1.length} 条`)]),
+          ...(x.t1.length ? group(x.t1) : [ui.empty('这一天没有达到 Tier1 门槛的内容')]),
+          x.t2.length ? h('details', {}, [h('summary', {}, t2head(x)), ...group(x.t2)]) : t2head(x),
+        ]);
+      };
+      const links = done[0]?.t3.links || [];
+      return [head, ...d.days.map(dayBlock),
+        ...tier3(done.reduce((a, x) => a + x.t3.count, 0), done.reduce((a, x) => a + x.t3.scanned, 0), links), ...interests(d)];
+    };
     const refreshBtn = h('button.btn', { onclick: () => load(true) }, [ui.icon('refresh'), '重新分级']);
-    el.append(h('style', {}, CSS), ui.pageHead('分级', '把信息推荐和产品雷达按重要程度重排：Tier1 重点、Tier2 次重点、Tier3 快速浏览', [refreshBtn]), body);
+    el.append(h('style', {}, CSS), ui.pageHead('分级', '把信息推荐和产品雷达按天、按重要程度重排：Tier1 重点、Tier2 次重点、Tier3 快速浏览；默认看今天，可切近 7 / 14 / 30 天看历史', [refreshBtn]), rangeBar, body);
+    drawRange([1, 7, 14, 30]);
     await load(false);
   },
 };
