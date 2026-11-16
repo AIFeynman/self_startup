@@ -694,7 +694,7 @@ function dayLabel(d) {
 function readHistory(ctx) {
   const { h, ui, api } = ctx;
   const list = h('div.ln-reads');
-  const more = h('button.sm.outline.ln-rmore', {}, '再看 30 条');
+  const more = h('button.sm.outline.ln-rmore', { hidden: true }, '再看 30 条');
   let head = ui.section('阅读过的', '');
   let offset = 0, lastDay = '';
   const row = (x) => {
