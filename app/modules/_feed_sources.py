@@ -935,16 +935,51 @@ def page_date(page: str) -> datetime | None:
     return None
 
 
+def _dig(obj, path: str):
+    for k in path.split("."):
+        obj = obj.get(k) if isinstance(obj, dict) else None
+    return obj
+
+
+def _url_date(url: str, rule: list[str] | None) -> datetime | None:
+    m = rule and re.search(rule[0], url)
+    return datetime.strptime(m[1], rule[1]).replace(tzinfo=timezone.utc) if m else None
+
+
+def _site_item(site: dict, url: str, title: str, summary: str, d: datetime) -> dict:
+    return {"id": f"blog:{sha1(url.encode()).hexdigest()[:12]}", "source": "blog", "type": "blog",
+            "title": clean(title, 200), "summary": clean(summary), "url": url, "date": _iso(d),
+            "popularity": 0.0, "extra": {"feed": site["name"], "feed_url": site["url"], "via": "scrape"}}
+
+
+def _json_site(data, site: dict, known_urls, cutoff: datetime) -> list[dict]:
+    spec, out = site["json"], []
+    for a in _dig(data, spec["items"]) or []:
+        title, raw = _dig(a, spec["title"]), _dig(a, spec["date"])
+        try:
+            url = spec["link"].format(**{k: v for k, v in a.items() if isinstance(v, str)})
+            d = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        d = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        if title and d >= cutoff and url not in known_urls:
+            out.append(_site_item(site, url, title, _dig(a, spec.get("summary", "")) or "", d))
+    return out
+
+
 def fetch_sites(sites: list[dict], known_urls: set[str] | frozenset = frozenset(), days: int = 30,
                 per_site: int = 6) -> tuple[list[dict], list[str]]:
-    """sites: [{name, url, link_re, ai_only?}]。已入库的文章链接（known_urls）不再读文章页。"""
+    """sites: [{name, url, link_re, ai_only?, url_date?}] 抓列表页；或 [{name, url, json}] 直接读文章列表接口（SPA 站）。
+    已入库的文章链接（known_urls）不再读文章页。"""
     cutoff = _days_ago(days)
 
     def one(c, site):
         r = c.get(site["url"])
         r.raise_for_status()
+        if site.get("json"):
+            return _json_site(r.json(), site, known_urls, cutoff)
         links = []
-        for href in re.findall(rf"""href\s*=\s*['"]({site['link_re']})['"]""", r.text, re.I):
+        for href in re.findall(rf"""href\s*=\s*['"]({site['link_re']})(?:[?#][^'"]*)?['"]""", r.text, re.I):
             u = _strip_query(urljoin(site["url"], html.unescape(href)))
             if u not in links and u.rstrip("/") != site["url"].rstrip("/"):
                 links.append(u)
@@ -953,14 +988,13 @@ def fetch_sites(sites: list[dict], known_urls: set[str] | frozenset = frozenset(
             if u in known_urls:
                 continue
             page = c.get(u).text
-            d = page_date(page)
-            title = _meta(page, "og:title", "twitter:title") or (re.search(r"<title[^>]*>(.*?)</title>", page, re.S) or [None, ""])[1]
+            d = page_date(page) or _url_date(u, site.get("url_date"))
+            title = (_meta(page, "og:title", "twitter:title") or clean((re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S) or [None, ""])[1])
+                     or clean((re.search(r"<title[^>]*>(.*?)</title>", page, re.S) or [None, ""])[1]))
             summary = _meta(page, "og:description", "description", "twitter:description")
             if not d or d < cutoff or not title or (site.get("ai_only") and not AI_HINT_RE.search(f"{title} {summary}")):
                 continue
-            out.append({"id": f"blog:{sha1(u.encode()).hexdigest()[:12]}", "source": "blog", "type": "blog",
-                        "title": clean(title, 200), "summary": clean(summary), "url": u, "date": _iso(d),
-                        "popularity": 0.0, "extra": {"feed": site["name"], "feed_url": site["url"], "via": "scrape"}})
+            out.append(_site_item(site, u, title, summary, d))
         return out
 
     def run(site):

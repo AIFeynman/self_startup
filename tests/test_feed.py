@@ -284,6 +284,42 @@ def test_fetch_sites(monkeypatch):
     assert "/blog/known" not in seen
 
 
+
+def test_fetch_sites_reads_json_article_api(monkeypatch):
+    recent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT10:00:00+08:00")
+    body = {"data": {"articles": [
+        {"title": "Old post", "path": "old", "extra": {"date": "2020-01-01T00:00:00+08:00", "introduction": "x"}},
+        {"title": "Qwen4-Max: Teammate", "path": "qwen4-max", "extra": {"date": recent, "introduction": "<p>2.4T &amp; 1M ctx</p>"}},
+        {"title": "Seen", "path": "seen", "extra": {"date": recent, "introduction": "y"}},
+        {"title": "No path", "extra": {"date": recent}},
+    ]}}
+    real = httpx.Client
+    monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=body))))
+    site = {"name": "Qwen", "url": "https://qwen.ai/api/v2/article/retrieval?type=qwen_ai&language=en-US",
+            "json": {"items": "data.articles", "title": "title", "date": "extra.date", "summary": "extra.introduction",
+                     "link": "https://qwen.ai/blog?id={path}"}}
+    items, errs = src.fetch_sites([site], known_urls={"https://qwen.ai/blog?id=seen"})
+    assert not errs and [i["title"] for i in items] == ["Qwen4-Max: Teammate"]
+    assert items[0]["url"] == "https://qwen.ai/blog?id=qwen4-max" and items[0]["summary"] == "2.4T & 1M ctx"
+    assert items[0]["extra"]["feed"] == "Qwen"
+
+
+def test_fetch_sites_prefers_h1_title_and_reads_url_date(monkeypatch):
+    d = datetime.now(timezone.utc) - timedelta(days=3)
+    slug = f"news{d:%y%m%d}"
+    pages = {
+        "/": f'<a href="/news/{slug}">n</a><a href="/blog/spa-post?view_from=list">b</a>',
+        f"/news/{slug}": '<meta property="og:title" content="App via API"><p>no date</p>',
+        "/blog/spa-post": f'<title>Lab News - Lab Team</title><h1 class="t">Seedream <b>5.5</b></h1><meta property="article:published_time" content="{d:%Y-%m-%d}">',
+    }
+    real = httpx.Client
+    monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(
+        lambda req: httpx.Response(200, text=pages.get(req.url.path, ""))), follow_redirects=True))
+    items, errs = src.fetch_sites([{"name": "Lab", "url": "https://lab.example/", "link_re": r"/(?:news/news\d{6}|blog/[a-z-]+)",
+                                    "url_date": [r"news(\d{6})", "%y%m%d"]}])
+    assert not errs and sorted(i["title"] for i in items) == ["App via API", "Seedream 5.5"]
+    assert {i["date"][:10] for i in items} == {f"{d:%Y-%m-%d}"}
+
 def test_load_env(tmp_path, monkeypatch):
     from app import settings
     p = tmp_path / ".env"
@@ -446,6 +482,9 @@ def test_official_blog_and_article_bonus():
     assert rk.official_org({"source": "blog", "url": "https://www.anthropic.com/news/x"}) == "Anthropic"
     assert rk.official_org({"source": "blog", "url": "https://openai.com/index/model-spec"}) == "OpenAI"
     assert rk.official_org({"source": "blog", "url": "https://research.google/blog/x"}) == "Google Research"
+    assert rk.official_org({"source": "blog", "url": "https://qwen.ai/blog?id=qwen4-max"}) == "Qwen"
+    assert rk.official_org({"source": "blog", "url": "https://api-docs.deepseek.com/news/news261113"}) == "DeepSeek"
+    assert rk.official_org({"source": "blog", "url": "https://seed.bytedance.com/en/blog/x"}) == "ByteDance Seed"
     assert rk.official_org({"source": "hn", "url": "https://openai.com/x"}) == ""          # 只认博客条目
     assert rk.official_org({"source": "blog", "url": "https://notopenai.com/x"}) == ""
     items = [{**_it("blog:1", "zz official", source="blog", url="https://openai.com/index/a"), "type": "blog"},
