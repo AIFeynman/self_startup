@@ -145,10 +145,14 @@ export default {
       if (filter === THREADS) {
         const q = query.toLowerCase();
         const list = threads.filter((t) => !q || `${t.title} ${t.gist}`.toLowerCase().includes(q));
-        days.replaceChildren(h('div.sn-threads', {}, list.length ? list.map((t) => h('button.sn-tcard' + (t.id === selected ? '.sel' : ''), { onclick: () => clickNote(t.id) }, [
-          h('div.sn-tmeta', {}, [h('span.tag' + (t.state === 'clear' ? '.ok' : t.state === 'paused' ? '.gray' : ''), {}, states[t.state] || '进行中'),
-            h('span', {}, `${t.count} 条 · 最近 ${(t.last || '').slice(5, 10)}`)]),
-          h('b', {}, t.title), t.gist ? h('span.muted', {}, '目前想法：' + t.gist) : null])) : [ui.empty('没有符合条件的主题线')]));
+        const follow = (id) => notes.filter((x) => x.thread_id === id).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+        days.replaceChildren(h('div.sn-threads', {}, list.length ? list.map((t) => h('div.sn-tcard' + (t.id === selected ? '.sel' : ''), {}, [
+          h('button.sn-thead', { onclick: () => clickNote(t.id) }, [
+            h('div.sn-tmeta', {}, [h('span.tag' + (t.state === 'clear' ? '.ok' : t.state === 'paused' ? '.gray' : ''), {}, states[t.state] || '进行中'),
+              h('span', {}, `${t.count} 条 · 最近 ${(t.last || '').slice(5, 10)}`)]),
+            h('b', {}, t.title), t.gist ? h('span.muted', {}, '目前想法：' + t.gist) : null]),
+          ...follow(t.id).map((x) => h('button.sn-tfollow' + (x.id === selected ? '.sel' : ''), { 'data-note': x.id, onclick: () => clickNote(x.id) },
+            [h('span', {}, `${x.date.slice(5)} ${(x.created_at || '').slice(11, 16)}`), h('span.txt', {}, noteHtml(x.text))]))])) : [ui.empty('没有符合条件的主题线')]));
         requestAnimationFrame(drawLines);
         return;
       }
@@ -359,8 +363,13 @@ function injectStyle() {
   .sn-titems a span { color: var(--muted); font-variant-numeric: tabular-nums; }
   .sn-titems a.on, .sn-titems a:hover { background: var(--accent-soft); text-decoration: none; }
   .sn-threads { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; padding-block: 14px; }
-  .sn-tcard { display: grid; gap: 6px; text-align: left; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--panel); border-radius: 10px; padding: 12px 14px; color: var(--text); font-weight: 400; }
+  .sn-threads { align-items: start; }
+  .sn-tcard { display: grid; gap: 4px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--panel); border-radius: 10px; padding: 8px; color: var(--text); }
   .sn-tcard:hover, .sn-tcard.sel { border-color: var(--accent); }
+  .sn-thead, .sn-tfollow { display: grid; gap: 6px; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 4px 6px; color: var(--text); font-weight: 400; cursor: pointer; }
+  .sn-thead:hover, .sn-tfollow:hover, .sn-tfollow.sel { background: var(--accent-soft); }
+  .sn-tfollow { gap: 2px; border-top: 1px dashed var(--line); border-radius: 0 0 6px 6px; padding-top: 8px; font-size: 14px; line-height: 1.6; }
+  .sn-tfollow > span:first-child { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .sn-tcard b { font: 600 15px/1.45 var(--serif); }
   .sn-tcard .muted { font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
   .sn-tmeta { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
