@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .. import db, jobs
 from . import _teen as tn
+from . import _vision_sources as src
 from ._feed_sources import BROWSER_UA
 
 log = logging.getLogger(__name__)
@@ -72,8 +73,10 @@ def _j(v, default):
 
 
 def _fetch_text(url: str) -> tuple[int, str]:
+    # 维基媒体的 UA 政策拒绝伪装成浏览器的程序请求，要带联系方式的 UA
+    ua = src.UA if re.search(r"(^|\.)(wikipedia|wikimedia)\.org$", httpx.URL(url).host) else BROWSER_UA
     try:
-        r = httpx.get(url, headers={"User-Agent": BROWSER_UA}, timeout=httpx.Timeout(25.0, connect=10.0), follow_redirects=True)
+        r = httpx.get(url, headers={"User-Agent": ua}, timeout=httpx.Timeout(25.0, connect=10.0), follow_redirects=True)
         return r.status_code, re.sub(r"<[^>]+>", " ", r.text)
     except httpx.HTTPError as e:
         return 0, str(e)
