@@ -788,7 +788,7 @@ def summarize_and_notify() -> int:
         return f"{p.get('zh') or p['name']}：" + "、".join(f"{CHANNELS[c][0]} {n}" for c, n in per[pid].items())
     body = "；".join(line(pid) for pid in order[:6]) + (f" 等 {len(order)} 人" if len(order) > 6 else "")
     batch = (db.row("SELECT MAX(notified) AS n FROM people_items")["n"] or 0) + 1
-    notify.notify("feed", f"名人新发声 {len(rows)} 条", body, link=f"#feed/people/batch/{batch}", kind="people")
+    notify.notify("feed", f"名人新发声 {len(rows)} 条", body, link=f"#feed/people/batch/{batch}", kind="people", mac=False)
     db.execute(f"UPDATE people_items SET notified=? WHERE id IN ({','.join('?' * len(rows))})", [batch] + [r["id"] for r in rows])
     return len(rows)
 

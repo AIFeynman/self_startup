@@ -185,7 +185,7 @@ def test_run_merges_people_judges_new_only_and_notifies_once(monkeypatch):
                                    ensure_ascii=False)}
     r = P.run(["youtube", "x"], judge=(judge, "m"))
     assert r["youtube"] == {"count": 1, "new": 1, "errors": []} and r["x"]["errors"] == ["X boom"]
-    assert len(sent) == 1 and "名人新发声 1 条" in sent[0][0][1]
+    assert len(sent) == 1 and "名人新发声 1 条" in sent[0][0][1] and sent[0][1]["mac"] is False
     r = P.run(["youtube"], judge=(judge, "m"))
     assert judged == ["youtube:v1", "youtube:v2"] and r["youtube"]["new"] == 0 and len(sent) == 1
     assert db.row("SELECT id FROM people_rejected WHERE id='youtube:v2'")
