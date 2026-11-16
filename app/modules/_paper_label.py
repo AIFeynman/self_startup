@@ -199,6 +199,7 @@ def validate(x: dict, refs: list[dict], lenient: bool = False) -> dict | None:
 
 
 def ask(chunk: list[tuple[dict, list[dict]]], lenient: bool = False, call=chat) -> tuple[dict[str, dict], float]:
+    """模型有输出但一条合格标签都没有（登录失效、限流等被当正文返回）→ 抛错，别静默标 0 条。"""
     text, cost = call(SYSTEM.format(tax=tax_text()), "论文：\n" + "\n".join(_row(n, r, f) for n, (r, f) in enumerate(chunk)))
     out = {}
     for line in text.splitlines():
@@ -212,6 +213,10 @@ def ask(chunk: list[tuple[dict, list[dict]]], lenient: bool = False, call=chat) 
             continue
         if 0 <= i < len(chunk) and (lab := validate(x, chunk[i][1], lenient)):
             out[chunk[i][0]["s2id"]] = lab
+    if not out:
+        e = RuntimeError(f"模型输出里没有可用标签：{' '.join(text.split())[:160] or '空输出'}")
+        e.cost = cost
+        raise e
     return out, cost
 
 
@@ -220,7 +225,7 @@ def label_batch(chunk: list[tuple[dict, list[dict]]], call=chat) -> tuple[dict[s
     try:
         got, cost = ask(chunk, call=call)
     except Exception as e:  # noqa: BLE001
-        got = {}
+        got, cost = {}, getattr(e, "cost", 0.0)
         errors.append(f"{type(e).__name__}: {str(e)[:160]}")
     miss = [x for x in chunk if x[0]["s2id"] not in got]
     if miss:
@@ -229,6 +234,7 @@ def label_batch(chunk: list[tuple[dict, list[dict]]], call=chat) -> tuple[dict[s
             got.update(more)
             cost += c2
         except Exception as e:  # noqa: BLE001
+            cost += getattr(e, "cost", 0.0)
             errors.append(f"重问：{type(e).__name__}: {str(e)[:160]}")
     return got, cost, errors
 

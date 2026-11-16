@@ -294,3 +294,11 @@ def test_message_history_merges_notifications_and_finished_jobs(client):
         ("深读笔记完成", "#learn/item/7", "2026-11-12T10:00:00"),
         ("名人新发声 3 条", "#feed/people/batch/2", "2026-11-12T09:00:00")]
     assert items[1]["body"] == "Sundar：X 1" and not items[0]["failed"]
+
+
+def test_clean_env_drops_claude_code_session_vars():
+    from app.agent import clean_env
+    env = clean_env({"CLAUDECODE": "1", "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH": "1", "CLAUDE_CODE_SESSION_ID": "s",
+                     "HTTPS_PROXY": "http://127.0.0.1:5555", "PATH": "/bin", "HOME": "/h"})
+    assert env == {"PATH": "/bin", "HOME": "/h"}
+    assert clean_env({"HTTPS_PROXY": "http://127.0.0.1:12000", "PATH": "/bin"})["HTTPS_PROXY"] == "http://127.0.0.1:12000"
