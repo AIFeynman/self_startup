@@ -21,7 +21,9 @@ W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
 OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
                   "openai.com": "OpenAI", "deepmind.google": "Google DeepMind", "blog.google": "Google",
-                  "research.google": "Google Research"}
+                  "research.google": "Google Research", "ai.meta.com": "Meta", "x.ai": "xAI", "mistral.ai": "Mistral",
+                  "deepseek.com": "DeepSeek", "qwen.ai": "Qwen", "kimi.com": "Kimi", "moonshot.ai": "Kimi", "minimax.io": "MiniMax",
+                  "seed.bytedance.com": "ByteDance Seed", "thinkingmachines.ai": "Thinking Machines"}
 # 重点机构的 GitHub 账号 → 机构名：这些账号新建的仓库（feed.github_watch_orgs 盯的）和官方博客同样加「官方」分
 GITHUB_ORGS = {"deepseek-ai": "DeepSeek", "openai": "OpenAI", "anthropics": "Anthropic", "google": "Google",
                "google-deepmind": "Google DeepMind", "google-research": "Google Research", "meta-llama": "Meta",
