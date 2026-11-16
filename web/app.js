@@ -28,10 +28,12 @@ async function boot() {
     h('div.nav-foot', {}, [h('a', { href: '#settings' }, [ui.icon('settings'), h('span', {}, '设置')]),
       h('span#engine-status', {}, Object.entries(meta.engines).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' '))]),
   );
-  window.addEventListener('hashchange', (e) => { trackOrigin(e); route(); });
+  window.addEventListener('hashchange', (e) => { trackOrigin(e); keepReadingTop(e); route().then(paintBackRead); });
+  document.addEventListener('keydown', backReadKey);
   document.addEventListener('agent-done', loadRecent);
   document.addEventListener('chat-sessions-changed', loadRecent);
   await route();
+  paintBackRead();
   loadRecent();
   watchJobs();
   watchApprovals();
@@ -174,6 +176,47 @@ async function loadRecent() {
     href: '#' + s.module, title: `${titleOf(s.module)} · ${s.title}`,
     onclick: () => setTimeout(() => openChat({ module: s.module, ref: s.ref, title: titleOf(s.module), sessionId: s.id }), 50),
   }, [ui.icon('chat'), (s.title || '对话')]))] : []));
+}
+
+// 最近读的一篇（深读、学习章节、调研、知识库…带划线讨论的页面）：切到别的板块后，左下角一键回去（⌥←），回到原来读到的位置
+const LAST_READ = 'last-read';
+const lastRead = () => { try { return JSON.parse(sessionStorage.getItem(LAST_READ) || 'null'); } catch { return null; } };
+const saveLastRead = (v) => { try { sessionStorage.setItem(LAST_READ, JSON.stringify(v)); } catch { /* 只是返回入口 */ } };
+window.__markReading = (title) => {
+  const old = lastRead();
+  saveLastRead(old?.hash === location.hash ? { ...old, title } : { hash: location.hash, title });
+};
+function keepReadingTop(e) {
+  const r = lastRead();
+  if (r && e.oldURL && new URL(e.oldURL).hash === r.hash) saveLastRead({ ...r, top: page.scrollTop });
+}
+function paintBackRead() {
+  document.getElementById('back-read')?.remove();
+  const r = lastRead();
+  if (!r) return;
+  if (r.hash === location.hash) {
+    if (r.top) restoreTop(r.top);
+    return;
+  }
+  document.body.append(h('a#back-read', { href: r.hash, title: `回到最近读的：${r.title}（快捷键 ⌥←）` },
+    [ui.icon('arrow'), h('span', {}, `回到：${r.title}`), h('kbd', {}, '⌥←')]));
+}
+function restoreTop(top) {
+  const until = Date.now() + 3000;
+  const tick = () => {
+    if (page.scrollHeight - page.clientHeight >= top || Date.now() > until) { page.scrollTop = top; return; }
+    setTimeout(tick, 100);
+  };
+  tick();
+}
+function backReadKey(e) {
+  if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || e.code !== 'ArrowLeft') return;
+  const a = document.activeElement;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(a?.tagName) || a?.isContentEditable) return;
+  const r = lastRead();
+  if (!r || r.hash === location.hash) return;
+  e.preventDefault();
+  location.hash = r.hash;
 }
 
 window.__navOrigin = null;
