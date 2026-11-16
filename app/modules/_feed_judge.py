@@ -26,6 +26,25 @@ Q_AI = ("state.items.{k} 是 GitHub Trending 上的一个开源项目。它是�
 Q_IMPORTANT = ("state.items.{k} 是 {org} 官方发布的内容。它是否是实质性的更新：新模型、新产品或功能、开源项目、"
                "研究成果、技术或工程深度文章、重要的安全报告？客户案例、合作签约、行业方案推广、营销活动、招聘、"
                "公关表态这类内容回答否。")
+Q_DEEP = ("state.items.{k} 是一条候选内容（publisher / author 写了来源）。读者是做 AI Agent 和 AI 团队的工程师，只给值得专门花 20 分钟精读、读完能改变做法的内容。"
+          "回答是：讲清了架构、核心概念或原理的技术 / 工程 / 研究长文；官方或一线团队写的 agent 构建实践指南（怎么设计、有哪些组件、怎么权衡，例如常驻 agent 的核心原语、"
+          "agent skills 指南、harness 设计）；一手的研究成果或开源技术报告；有论证的深度访谈和长文。"
+          "回答否：产品发布和功能公告、定价和套餐、客户案例、融资人事、营销推广、新闻转述、泛泛观点、清单合集、"
+          "入门科普、个人体验或评测流水账、安装教程、没有细节的预告。")
+Q_CASE = ("state.items.{k} 是一个增长 / 产品案例（publisher 写了公司）。读者是做 AI 产品和 AI Agent 的工程师与产品人。回答是：AI 产品或 AI 能力驱动的增长案例，"
+          "讲清了具体做法、数据和可复用的机制（定价、激活、留存、分发、冷启动、Agent 产品的商业化）。"
+          "回答否：和 AI 无关的传统订阅 / 付费墙 / 广告变现故事、只有结果数字没有做法、个人励志和标题党、融资公关稿。")
+Q_PICK = {
+    "paper": ("state.items.{k} 是一篇 AI 论文。读者是做 AI Agent 和大模型应用的工程师。回答是：提出了有实质贡献的新方法、系统或评测基准，"
+              "结论清晰，对 agent、harness、记忆、工具调用、评测、推理工程、训练方法有参考价值。回答否：窄领域应用、增量调参、"
+              "纯理论推导、综述水文、只换个场景套用已有方法、结论空泛。"),
+    "repo": ("state.items.{k} 是 GitHub 上增速很快的一个项目。读者是做 AI Agent 和大模型应用的工程师。回答是：解决了真实的工程问题、"
+             "代码可直接用或有可借鉴的设计的 agent / LLM 基础设施和工具。回答否：薄封装和套壳、免费白嫖教程、资源清单合集、"
+             "个人 demo、荐股和赚钱类应用、模板仓库、只有 README 的概念项目。"),
+    "other": ("state.items.{k} 是一条候选内容（publisher / author 写了来源）。读者是做 AI Agent 和 AI 团队的工程师。回答是：有具体做法、数据、"
+              "论证的技术或产品干货，值得扫一眼。回答否：标题党和情绪表达、吹捧、安全通告和故障公告、单纯的产品发布转述、"
+              "清单合集、个人评测流水账、营销推广、没有细节的预告。"),
+}
 Q_VALUE = {
     "reddit": ("state.items.{k} 是 Reddit 上的一个帖子。它对一个关注 AI 的工程师是否有实际价值：亲身实践经验、"
                "教程或配置分享、实测 / 对比 / 基准、开源项目展示、对新论文 / 新模型 / 技术方向的有内容的讨论？"
@@ -52,9 +71,19 @@ Q_VALUE = {
 }
 
 
+def pick_type(it: dict) -> str:
+    return "paper" if it.get("type") == "paper" else "repo" if it.get("source") == "github" else "other"
+
+
 def _question(kind: str, k: str, it: dict, org: str) -> str:
     if kind == "ai":
         return Q_AI.format(k=k)
+    if kind == "pick":
+        return Q_PICK[pick_type(it)].format(k=k)
+    if kind == "deep":
+        return Q_DEEP.format(k=k)
+    if kind == "case":
+        return Q_CASE.format(k=k)
     if kind == "value":
         return Q_VALUE.get(it.get("source"), Q_VALUE["reddit"]).format(k=k)
     return Q_IMPORTANT.format(k=k, org=org)
@@ -78,13 +107,15 @@ def _state(it: dict, org: str) -> dict:
     if it.get("source") in ("youtube", "bilibili"):
         row |= {"channel": ex.get("channel", ""), "views": int(it.get("popularity") or 0),
                 "minutes": round((ex.get("duration") or 0) / 60)}
+    if it.get("source") in ("twitter", "blog", "podcast"):
+        row["author"] = ex.get("author") or ex.get("channel") or ""
     if org:
         row["publisher"] = org
     return row
 
 
 def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = None) -> tuple[dict[str, dict], list[str]]:
-    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
+    """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value" / "deep" / "pick" / "case"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
     key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
     if not key:
         return {}, ["未配置 TYPESAFE_API_KEY（项目根目录 .env），Trending 是否 AI、官方内容是否重要、Reddit / 视频有没有干货改用关键词规则"]

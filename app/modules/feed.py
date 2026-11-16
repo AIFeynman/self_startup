@@ -404,9 +404,7 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = _without_radar(out)
     deeps = _deep_latest()
     read_urls = _read_log.urls("feed") | {u for u, d in deeps.items() if d.get("finished_at")}
-    deep_of = lambda d: {"id": d["id"], "status": d["status"], "seen": bool(d.get("opened_at")), "finished": bool(d.get("finished_at")),
-                         "reading": bool(d.get("read_pos")) and not d.get("finished_at"), "pos": d.get("read_pos") or 0}
-    out = [{**x, "read": x["norm_url"] in read_urls, "deep": deep_of(deeps[x["norm_url"]]) if x["norm_url"] in deeps else None}
+    out = [{**x, "read": x["norm_url"] in read_urls, "deep": deep_state(deeps[x["norm_url"]]) if x["norm_url"] in deeps else None}
            for x in out]
     if read == "deep" and not saved:
         out = [x for x in out if x["deep"] and x["deep"]["finished"]]
@@ -1117,6 +1115,11 @@ def feedback_stats() -> dict:
     out = {k: int(r.get(k) or 0) for k in ("likes", "dislikes", "saved", "hidden", "clicks", "clicked_items")}
     out["deep_reads"] = deep_reads()
     return out
+
+
+def deep_state(d: dict) -> dict:
+    return {"id": d["id"], "status": d["status"], "seen": bool(d.get("opened_at")), "finished": bool(d.get("finished_at")),
+            "reading": bool(d.get("read_pos")) and not d.get("finished_at"), "pos": d.get("read_pos") or 0}
 
 
 def _deep_latest() -> dict[str, dict]:
