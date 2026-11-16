@@ -106,7 +106,7 @@ def test_label_run_retries_missing_and_indexes():
 def test_label_run_reports_output_without_labels():
     paper("A", "Proximal policy optimization", 2017, 30000)
     st = lab.run(call=lambda *a, **kw: ("API Error: 401 OAuth token has expired", 0.01))
-    assert st["labeled"] == 0
+    assert st["labeled"] == 0 and st["cost"] == 0.02
     assert st["errors"] and "API Error: 401" in st["errors"][0]
 
 

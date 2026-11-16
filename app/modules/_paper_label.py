@@ -214,7 +214,9 @@ def ask(chunk: list[tuple[dict, list[dict]]], lenient: bool = False, call=chat) 
         if 0 <= i < len(chunk) and (lab := validate(x, chunk[i][1], lenient)):
             out[chunk[i][0]["s2id"]] = lab
     if not out:
-        raise RuntimeError(f"模型输出里没有可用标签：{' '.join(text.split())[:160] or '空输出'}")
+        e = RuntimeError(f"模型输出里没有可用标签：{' '.join(text.split())[:160] or '空输出'}")
+        e.cost = cost
+        raise e
     return out, cost
 
 
@@ -223,7 +225,7 @@ def label_batch(chunk: list[tuple[dict, list[dict]]], call=chat) -> tuple[dict[s
     try:
         got, cost = ask(chunk, call=call)
     except Exception as e:  # noqa: BLE001
-        got = {}
+        got, cost = {}, getattr(e, "cost", 0.0)
         errors.append(f"{type(e).__name__}: {str(e)[:160]}")
     miss = [x for x in chunk if x[0]["s2id"] not in got]
     if miss:
@@ -232,6 +234,7 @@ def label_batch(chunk: list[tuple[dict, list[dict]]], call=chat) -> tuple[dict[s
             got.update(more)
             cost += c2
         except Exception as e:  # noqa: BLE001
+            cost += getattr(e, "cost", 0.0)
             errors.append(f"重问：{type(e).__name__}: {str(e)[:160]}")
     return got, cost, errors
 
