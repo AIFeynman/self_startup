@@ -48,6 +48,7 @@ START_STEP = 900
 VIEW_GATE = 500
 FULL_PER_DAY = 120
 TITLE_PER_DAY = 500
+GRAB_PER_DAY = 200
 FOL_EXCEPTION = 20000
 MIN_CHARS = 300
 DOMAINS = {
@@ -192,6 +193,29 @@ def titles(limit: int = 0, workers: int = 3) -> dict:
             else:
                 db.execute("UPDATE x_art SET stage='drop_notitle',updated=? WHERE id=?", [db.now(), r["id"]])
                 stat["drop"] += 1
+
+    with ThreadPoolExecutor(workers) as ex:
+        list(ex.map(one, rows))
+    return {**stat, "todo": len(rows)}
+
+
+def grab(limit: int = 0, workers: int = 8) -> dict:
+    """vx 被限流后的主路径：每天阅读数前 GRAB_PER_DAY 的直接取全文（$0.001/篇），标题预览同时拿到。"""
+    rows = db.rows("SELECT id FROM (SELECT id,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
+                   f"WHERE rk<={GRAB_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
+    stat = {"ok": 0, "drop": 0}
+
+    def one(r):
+        with _client() as c:
+            a = _article(c, r["id"])
+        text = _blocks_text(a)
+        if a.get("title") and text:
+            db.execute("UPDATE x_art SET title=?,preview=?,text=?,n=?,stage='titled',updated=? WHERE id=?",
+                       [a["title"], (a.get("preview_text") or text[:200]), text, len(text), db.now(), r["id"]])
+            stat["ok"] += 1
+        else:
+            db.execute("UPDATE x_art SET stage='drop_notitle',updated=? WHERE id=?", [db.now(), r["id"]])
+            stat["drop"] += 1
 
     with ThreadPoolExecutor(workers) as ex:
         list(ex.map(one, rows))
