@@ -45,7 +45,8 @@ VX = "https://api.vxtwitter.com"
 SPLIT_AT = 20
 MIN_WINDOW = 60
 START_STEP = 900
-VIEW_GATE = 300
+VIEW_GATE = 500
+FULL_PER_DAY = 120
 FOL_EXCEPTION = 20000
 MIN_CHARS = 300
 DOMAINS = {
@@ -197,7 +198,7 @@ REL_PROMPT = """你是 AI 内容库的筛选员。对每篇 X 长文（只给标
 - core: 主要讲 AI 模型、Agent、AI 编程工具(Claude Code/Codex/Cursor 等)、提示词/上下文/工作流实践、AI 产品、AI 论文或技术
 - topic: AI 只是话题或噱头(AI 副业赚钱、泛 AI 新闻汇总、含 AI 字样的泛生活/营销文、AI 概念股/加密货币)
 - none: 与 AI 无关(标题含 Claude/Grok 等名字也要看内容是不是真讲 AI)
-宁可多放：拿不准 core 还是 topic 时给 core。
+从严：只有标题或预览明确在讲 AI 本身（模型、Agent、AI 编程、提示词/上下文、AI 论文与技术）才给 core；拿不准给 topic。
 """
 
 
@@ -237,7 +238,8 @@ def relevance(limit: int = 0, batch: int = 20, workers: int = 4) -> dict:
 
 
 def fulltext(limit: int = 0, workers: int = 8) -> dict:
-    rows = db.rows("SELECT id,text FROM x_art WHERE stage='rel'" + (f" LIMIT {limit}" if limit else ""))
+    rows = db.rows("SELECT id,text FROM (SELECT id,text,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='rel') "
+                   f"WHERE rk<={FULL_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
     stat = {"ok": 0, "short": 0, "failed": 0}
 
     def one(r):
