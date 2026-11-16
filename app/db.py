@@ -159,7 +159,8 @@ def init(extra_schemas: Iterable[str] = ()) -> None:
         note_cols = {r[1] for r in c.execute("PRAGMA table_info(review_notes)")}
         if note_cols:
             for col, typ in (("author", "TEXT DEFAULT 'system'"), ("sources", "TEXT DEFAULT '[]'"), ("thread_id", "INTEGER"),
-                             ("thread_state", "TEXT DEFAULT ''"), ("thread_gist", "TEXT DEFAULT ''")):
+                             ("thread_state", "TEXT DEFAULT ''"), ("thread_gist", "TEXT DEFAULT ''"),
+                             ("more_kinds", "TEXT DEFAULT ''")):
                 if col not in note_cols:
                     c.execute(f"ALTER TABLE review_notes ADD COLUMN {col} {typ}")
         c.commit()

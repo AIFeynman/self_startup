@@ -173,8 +173,9 @@ export function kindChips(kinds, current, onPick) {
   const box = h('div.kind-chips');
   let adding = false;
   const paint = () => {
-    const list = kinds.some((k) => k.key === current) ? kinds : [...kinds, { key: current, label: current }];
-    box.replaceChildren(...list.map((k) => h('button.kind-chip' + (k.key === current ? '.on' : ''), { type: 'button', onclick: () => onPick(k.key) },
+    const on = [current].flat();
+    const list = [...kinds, ...on.filter((c) => !kinds.some((k) => k.key === c)).map((c) => ({ key: c, label: c }))];
+    box.replaceChildren(...list.map((k) => h('button.kind-chip' + (on.includes(k.key) ? '.on' : ''), { type: 'button', onclick: () => onPick(k.key) },
       [h(`i.kc${kindColor(k.key, kinds)}`), k.label])),
     adding ? addInput() : h('button.kind-chip.add', { type: 'button', onclick: () => { adding = true; paint(); box.querySelector('input').focus(); } }, '+ 自己加类型'));
   };

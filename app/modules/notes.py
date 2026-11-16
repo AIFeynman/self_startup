@@ -67,7 +67,15 @@ def _full(n: dict) -> dict:
     n = dict(n)
     n["sources"] = review._loads(n.get("sources"), [])
     n["text"] = "\n".join(x for x in (n.get("title"), n.get("content")) if x)
+    n["kinds"] = [n["kind"], *(k for k in (n.get("more_kinds") or "").split(",") if k)]
     return n
+
+
+def _kind_cols(kinds: list[str]) -> dict:
+    ks = list(dict.fromkeys(review.normalize_kind(k) for k in kinds if k.strip()))
+    if not ks:
+        raise HTTPException(400, "至少选一个类型")
+    return {"kind": ks[0], "more_kinds": ",".join(ks[1:])}
 
 
 def _get(nid: int) -> dict:
@@ -79,7 +87,10 @@ def _get(nid: int) -> dict:
 
 def kinds() -> list[dict]:
     """内置类型 + 自己用过的类型；自定义类型不单独存，没有便签在用就自然消失。"""
-    used = {r["kind"]: r["n"] for r in db.rows("SELECT kind, COUNT(*) n FROM review_notes WHERE author='me' GROUP BY kind")}
+    used: dict[str, int] = {}
+    for r in db.rows("SELECT kind, more_kinds FROM review_notes WHERE author='me'"):
+        for k in [r["kind"], *(x for x in (r["more_kinds"] or "").split(",") if x)]:
+            used[k] = used.get(k, 0) + 1
     out = [{"key": k, "label": v, "builtin": True, "count": used.pop(k, 0)} for k, v in review.KIND_LABEL.items()]
     return out + [{"key": k, "label": k, "builtin": False, "count": v} for k, v in sorted(used.items())]
 
@@ -186,7 +197,8 @@ def api_kinds():
     return kinds()
 
 
-def add(text: str, kind: str = "", sources: list[dict] | None = None, date: str | None = None, thread: int | None = None) -> dict:
+def add(text: str, kind: str = "", sources: list[dict] | None = None, date: str | None = None, thread: int | None = None,
+        more_kinds: list[str] = ()) -> dict:
     """贴一张便签。文字里写了前缀（问题: / 自定义类型:）以前缀为准，否则用选的类型，都没有归「灵感」。
     thread：续写哪张便签（续写的续写也挂到线头）。"""
     root = _root(thread) if thread else None
@@ -195,6 +207,8 @@ def add(text: str, kind: str = "", sources: list[dict] | None = None, date: str 
     if not parsed["title"]:
         raise HTTPException(400, "写点内容")
     now = db.now()
+    if more_kinds:
+        parsed |= _kind_cols([parsed["kind"], *more_kinds])
     nid = db.insert("review_notes", {**parsed, "date": review._day(date), "author": "me",
                                      "sources": json.dumps(clean_sources(sources), ensure_ascii=False),
                                      "thread_id": root["id"] if root else None, "created_at": now, "updated_at": now})
@@ -206,6 +220,7 @@ def add(text: str, kind: str = "", sources: list[dict] | None = None, date: str 
 class AddIn(BaseModel):
     text: str
     kind: str = ""
+    kinds: list[str] = []
     sources: list[dict] = []
     date: str | None = None
     thread: int | None = None
@@ -213,7 +228,7 @@ class AddIn(BaseModel):
 
 @router.post("")
 def api_add(body: AddIn):
-    return add(body.text, body.kind, body.sources, body.date, body.thread)
+    return add(body.text, body.kinds[0] if body.kinds else body.kind, body.sources, body.date, body.thread, body.kinds[1:])
 
 
 ISSUE_ASPECT = "有问题的"
@@ -239,7 +254,7 @@ def api_review(body: ReviewIn):
 
 class PatchIn(BaseModel):
     text: str | None = None
-    kind: str | None = None
+    kinds: list[str] | None = None
     sources: list[dict] | None = None
     author: str | None = None
 
@@ -253,8 +268,8 @@ def api_patch(nid: int, body: PatchIn):
         if not lines or not lines[0]:
             raise HTTPException(400, "写点内容")
         d |= {"title": lines[0], "content": "\n".join(lines[1:]).strip()}
-    if body.kind is not None:
-        d["kind"] = review.normalize_kind(body.kind)
+    if body.kinds is not None:
+        d |= _kind_cols(body.kinds)
     if body.sources is not None:
         d["sources"] = json.dumps(clean_sources(body.sources), ensure_ascii=False)
     if body.author == "system":  # 不是自己写的：退回「问题与经验」，类型要落回系统认识的那几种
@@ -263,6 +278,7 @@ def api_patch(nid: int, body: PatchIn):
         d["thread_id"] = None
         kind = d.get("kind") or db.row("SELECT kind FROM review_notes WHERE id=?", [nid])["kind"]
         d["kind"] = kind if kind in review.NOTE_KINDS else "lesson"
+        d["more_kinds"] = ""
         db.execute("DELETE FROM note_links WHERE a=? OR b=?", [nid, nid])
     db.update("review_notes", nid, d)
     return _full(db.row("SELECT * FROM review_notes WHERE id=?", [nid]))

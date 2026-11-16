@@ -21,7 +21,7 @@ def test_mine_and_system_are_separate(client):
     # 划错了可以来回移，退回时自定义类型落回系统类型，关系解除
     sys_note = client.get("/api/review/notes?author=system").json()[0]
     assert client.patch(f"/api/review/notes/{sys_note['id']}", json={"author": "me"}).json()["author"] == "me"
-    custom = client.patch(f"/api/notes/{sys_note['id']}", json={"kind": "读书"}).json()
+    custom = client.patch(f"/api/notes/{sys_note['id']}", json={"kinds": ["读书"]}).json()
     client.post(f"/api/notes/{custom['id']}/links", json={"to": me["id"]})
     back = client.patch(f"/api/notes/{custom['id']}", json={"author": "system"}).json()
     assert back["author"] == "system" and back["kind"] == "lesson"
@@ -300,3 +300,16 @@ def test_agent_summarizes_a_thread_only_when_asked(client, monkeypatch):
     monkeypatch.setattr(agent, "run_once", lambda p, **k: seen.append((p, k)) or {"text": "倾向代码生成，模板只做兜底。", "session": "", "engine": "claude", "log": ""})
     t = client.post(f"/api/notes/threads/{root['id']}/summarize").json()
     assert t["gist"] == "倾向代码生成，模板只做兜底。" and "模板太死板" in seen[0][0] and seen[0][1]["readonly"]
+
+
+def test_note_carries_several_kinds(client):
+    _clean()
+    n = client.post("/api/notes", json={"text": "一句多面的想法", "kinds": ["灵感", "问题", "读书"]}).json()
+    assert n["kind"] == "spark" and n["kinds"] == ["spark", "problem", "读书"]
+    n = client.patch(f"/api/notes/{n['id']}", json={"kinds": ["deep", "spark", "deep"]}).json()
+    assert n["kind"] == "deep" and n["kinds"] == ["deep", "spark"]
+    ks = {k["key"]: k["count"] for k in client.get("/api/notes/kinds").json()}
+    assert ks["deep"] == 1 and ks["spark"] == 1 and "读书" not in ks
+    assert [x["id"] for x in client.get("/api/notes?kind=spark").json()["notes"]] == [n["id"]]
+    plain = client.post("/api/notes", json={"text": "只有一个", "kind": "idea"}).json()
+    assert plain["kinds"] == ["idea"]
