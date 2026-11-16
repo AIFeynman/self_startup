@@ -19,7 +19,7 @@ def main(argv: list[str]) -> None:
         for step in ("gate", "titles", "relevance", "fulltext", "score"):
             print(step, json.dumps(getattr(x, step)(), ensure_ascii=False), flush=True)
     else:
-        fn = {"gate": x.gate, "titles": x.titles, "grab": x.grab, "rel": x.relevance, "full": x.fulltext, "score": x.score, "funnel": x.funnel}[cmd]
+        fn = {"gate": x.gate, "titles": x.titles, "grab": x.grab, "audit": x.audit, "rel": x.relevance, "full": x.fulltext, "score": x.score, "funnel": x.funnel}[cmd]
         print(json.dumps(fn(limit=limit) if cmd not in ("gate", "funnel") else fn(), ensure_ascii=False))
     print("funnel", json.dumps(x.funnel(), ensure_ascii=False))
 

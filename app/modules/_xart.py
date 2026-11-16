@@ -167,6 +167,11 @@ def _blocks_text(a: dict) -> str:
     return "\n".join((b.get("text") or "") for b in cs if isinstance(b, dict)).strip()
 
 
+def audit(limit: int = 0) -> dict:
+    """召回抽查：grab 取完前 200 后，found 里每天阅读最高的 30 篇就是原排名 201~230。"""
+    return grab(limit=limit, per_day=30)
+
+
 def titles(limit: int = 0, workers: int = 3) -> dict:
     rows = db.rows("SELECT id,user,tries FROM (SELECT id,user,tries,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
                    f"WHERE rk<={TITLE_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
@@ -199,10 +204,10 @@ def titles(limit: int = 0, workers: int = 3) -> dict:
     return {**stat, "todo": len(rows)}
 
 
-def grab(limit: int = 0, workers: int = 8) -> dict:
+def grab(limit: int = 0, workers: int = 8, per_day: int = 0) -> dict:
     """vx 被限流后的主路径：每天阅读数前 GRAB_PER_DAY 的直接取全文（$0.001/篇），标题预览同时拿到。"""
     rows = db.rows("SELECT id FROM (SELECT id,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
-                   f"WHERE rk<={GRAB_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
+                   f"WHERE rk<={per_day or GRAB_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
     stat = {"ok": 0, "drop": 0}
 
     def one(r):
