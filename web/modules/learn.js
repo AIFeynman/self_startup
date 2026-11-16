@@ -634,8 +634,7 @@ async function renderHome(el, ctx, scrollToPlans) {
   if (reading.length) el.append(ui.section(`在读 ${reading.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.grid', {}, reading.map((it) => itemCard(it, ctx))));
   el.append(plansSec,
     ui.section('论文与项目深读', items.length ? `${items.length} 篇` : ''),
-    items.length ? itemList(items, ctx) : ui.empty('还没有深读条目', '粘贴一个 arXiv / GitHub 链接试试'),
-    readHistory(ctx));
+    items.length ? itemList(items, ctx) : readHistory(ctx));
   if (scrollToPlans) setTimeout(() => plansSec.scrollIntoView({ block: 'start' }), 0);
 }
 
@@ -651,7 +650,8 @@ function planCard(p, ctx) {
   ]);
 }
 
-// 深读记录按类型分类：论文 / 项目 / 文章 / 视频；只显示有内容的分类，选中的分类在本次打开期间记住
+// 深读记录按类型分类：论文 / 项目 / 文章 / 视频；只显示有内容的分类，选中的分类在本次打开期间记住；
+// 最后一个「阅读过的」不是深读条目，是推荐里打开过的文章（含只点外链的）
 const KINDS = [['', '全部'], ['paper', '论文'], ['github', '项目'], ['article', '文章'], ['video', '视频']];
 const kindOf = (it) => (BADGE[it.kind] ? it.kind : 'paper');
 // 按自己打的星筛：找回喜欢的文章；筛星时高分在前
@@ -663,15 +663,23 @@ function itemList(items, ctx) {
   const ofKind = (k) => (k ? items.filter((it) => kindOf(it) === k) : items);
   const count = (k) => ofKind(k).length;
   const kinds = KINDS.filter(([k]) => count(k));
-  if (!kinds.some(([k]) => k === itemKind)) itemKind = '';
+  if (itemKind !== 'reads' && !kinds.some(([k]) => k === itemKind)) itemKind = '';
   const rated = items.some((it) => it.rating > 0);
   if (!rated) itemStar = 0;
   const tabs = h('div.tabs');
   const stars = h('div.ln-starf');
   const grid = h('div.grid');
+  const body = h('div');
+  let readTotal = null;
+  const reads = readHistory(ctx, (n) => { readTotal = n; render(); });
   const render = () => {
     tabs.replaceChildren(...kinds.map(([k, name]) => h('button' + (itemKind === k ? '.active' : ''), { onclick: () => { itemKind = k; render(); } },
-      [name, h('span.ln-kcount', {}, String(count(k)))])));
+      [name, h('span.ln-kcount', {}, String(count(k)))])),
+    h('button' + (itemKind === 'reads' ? '.active' : ''), { title: '推荐里打开过的文章，只点了外链的也算', onclick: () => { itemKind = 'reads'; render(); } },
+      ['阅读过的', readTotal === null ? null : h('span.ln-kcount', {}, String(readTotal))]));
+    if (itemKind === 'reads') { stars.style.display = 'none'; body.replaceChildren(reads); return; }
+    stars.style.display = '';
+    body.replaceChildren(grid);
     const pool = ofKind(itemKind);
     const atLeast = (n) => pool.filter((it) => (it.rating || 0) >= n);
     stars.replaceChildren(...STARS.map(([n, name]) => h('button' + (itemStar === n ? '.on' : ''), { onclick: () => { itemStar = n; render(); } },
@@ -680,7 +688,7 @@ function itemList(items, ctx) {
     grid.replaceChildren(...(shown.length ? shown.map((it) => itemCard(it, ctx)) : [h('div.muted', {}, '这个分类下还没有这个星级的文章')]));
   };
   render();
-  return h('div', {}, [kinds.length > 2 ? tabs : null, rated ? stars : null, grid].filter(Boolean));
+  return h('div', {}, [tabs, rated ? stars : null, body].filter(Boolean));
 }
 
 // 阅读过的：信息推荐 / 产品雷达 / 增长 Case 里打开过的条目（只点外链也算），最后打开的在前
@@ -691,7 +699,7 @@ function dayLabel(d) {
   if (d === day(1)) return '昨天';
   return `${d.slice(5)} 周${WEEK[new Date(d + 'T12:00:00').getDay()]}`;
 }
-function readHistory(ctx) {
+function readHistory(ctx, onTotal) {
   const { h, ui, api } = ctx;
   const list = h('div.ln-reads');
   const more = h('button.sm.outline.ln-rmore', { hidden: true }, '再看 30 条');
@@ -715,14 +723,14 @@ function readHistory(ctx) {
       list.append(row(x));
     }
     offset += r.items.length;
-    head.replaceWith(head = ui.section('阅读过的', r.total ? `${r.total} 篇` : ''));
+    if (onTotal) onTotal(r.total); else head.replaceWith(head = ui.section('阅读过的', r.total ? `${r.total} 篇` : ''));
     if (!r.total) list.replaceChildren(ui.empty('还没有阅读记录', '在信息推荐里点开的文章（包括只打开外链）会记在这里'));
     more.disabled = false;
     more.hidden = !r.more;
   };
   more.onclick = load;
   load();
-  return h('div', {}, [head, list, more]);
+  return h('div', {}, [onTotal ? null : head, list, more].filter(Boolean));
 }
 
 const isReading = (it) => it.status === 'done' && it.read_pos > 0 && !it.finished_at;
