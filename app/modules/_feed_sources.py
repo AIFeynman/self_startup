@@ -956,10 +956,10 @@ def _json_site(data, site: dict, known_urls, cutoff: datetime) -> list[dict]:
     spec, out = site["json"], []
     for a in _dig(data, spec["items"]) or []:
         title, raw = _dig(a, spec["title"]), _dig(a, spec["date"])
-        url = spec["link"].format(**{k: v for k, v in a.items() if isinstance(v, str)})
         try:
+            url = spec["link"].format(**{k: v for k, v in a.items() if isinstance(v, str)})
             d = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        except ValueError:
+        except (KeyError, ValueError):
             continue
         d = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
         if title and d >= cutoff and url not in known_urls:

@@ -291,6 +291,7 @@ def test_fetch_sites_reads_json_article_api(monkeypatch):
         {"title": "Old post", "path": "old", "extra": {"date": "2020-01-01T00:00:00+08:00", "introduction": "x"}},
         {"title": "Qwen4-Max: Teammate", "path": "qwen4-max", "extra": {"date": recent, "introduction": "<p>2.4T &amp; 1M ctx</p>"}},
         {"title": "Seen", "path": "seen", "extra": {"date": recent, "introduction": "y"}},
+        {"title": "No path", "extra": {"date": recent}},
     ]}}
     real = httpx.Client
     monkeypatch.setattr(src.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=body))))
