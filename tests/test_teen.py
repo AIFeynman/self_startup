@@ -11,7 +11,7 @@ def _q(level, ability):
 
 
 def _item(kind, domain, d):
-    return {"kind": kind, "domain": domain, "headline": "某件事", "train_focus": "区分事实和观点", "ability": "思辨",
+    return {"kind": kind, "domain": domain, "headline": "某件事", "hook": "居然是这样", "train_focus": "区分事实和观点", "ability": "思辨",
             "why_this": "练分辨事实与说法", "ladder": "先看清，再追问，最后换位", "background": "背" * 160,
             "phenomenon": "现象", "source": {"name": "新华社", "url": "https://example.com/a", "date": d},
             "questions": [_q(1, "思辨"), _q(2, "思辨"), _q(3, "感同身受")]}
@@ -57,3 +57,9 @@ def test_rejected_day_retries_with_reasons(monkeypatch):
     teen.on_job_done({"status": "done", "ref": f"teen:day:{did}", "output": "不是 JSON"})
     assert db.row("SELECT status FROM teen_days WHERE id=?", [did])["status"] == "rejected"
     assert seen and "JSON" in seen[0]["redo"] and seen[0]["attempt"] == 2
+
+
+def test_check_rejects_long_question():
+    out = _good()
+    out["items"][0]["questions"][0]["q"] = "问" * 120
+    assert any("90 字" in p for p in tn.check(out, lambda u: (200, ""))["problems"])

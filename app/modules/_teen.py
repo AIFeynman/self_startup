@@ -22,14 +22,14 @@ def day_prompt(recent: list[dict], feedback: dict, redo: str = "") -> str:
     notes = "\n".join(f"- {n}" for n in feedback["improve"]) or "（还没有）"
     thoughts = "\n".join(f"- {n}" for n in feedback["thoughts"]) or "（还没有）"
     retry = f"\n\n## 上一版被打回的原因（这次必须改掉）\n{redo}" if redo else ""
-    return f"""你是「青少年」板块的出题人。读者是初中到高中的学生，目标是通过每天的两个题材，从现象看到背后的问题，培养两种能力：
+    return f"""你是「青少年」板块的出题人。读者是初中生，目标是通过每天的两个题材，从现象看到背后的问题，培养两种能力（难度以初中生能独立读懂、答出来为准，不超过初中水平）：
 - 思辨：区分事实和观点、找隐含前提、因果还是相关、多角度看、找反例、给出有依据的判断；
 - 感同身受：站到不同处境的人的位置，理解他们的动机、代价和限制；理解不等于认同。
 
 ## 今天要出两个题材
 1. 一个「时事」：最近 {NEWS_WINDOW_DAYS} 天内发生的真实事件。先用 WebSearch / WebFetch 找权威来源（新华社、人民日报、央视、中国政府网、联合国、路透、BBC、权威期刊或官方机构等），记下链接和发布日期。打不开的网页不能当来源。
 2. 一个「往事」：从过去的知识里挖掘——历史事件、地理现象、生物规律、文学作品、经典案例，选一个能照亮今天某类问题的。来源用权威资料（教材级百科、博物馆、官方机构、学术机构、经典原著出处），同样要链接。
-两个题材领域不同，领域从这些里选：{'、'.join(DOMAINS)}。题材要有分量、有争议或有张力，不选明星八卦、纯猎奇、血腥细节。立场中立，不灌输结论，涉及政治、军事只讲事实、不同方的诉求和后果。
+两个题材领域不同，领域从这些里选：{'、'.join(DOMAINS)}。题材一定要有意思：选初中生会好奇的事——有反差、有悬念、有“居然”的故事或现象，能一句话勾起兴趣；不选枯燥的数据通报、官话套话、明星八卦、纯猎奇、血腥细节。立场中立，不灌输结论，涉及政治、军事只讲事实、不同方的诉求和后果。
 
 ## 最近出过的题材（不要重复，领域尽量换）
 {seen}
@@ -42,23 +42,24 @@ def day_prompt(recent: list[dict], feedback: dict, redo: str = "") -> str:
 {notes}
 
 ## 每个题材的结构
-- kind：时事 或 往事；domain：上面领域之一；headline：一句话标题，说清是什么事。
+- kind：时事 或 往事；domain：上面领域之一；headline：一句话标题，说清是什么事；hook：一句话（不超过 30 字）写这件事最让人好奇的点。
 - train_focus：这个题材重点练的具体能力，如「区分事实和观点」「看见不同处境的人」，并在 ability 里写 思辨 或 感同身受。
 - why_this：为什么选它、为什么练这个，不超过 80 字。
 - ladder：三层题怎么一层层递进的，一句话，不超过 80 字。
 - source：name、url、date（时事必填 YYYY-MM-DD；往事写资料发布或修订日期，没有就空）。
-- background：青少年读得懂的背景，150–300 字，不堆术语，术语第一次出现用括号解释，数字只能来自来源网页。
+- background：初中生读得懂的背景，120–250 字，口语化，短句，不堆术语，术语第一次出现用括号解释，数字最多 3 个且只能来自来源网页。
 - phenomenon：一句话写表面看到的现象。
 - questions：1–3 道，level 依次为 1、2、3，不跳层：
-  - 第 1 层「看清」：事实是什么、谁受影响、哪些是事实哪些是说法（初中水平）；
-  - 第 2 层「追问」：为什么会这样、背后的结构和利益、因果还是相关、各方怎么看（高一水平）；
-  - 第 3 层「换位与评价」：站到某一方想一想、权衡代价、给出有依据的判断，难度到高考语文、政治的材料分析题，要求答题者结合材料自己组织论述。
+  - 第 1 层「看清」：事实是什么、谁受影响、哪些是事实哪些是说法（初一水平，读完材料就能答）；
+  - 第 2 层「追问」：为什么会这样、谁怎么想、因果还是巧合（初二水平，要动一步脑）；
+  - 第 3 层「换位与评价」：站到某一方想一想、说说自己的看法和理由（初三水平，写 80–120 字，不需要专业知识，不要求高考式长论述）。
+  - 题目每道不超过 90 字，一次只问一件事，不用「请分别……并……再……」这种多问连环句。
   - 每题字段：level、ability（思辨 或 感同身受）、q（题目，必须结合材料，不考死记）、answer（参考答案，分点写清思路，不是只给结论）、points（得分要点 2–4 条）、hint（卡住时的一句提示，可空）。
   - 每个题材的题目里至少有一道是感同身受，至少有一道是思辨。
 
 ## 输出
 只输出一个 JSON 对象，不要别的文字：
-{{"items": [{{"kind": "时事", "domain": "经济", "headline": "...", "train_focus": "...", "ability": "思辨", "why_this": "...", "ladder": "...",
+{{"items": [{{"kind": "时事", "domain": "经济", "headline": "...", "hook": "...", "train_focus": "...", "ability": "思辨", "why_this": "...", "ladder": "...",
   "source": {{"name": "...", "url": "https://...", "date": "YYYY-MM-DD"}}, "background": "...", "phenomenon": "...",
   "questions": [{{"level": 1, "ability": "思辨", "q": "...", "answer": "...", "points": ["..."], "hint": ""}}]}},
   {{"kind": "往事", "...": "..."}}]}}{retry}
@@ -76,7 +77,7 @@ def check(out: dict, fetch_text, today: date | None = None) -> dict:
         probs.append("两个题材的领域要不同")
     for i in items:
         tag = f"{i.get('kind')}「{str(i.get('headline'))[:12]}」"
-        for k in ("headline", "train_focus", "why_this", "ladder", "background", "phenomenon"):
+        for k in ("headline", "hook", "train_focus", "why_this", "ladder", "background", "phenomenon"):
             if not str(i.get(k) or "").strip():
                 probs.append(f"{tag}缺少 {k}")
         if i.get("domain") not in DOMAINS:
@@ -85,8 +86,8 @@ def check(out: dict, fetch_text, today: date | None = None) -> dict:
             probs.append(f"{tag}ability 要写 思辨 或 感同身受")
         if len(i.get("why_this") or "") > 80 or len(i.get("ladder") or "") > 80:
             probs.append(f"{tag}why_this 和 ladder 各不超过 80 字")
-        if not 100 <= len(i.get("background") or "") <= 400:
-            probs.append(f"{tag}背景要 150–300 字，现在 {len(i.get('background') or '')} 字")
+        if not 100 <= len(i.get("background") or "") <= 320:
+            probs.append(f"{tag}背景要 120–250 字，现在 {len(i.get('background') or '')} 字")
         src = i.get("source") if isinstance(i.get("source"), dict) else {}
         url, sdate = src.get("url") or "", src.get("date") or ""
         if not src.get("name") or not url.startswith("http"):
@@ -110,6 +111,8 @@ def check(out: dict, fetch_text, today: date | None = None) -> dict:
         for q in qs:
             if q.get("ability") not in ABILITIES:
                 probs.append(f"{tag}第{q.get('level')}题 ability 要写 思辨 或 感同身受")
+            if len(q.get("q") or "") > 110:
+                probs.append(f"{tag}第{q.get('level')}题题目超过 90 字，要拆短")
             if not str(q.get("q") or "").strip() or not str(q.get("answer") or "").strip():
                 probs.append(f"{tag}第{q.get('level')}题缺题目或答案")
             if not [p for p in q.get("points") or [] if str(p).strip()]:
