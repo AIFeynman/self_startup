@@ -91,9 +91,9 @@ def engine() -> str:
     return os.environ.get("PAPER_LLM_ENGINE") or str(settings.get("paper.llm_engine", "haiku") or "haiku")
 
 
-def chat(system: str, user: str, max_tokens: int = 16000, json_mode: bool = False) -> tuple[str, float]:
-    """→ (内容, 美元)。按 paper.llm_engine 走本机 Claude Code（默认）或 DeepSeek。"""
-    return (_deepseek if engine() == "deepseek" else _claude)(system, user, max_tokens, json_mode)
+def chat(system: str, user: str, max_tokens: int = 16000, json_mode: bool = False, engine_name: str = "") -> tuple[str, float]:
+    """→ (内容, 美元)。按 paper.llm_engine 走本机 Claude Code（默认）或 DeepSeek；engine_name 指定时优先。"""
+    return (_deepseek if (engine_name or engine()) == "deepseek" else _claude)(system, user, max_tokens, json_mode)
 
 
 def _claude(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple[str, float]:
