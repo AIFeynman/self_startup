@@ -55,7 +55,7 @@ def _one(c: httpx.Client, arxiv: str) -> list[str] | None:
 def backfill(limit: int = 0, workers: int = 6) -> dict:
     init()
     rows = db.rows("SELECT s2id, arxiv, pub_date FROM paper_items WHERE status='in' AND arxiv!='' AND arxiv IS NOT NULL "
-                   "AND s2id NOT IN (SELECT s2id FROM paper_orgs) ORDER BY cites DESC" + (f" LIMIT {limit}" if limit else ""))
+                   "AND s2id NOT IN (SELECT s2id FROM paper_orgs) ORDER BY year DESC, cites DESC" + (f" LIMIT {limit}" if limit else ""))
     young = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
     stat = {"todo": len(rows), "found": 0, "empty": 0, "errors": 0}
 
