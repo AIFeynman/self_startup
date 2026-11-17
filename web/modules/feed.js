@@ -12,7 +12,8 @@ const fmtDur = (s) => s ? (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.fl
 const PAGE = 40;
 const TOP_N = 5;
 const DAYS = [['0', '不限时间'], ['1', '24 小时内'], ['3', '3 天内'], ['7', '7 天内'], ['30', '30 天内']];
-const SORTS = [['day', '按天 · 天内按推荐'], ['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）']];
+const fmtN = (n) => (n >= 10000 ? (n / 10000).toFixed(1) + ' 万' : String(n || 0));
+const SORTS = [['day', '按天 · 天内按推荐'], ['score', '综合排序'], ['new', '最新发布'], ['hot', '最热（同源比）'], ['views', 'X 按阅读量'], ['followers', 'X 按作者粉丝']];
 const st = { tab: '', q: '', mode: 'filter', days: '0', sort: 'day', hnView: 'posts', read: 'unread', earlierOpen: false };
 const READS = [['unread', '未读'], ['', '含已读'], ['read', '已读'], ['deep', '深读过']];
 const HN_ITEM = (id) => `https://news.ycombinator.com/item?id=${id}`;
@@ -656,6 +657,7 @@ export default {
       x.extra?.duration && h('span.fd-chip', {}, fmtDur(x.extra.duration)),
       x.source === 'reddit' && x.extra?.comments ? h('span.fd-chip', {}, [ui.icon('chat'), `评论 ${x.extra.comments}`]) : null,
       x.extra?.link && h('a.fd-chip', { href: x.extra.link, target: '_blank', rel: 'noopener', title: '帖子指向的外部链接' }, [ui.icon('arrow'), host(x.extra.link) || '外链']),
+      x.source === 'twitter' && x.extra?.author && h('span.fd-chip', {}, `@${x.extra.author} · ${fmtN(x.extra.followers)} 粉丝 · ${fmtN(x.extra.views)} 阅读`),
       x.extra?.x_article && h('span.fd-chip.art', { title: '长文正文未抓取，点标题去 X 上看' }, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
       x.extra?.origin === 'learn_evolve' && h('span.fd-chip', {}, 'learn_evolve'),
       x.extra?.oss?.t?.length && h('a.fd-chip', { href: '#intel/oss/' + encodeURIComponent(x.extra.oss.t[0]), title: `开源雷达里按「${x.extra.oss.t[0]}」找同类` }, [ui.icon('radar'), '同类项目']),
@@ -810,6 +812,7 @@ export default {
             eventBox(x),
             h('div.fd-line', {}, [TYPE_NAME[x.type] && h('span.fd-chip.type', {}, TYPE_NAME[x.type]),
               x.extra?.x_article && h('span.fd-chip.art', {}, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
+              x.source === 'twitter' && x.extra?.author && h('span.fd-chip', {}, `@${x.extra.author} · ${fmtN(x.extra.followers)} 粉丝 · ${fmtN(x.extra.views)} 阅读`),
               h('span', { style: { whiteSpace: 'nowrap' } }, x.source_label + (fmtDate(x.date) ? ' · ' + fmtDate(x.date) : '')),
               x.extra?.hn_url && h('a.muted', { href: x.extra.hn_url, target: '_blank', rel: 'noopener', style: { whiteSpace: 'nowrap' } }, 'HN 讨论'),
               (x.extra?.channel || x.extra?.subreddit) && h('span', { style: { whiteSpace: 'nowrap' } }, x.extra.channel || `r/${x.extra.subreddit}`),

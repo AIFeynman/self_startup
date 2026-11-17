@@ -439,8 +439,9 @@ def test_notification_opens_its_own_batch(client, monkeypatch):
     P.summarize_and_notify()
     P.upsert([P._item("twitter:b", "x", ["karpathy"], "@karpathy：later", "u", "2026-11-11")])
     P.summarize_and_notify()
-    first, second = (int(link.rsplit("/", 1)[1]) for link in sent)
+    first, second = (int(link.split("/")[3]) for link in sent)
     assert sent[0].startswith("#feed/people/batch/") and first != second
+    assert [link.split("/", 4)[4] for link in sent] == ["twitter%3Aa", "twitter%3Ab"]
     r = client.get(f"/api/feed/people?batch={first}").json()
     assert [it["id"] for it in r["batch"]] == ["twitter:a", "news:a"]
     assert [it["id"] for it in client.get(f"/api/feed/people?batch={second}").json()["batch"]] == ["twitter:b"]
