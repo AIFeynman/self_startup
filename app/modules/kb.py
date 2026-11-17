@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 import re
 
-from .. import kb, kb_graph, kb_judge, kb_verify, kb_whynot
+from .. import db, kb, kb_graph, kb_judge, kb_verify, kb_whynot
 from . import _paper_add as paper_add, _paper_label as paper_label, _paper_maintain as paper_maintain, _paper_map as paper_map
 
 TITLE = "知识库"
@@ -158,6 +158,23 @@ def xarticles_search(body: XSearchIn):
 @router.get("/xarticles/search")
 def xarticles_search_status():
     return _xsearch
+
+
+@router.post("/xarticles/{aid}/translate")
+def xarticle_translate(aid: str):
+    from . import _xart
+    try:
+        return {"text": _xart.translate(aid)}
+    except KeyError:
+        raise HTTPException(404, "没有这篇长文")
+
+
+@router.get("/xarticles/{aid}")
+def xarticle_text(aid: str):
+    r = db.row("SELECT text FROM x_art WHERE id=? AND stage='scored'", [aid])
+    if not r:
+        raise HTTPException(404, "没有这篇长文")
+    return {"text": r["text"]}
 
 
 # ---------- 判断台账（逻辑在 app/kb_judge.py） ----------

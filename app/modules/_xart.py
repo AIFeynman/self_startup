@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS x_art (
 );
 CREATE INDEX IF NOT EXISTS x_art_ix_stage ON x_art(stage);
 CREATE INDEX IF NOT EXISTS x_art_ix_day ON x_art(day);
+CREATE TABLE IF NOT EXISTS x_art_zh (id TEXT PRIMARY KEY, zh TEXT, updated TEXT);
 CREATE TABLE IF NOT EXISTS x_art_day (day TEXT PRIMARY KEY, found INTEGER, calls INTEGER, done_at TEXT);
 """
 
@@ -198,7 +199,63 @@ def _blocks_text(a: dict) -> str:
     cs = a.get("contents") or a.get("content") or []
     if isinstance(cs, str):
         return cs
-    return "\n".join((b.get("text") or "") for b in cs if isinstance(b, dict)).strip()
+    lines = [f"![]({b['url']})" if b.get("type") == "image" and b.get("url") else (b.get("text") or "")
+             for b in cs if isinstance(b, dict)]
+    return "\n".join(lines).strip()
+
+
+IMG_LINE = re.compile(r"^!\[\]\(https://\S+\)$")
+ZH_PROMPT = "把用户给的文章片段翻译成通顺的简体中文。保留原有换行、列表和段落结构；代码、命令、链接、以 ![]( 开头的图片行、@用户名、产品和模型名保持原文；只输出译文，不加解释。"
+ZH_CHUNK = 3000
+
+
+def _chunks(text: str) -> list[str]:
+    out, cur = [], ""
+    for ln in text.split("\n"):
+        if cur and len(cur) + len(ln) > ZH_CHUNK:
+            out.append(cur)
+            cur = ""
+        cur += ln + "\n"
+    return out + [cur] if cur.strip() else out
+
+
+def _zh_chunk(part: str) -> str:
+    for _ in range(2):
+        t = pl.chat(ZH_PROMPT, part)[0]
+        if len(t) >= len(part) * 0.3:
+            break
+    return t
+
+
+def translate(aid: str) -> str:
+    r = db.row("SELECT zh FROM x_art_zh WHERE id=?", [aid])
+    if r:
+        return r["zh"]
+    a = db.row("SELECT text FROM x_art WHERE id=? AND stage='scored'", [aid])
+    if not a:
+        raise KeyError(aid)
+    parts = _chunks(a["text"])
+    todo = [i for i, p in enumerate(parts) if p.strip() and not all(IMG_LINE.match(x) or not x.strip() for x in p.split("\n"))]
+    with ThreadPoolExecutor(3) as ex:
+        for i, t in zip(todo, ex.map(_zh_chunk, [parts[i] for i in todo])):
+            parts[i] = t.strip() + "\n"
+    zh = "".join(parts).strip()
+    db.execute("INSERT OR REPLACE INTO x_art_zh(id,zh,updated) VALUES(?,?,?)", [aid, zh, db.now()])
+    return zh
+
+
+def backfill_images(workers: int = 8) -> int:
+    rows = db.rows("SELECT id FROM x_art WHERE stage='scored' AND mkt=0 AND q>=1 AND text NOT LIKE '%![](%'")
+    def one(r):
+        with _client() as c:
+            return r["id"], _blocks_text(_article(c, r["id"]))
+    n = 0
+    with ThreadPoolExecutor(workers) as ex:
+        for tid, text in ex.map(one, rows):
+            if "![](" in text:
+                db.execute("UPDATE x_art SET text=?,n=?,updated=? WHERE id=?", [text, len(text), db.now(), tid])
+                n += 1
+    return n
 
 
 def audit(limit: int = 0) -> dict:
