@@ -29,8 +29,10 @@ if todo:
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     import torch
     from transformers import AutoModel, AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(model, padding_side="left")
-    m = AutoModel.from_pretrained(model, torch_dtype=torch.float32).eval()
+    snaps = sorted((Path.home() / ".cache/huggingface/hub" / ("models--" + model.replace("/", "--")) / "snapshots").glob("*"))
+    path = str(snaps[-1]) if snaps else model
+    tok = AutoTokenizer.from_pretrained(path, padding_side="left")
+    m = AutoModel.from_pretrained(path, torch_dtype=torch.float32).eval()
     first = {h: t for h, t in zip(reversed(hs), reversed(texts))}
     new = []
     with torch.no_grad():
