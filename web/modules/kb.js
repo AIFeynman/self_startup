@@ -122,6 +122,16 @@ export default {
 };
 
 // ---------- 首页：页头 + 搜索 + 四个视图 ----------
+async function libraryStrip(body, ctx) {
+  const { api, h, ui } = ctx;
+  const box = h('div');
+  body.prepend(box);
+  const L = await api.get('/api/kb/library');
+  const fmt = (n) => Number(n).toLocaleString('en-US');
+  box.append(ui.stats([['xart', 'X 长文'], ['paper', '论文'], ['repo', 'GitHub 项目']].map(([k, name]) => ({
+    k: `${name} · 较前一天 +${fmt(L[k].added)}`, v: fmt(L[k].total) }))));
+}
+
 async function home(el, ctx, tab, arg = '') {
   const { api, h, ui, ask, toast } = ctx;
   const [g, st] = await Promise.all([api.get('/api/kb/graph'), api.get('/api/kb/stats')]);
@@ -152,6 +162,7 @@ async function home(el, ctx, tab, arg = '') {
   showStatus(g.status, g.stale);
   if (g.status.running) poll();
 
+  if (cur === 'papers' || cur === 'xart') libraryStrip(body, ctx);
   if (cur === 'judge') judgeTab(body, ctx, arg);
   else if (cur === 'graph') graphTab(body, ctx, g);
   else if (cur === 'topics') topicsTab(body, ctx, g);
