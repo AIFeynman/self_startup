@@ -160,6 +160,20 @@ def xarticles_search_status():
     return _xsearch
 
 
+@router.post("/xarticles/refresh")
+def xarticles_refresh():
+    """手动刷新：从上次抓到的时刻抓到现在，后台跑完同步知识库；正在跑时不重复开。"""
+    from . import _xart
+    return {"started": _xart.start(force=True)}
+
+
+@router.get("/xarticles/status")
+def xarticles_status():
+    from . import _xart
+    _xart.init()
+    return _xart.status()
+
+
 @router.post("/xarticles/{aid}/translate")
 def xarticle_translate(aid: str):
     from . import _xart

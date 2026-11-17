@@ -63,24 +63,113 @@ def test_xarticle_search_splits_cjk_and_matches_fulltext(client):
     assert _xart.listing("AI融资") == []
 
 
+def _tw(i, user="u", fol=10, views=0, likes=0, at="Tue Nov 17 01:00:00 +0000 2026"):
+    return {"id": str(i), "createdAt": at, "viewCount": views, "likeCount": likes, "author": {"userName": user, "followers": fol}}
+
+
+class _Ctx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
 def test_xart_daily_runs_once_a_day_and_stops_over_budget(client, monkeypatch):
     from datetime import datetime
     from app.modules import _xart as x
     x.init()
-    crawled = []
-    monkeypatch.setattr(x, "crawl_day", lambda d: crawled.append(d) or {"day": d, "calls": 400})
+    monkeypatch.setattr(x, "crawl_since", lambda now: {"calls": 400})
     monkeypatch.setattr(x, "gate", lambda: {})
+    monkeypatch.setattr(x, "grab_ids", lambda: [])
     monkeypatch.setattr(x, "grab", lambda **k: {"ok": 10, "drop": 2})
+    monkeypatch.setattr(x, "stale", lambda: 0)
+    monkeypatch.setattr(x, "dedupe", lambda: {})
     monkeypatch.setattr(x, "relevance", lambda **k: {})
     monkeypatch.setattr(x, "fulltext", lambda **k: {"ok": 3, "short": 0, "failed": 0})
     monkeypatch.setattr(x, "score", lambda **k: {})
     now = datetime(2026, 11, 17, 5, 0)
     assert x.due(now) and not x.due(datetime(2026, 11, 17, 3, 0))
-    res = x.daily(now)
-    assert crawled[-1] == "2026-11-15" and res["calls"] == 400 * len(crawled) + 15
+    assert x.daily(now)["calls"] == 415
     assert not x.due(now)
     db.execute("UPDATE x_art_run SET calls=?", [x.MONTH_STOP_CALLS])
     assert x.daily(datetime(2026, 11, 18, 5, 0)) == {"stopped": "月调用数到上限"}
+
+
+def test_xart_crawl_since_uses_watermark_with_overlap_and_dedupes(client, monkeypatch):
+    import pytest
+    from app.modules import _xart as x
+    x.init()
+    db.execute("DELETE FROM x_art_mark")
+    spans = []
+    monkeypatch.setattr(x, "_client", lambda: _Ctx())
+    monkeypatch.setattr(x, "search_window", lambda c, t0, t1, stat: spans.append((t0, t1)) or [_tw("w1", views=50), _tw("w1", views=50)])
+    now = 1_800_000_000
+    r = x.crawl_since(now)
+    assert spans[0][0] == now - x.FIRST_SPAN and spans[-1][1] == now and r["new"] == 1 and x._mark() == now
+    spans.clear()
+    x.crawl_since(now + 7200)
+    assert spans[0][0] == now - x.OVERLAP and spans[-1][1] == now + 7200
+    spans.clear()
+    r = x.crawl_since(now + 10 * 86400)
+    assert spans[0][0] == now + 10 * 86400 - x.MAX_GAP and r["gap"]
+
+    def boom(*a):
+        raise RuntimeError("x")
+    monkeypatch.setattr(x, "search_window", boom)
+    with pytest.raises(RuntimeError):
+        x.crawl_since(now + 20 * 86400)
+    assert x._mark() == now + 10 * 86400
+
+
+def test_xart_resight_updates_views_and_revives_dropped(client):
+    from app.modules import _xart as x
+    x.init()
+    assert x._save_found(_tw("rv1", views=10), "2026-11-17")
+    assert not x._save_found(_tw("rv1", views=900, likes=3, fol=50), "2026-11-17")
+    db.execute("UPDATE x_art SET stage='drop_view' WHERE id='rv1'")
+    assert not x._save_found(_tw("rv1", views=400), "2026-11-17")
+    r = db.row("SELECT stage,views,likes,fol FROM x_art WHERE id='rv1'")
+    assert (r["stage"], r["views"], r["likes"], r["fol"]) == ("drop_view", 900, 3, 50)
+    assert not x._save_found(_tw("rv1", views=1500), "2026-11-17")
+    assert db.row("SELECT stage FROM x_art WHERE id='rv1'")["stage"] == "found"
+
+
+def test_xart_gate_tiers_and_grab_priority(client, monkeypatch):
+    from app.modules import _xart as x
+    x.init()
+    monkeypatch.setattr(x, "watch", lambda: ["watched"])
+    db.execute("DELETE FROM x_art WHERE stage='found'")
+    rows = [("g1", "nobody", 5, 0, 0), ("g2", "nobody", 5, 100, 0), ("g3", "nobody", 5, 0, 5), ("g4", "watched", 5, 0, 0),
+            ("g5", "big", 600000, 0, 0), ("g6", "mid", 30000, 0, 0), ("g7", "nobody", 5, 300, 0)]
+    for i, u, f, v, l in rows:
+        db.execute("INSERT INTO x_art (id,user,fol,views,likes,stage) VALUES (?,?,?,?,?,'found')", [i, u, f, v, l])
+    x.gate()
+    st = {r["id"]: r["stage"] for r in db.rows("SELECT id,stage FROM x_art WHERE id LIKE 'g%'")}
+    assert st["g1"] == "drop_view" and all(st[k] == "found" for k in ("g2", "g3", "g4", "g5", "g6", "g7"))
+    ids = [i for i in x.grab_ids(cap=1) if i.startswith("g")]
+    assert set(ids) == {"g4", "g5", "g6", "g7"}
+
+
+def test_xart_dedupe_same_author_same_title_keeps_earliest(client):
+    from app.modules import _xart as x
+    x.init()
+    for i, st in [("d1", "scored"), ("d2", "titled"), ("d3", "titled")]:
+        db.execute("INSERT INTO x_art (id,user,title,stage) VALUES (?, 'dupa', ?, ?)", [i, "同一篇" if i != "d3" else "另一篇", st])
+    db.execute("INSERT INTO x_art (id,user,title,stage) VALUES ('d4','dupb','同一篇','titled')")
+    x.dedupe()
+    st = {r["id"]: r["stage"] for r in db.rows("SELECT id,stage FROM x_art WHERE id LIKE 'd_'")}
+    assert st == {"d1": "scored", "d2": "drop_dup", "d3": "titled", "d4": "titled"}
+
+
+def test_xart_refresh_endpoint_rejects_double_start(client):
+    from app.modules import _xart as x
+    assert x._lock.acquire(blocking=False)
+    try:
+        assert client.post("/api/kb/xarticles/refresh").json() == {"started": False}
+        assert client.get("/api/kb/xarticles/status").json()["running"] is True
+    finally:
+        x._lock.release()
 
 
 def test_xart_listing_sorts_by_views_and_followers(client):

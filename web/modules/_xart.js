@@ -44,9 +44,12 @@ export function xartTab(body, ctx) {
   const f = { q: '', sort: stored('sort', 'q'), q_min: stored('qmin', '2') };
   const sel = (key, opts, label) => h('select', { 'aria-label': label, onchange: (e) => { f[key] = e.target.value; keep(key === 'q_min' ? 'qmin' : key, f[key]); load(); } },
     opts.map(([v, n]) => h('option', { value: v, ...(f[key] === v ? { selected: true } : {}) }, n)));
+  const refreshNote = h('span.muted', {}, '');
   const bar = h('div.xa-bar', {}, [
     sel('sort', [['q', '按质量分'], ['date', '按时间'], ['views', '按观看数'], ['fol', '按作者粉丝']], '排序'),
     sel('q_min', [['1', '质量 ≥1'], ['2', '质量 ≥2'], ['3', '质量 ≥3'], ['4', '质量 ≥4']], '最低质量'),
+    h('button.outline', { onclick: () => refresh(true) }, '刷新到现在'),
+    refreshNote,
   ]);
   const out = h('div');
   body.append(bar, out);
@@ -69,6 +72,16 @@ export function xartTab(body, ctx) {
   }
   const xnote = h('div.muted', {}, '关键词支持 X 搜索语法，比如 from:omarsar0、"context engineering"。取阅读最高的 40 篇读全文、提炼、打分，约 0.05 美元，1–3 分钟。');
 
+  const clock = (t) => { const d = new Date(t * 1000), z = (n) => String(n).padStart(2, '0'); return `${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
+  async function refresh(start) {
+    if (start) { try { await api.post('/api/kb/xarticles/refresh', {}); } catch (e) { toast(e.message, true); return; } }
+    const s = await api.get('/api/kb/xarticles/status');
+    if (!body.isConnected) return;
+    if (s.running) { refreshNote.textContent = '正在抓取新长文并提炼，几分钟…'; setTimeout(() => refresh(false), 4000); return; }
+    const r = s.last && s.last.status === 'failed' ? '上次刷新失败' : '';
+    refreshNote.textContent = [s.mark ? `更新到 ${clock(s.mark)}` : '还没抓过', r].filter(Boolean).join(' · ');
+    if (start !== null) load();
+  }
   async function fetchX(q) {
     try { await api.post('/api/kb/xarticles/search', { q, days: 30 }); } catch (e) { toast(e.message, true); return; }
     poll();
@@ -117,5 +130,6 @@ export function xartTab(body, ctx) {
     ]);
   }
   load();
+  refresh(null);
   return { search: (q) => { f.q = q; return load(); } };
 }
