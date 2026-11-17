@@ -509,9 +509,9 @@ def _ts(created: str | None) -> float:
 def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> list[dict]:
     init()
     where, args = ["stage='scored'", "mkt=0", "q>=?"], [q_min]
-    for w in q.split():
-        where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\')")
-        args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 5
+    for w in re.findall(r"[\u4e00-\u9fff]+|[^\s\u4e00-\u9fff]+", q):
+        where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\')")
+        args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 6
     order = "day DESC, q DESC" if sort == "date" else "q DESC, day DESC, views DESC"
     rows = db.rows(f"SELECT id,user,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
     for r in rows:
