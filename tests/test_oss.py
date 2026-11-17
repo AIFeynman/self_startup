@@ -181,6 +181,21 @@ def test_api_browse_status_and_run_guard(client, monkeypatch):
     assert client.post("/api/intel/oss/runs", json={"task": "nope"}).status_code == 400
 
 
+def test_browse_filters_by_added_day_and_sorts_by_time_or_stars(client):
+    from datetime import datetime, timedelta
+    _setup()
+    day = lambda n: (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%dT10:00:00")
+    db.execute("UPDATE oss_repos SET first_seen=?", [day(20)])
+    for name, n in [("a/pdfx", 0), ("d/caveman", 5)]:
+        db.execute("UPDATE oss_repos SET first_seen=? WHERE name=?", [day(n), name])
+    got = lambda **q: [x["name"] for x in client.get("/api/intel/oss/search", params=q).json()["results"]]
+    assert got(added=1) == ["a/pdfx"]
+    assert set(got(added=7)) == {"a/pdfx", "d/caveman"} and got(added=1, order="time") == ["a/pdfx"]
+    allr = got(order="time")
+    assert allr.index("a/pdfx") < allr.index("d/caveman")
+    assert client.get("/api/intel/oss/search", params={"added": 1}).json()["results"][0]["added"] == day(0)[:10]
+
+
 def test_schedule_only_after_library_exists(monkeypatch):
     from app.modules import _oss_radar as intel
     spawned = []
