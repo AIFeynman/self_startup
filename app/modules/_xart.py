@@ -572,14 +572,18 @@ def _ts(created: str | None) -> float:
         return time.time()
 
 
-def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> list[dict]:
+def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100, domain: str = "", kind: str = "") -> list[dict]:
     init()
     where, args = ["stage='scored'", "mkt=0", "q>=?"], [q_min]
+    for col, v in (("domain", domain), ("kind", kind)):
+        if v:
+            where.append(f"{col}=?")
+            args.append(v)
     for w in re.findall(r"[\u4e00-\u9fff]+|[^\s\u4e00-\u9fff]+", q):
         where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\')")
         args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 6
     order = {"date": "day DESC, q DESC", "views": "views DESC, q DESC", "fol": "fol DESC, views DESC"}.get(sort, "q DESC, day DESC, views DESC")
-    rows = db.rows(f"SELECT id,user,fol,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
+    rows = db.rows(f"SELECT id,user,fol,likes,views,day,title,summary,tags,take,q,kind,domain FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
     for r in rows:
         r["tags"] = json.loads(r["tags"] or "[]")
         r["url"] = f"https://x.com/{r['user']}/status/{r['id']}"

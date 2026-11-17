@@ -1,5 +1,6 @@
 """论文脉络库：入库门槛、标注校验 / 重问 / 索引、脉络召回 + 子图 + 成线校验。不联网。"""
 import json
+from pathlib import Path
 import threading
 import time
 from datetime import datetime, timedelta
@@ -535,3 +536,25 @@ def test_recent_groups_new_papers_by_day_with_total(client):
     db.execute("UPDATE paper_items SET first_seen=? WHERE s2id='r4'", [(datetime.now() - timedelta(days=20)).isoformat(timespec="seconds")])
     got = client.get("/api/kb/papers/recent?days=7&per_day=1").json()
     assert [(g["n"], [p["s2id"] for p in g["items"]]) for g in got] == [(2, ["r2"]), (1, ["r3"])]
+
+
+def test_browse_filters_by_domain_kind_org_and_year(client):
+    from app.modules import _paper_orgs
+    from app.modules import _paper_map as pm
+    pm._init()
+    _paper_orgs.init()
+    tax = json.loads((Path(__file__).parent.parent / "app/modules/paper_taxonomy.json").read_text())
+    top = tax["domains"][0]
+    child = top["children"][0]["code"]
+    for sid, year, d, k, orgs in [("a" * 40, 2024, child, "method", ["OpenAI"]), ("b" * 40, 2023, child, "survey", ["Google", "OpenAI"]), ("c" * 40, 2024, "other_x", "method", [])]:
+        db.execute("INSERT INTO paper_items (s2id,title,year,cites,status) VALUES (?,?,?,5,'in')", [sid, sid[:3], year])
+        db.execute("INSERT INTO paper_labels (s2id,k,d) VALUES (?,?,?)", [sid, k, d])
+        db.execute("INSERT INTO paper_orgs (s2id,orgs) VALUES (?,?)", [sid, json.dumps(orgs)])
+    ids = lambda **q: sorted(r["title"] for r in client.get("/api/kb/papers/browse", params=q).json()["items"])
+    assert ids(domain=top["code"]) == ["aaa", "bbb"]
+    assert ids(domain=top["code"], kind="survey") == ["bbb"]
+    assert ids(org="OpenAI") == ["aaa", "bbb"]
+    assert ids(org="Google", year=2023) == ["bbb"]
+    assert ids(year=2024) == ["aaa", "ccc"]
+    f = client.get("/api/kb/papers/facets").json()
+    assert {o["name"]: o["n"] for o in f["orgs"]} == {"OpenAI": 2, "Google": 1}

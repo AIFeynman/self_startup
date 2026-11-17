@@ -1,3 +1,5 @@
+import json
+
 from app import db, kb
 
 
@@ -194,3 +196,21 @@ def test_library_counts_total_and_last_day_added(client):
     got = client.get("/api/kb/library").json()
     assert got["xart"]["total"] == base["xart"]["total"] + 2 and got["xart"]["added"] == base["xart"]["added"] + 1
     assert set(got) == {"xart", "paper", "repo"}
+
+
+def test_xarticle_listing_filters_by_domain_and_kind_and_score_unhides_good_marketing(client, monkeypatch):
+    from app.modules import _xart
+    _xart.init()
+    for i, (d, k) in enumerate([("agent", "教程"), ("agent", "观点"), ("strategy", "教程")]):
+        db.execute("INSERT INTO x_art (id,user,title,text,stage,q,domain,kind) VALUES (?,'a','t','x','scored',3,?,?)", [f"4{i}", d, k])
+    assert sorted(r["id"] for r in _xart.listing(domain="agent")) == ["40", "41"]
+    assert [r["id"] for r in _xart.listing(domain="agent", kind="教程")] == ["40"]
+    assert sorted(r["id"] for r in _xart.listing(kind="教程")) == ["40", "42"]
+    assert all(r["domain"] for r in _xart.listing(limit=1000) if r["id"] in {"40", "41", "42"})
+
+    db.execute("INSERT INTO x_art (id,user,title,text,stage) VALUES ('51','a','t','课程 正文','full')")
+    db.execute("INSERT INTO x_art (id,user,title,text,stage) VALUES ('52','a','t','课程 正文','full')")
+    out = {"51": {"q": 3, "mkt": True, "kind": "教程"}, "52": {"q": 3, "mkt": True, "kind": "产品介绍"}}
+    monkeypatch.setattr(_xart.pl, "chat", lambda *a, **k: (json.dumps([{"id": i, **v} for i, v in out.items()]), 0))
+    _xart.score(ids=["51", "52"])
+    assert {r["id"]: r["mkt"] for r in db.rows("SELECT id,mkt FROM x_art WHERE id IN ('51','52')")} == {"51": 0, "52": 1}
