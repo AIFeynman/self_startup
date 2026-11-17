@@ -22,6 +22,7 @@ const CSS = `
 .pp-pin { border-color: var(--accent); }
 .pp-pin > b, .pp-batch > b { display: block; margin-bottom: 4px; }
 .pp-batch { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pp-it.pp-focus { background: var(--accent-soft); border-radius: 8px; box-shadow: 0 0 0 6px var(--accent-soft); }
 .pp-pin > b small, .pp-batch > b small { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
 .pp-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .pp-people button { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 12px; color: var(--text); }
@@ -35,13 +36,13 @@ const CSS = `
 const CH = { x: 'X', blog: '博客', youtube: 'YouTube', podcast: '播客', paper: '论文', news: '新闻', bili: 'B站' };
 // 视频和播客深读时才转写：播客传音频直链，按视频走字幕 / whisper
 const DEEP = new Set(['blog', 'youtube', 'podcast', 'paper', 'news', 'bili']);
-const state = { view: 'today', person: '', batch: '' };
+const state = { view: 'today', person: '', batch: '', focus: '' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
 export function peopleTab(box, ctx, sub = []) {
   const { api, h, ui, toast } = ctx;
   if (!document.getElementById('pp-style')) document.head.append(h('style#pp-style', {}, CSS));
-  if (sub[0] === 'batch' && sub[1]) { state.view = 'batch'; state.batch = sub[1]; }
+  if (sub[0] === 'batch' && sub[1]) { state.view = 'batch'; state.batch = sub[1]; state.focus = sub[2] ? decodeURIComponent(sub[2]) : ''; }
   else if (sub[0]) { state.view = 'person'; state.person = sub[0]; }
   else if (state.view === 'batch') state.view = 'today';
   const go = (view, person = '') => {
@@ -84,7 +85,7 @@ export function peopleTab(box, ctx, sub = []) {
   };
   const row = (it, showPeople = false, idx = {}) => {
     const b = deepBtn(it);
-    return h('div.pp-it', {}, [
+    return h('div.pp-it', { 'data-id': it.id }, [
       h('span.pp-ch', {}, CH[it.channel] || it.channel),
       h('div.t', {}, [h('a', { href: safeUrl(it.url), target: '_blank', rel: 'noopener' }, it.title),
         h('div.m', {}, [meta(it), showPeople ? ' · ' + it.people.map((p) => idx[p] ? who(idx[p]) : p).join('、') : '']),
@@ -138,7 +139,12 @@ export function peopleTab(box, ctx, sub = []) {
         h('b', {}, ['这次提醒的发声', h('small', {}, `${r.batch.length} 条 · Tier1 在前`)]),
         ...(r.batch.length ? r.batch.map((it) => row(it, true, idx)) : [h('div.muted', {}, '这次提醒里的条目已经被过滤掉了')]),
         h('a.pp-more', { href: '#', onclick: (e) => { e.preventDefault(); go('today'); } }, '看今天全部 →')]));
-      box.scrollIntoView({ block: 'start' });
+      const want = r.batch.find((it) => it.id === state.focus) || r.batch[0];
+      const hit = want && [...box.querySelectorAll('.pp-it')].find((e) => e.dataset.id === want.id);
+      if (hit) {
+        hit.classList.add('pp-focus');
+        [0, 300, 900, 1800].forEach((ms) => setTimeout(() => { if (hit.isConnected) hit.scrollIntoView({ block: 'center' }); }, ms));
+      }
       if (r.running) poll();
       return;
     }

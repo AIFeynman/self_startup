@@ -413,7 +413,7 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = [x for x in out if x["read"] == (read == "read")]
     if events and not saved:
         out = cluster.collapse(out)
-    if sort in ("new", "hot", "day"):
+    if sort in ("new", "hot", "day", "views", "followers"):
         return rk.sort_items(out, sort, now)
     if not (type_ or saved or q or days):
         out = rk.diversify(out)
@@ -986,8 +986,8 @@ def _public(x: dict) -> dict:
 def items(type: str = "", saved: bool = False, q: str = "", limit: int = 60, offset: int = 0, days: float = 0,
           sort: str = "day", since: str = "", read: str = ""):
     """since：刷新开始时间（status.started_utc），这之后第一次收进来的条目排到最前（刷完让人一眼看到新增）。"""
-    if sort not in ("day", "score", "new", "hot"):
-        raise HTTPException(400, "sort 只能是 day / score / new / hot")
+    if sort not in ("day", "score", "new", "hot", "views", "followers"):
+        raise HTTPException(400, "sort 只能是 day / score / new / hot / views / followers")
     if read not in ("", "unread", "read", "deep"):
         raise HTTPException(400, "read 只能是 unread / read / deep")
     out = ranked(type, saved, q, days=days, sort=sort, read=read, stale_ok=True)

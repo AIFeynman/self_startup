@@ -626,7 +626,7 @@ def pop_norm(pops: dict[str, list[float]], it: dict) -> float:
 
 
 def sort_items(items: list[dict], sort: str, now: datetime) -> list[dict]:
-    """sort: day（按发布那天，新的天在前，同一天保持综合排序）/ new（按发布时间）/ hot（按同源热度百分位，热度相同按综合分）/ 其他保持综合排序。"""
+    """sort: views / followers（X 条目按阅读量 / 作者粉丝，别的来源排后面）/ day（按发布那天，新的天在前，同一天保持综合排序）/ new（按发布时间）/ hot（按同源热度百分位，热度相同按综合分）/ 其他保持综合排序。"""
     if sort == "day":
         days = [{**x, "day": d.astimezone().date().isoformat() if (d := item_time(x, now)) else ""} for x in items]
         return sorted(days, key=lambda x: x["day"], reverse=True)
@@ -635,6 +635,8 @@ def sort_items(items: list[dict], sort: str, now: datetime) -> list[dict]:
         return sorted(items, key=lambda x: (item_time(x, now) or far, x["score"]), reverse=True)
     if sort == "hot":
         return sorted(items, key=lambda x: (x.get("pop_norm", 0), x["score"]), reverse=True)
+    if sort in ("views", "followers"):
+        return sorted(items, key=lambda x: ((x.get("extra") or {}).get(sort) or 0, x["score"]), reverse=True)
     return items
 
 

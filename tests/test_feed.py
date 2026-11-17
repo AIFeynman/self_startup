@@ -431,6 +431,11 @@ def test_within_days_and_sort():
     assert {x["id"] for x in rk.within_days(items, 3, NOW)} == {"a", "c"}
     assert [x["id"] for x in rk.sort_items(items, "new", NOW)] == ["a", "c", "b"]
     assert [x["id"] for x in rk.sort_items(items, "hot", NOW)] == ["b", "c", "a"]
+    by = {x["id"]: x for x in items}
+    by["a"]["extra"] = {"views": 50, "followers": 9}
+    by["b"]["extra"] = {"views": 10, "followers": 900}
+    assert [x["id"] for x in rk.sort_items(items, "views", NOW)][:2] == ["a", "b"]
+    assert [x["id"] for x in rk.sort_items(items, "followers", NOW)][:2] == ["b", "a"]
 
 
 def test_api_days_sort(client, monkeypatch):
