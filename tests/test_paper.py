@@ -423,6 +423,7 @@ def test_ingest_feed_marks_hot_and_labels(client, monkeypatch, labeled):
     monkeypatch.setattr(col, "batch", lambda ids, c, fields=col.DETAIL_FIELDS: [new if i.endswith("00001") else None for i in ids])
     monkeypatch.setattr(lab, "judge_recent", lambda: {"judged": 0})
     monkeypatch.setattr(padd._paper_orgs, "backfill", lambda: {"found": 3})
+    monkeypatch.setattr(padd._paper_orgs, "arxiv_fill", lambda: {"found": 2})
     st = padd.ingest_feed()
     assert (st["feed"], st["new"], st["admitted"], st["labeled"], st["orgs"]) == (2, 1, 1, 1, {"found": 3})
     r = db.row("SELECT * FROM paper_items WHERE s2id='HOT'")
@@ -567,3 +568,25 @@ def test_browse_filters_by_domain_kind_org_and_year(client):
     assert one["added"] == db.now()[:10]
     f = client.get("/api/kb/papers/facets").json()
     assert {o["name"]: o["n"] for o in f["orgs"]} == {"OpenAI": 2, "Google": 1}
+
+
+def test_arxiv_fill_writes_orgs_for_young_papers_and_openalex_overrides(monkeypatch):
+    from app.modules import _paper_orgs as po
+
+    po.init()
+    today = db.now()[:10]
+    ids = {"a": "1" * 40, "b": "2" * 40, "c": "3" * 40}
+    for k, sid in ids.items():
+        db.execute("DELETE FROM paper_orgs WHERE s2id=?", [sid])
+        db.execute("INSERT OR REPLACE INTO paper_items (s2id,title,status,arxiv,pub_date,year) VALUES (?,?,'in',?,?,2026)", [sid, "t" + k, "2611.0000" + k, today])
+    html = {"2611.0000a": "Alice, MIT; bob@x.com", "2611.0000b": "", "2611.0000c": None}
+    monkeypatch.setattr(po, "_author_text", lambda c, arxiv: html[arxiv])
+    monkeypatch.setattr("app.modules._paper_label.chat", lambda *a, **kw: (json.dumps([{"i": 0, "orgs": ["MIT", "MIT", " "]}]), 0.001))
+    st = po.arxiv_fill()
+    assert (st["found"], st["empty"], st["skipped"]) == (1, 1, 1)
+    got = {r["s2id"]: (json.loads(r["orgs"]), r["src"]) for r in db.rows("SELECT * FROM paper_orgs WHERE s2id IN (?,?,?)", list(ids.values()))}
+    assert got == {ids["a"]: (["MIT"], "arxiv"), ids["b"]: ([], "arxiv")}
+    monkeypatch.setattr(po, "_one", lambda c, arxiv: ["Stanford University"])
+    po.backfill()
+    assert json.loads(db.row("SELECT orgs FROM paper_orgs WHERE s2id=?", [ids["a"]])["orgs"]) == ["Stanford University"]
+    assert db.row("SELECT src FROM paper_orgs WHERE s2id=?", [ids["a"]])["src"] == "oa"

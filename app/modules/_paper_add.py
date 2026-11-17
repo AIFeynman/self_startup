@@ -292,6 +292,7 @@ def ingest_feed(days: float = FEED_DAYS) -> dict:
     stat |= {"labeled": st["labeled"], "cost": st["cost"], "errors": stat["errors"] + st["errors"][-5:]}
     try:
         stat["orgs"] = _paper_orgs.backfill()
+        stat["orgs_arxiv"] = _paper_orgs.arxiv_fill()
     except Exception as e:  # noqa: BLE001
         stat["errors"].append(f"机构：{type(e).__name__}: {str(e)[:120]}")
     return stat
