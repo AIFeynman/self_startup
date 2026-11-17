@@ -2,6 +2,7 @@
 import json
 import subprocess
 import threading
+from pathlib import Path
 from datetime import datetime, timedelta
 
 import httpx
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 import re
 
 from .. import db, kb, kb_graph, kb_judge, kb_verify, kb_whynot
-from . import _paper_add as paper_add, _paper_label as paper_label, _paper_maintain as paper_maintain, _paper_map as paper_map
+from . import _paper_add as paper_add, _paper_label as paper_label, _paper_maintain as paper_maintain, _paper_map as paper_map, _paper_orgs
 
 TITLE = "知识库"
 ORDER = 60
@@ -140,9 +141,9 @@ _xsearch = {"running": False, "q": "", "result": None, "error": ""}
 
 
 @router.get("/xarticles")
-def xarticles(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100):
+def xarticles(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100, domain: str = "", kind: str = ""):
     from . import _xart
-    return {"items": _xart.listing(q, sort, q_min, limit)}
+    return {"items": _xart.listing(q, sort, q_min, limit, domain, kind), "domains": _xart.DOMAINS, "kinds": _xart.KINDS}
 
 
 class XSearchIn(BaseModel):
@@ -381,6 +382,59 @@ def papers_recent(days: int = 7, per_day: int = 100):
     return [{"day": c["d"], "n": c["n"], "items": _paper_cards(paper_map.db.rows(
         f"SELECT {PAPER_CARD} FROM paper_items WHERE status='in' AND substr(first_seen,1,10)=? ORDER BY cites DESC LIMIT ?", [c["d"], per_day]))}
         for c in counts]
+
+
+def _paper_tax() -> dict:
+    return json.loads((Path(__file__).with_name("paper_taxonomy.json")).read_text())
+
+
+@router.get("/papers/facets")
+def papers_facets():
+    """论文筛选项：领域（一级）/ 类型 / 机构（篇数前 80）/ 年份，各带篇数。"""
+    paper_map._init()
+    _paper_orgs.init()
+    t = _paper_tax()
+    by_d = {r["d"]: r["n"] for r in paper_map.db.rows("SELECT l.d d, count(*) n FROM paper_items p JOIN paper_labels l USING(s2id) WHERE p.status='in' GROUP BY l.d")}
+    by_k = {r["k"]: r["n"] for r in paper_map.db.rows("SELECT l.k k, count(*) n FROM paper_items p JOIN paper_labels l USING(s2id) WHERE p.status='in' GROUP BY l.k")}
+    orgs = paper_map.db.rows("SELECT j.value name, count(*) n FROM paper_orgs o JOIN paper_items p USING(s2id), json_each(o.orgs) j WHERE p.status='in' "
+                             "GROUP BY j.value ORDER BY n DESC LIMIT 80")
+    years = paper_map.db.rows("SELECT year, count(*) n FROM paper_items WHERE status='in' AND year IS NOT NULL GROUP BY year ORDER BY year DESC LIMIT 8")
+    return {"domains": [{"code": d["code"], "name": d["name"], "n": sum(by_d.get(c["code"], 0) for c in d["children"])} for d in t["domains"]],
+            "kinds": [{"code": k["code"], "name": k["name"], "n": by_k.get(k["code"], 0)} for k in t["kinds"]],
+            "orgs": orgs, "years": years,
+            "orgs_done": paper_map.db.row("SELECT count(*) n FROM paper_orgs WHERE orgs!='[]'")["n"]}
+
+
+@router.get("/papers/browse")
+def papers_browse(domain: str = "", kind: str = "", org: str = "", year: int = 0, sort: str = "cites", limit: int = 100):
+    """按领域 / 类型 / 机构 / 年份筛论文；sort=cites 被引多的在前，date 新入库的在前。"""
+    paper_map._init()
+    _paper_orgs.init()
+    where, args = ["p.status='in'"], []
+    if domain:
+        kids = [c["code"] for d in _paper_tax()["domains"] if d["code"] == domain for c in d["children"]]
+        where.append(f"l.d IN ({','.join('?' * len(kids))})" if kids else "0")
+        args += kids
+    if kind:
+        where.append("l.k=?")
+        args.append(kind)
+    if org:
+        where.append("EXISTS (SELECT 1 FROM json_each(o.orgs) j WHERE j.value=?)")
+        args.append(org)
+    if year:
+        where.append("p.year=?")
+        args.append(year)
+    order = "p.first_seen DESC, p.cites DESC" if sort == "date" else "p.cites DESC"
+    rows = paper_map.db.rows(f"SELECT {', '.join('p.' + c.strip() for c in PAPER_CARD.split(','))}, o.orgs orgs, l.k kind, l.d dcode FROM paper_items p "
+                             "LEFT JOIN paper_labels l USING(s2id) LEFT JOIN paper_orgs o USING(s2id) "
+                             f"WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, max(1, min(limit, 300))])
+    total = paper_map.db.row("SELECT count(*) n FROM paper_items p LEFT JOIN paper_labels l USING(s2id) LEFT JOIN paper_orgs o USING(s2id) "
+                             f"WHERE {' AND '.join(where)}", args)["n"]
+    cards = _paper_cards(rows)
+    for c, r in zip(cards, rows):
+        c["orgs"] = json.loads(r["orgs"] or "[]")
+        c["kind"] = r["kind"]
+    return {"total": total, "items": cards}
 
 
 @router.get("/papers/search")

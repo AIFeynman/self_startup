@@ -494,10 +494,12 @@ def score(limit: int = 0, batch: int = 3, workers: int = 4, ids: list[str] | Non
             if not x or not isinstance(x.get("q"), int):
                 stat["miss"] += 1
                 continue
-            mkt = int(bool(x.get("mkt")) or bool(MKT.search(r["title"] + r["text"][:300] + r["text"][-300:])) and x["q"] < 4)
             tags = [str(t).strip() for t in (x.get("tags") or []) if str(t).strip()][:5]
             domain = x.get("d") if x.get("d") in DOMAINS else "other"
             kind = x.get("kind") if x.get("kind") in KINDS else "其他"
+            mkt = int(bool(x.get("mkt")) or bool(MKT.search(r["title"] + r["text"][:300] + r["text"][-300:])) and x["q"] < 4)
+            if x["q"] >= 3 and kind != "产品介绍":
+                mkt = 0
             db.execute("UPDATE x_art SET q=?,mkt=?,kind=?,domain=?,summary=?,tags=?,take=?,why=?,stage='scored',updated=? WHERE id=?",
                        [max(0, min(5, x["q"])), mkt, kind, domain, str(x.get("sum") or "")[:120], json.dumps(tags, ensure_ascii=False),
                         str(x.get("take") or "")[:120], str(x.get("why") or "")[:80], db.now(), r["id"]])
@@ -570,14 +572,18 @@ def _ts(created: str | None) -> float:
         return time.time()
 
 
-def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> list[dict]:
+def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100, domain: str = "", kind: str = "") -> list[dict]:
     init()
     where, args = ["stage='scored'", "mkt=0", "q>=?"], [q_min]
+    for col, v in (("domain", domain), ("kind", kind)):
+        if v:
+            where.append(f"{col}=?")
+            args.append(v)
     for w in re.findall(r"[\u4e00-\u9fff]+|[^\s\u4e00-\u9fff]+", q):
         where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\')")
         args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 6
     order = {"date": "day DESC, q DESC", "views": "views DESC, q DESC", "fol": "fol DESC, views DESC"}.get(sort, "q DESC, day DESC, views DESC")
-    rows = db.rows(f"SELECT id,user,fol,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
+    rows = db.rows(f"SELECT id,user,fol,likes,views,day,title,summary,tags,take,q,kind,domain FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
     for r in rows:
         r["tags"] = json.loads(r["tags"] or "[]")
         r["url"] = f"https://x.com/{r['user']}/status/{r['id']}"

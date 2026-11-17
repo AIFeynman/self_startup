@@ -18,7 +18,7 @@ import threading
 from datetime import datetime, timedelta
 
 from .. import db, settings
-from . import _paper_collect as col, _paper_label as lab
+from . import _paper_collect as col, _paper_label as lab, _paper_orgs
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +151,11 @@ def weekly(on_step=lambda s: None) -> dict:
             stat["errors"].append(f"Jev：{type(e).__name__}: {str(e)[:120]}")
         new = [s for s in new if (db.row("SELECT status FROM paper_items WHERE s2id=?", [s]) or {}).get("status") == "in"]
     stat["admitted"] = len(new)
+    on_step("补作者机构")
+    try:
+        stat["orgs"] = _paper_orgs.backfill()
+    except Exception as e:  # noqa: BLE001
+        stat["errors"].append(f"机构：{type(e).__name__}: {str(e)[:120]}")
     queue = lab.todo(LABEL_CAP)          # 新收的 + 参考文献里多了新论文的（builds_on 要重标），按被引排
     fresh = set(new)
     stat["relabel"] = sum(r["s2id"] not in fresh for r, _ in queue)

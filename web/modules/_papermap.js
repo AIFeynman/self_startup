@@ -63,6 +63,8 @@ const CSS = `
 .pm-add .muted { font-size: 12.5px; margin-top: 6px; }
 .pm-add ol { margin: 8px 0 4px; padding-left: 22px; font-size: 13px; max-height: 320px; overflow: auto; } .pm-add li { margin: 2px 0; }
 .pm-add .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+.pm-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.pm-bar select { font: inherit; width: auto; max-width: 100%; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); }
 .pm-hist { margin: 14px 0; }
 .pm-hist > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; margin-bottom: 8px; }
 .pm-new { color: var(--accent); font-size: 12px; display: block; margin-top: 2px; }
@@ -110,7 +112,8 @@ export async function papersTab(body, ctx, topic = '') {
     out.replaceChildren(
       h('div', {}, '加载中…'),
     );
-    recent().then((box) => out.replaceChildren(
+    Promise.all([browse(), recent()]).then(([flt, box]) => out.replaceChildren(
+      flt,
       box,
       h('details.pm-hist', {}, [
         h('summary', {}, `已梳理的主题 · ${ov.maps.length} 个（点开展开）`),
@@ -121,12 +124,36 @@ export async function papersTab(body, ctx, topic = '') {
     ));
   }
 
+  const card = (p) => h('div', {}, [h('a', { href: p.url, target: '_blank', rel: 'noopener' }, p.title),
+    p.read ? h('a.pm-rd.done', { href: `#learn/item/${p.read.id}` }, '已深读') : null,
+    h('small', {}, `${p.year || ''} · 被引 ${fmt(p.cites)}${p.orgs && p.orgs.length ? ' · ' + p.orgs.slice(0, 3).join(' / ') : ''}${p.tldr ? ' · ' + p.tldr : ''}`)]);
+
+  async function browse() {
+    const fc = await api.get('/api/kb/papers/facets');
+    const f = { domain: '', kind: '', org: '', year: '', sort: 'cites' };
+    const list = h('div');
+    const sel = (key, label, opts) => h('select', { 'aria-label': label, onchange: (e) => { f[key] = e.target.value; run(); } },
+      [h('option', { value: '' }, label), ...opts.map(([v, n]) => h('option', { value: v }, n))]);
+    const bar = h('div.pm-bar', {}, [
+      sel('domain', '全部领域', fc.domains.map((d) => [d.code, `${d.name} (${fmt(d.n)})`])),
+      sel('kind', '全部类型', fc.kinds.map((k) => [k.code, `${k.name} (${fmt(k.n)})`])),
+      sel('org', fc.orgs_done ? '全部机构' : '机构（还在补数据）', fc.orgs.map((o) => [o.name, `${o.name} (${fmt(o.n)})`])),
+      sel('year', '全部年份', fc.years.map((y) => [String(y.year), `${y.year} (${fmt(y.n)})`])),
+      h('select', { 'aria-label': '排序', onchange: (e) => { f.sort = e.target.value; run(); } }, [h('option', { value: 'cites' }, '被引多的在前'), h('option', { value: 'date' }, '新入库的在前')]),
+    ]);
+    async function run() {
+      if (!f.domain && !f.kind && !f.org && !f.year) { list.replaceChildren(h('div.muted', {}, '选一个条件，列出符合的论文（最多 100 篇）。机构来自 OpenAlex，约一半以上的论文有。')); return; }
+      const res = await api.get('/api/kb/papers/browse?' + new URLSearchParams({ ...Object.fromEntries(Object.entries(f).filter(([, v]) => v)), limit: 100 }));
+      list.replaceChildren(h('div.muted', {}, `符合条件 ${fmt(res.total)} 篇${res.total > res.items.length ? `，列出前 ${res.items.length} 篇` : ''}`),
+        res.items.length ? h('div.pm-found', {}, res.items.map(card)) : ui.empty('没有符合条件的论文'));
+    }
+    run();
+    return h('div', {}, [ui.section('按条件筛选', '领域 · 类型 · 机构 · 年份'), bar, list]);
+  }
+
   async function recent() {
     const days = await api.get('/api/kb/papers/recent?days=7');
     const dayName = (d, i) => (i === 0 ? '今天' : i === 1 ? '昨天' : '') + (i < 2 ? ' · ' : '') + d.slice(5);
-    const card = (p) => h('div', {}, [h('a', { href: p.url, target: '_blank', rel: 'noopener' }, p.title),
-      p.read ? h('a.pm-rd.done', { href: `#learn/item/${p.read.id}` }, '已深读') : null,
-      h('small', {}, `${p.year || ''} · 被引 ${fmt(p.cites)}${p.tldr ? ' · ' + p.tldr : ''}`)]);
     const grp = (d, i) => {
       const more = d.n > d.items.length ? `，仅列被引最高的 ${d.items.length} 篇` : '';
       const head = `${dayName(d.day, i)} · 新入库 ${fmt(d.n)} 篇${more}`;

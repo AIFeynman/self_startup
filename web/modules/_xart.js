@@ -41,13 +41,15 @@ const keep = (k, v) => { try { localStorage.setItem('xa-' + k, v); } catch { /* 
 export function xartTab(body, ctx) {
   css();
   const { api, h, ui, toast } = ctx;
-  const f = { q: '', sort: stored('sort', 'q'), q_min: stored('qmin', '2') };
+  const f = { q: '', sort: stored('sort', 'q'), q_min: stored('qmin', '2'), domain: '', kind: '' };
   const sel = (key, opts, label) => h('select', { 'aria-label': label, onchange: (e) => { f[key] = e.target.value; keep(key === 'q_min' ? 'qmin' : key, f[key]); load(); } },
     opts.map(([v, n]) => h('option', { value: v, ...(f[key] === v ? { selected: true } : {}) }, n)));
   const refreshNote = h('span.muted', {}, '');
+  const facets = h('span', { style: 'display: contents' });
   const bar = h('div.xa-bar', {}, [
     sel('sort', [['q', '按质量分'], ['date', '按时间'], ['views', '按观看数'], ['fol', '按作者粉丝']], '排序'),
     sel('q_min', [['1', '质量 ≥1'], ['2', '质量 ≥2'], ['3', '质量 ≥3'], ['4', '质量 ≥4']], '最低质量'),
+    facets,
     h('button.outline', { onclick: () => refresh(true) }, '刷新到现在'),
     refreshNote,
   ]);
@@ -57,9 +59,15 @@ export function xartTab(body, ctx) {
   let seq = 0;
   async function load() {
     const mine = ++seq;
-    const p = new URLSearchParams({ q: f.q, sort: f.sort, q_min: f.q_min, limit: 200 });
-    const items = (await api.get('/api/kb/xarticles?' + p)).items;
+    const p = new URLSearchParams({ q: f.q, sort: f.sort, q_min: f.q_min, domain: f.domain, kind: f.kind, limit: 200 });
+    const res = await api.get('/api/kb/xarticles?' + p);
     if (mine !== seq) return;
+    const items = res.items;
+    if (!facets.firstChild) {
+      const short = (t) => t.split(/[（/]/)[0].trim();
+      facets.append(sel('domain', [['', '全部领域'], ...Object.entries(res.domains).map(([k, t]) => [k, short(t)])], '领域'),
+        sel('kind', [['', '全部类型'], ...res.kinds.map((k) => [k, k])], '类型'));
+    }
     const n = items.length;
     out.replaceChildren(
       ui.section(f.q ? `「${f.q}」` : 'X 长文', [`${n}${n >= 200 ? '+' : ''} 篇 · ${{ q: '质量分高的在前', date: '最新的在前', views: '观看数多的在前', fol: '作者粉丝多的在前' }[f.sort] || ''}`,
@@ -118,7 +126,7 @@ export function xartTab(body, ctx) {
       toggle.textContent = '收起全文';
       try { orig = (await api.get('/api/kb/xarticles/' + a.id)).text || '（没有存全文）'; showZh = false; tr.textContent = '翻译成中文'; tr.style.display = ''; fill(h, box, orig); } catch (err) { box.textContent = '加载失败：' + err.message; }
     } }, '展开全文');
-    const info = h('div.xa-meta', {}, [`@${a.user}`, `${fmt(a.fol)} 粉丝`, a.day, `${fmt(a.views)} 观看`, `${fmt(a.likes)} 赞`, a.kind].map((t) => h('span', {}, t)).concat(...a.tags.map((t) => h('span.xa-tag', {}, t)), toggle, tr));
+    const info = h('div.xa-meta', {}, [`@${a.user}`, `${fmt(a.fol)} 粉丝`, a.day, `${fmt(a.views)} 观看`, `${fmt(a.likes)} 赞`, a.kind].map((t) => h('span', {}, t)).concat(...a.tags.map((t) => h('a.xa-tag', { href: '#', onclick: (e) => { e.preventDefault(); f.q = t; load(); } }, t)), toggle, tr));
     return h('div.xa-it', {}, [
       h('div.xa-q' + (a.q >= 4 ? '.hi' : ''), {}, [String(a.q), h('small', {}, '质量')]),
       h('div', {}, [
