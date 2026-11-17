@@ -49,6 +49,7 @@ VIEW_GATE = 500
 FULL_PER_DAY = 120
 TITLE_PER_DAY = 500
 GRAB_PER_DAY = 200
+VIP_FOL = 500000
 FOL_EXCEPTION = 20000
 MIN_CHARS = 300
 DOMAINS = {
@@ -140,9 +141,16 @@ def crawl_day(day: str, step: int = START_STEP) -> dict:
     return {"day": day, "found": len(seen), "new": new, "calls": stat["calls"]}
 
 
+def watch() -> list[str]:
+    from . import feed
+    return [a.lower() for a in feed.x_accounts_to_fetch()]
+
+
 def gate() -> dict:
     """阅读门槛：未处理的行里，阅读不够又不是大粉账号的标 drop_view（可回捞）。"""
-    n = db.execute("UPDATE x_art SET stage='drop_view', updated=? WHERE stage='found' AND views<? AND fol<?", [db.now(), VIEW_GATE, FOL_EXCEPTION])
+    w = watch()
+    n = db.execute(f"UPDATE x_art SET stage='drop_view', updated=? WHERE stage='found' AND views<? AND fol<? AND lower(user) NOT IN ({','.join('?' * len(w))})",
+                   [db.now(), VIEW_GATE, FOL_EXCEPTION, *w])
     return {"drop_view": n}
 
 
@@ -206,8 +214,9 @@ def titles(limit: int = 0, workers: int = 3) -> dict:
 
 def grab(limit: int = 0, workers: int = 8, per_day: int = 0) -> dict:
     """vx 被限流后的主路径：每天阅读数前 GRAB_PER_DAY 的直接取全文（$0.001/篇），标题预览同时拿到。"""
-    rows = db.rows("SELECT id FROM (SELECT id,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
-                   f"WHERE rk<={per_day or GRAB_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
+    w = watch()
+    rows = db.rows("SELECT id FROM (SELECT id,fol,user,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
+                   f"WHERE rk<={per_day or GRAB_PER_DAY}" + ("" if per_day else f" OR fol>={VIP_FOL} OR lower(user) IN ({','.join('?' * len(w))})") + (f" LIMIT {limit}" if limit else ""), [] if per_day else w)
     stat = {"ok": 0, "drop": 0}
 
     def one(r):
