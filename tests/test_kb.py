@@ -81,3 +81,14 @@ def test_xart_daily_runs_once_a_day_and_stops_over_budget(client, monkeypatch):
     assert not x.due(now)
     db.execute("UPDATE x_art_run SET calls=?", [x.MONTH_STOP_CALLS])
     assert x.daily(datetime(2026, 11, 18, 5, 0)) == {"stopped": "月调用数到上限"}
+
+
+def test_xart_listing_sorts_by_views_and_followers(client):
+    from app.modules import _xart as x
+    x.init()
+    for i, (v, f) in enumerate([(100, 9000), (900, 10), (500, 500)]):
+        db.execute("INSERT INTO x_art (id,user,fol,views,stage,q,title,day) VALUES (?,?,?,?,'scored',3,?,'2026-11-01')", [f"sort{i}", f"u{i}", f, v, f"t{i}"])
+    pick = lambda sort: [r for r in x.listing(sort=sort) if r["id"].startswith("sort")]
+    assert [r["id"] for r in pick("views")] == ["sort1", "sort2", "sort0"]
+    top = pick("fol")
+    assert [r["id"] for r in top] == ["sort0", "sort2", "sort1"] and top[0]["fol"] == 9000
