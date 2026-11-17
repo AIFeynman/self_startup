@@ -32,6 +32,20 @@ const CSS = `
 .rs-note { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 2px 6px 2px 12px; margin-bottom: 4px; }
 .rs-note button { padding: 0 4px; border: none; background: none; color: inherit; }
 .rs-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.rs-filters { display: grid; gap: 8px; margin-bottom: 18px; }
+.rs-fgroup { display: flex; flex-wrap: wrap; gap: 6px; }
+.rs-fchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: transparent; border-radius: 99px; padding: 2px 12px; font-size: 13px; color: var(--text); cursor: pointer; }
+.rs-fchip span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rs-fchip:hover { border-color: var(--accent); }
+.rs-fchip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.rs-fchip.on span { color: inherit; }
+.rs-timeline { position: relative; padding-left: 22px; }
+.rs-timeline::before { content: ''; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+.rs-day { position: relative; margin-bottom: 22px; }
+.rs-day-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; font-size: 15px; }
+.rs-day-head::before { content: ''; position: absolute; left: -22px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--panel); border: 2px solid var(--accent); box-sizing: border-box; }
+.rs-day-head .muted { font-size: 12px; }
+.rs-timeline > .empty { margin-left: -22px; }
 .rs-card { cursor: pointer; margin: 0; display: flex; flex-direction: column; gap: 6px; transition: border-color .12s, transform .12s; }
 .rs-card:hover { border-color: var(--accent); transform: translateY(-1px); }
 .rs-card .t { font: 700 17px/1.4 var(--serif); }
@@ -223,29 +237,70 @@ async function newResearch(el, ctx) {
     comp.setHint(hints[comp.mode]);
   });
 
-  // 最近调研
-  const cards = h('div.rs-cards');
-  let q = '';
+  // 历史调研：按天的时间线 + 时间、状态、引擎筛选
+  const cards = h('div.rs-timeline');
+  const filterBar = h('div.rs-filters');
+  let q = '', all = [];
+  const f = { range: 'all', state: 'all', engine: '' };
+  const RANGES = [['all', '全部时间'], ['7', '近 7 天'], ['30', '近 30 天']];
+  const STATES = [['all', '全部状态'], ['running', '进行中'], ['synth', '已综合'], ['nosynth', '未综合'], ['failed', '有失败']];
+  const isRunning = (r) => ['running', 'queued'].includes(r.status) || r.synth_status === 'running';
+  const stateOk = {
+    all: () => true,
+    running: isRunning,
+    synth: (r) => r.synth_status === 'done',
+    nosynth: (r) => r.synth_status !== 'done' && !isRunning(r),
+    failed: (r) => r.status === 'failed' || (r.progress || []).some((x) => x.status === 'failed'),
+  };
+  const engsOf = (r) => (r.progress?.length ? r.progress.map((x) => x.engine) : r.engines);
+  const daysAgo = (n) => { const d = new Date(Date.now() - n * 86400000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const WEEK = '日一二三四五六';
+  const dayLabel = (day) => {
+    const today = daysAgo(0), yest = daysAgo(1);
+    const d = new Date(day + 'T12:00:00');
+    return day === today ? '今天' : day === yest ? '昨天' : `${day.slice(5).replace('-', '月')}日 周${WEEK[d.getDay()]}`;
+  };
   const card = (r) => h('div.card.rs-card', { onclick: () => go('r/' + r.id) }, [
-    h('div.row', {}, [h('span.card-label', { style: { margin: 0 } }, `#${r.id} · ${fmt(r.created_at)}`), h('span.grow'),
+    h('div.row', {}, [h('span.card-label', { style: { margin: 0 } }, `#${r.id} · ${r.created_at.slice(11, 16)}`), h('span.grow'),
       r.synth_status === 'done' ? h('span.tag.line', {}, '已综合') : null, statusTag(h, r.status)]),
     h('div.t.clamp2', {}, r.topic),
     h('div.muted.clamp2', {}, r.angles.join(' · ') || '整体概况'),
     dots(h, r.progress?.length ? r.progress : r.engines.map((e) => ({ engine: e, status: r.status }))),
   ]);
   let timer;
+  const chip = (on, label, n, onclick) => h('button.rs-fchip' + (on ? '.on' : ''), { type: 'button', onclick }, [label, n == null ? null : h('span', {}, String(n))]);
+  const paint = () => {
+    const since = f.range === 'all' ? '' : daysAgo(+f.range);
+    const byRange = all.filter((r) => !since || r.created_at.slice(0, 10) >= since);
+    const byState = byRange.filter((r) => stateOk[f.state](r));
+    const shown = byState.filter((r) => !f.engine || engsOf(r).includes(f.engine));
+    const engines = Object.keys(ENGINE_NAMES).map((e) => [e, byState.filter((r) => engsOf(r).includes(e)).length]).filter(([, n]) => n);
+    const pick = (k, v) => () => { f[k] = v; paint(); };
+    filterBar.replaceChildren(
+      h('div.rs-fgroup', {}, RANGES.map(([k, t]) => chip(f.range === k, t, null, pick('range', k)))),
+      h('div.rs-fgroup', {}, STATES.map(([k, t]) => chip(f.state === k, t, byRange.filter((r) => stateOk[k](r)).length, pick('state', k)))),
+      h('div.rs-fgroup', {}, [chip(!f.engine, '全部引擎', null, pick('engine', '')),
+        ...engines.map(([e, n]) => chip(f.engine === e, ENGINE_NAMES[e], n, pick('engine', f.engine === e ? '' : e)))]));
+    const days = [...new Set(shown.map((r) => r.created_at.slice(0, 10)))];
+    const filtered = q || f.range !== 'all' || f.state !== 'all' || f.engine;
+    cards.replaceChildren(...(days.length ? days.map((d) => {
+      const list = shown.filter((r) => r.created_at.slice(0, 10) === d);
+      return h('section.rs-day', {}, [h('div.rs-day-head', {}, [h('b', {}, dayLabel(d)), h('span.muted', {}, `${list.length} 个调研`)]),
+        h('div.rs-cards', {}, list.map(card))]);
+    }) : [ui.empty(filtered ? '没有符合条件的调研' : '还没有调研', filtered ? '换个关键词或放宽筛选' : '在上面输入一个主题，回车就开始')]));
+  };
   const load = async () => {
-    const rs = await api.get('/api/research?limit=30&q=' + encodeURIComponent(q));
-    cards.replaceChildren(...(rs.length ? rs.map(card) : [h('div', { style: { gridColumn: '1/-1' } }, ui.empty(q ? '没找到' : '还没有调研', q ? '换个关键词' : '在上面输入一个主题，回车就开始'))]));
+    all = await api.get('/api/research?limit=1000&q=' + encodeURIComponent(q));
+    paint();
     clearTimeout(timer);
-    if (rs.some((r) => ['running', 'queued'].includes(r.status) || r.synth_status === 'running')) timer = setTimeout(() => { if (cards.isConnected) load(); }, 6000);
+    if (all.some(isRunning)) timer = setTimeout(() => { if (cards.isConnected) load(); }, 6000);
   };
   const search = searchBox(h, ui, '搜索历史调研…', (v) => { q = v; load(); });
   search.style.width = '240px';
 
   el.append(...[note, comp, opts, productHelp].filter(Boolean),
-    h('div.row', { style: { margin: '28px 0 12px' } }, [h('div.section-title.grow', { style: { margin: 0 } }, '最近调研'), search]),
-    cards);
+    h('div.row', { style: { margin: '28px 0 10px' } }, [h('div.section-title.grow', { style: { margin: 0 } }, '历史调研'), search]),
+    filterBar, cards);
   await load();
 }
 
