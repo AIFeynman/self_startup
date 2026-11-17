@@ -29,9 +29,9 @@ function question(ctx, it, q, i, refresh) {
     h('div.row', {}, [h('span.tag', {}, `第 ${q.level} 层 · ${LEVEL[q.level] || ''}`), h('span.tag.gray', {}, q.ability)]),
     h('p.tn-qtext', {}, q.q),
     q.hint ? h('details', {}, [h('summary.muted', {}, '卡住了？看提示'), h('div', {}, q.hint)]) : null,
-    h('div.tn-answer', {}, [h('span.card-label', {}, '参考答案'), q.answer]),
-    h('ul.vs-list', {}, (q.points || []).map((p) => h('li', {}, p))),
-    box(ctx, it, { qidx: i, kind: 'answer', label: '备注', placeholder: '这道题的想法、哪里没想到、哪里不好懂', after: refresh }),
+    box(ctx, it, { qidx: i, kind: 'answer', label: '我的作答', placeholder: '先自己写，再看答案', scored: true, after: refresh }),
+    h('details.tn-ans', {}, [h('summary', {}, '看参考答案'), h('div.tn-answer', {}, q.answer),
+      h('ul.vs-list', {}, (q.points || []).map((p) => h('li', {}, p)))]),
   ]);
 }
 
