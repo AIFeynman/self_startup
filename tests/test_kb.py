@@ -181,3 +181,16 @@ def test_xart_listing_sorts_by_views_and_followers(client):
     assert [r["id"] for r in pick("views")] == ["sort1", "sort2", "sort0"]
     top = pick("fol")
     assert [r["id"] for r in top] == ["sort0", "sort2", "sort1"] and top[0]["fol"] == 9000
+
+
+def test_library_counts_total_and_last_day_added(client):
+    from datetime import datetime, timedelta
+    from app.modules import _xart
+    _xart.init()
+    base = client.get("/api/kb/library").json()
+    old = (datetime.now() - timedelta(days=3)).isoformat(timespec="seconds")
+    db.execute("INSERT INTO x_art (id,user,stage,mkt,updated) VALUES ('lib1','a','scored',0,?)", [db.now()])
+    db.execute("INSERT INTO x_art (id,user,stage,mkt,updated) VALUES ('lib2','a','scored',0,?)", [old])
+    got = client.get("/api/kb/library").json()
+    assert got["xart"]["total"] == base["xart"]["total"] + 2 and got["xart"]["added"] == base["xart"]["added"] + 1
+    assert set(got) == {"xart", "paper", "repo"}

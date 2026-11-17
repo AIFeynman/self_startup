@@ -48,6 +48,25 @@ def stats():
             "recent": [{k: d[k] for k in ("path", "type", "title", "date", "summary")} for d in recent]}
 
 
+@router.get("/library")
+def library():
+    """长文 / 论文 / GitHub 项目三个库的总数，和最近 24 小时新增的数量。"""
+    from datetime import datetime, timedelta
+    from . import _xart
+    _xart.init()
+    paper_map._init()
+    since = (datetime.now() - timedelta(days=1)).isoformat(timespec="seconds")
+    one = lambda sql, *a: db.row(sql, list(a))["n"]
+    return {
+        "xart": {"total": one("SELECT count(*) n FROM x_art WHERE stage='scored' AND mkt=0"),
+                 "added": one("SELECT count(*) n FROM x_art WHERE stage='scored' AND mkt=0 AND updated>=?", since)},
+        "paper": {"total": one("SELECT count(*) n FROM paper_items WHERE status='in'"),
+                  "added": one("SELECT count(*) n FROM paper_items WHERE status='in' AND first_seen>=?", since)},
+        "repo": {"total": one("SELECT count(*) n FROM oss_repos WHERE status='ok'"),
+                 "added": one("SELECT count(*) n FROM oss_repos WHERE status='ok' AND first_seen>=?", since)},
+    }
+
+
 def agent_context(ref: str) -> str:
     try:
         return (kb.read("GRAPH.md")[:4000] + "\n\n" + kb.read("INDEX.md")[:3000]
