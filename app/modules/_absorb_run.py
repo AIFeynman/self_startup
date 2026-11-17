@@ -448,6 +448,9 @@ def s_evidence(r: Run) -> dict:
     return {"shown": sh, "ev": {str(k): v for k, v in evid.items()}, "sum": dict(_pmap(runq, qs, 5))}
 
 
+TAGS = "jcsrn"
+
+
 def s_page(r: Run) -> dict:
     th, qd, d, e, pools = r.load("theme.json"), r.load("questions.json"), r.load("merged.json"), r.load("evidence.json"), r.load("pools.json")
     units, qs, cards, judg = qd["U"], qd["Q"], d["C"], pools["judg"]
@@ -469,9 +472,12 @@ def s_page(r: Run) -> dict:
             seen.add(u["aid"])
             src.append({"user": u["user"], "url": f"https://x.com/{u['user']}/status/{u['aid']}", "day": u["day"], "kind": u["source_kind"],
                         "gain": c["gain"].get(str(m), ""), "claim": u["claim"], "quote": u["quote"]})
-        tag = "c" if cc[i] or any(j["rel"] == "相反" for j in jd) or any(x["v"] == "反对" for x in ev) else "s" if jd else "n"
+        hard = any(x["v"] == "佐证" and x["pool"] in ("papers", "repos", "intel") for x in ev)
+        tag = ("j" if any(j["rel"] == "相反" for j in jd) else "c" if cc[i] or any(x["v"] == "反对" for x in ev)
+               else "s" if any(j["rel"] == "一致" for j in jd) and (len(c["authors"]) >= 2 or hard) else "r" if jd else "n")
+        jd.sort(key=lambda j: {"相反": 0, "一致": 1}.get(j["rel"], 2))
         out.append({"id": i, "qid": c["qid"], "tag": tag, "claim": c["claim"], "scope": c["scope"], "authors": c["authors"], "ev": ev, "conf": cc[i], "judg": jd, "src": src})
-    out.sort(key=lambda c: ("csn".index(c["tag"]), -len(c["authors"]), -len(c["ev"])))
+    out.sort(key=lambda c: (TAGS.index(c["tag"]), -len(c["authors"]), -len(c["ev"])))
     qout = []
     for q in qs:
         cs, sc = [c for c in cards if c["qid"] == q["id"]], [c for c in out if c["qid"] == q["id"]]

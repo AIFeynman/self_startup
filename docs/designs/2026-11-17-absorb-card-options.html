@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>吸收卡片方案对比</title>
+<style>
+:root { --bg:#f6f3ee; --card:#fffdf9; --ink:#2b2622; --mute:#857b70; --line:#e6dfd5; --acc:#b4532a; --red:#a63d2f; --green:#4f7d4a; --amber:#b9852f; --soft:#f1ece4; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#1d1b19; --card:#262320; --ink:#ece6de; --mute:#a39a8f; --line:#3a3530; --acc:#e07a4f; --red:#e0735f; --green:#8bbf84; --amber:#d9a85a; --soft:#302c28; } }
+:root[data-theme="dark"] { --bg:#1d1b19; --card:#262320; --ink:#ece6de; --mute:#a39a8f; --line:#3a3530; --acc:#e07a4f; --red:#e0735f; --green:#8bbf84; --amber:#d9a85a; --soft:#302c28; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.6 -apple-system, "PingFang SC", sans-serif; }
+.w { max-width:1180px; margin:0 auto; padding:28px 16px 60px; }
+h1 { font-size:22px; margin:0 0 6px; }
+.sub { color:var(--mute); margin:0 0 22px; }
+.g { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
+@media (max-width:900px) { .g { grid-template-columns:1fr; } }
+.opt { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:12px; }
+.opt.pick { border:2px solid var(--acc); }
+.hd { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.hd b { font-size:16px; }
+.rec { font-size:12px; color:#fff; background:var(--acc); border-radius:999px; padding:1px 8px; }
+.pros { font-size:13px; color:var(--mute); margin:0; padding-left:18px; }
+.c { border-top:1px solid var(--line); padding-top:12px; }
+.tag { display:inline-block; font-size:12px; border-radius:6px; padding:1px 7px; margin-right:6px; background:#f6e4dc; color:var(--red); }
+.t { font-weight:600; }
+.sc { font-size:13px; color:var(--mute); }
+.vs { margin:8px 0; border-left:3px solid var(--red); background:var(--soft); padding:6px 10px; font-size:13px; border-radius:0 6px 6px 0; }
+.vs em { font-style:normal; color:var(--red); font-weight:600; margin-right:6px; }
+.st { font-size:13px; color:var(--mute); }
+.st .ok { color:var(--green); }
+.btns { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.btns span { border:1px solid var(--line); border-radius:999px; padding:1px 10px; font-size:13px; }
+.one { display:flex; gap:8px; align-items:flex-start; }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--red); margin-top:8px; flex:none; }
+.q { font-size:14px; border-left:3px solid var(--amber); padding:4px 10px; margin:6px 0; }
+.q small { display:block; color:var(--mute); }
+label { display:flex; gap:8px; align-items:center; font-size:14px; cursor:pointer; margin-top:auto; }
+</style>
+</head>
+<body>
+<div class="w">
+<h1>吸收卡片：三种呈现方式</h1>
+<p class="sub">同一张真实卡（Agent 评测 #1894，挑战判断）。已上线到预览的是 A。选一个即可，不改就是 A。</p>
+<div class="g">
+
+<div class="opt pick">
+  <div class="hd"><b>A 判断对照卡</b><span class="rec">推荐 · 已实现</span></div>
+  <ul class="pros"><li>一眼看到“它和我哪条判断冲突”，最快决定信不信</li><li>强度一行：几位作者、几位一手、什么证据</li><li>每卡多 1–2 行高度</li></ul>
+  <div class="c">
+    <span class="tag">挑战判断</span><span class="t">人工审查应从读 diff 转向看录屏、截图、状态图和形式化验证结果等证据</span>
+    <div class="sc">适用：agent 产出量极大时</div>
+    <div class="vs"><em>它反驳了你的判断</em>证据来自不读代码不跑命令用户的个人经验，推不出对需审 diff 的工程师也成立。<span class="sc"> 另 1 条</span></div>
+    <div class="st">●● 2 位作者，1 位一手　<span class="ok">1 篇论文佐证</span></div>
+    <div class="btns"><span>已知</span><span>采纳</span><span>不信</span><span>想试</span></div>
+  </div>
+  <label><input type="radio" name="v" checked> 选 A</label>
+</div>
+
+<div class="opt">
+  <div class="hd"><b>B 一行极简</b></div>
+  <ul class="pros"><li>一屏能扫 15 张以上，适合快速过量</li><li>和判断的关系只剩颜色点，要点开才知道冲突什么</li><li>强度信息藏到展开里</li></ul>
+  <div class="c">
+    <div class="one"><span class="dot"></span><div><span class="t">人工审查应从读 diff 转向看录屏、截图、状态图和形式化验证结果等证据</span> <span class="sc">· 2 人 · 1 论文</span></div></div>
+    <div class="btns"><span>已知</span><span>采纳</span><span>不信</span><span>想试</span></div>
+  </div>
+  <label><input type="radio" name="v"> 选 B</label>
+</div>
+
+<div class="opt">
+  <div class="hd"><b>C 原文引文卡</b></div>
+  <ul class="pros"><li>直接看到作者原话，信任感强</li><li>中英混杂时读得慢，卡片更高</li><li>和你判断的关系放在最后</li></ul>
+  <div class="c">
+    <span class="tag">挑战判断</span><span class="t">人工审查应从读 diff 转向看录屏、截图、状态图和形式化验证结果等证据</span>
+    <div class="q">“人不读 diff，看录屏、截图、状态图、形式化验证的结果”<small>FinanceYF5 · 实践者 · 11-13</small></div>
+    <div class="q">“analyzing supporting materials”<small>0x_kaize · 转述 · 11-14</small></div>
+    <div class="sc">与你的判断相反 · 1 篇论文佐证</div>
+    <div class="btns"><span>已知</span><span>采纳</span><span>不信</span><span>想试</span></div>
+  </div>
+  <label><input type="radio" name="v"> 选 C</label>
+</div>
+
+</div>
+</div>
+</body>
+</html>

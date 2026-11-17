@@ -1,4 +1,4 @@
-"""吸收：按选题把一段时间的 X 长文压成认知卡，对照知识库里“我的判断”和论文 / 开源项目 / 产品动态 / 讨论，标出被挑战、被加强和新的。
+"""吸收：按选题把一段时间的 X 长文压成认知卡，对照知识库里“我的判断”和论文 / 开源项目 / 产品动态 / 讨论，标出挑战你判断的、有争议的、印证你判断的、与你判断相关的和新的。
 流水线在 _absorb_run.py，作为独立进程跑，每个选题一个目录 data/absorb/<选题>_<起>_<止>/；这里只负责发起、报进度、读结果、存表态。
 表态存在该目录的 reactions.json，不进 app.db。"""
 import json
@@ -68,6 +68,12 @@ def runs():
 @router.get("/topics")
 def topics():
     return sorted(p.stem for p in (ar.KB / "topics").glob("*.md"))
+
+
+@router.get("/preflight")
+def preflight(start: str, end: str):
+    rows = ar._ro().execute("select day, count(*), coalesce(sum(kind!=''), 0) from x_art where day between ? and ? group by day order by day", (start, end)).fetchall()
+    return {"total": sum(x[1] for x in rows), "classified": sum(x[2] for x in rows), "gaps": [x[0] for x in rows if x[2] * 20 < x[1]]}
 
 
 class RunIn(BaseModel):
