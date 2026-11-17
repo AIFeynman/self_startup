@@ -41,7 +41,7 @@ const keep = (k, v) => { try { localStorage.setItem('xa-' + k, v); } catch { /* 
 export function xartTab(body, ctx) {
   css();
   const { api, h, ui, toast } = ctx;
-  const f = { q: '', sort: stored('sort', 'q'), q_min: stored('qmin', '2'), domain: '', kind: '' };
+  const f = { q: '', sort: stored('sort', 'q'), q_min: stored('qmin', '2'), days: stored('days', '7'), domain: '', kind: '' };
   const sel = (key, opts, label) => h('select', { 'aria-label': label, onchange: (e) => { f[key] = e.target.value; keep(key === 'q_min' ? 'qmin' : key, f[key]); load(); } },
     opts.map(([v, n]) => h('option', { value: v, ...(f[key] === v ? { selected: true } : {}) }, n)));
   const refreshNote = h('span.muted', {}, '');
@@ -49,6 +49,7 @@ export function xartTab(body, ctx) {
   const bar = h('div.xa-bar', {}, [
     sel('sort', [['q', '按质量分'], ['date', '按时间'], ['views', '按观看数'], ['fol', '按作者粉丝']], '排序'),
     sel('q_min', [['1', '质量 ≥1'], ['2', '质量 ≥2'], ['3', '质量 ≥3'], ['4', '质量 ≥4']], '最低质量'),
+    sel('days', [['1', '今天发布'], ['3', '近 3 天'], ['7', '近 7 天'], ['30', '近 30 天'], ['0', '全部时间']], '发布时间'),
     facets,
     h('button.outline', { onclick: () => refresh(true) }, '刷新到现在'),
     refreshNote,
@@ -59,7 +60,7 @@ export function xartTab(body, ctx) {
   let seq = 0;
   async function load() {
     const mine = ++seq;
-    const p = new URLSearchParams({ q: f.q, sort: f.sort, q_min: f.q_min, domain: f.domain, kind: f.kind, limit: 200 });
+    const p = new URLSearchParams({ q: f.q, sort: f.sort, q_min: f.q_min, domain: f.domain, kind: f.kind, days: f.days, limit: 200 });
     const res = await api.get('/api/kb/xarticles?' + p);
     if (mine !== seq) return;
     const items = res.items;
@@ -75,7 +76,7 @@ export function xartTab(body, ctx) {
       f.q ? h('div.card.xa-x', {}, [h('div.row', {}, [
         h('span.muted', {}, '库里没有想要的？'),
         h('button.outline', { onclick: () => fetchX(f.q) }, `去 X 上搜「${f.q}」并入库`)]), xnote]) : '',
-      n ? h('div.xa-list', {}, items.map(card)) : ui.empty('没有符合条件的长文', '放宽最低质量，或换个关键词'),
+      n ? h('div.xa-list', {}, items.map(card)) : ui.empty('没有符合条件的长文', '放宽最低质量或发布时间，或换个关键词'),
     );
   }
   const xnote = h('div.muted', {}, '关键词支持 X 搜索语法，比如 from:omarsar0、"context engineering"。取阅读最高的 40 篇读全文、提炼、打分，约 0.05 美元，1–3 分钟。');
@@ -102,7 +103,7 @@ export function xartTab(body, ctx) {
     if (s.result) {
       const r = s.result;
       xnote.textContent = `搜到 ${r.found} 篇，新读 ${r.new} 篇，入库打分 ${r.scored} 篇。`;
-      f.q_min = '1'; f.q = s.q.replace(/"/g, '').split(/\s+/).map((w) => w.replace(/^from:/i, '')).filter((w) => w && !w.includes(':')).join(' ');
+      f.q_min = '1'; f.days = '0'; f.q = s.q.replace(/"/g, '').split(/\s+/).map((w) => w.replace(/^from:/i, '')).filter((w) => w && !w.includes(':')).join(' ');
       load();
     }
   }

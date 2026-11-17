@@ -526,16 +526,21 @@ def test_map_counts_papers_added_since_built(client, labeled):
     assert [m["new"] for m in pmap.overview()["maps"]] == [1]
 
 
-def test_recent_groups_new_papers_by_day_with_total(client):
+def test_browse_filters_by_added_days_and_keyword_and_sorts_by_time(client, labeled):
     from datetime import timedelta
-    paper("r1", "low cited today", 2026, 1)
-    paper("r2", "high cited today", 2026, 90)
-    paper("r3", "old day", 2026, 5)
+    paper("r1", "zzquark low cited today", 2026, 1)
+    paper("r2", "zzquark high cited today", 2026, 90)
+    paper("r3", "zzquark two days ago", 2026, 5)
     db.execute("UPDATE paper_items SET first_seen=? WHERE s2id='r3'", [(datetime.now() - timedelta(days=2)).isoformat(timespec="seconds")])
-    paper("r4", "too old", 2026, 5)
+    paper("r4", "zzquark too old", 2026, 5)
     db.execute("UPDATE paper_items SET first_seen=? WHERE s2id='r4'", [(datetime.now() - timedelta(days=20)).isoformat(timespec="seconds")])
-    got = client.get("/api/kb/papers/recent?days=7&per_day=1").json()
-    assert [(g["n"], [p["s2id"] for p in g["items"]]) for g in got] == [(2, ["r2"]), (1, ["r3"])]
+    lab.run()
+    titles = lambda **q: [r["title"] for r in client.get("/api/kb/papers/browse", params={"q": "zzquark", **q}).json()["items"]]
+    assert titles(added=1) == ["zzquark high cited today", "zzquark low cited today"]
+    assert titles(added=3, sort="date")[-1] == "zzquark two days ago"
+    assert titles(added=30) and "zzquark too old" in titles(added=30)
+    assert "zzquark too old" in titles()
+    assert client.get("/api/kb/papers/browse", params={"q": "nosuchword9x"}).json() == {"total": 0, "items": []}
 
 
 def test_browse_filters_by_domain_kind_org_and_year(client):
@@ -547,7 +552,7 @@ def test_browse_filters_by_domain_kind_org_and_year(client):
     top = tax["domains"][0]
     child = top["children"][0]["code"]
     for sid, year, d, k, orgs in [("a" * 40, 2024, child, "method", ["OpenAI"]), ("b" * 40, 2023, child, "survey", ["Google", "OpenAI"]), ("c" * 40, 2024, "other_x", "method", [])]:
-        db.execute("INSERT INTO paper_items (s2id,title,year,cites,status) VALUES (?,?,?,5,'in')", [sid, sid[:3], year])
+        db.execute("INSERT INTO paper_items (s2id,title,year,cites,status,first_seen) VALUES (?,?,?,5,'in',?)", [sid, sid[:3], year, db.now()])
         db.execute("INSERT INTO paper_labels (s2id,k,d) VALUES (?,?,?)", [sid, k, d])
         db.execute("INSERT INTO paper_orgs (s2id,orgs) VALUES (?,?)", [sid, json.dumps(orgs)])
     ids = lambda **q: sorted(r["title"] for r in client.get("/api/kb/papers/browse", params=q).json()["items"])
@@ -556,5 +561,8 @@ def test_browse_filters_by_domain_kind_org_and_year(client):
     assert ids(org="OpenAI") == ["aaa", "bbb"]
     assert ids(org="Google", year=2023) == ["bbb"]
     assert ids(year=2024) == ["aaa", "ccc"]
+    one = next(r for r in client.get("/api/kb/papers/browse", params={"org": "Google"}).json()["items"])
+    assert (one["kind"], one["domain"]) == ("综述", top["children"][0]["name"])
+    assert one["added"] == db.now()[:10]
     f = client.get("/api/kb/papers/facets").json()
     assert {o["name"]: o["n"] for o in f["orgs"]} == {"OpenAI": 2, "Google": 1}

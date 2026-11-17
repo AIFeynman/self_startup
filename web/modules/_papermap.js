@@ -1,9 +1,18 @@
-// 论文脉络：输入一个研究主题，从论文库里梳理出几条按时间演进的研究线（后端见 app/modules/_paper_map.py）。
+// 论文库：按入库时间 / 领域 / 类型 / 机构 / 年份筛，顶部搜索框按关键词查，也能把关键词梳理成几条按时间演进的研究线（后端见 app/modules/_paper_map.py）。
 // 路由：#kb/papers（主题列表）#kb/papers/<主题>（某个主题的脉络）
 const CSS = `
-.pm-ask { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 14px 16px; }
-.pm-ask input { flex: 1; min-width: 200px; font: inherit; padding: 7px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); }
-.pm-ask .muted { width: 100%; font-size: 12.5px; }
+.pm-ask { padding: 12px 16px; }
+.pm-ask .muted { font-size: 12.5px; }
+.pm-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; font-size: 13px; }
+.pr-rows { display: grid; gap: 8px; margin-bottom: 8px; }
+.pr-row { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: start; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.pr-t { font-size: 14.5px; line-height: 1.45; } .pr-t a { color: var(--text); } .pr-t a:hover { color: var(--accent); }
+.pr-t .pm-rd { margin-left: 8px; }
+.pr-s { margin-top: 3px; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.pr-meta { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
+.pr-meta .pm-tag.d { color: var(--accent); } .pr-meta .pm-tag.o { color: var(--text); }
+.pr-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 640px) { .pr-row { grid-template-columns: 1fr; gap: 6px; } .pr-side { flex-direction: row; gap: 10px; align-items: center; } }
 .pm-maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
 .pm-maps a { display: block; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); }
 .pm-maps a:hover { border-color: var(--accent); text-decoration: none; }
@@ -64,7 +73,7 @@ const CSS = `
 .pm-add ol { margin: 8px 0 4px; padding-left: 22px; font-size: 13px; max-height: 320px; overflow: auto; } .pm-add li { margin: 2px 0; }
 .pm-add .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
 .pm-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-.pm-bar select { font: inherit; width: auto; max-width: 100%; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); }
+.pm-bar select { font: inherit; font-size: 12.5px; width: auto; max-width: 130px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--text); }
 .pm-hist { margin: 14px 0; }
 .pm-hist > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; margin-bottom: 8px; }
 .pm-new { color: var(--accent); font-size: 12px; display: block; margin-top: 2px; }
@@ -87,20 +96,21 @@ const ago = (s) => (s || '').slice(5, 16).replace('T', ' ');
 const READ_MAX = 10;        // 和后端 PAPER_READ_MAX 一致：一次最多新开几篇深读
 const RUNNING = new Set(['queued', 'running']);
 
+const ADDED = [['1', '今天入库'], ['3', '近 3 天'], ['7', '近 7 天'], ['30', '近 30 天'], ['0', '全部时间']];
+
 export async function papersTab(body, ctx, topic = '') {
   css();
   const { api, h, ui, toast } = ctx;
   const ov = await api.get('/api/kb/papers');
-  const input = h('input', { placeholder: '输入一个研究主题，比如：后训练、检索增强生成、混合专家 MoE、推理模型的强化学习', value: topic });
-  const btn = h('button', { onclick: () => go(input.value) }, '梳理脉络');
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(input.value); });
   const tiers = TIERS.filter(([k]) => ov.tiers[k]).map(([k, n]) => `${n} ${fmt(ov.tiers[k])}`).join(' · ');
   const note = h('div.muted', {}, ov.total
-    ? `论文库 ${fmt(ov.total)} 篇（${tiers}），越老的论文门槛越高，近期论文过 Jev 筛水文；已标注 ${fmt(ov.labeled)} 篇。新主题在后台生成，约 1–3 分钟，页面会显示进行到哪一步。`
+    ? `论文库 ${fmt(ov.total)} 篇（${tiers}），越老的论文门槛越高，近期论文过 Jev 筛水文；已标注 ${fmt(ov.labeled)} 篇。顶部搜索框输入主题：筛库内论文，也能一键梳理成脉络（后台生成，约 1–3 分钟）。`
     : '论文库还是空的：先跑采集和标注（scripts/paper_proto collect / judge / label）。');
   const out = h('div');
   const adder = addPanel(ctx, (t) => go(t, false));
-  body.append(h('div.card.pm-ask', {}, [input, btn, note, ov.total ? maintLine(ctx, ov.maintain) : null]), adder.el, out);
+  body.append(h('div.card.pm-ask', {}, [note, ov.total ? maintLine(ctx, ov.maintain) : null]), adder.el, out);
+  const f = { q: '', domain: '', kind: '', org: '', year: '', added: '1', sort: 'date' };
+  let filt = null;
 
   if (topic) {
     let m;
@@ -109,77 +119,84 @@ export async function papersTab(body, ctx, topic = '') {
   } else list();
 
   function list() {
-    out.replaceChildren(
-      h('div', {}, '加载中…'),
-    );
-    Promise.all([browse(), recent()]).then(([flt, box]) => out.replaceChildren(
+    out.replaceChildren(h('div', {}, '加载中…'));
+    browse().then((flt) => out.replaceChildren(
       flt,
-      box,
       h('details.pm-hist', {}, [
         h('summary', {}, `已梳理的主题 · ${ov.maps.length} 个（点开展开）`),
         ov.maps.length ? h('div.pm-maps', {}, ov.maps.map((m) => h('a', { href: pLink(m.topic) }, [
           h('b', {}, m.topic), h('small', {}, `${m.lines} 条研究线 · ${m.chosen} 篇候选 · ${ago(m.created)}`),
           m.new ? h('span.pm-new', {}, `自生成后相关论文多了 ${m.new} 篇（新入库或重新标注），可重新生成`) : null])))
-          : ui.empty('还没有梳理过的主题', '在上面输入一个主题试试')]),
+          : ui.empty('还没有梳理过的主题', '在顶部搜索框输入一个主题，点「梳理脉络」')]),
     ));
   }
 
-  const card = (p) => h('div', {}, [h('a', { href: p.url, target: '_blank', rel: 'noopener' }, p.title),
-    p.read ? h('a.pm-rd.done', { href: `#learn/item/${p.read.id}` }, '已深读') : null,
-    h('small', {}, `${p.year || ''} · 被引 ${fmt(p.cites)}${p.orgs && p.orgs.length ? ' · ' + p.orgs.slice(0, 3).join(' / ') : ''}${p.tldr ? ' · ' + p.tldr : ''}`)]);
+  const card = (p) => h('div.pr-row', {}, [
+    h('div.pr-main', {}, [
+      h('div.pr-t', {}, [h('a', { href: p.url, target: '_blank', rel: 'noopener' }, p.title),
+        p.read ? h('a.pm-rd.done', { href: `#learn/item/${p.read.id}` }, '已深读') : null]),
+      p.tldr ? h('div.pr-s', {}, p.tldr) : null,
+      h('div.pr-meta', {}, [p.kind ? h('span.pm-tag', {}, p.kind) : null, p.domain ? h('span.pm-tag.d', {}, p.domain) : null,
+        ...(p.orgs || []).slice(0, 3).map((o) => h('span.pm-tag.o', {}, o))]),
+    ]),
+    h('div.pr-side', {}, [h('span', {}, p.added ? `入库 ${p.added.slice(5)}` : ''), h('span', {}, `${p.year || ''}`), h('span', {}, `被引 ${fmt(p.cites)}`)]),
+  ]);
 
   async function browse() {
     const fc = await api.get('/api/kb/papers/facets');
-    const f = { domain: '', kind: '', org: '', year: '', sort: 'cites' };
-    const list = h('div');
+    const res = h('div');
     const sel = (key, label, opts) => h('select', { 'aria-label': label, onchange: (e) => { f[key] = e.target.value; run(); } },
-      [h('option', { value: '' }, label), ...opts.map(([v, n]) => h('option', { value: v }, n))]);
+      [h('option', { value: '' }, label), ...opts.map(([v, n]) => h('option', { value: v, ...(f[key] === v ? { selected: true } : {}) }, n))]);
+    const fixed = (key, label, opts) => h('select', { 'aria-label': label, onchange: (e) => { f[key] = e.target.value; run(); } },
+      opts.map(([v, n]) => h('option', { value: v, ...(f[key] === v ? { selected: true } : {}) }, n)));
     const bar = h('div.pm-bar', {}, [
+      fixed('added', '入库时间', ADDED),
+      fixed('sort', '排序', [['date', '新入库的在前'], ['cites', '被引多的在前']]),
       sel('domain', '全部领域', fc.domains.map((d) => [d.code, `${d.name} (${fmt(d.n)})`])),
       sel('kind', '全部类型', fc.kinds.map((k) => [k.code, `${k.name} (${fmt(k.n)})`])),
       sel('org', fc.orgs_done ? '全部机构' : '机构（还在补数据）', fc.orgs.map((o) => [o.name, `${o.name} (${fmt(o.n)})`])),
       sel('year', '全部年份', fc.years.map((y) => [String(y.year), `${y.year} (${fmt(y.n)})`])),
-      h('select', { 'aria-label': '排序', onchange: (e) => { f.sort = e.target.value; run(); } }, [h('option', { value: 'cites' }, '被引多的在前'), h('option', { value: 'date' }, '新入库的在前')]),
     ]);
+    let seq = 0;
     async function run() {
-      if (!f.domain && !f.kind && !f.org && !f.year) { list.replaceChildren(h('div.muted', {}, '选一个条件，列出符合的论文（最多 100 篇）。机构来自 OpenAlex，约一半以上的论文有。')); return; }
-      const res = await api.get('/api/kb/papers/browse?' + new URLSearchParams({ ...Object.fromEntries(Object.entries(f).filter(([, v]) => v)), limit: 100 }));
-      list.replaceChildren(h('div.muted', {}, `符合条件 ${fmt(res.total)} 篇${res.total > res.items.length ? `，列出前 ${res.items.length} 篇` : ''}`),
-        res.items.length ? h('div.pm-found', {}, res.items.map(card)) : ui.empty('没有符合条件的论文'));
+      const mine = ++seq;
+      const r = await api.get('/api/kb/papers/browse?' + new URLSearchParams({ ...Object.fromEntries(Object.entries(f).filter(([, v]) => v && v !== '0')), limit: 100 }));
+      if (mine !== seq) return;
+      const head = h('div.pm-head', {}, [
+        h('span.muted', {}, `${f.q ? `「${f.q}」 ` : ''}符合条件 ${fmt(r.total)} 篇${r.total > r.items.length ? `，列出前 ${r.items.length} 篇` : ''}`),
+        f.q ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); f.q = ''; run(); } }, '清除关键词') : null,
+        f.q ? h('button.outline.sm', { onclick: () => go(f.q, false) }, `梳理「${f.q}」的脉络`) : null]);
+      res.replaceChildren(head, r.items.length ? h('div.pr-rows', {}, r.items.map(card))
+        : ui.empty('没有符合条件的论文', f.added !== '0' ? '换成更长的入库时间，或选「全部时间」' : '换个关键词或放宽筛选'));
     }
+    filt = { run, bar };
     run();
-    return h('div', {}, [ui.section('按条件筛选', '领域 · 类型 · 机构 · 年份'), bar, list]);
+    return h('div', {}, [bar, res]);
   }
 
-  async function recent() {
-    const days = await api.get('/api/kb/papers/recent?days=7');
-    const dayName = (d, i) => (i === 0 ? '今天' : i === 1 ? '昨天' : '') + (i < 2 ? ' · ' : '') + d.slice(5);
-    const grp = (d, i) => {
-      const more = d.n > d.items.length ? `，仅列被引最高的 ${d.items.length} 篇` : '';
-      const head = `${dayName(d.day, i)} · 新入库 ${fmt(d.n)} 篇${more}`;
-      const grid = h('div.pm-found', {}, d.items.map(card));
-      return i === 0 ? h('div', {}, [ui.section(head), grid]) : h('details.pm-hist', {}, [h('summary', {}, head), grid]);
-    };
-    return h('div', {}, days.length ? days.map(grp) : [ui.section('新入库论文', '最近 7 天'), ui.empty('最近 7 天没有新入库的论文')]);
+  function search(q) {
+    f.q = (q || '').trim();
+    if (f.q && f.added === '1') f.added = '0';
+    if (out.querySelector('.pm-bar')) { filt.bar.querySelector('select').value = f.added; return filt.run(); }
+    history.replaceState(null, '', '#kb/papers');
+    list();
   }
 
   async function go(t, force = false) {
     t = (t || '').trim();
     if (!t) return;
     if (decodeURIComponent(location.hash) !== '#kb/papers/' + t) { history.replaceState(null, '', pLink(t)); }
-    btn.disabled = true;
-    try { wait(await api.post('/api/kb/papers/map', { topic: t, force })); } catch (e) { out.replaceChildren(); toast('生成失败：' + e.message, true); btn.disabled = false; }
+    try { wait(await api.post('/api/kb/papers/map', { topic: t, force })); } catch (e) { out.replaceChildren(); toast('生成失败：' + e.message, true); }
   }
 
   // 后台生成：每 2 秒看一次进度，离开这个主题就停
   function wait(m) {
-    if (m.error) { out.replaceChildren(); toast('生成失败：' + m.error, true); btn.disabled = false; return; }
-    if (!m.running) { btn.disabled = false; show(m); return; }
-    btn.disabled = true;
+    if (m.error) { out.replaceChildren(); toast('生成失败：' + m.error, true); return; }
+    if (!m.running) { show(m); return; }
     out.replaceChildren(ui.empty(`正在梳理「${m.topic}」…`, `${m.step} · 改写检索意图 → 召回 → 引用子图选点 → 模型分线，共 1–3 分钟`));
     setTimeout(async () => {
       if (!out.isConnected || decodeURIComponent(location.hash) !== '#kb/papers/' + m.topic) return;
-      try { wait(await api.get('/api/kb/papers/map?topic=' + enc(m.topic))); } catch (e) { toast('生成失败：' + e.message, true); btn.disabled = false; }
+      try { wait(await api.get('/api/kb/papers/map?topic=' + enc(m.topic))); } catch (e) { toast('生成失败：' + e.message, true); }
     }, 2000);
   }
 
@@ -322,6 +339,7 @@ export async function papersTab(body, ctx, topic = '') {
       m.open.length ? h('div.card', { style: { padding: '12px 16px' } }, h('ul.pm-open', {}, m.open.map((o) => h('li', {}, o)))) : '',
     );
   }
+  return { search };
 }
 
 // 维护状态：每日热门入库 / 每周维护（刷新被引、重判门槛、补标注）各自最近一次；同一种连续失败两次标红
