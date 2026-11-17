@@ -114,6 +114,52 @@ def list_docs(type: str = "", limit: int = 200):
     return [{k: d[k] for k in ("path", "type", "title", "date", "summary")} for d in docs[:limit]]
 
 
+# ---------- X 长文库（逻辑在 app/modules/_xart.py） ----------
+
+_xlock = threading.Lock()
+_xsearch = {"running": False, "q": "", "result": None, "error": ""}
+
+
+@router.get("/xarticles")
+def xarticles(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100):
+    from . import _xart
+    return {"items": _xart.listing(q, sort, q_min, limit)}
+
+
+class XSearchIn(BaseModel):
+    q: str
+    days: int = 30
+
+
+@router.post("/xarticles/search")
+def xarticles_search(body: XSearchIn):
+    """指定 X 搜索（X 搜索语法，如 `Claude Code`、`from:omarsar0`）：后台抓取并提炼，完成后同步知识库。"""
+    from . import _xart
+    if not body.q.strip():
+        raise HTTPException(400, "搜索词不能为空")
+    with _xlock:
+        if _xsearch["running"]:
+            raise HTTPException(409, f"正在搜索「{_xsearch['q']}」，等它结束")
+        _xsearch.update(running=True, q=body.q.strip(), result=None, error="")
+
+    def run():
+        try:
+            _xsearch["result"] = _xart.adhoc(body.q.strip(), max(1, min(body.days, 90)))
+            kb.sync(refresh_graph=False)
+        except Exception as e:  # noqa: BLE001
+            _xsearch["error"] = str(e)
+        finally:
+            _xsearch["running"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True}
+
+
+@router.get("/xarticles/search")
+def xarticles_search_status():
+    return _xsearch
+
+
 # ---------- 判断台账（逻辑在 app/kb_judge.py） ----------
 
 @router.get("/judgments")

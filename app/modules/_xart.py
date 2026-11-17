@@ -49,6 +49,7 @@ VIEW_GATE = 500
 FULL_PER_DAY = 120
 TITLE_PER_DAY = 500
 GRAB_PER_DAY = 200
+VIP_FOL = 500000
 FOL_EXCEPTION = 20000
 MIN_CHARS = 300
 DOMAINS = {
@@ -140,9 +141,16 @@ def crawl_day(day: str, step: int = START_STEP) -> dict:
     return {"day": day, "found": len(seen), "new": new, "calls": stat["calls"]}
 
 
+def watch() -> list[str]:
+    from . import feed
+    return [a.lower() for a in feed.x_accounts_to_fetch()]
+
+
 def gate() -> dict:
     """阅读门槛：未处理的行里，阅读不够又不是大粉账号的标 drop_view（可回捞）。"""
-    n = db.execute("UPDATE x_art SET stage='drop_view', updated=? WHERE stage='found' AND views<? AND fol<?", [db.now(), VIEW_GATE, FOL_EXCEPTION])
+    w = watch()
+    n = db.execute(f"UPDATE x_art SET stage='drop_view', updated=? WHERE stage='found' AND views<? AND fol<? AND lower(user) NOT IN ({','.join('?' * len(w))})",
+                   [db.now(), VIEW_GATE, FOL_EXCEPTION, *w])
     return {"drop_view": n}
 
 
@@ -206,8 +214,9 @@ def titles(limit: int = 0, workers: int = 3) -> dict:
 
 def grab(limit: int = 0, workers: int = 8, per_day: int = 0) -> dict:
     """vx 被限流后的主路径：每天阅读数前 GRAB_PER_DAY 的直接取全文（$0.001/篇），标题预览同时拿到。"""
-    rows = db.rows("SELECT id FROM (SELECT id,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
-                   f"WHERE rk<={per_day or GRAB_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
+    w = watch()
+    rows = db.rows("SELECT id FROM (SELECT id,fol,user,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
+                   f"WHERE rk<={per_day or GRAB_PER_DAY}" + ("" if per_day else f" OR fol>={VIP_FOL} OR lower(user) IN ({','.join('?' * len(w))})") + (f" LIMIT {limit}" if limit else ""), [] if per_day else w)
     stat = {"ok": 0, "drop": 0}
 
     def one(r):
@@ -316,8 +325,8 @@ def _excerpt(r: dict) -> str:
     return f"### id={r['id']} 全文{r['n']}字\n标题: {r['title']}\n开头: {t[:2200]}\n中段: {t[m:m + 600]}\n结尾: {t[-600:]}"
 
 
-def score(limit: int = 0, batch: int = 3, workers: int = 4) -> dict:
-    rows = db.rows("SELECT id,title,text,n FROM x_art WHERE stage='full'" + (f" LIMIT {limit}" if limit else ""))
+def score(limit: int = 0, batch: int = 3, workers: int = 4, ids: list[str] | None = None) -> dict:
+    rows = db.rows("SELECT id,title,text,n FROM x_art WHERE stage='full'" + (f" AND id IN ({','.join('?' * len(ids))})" if ids is not None else "") + (f" LIMIT {limit}" if limit else ""), ids or [])
     chunks = [rows[i:i + batch] for i in range(0, len(rows), batch)]
     system = SCORE_PROMPT.replace("__DOMAINS__", "；".join(f"{k}={v}" for k, v in DOMAINS.items()))
     stat = {"scored": 0, "miss": 0}
@@ -356,3 +365,69 @@ def funnel() -> dict:
 def days(start: str, end: str) -> list[str]:
     d0, d1 = datetime.strptime(start, "%Y-%m-%d"), datetime.strptime(end, "%Y-%m-%d")
     return [(d0 + timedelta(days=i)).strftime("%Y-%m-%d") for i in range((d1 - d0).days + 1)]
+
+
+ADHOC_PAGES = 6
+ADHOC_TOP = 40
+
+
+def adhoc(query: str, days: int = 30) -> dict:
+    """用户指定的 X 搜索（关键词 / from:作者 等 X 搜索语法）：只处理这次搜到的长文，跳过 AI 相关判断和每日名额，直接取全文打分。"""
+    init()
+    now = int(time.time())
+    stat = {"calls": 0}
+    found: dict[str, dict] = {}
+    with _client() as c:
+        cur = None
+        for _ in range(ADHOC_PAGES):
+            p = {"q": f'url:"x.com/i/article" {query} since_time:{now - days * 86400} until_time:{now}', "product": "Latest"}
+            if cur:
+                p["cursor"] = cur
+            j = _get(c, f"{API}/twitter/tweet/advanced_search", p)
+            stat["calls"] += 1
+            for t in j.get("tweets") or []:
+                found[str(t["id"])] = t
+            if not j.get("has_more") or not j.get("next_cursor"):
+                break
+            cur = j["next_cursor"]
+        top = sorted(found.values(), key=lambda t: int(t.get("viewCount") or 0), reverse=True)[:ADHOC_TOP]
+        for t in top:
+            day = datetime.fromtimestamp(_ts(t.get("createdAt")), timezone.utc).strftime("%Y-%m-%d")
+            _save_found(t, day)
+        ids, new = [], 0
+        for t in top:
+            r = db.row("SELECT stage FROM x_art WHERE id=?", [str(t["id"])])
+            if r["stage"] == "scored":
+                continue
+            a = _article(c, str(t["id"]))
+            text = _blocks_text(a)
+            if not a.get("title") or len(text) < MIN_CHARS:
+                db.execute("UPDATE x_art SET stage='drop_short',updated=? WHERE id=?", [db.now(), str(t["id"])])
+                continue
+            db.execute("UPDATE x_art SET title=?,preview=?,text=?,n=?,rel='core',stage='full',updated=? WHERE id=?",
+                       [a["title"], a.get("preview_text") or text[:200], text, len(text), db.now(), str(t["id"])])
+            ids.append(str(t["id"]))
+            new += 1
+    sc = score(ids=ids) if ids else {"scored": 0}
+    return {"found": len(found), "taken": len(top), "new": new, "scored": sc["scored"], "calls": stat["calls"] + len(top)}
+
+
+def _ts(created: str | None) -> float:
+    try:
+        return datetime.strptime(created or "", "%a %b %d %H:%M:%S %z %Y").timestamp()
+    except ValueError:
+        return time.time()
+
+
+def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> list[dict]:
+    init()
+    where, args = ["stage='scored'", "mkt=0", "q>=?"], [q_min]
+    for w in q.split():
+        where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\')")
+        args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 5
+    order = "day DESC, q DESC" if sort == "date" else "q DESC, day DESC, views DESC"
+    rows = db.rows(f"SELECT id,user,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
+    for r in rows:
+        r["tags"] = json.loads(r["tags"] or "[]")
+        r["url"] = f"https://x.com/{r['user']}/status/{r['id']}"
+    return rows
