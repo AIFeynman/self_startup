@@ -53,3 +53,11 @@ def test_xarticle_blocks_keep_images_and_translate_skips_them(client, monkeypatc
     client.post("/api/kb/xarticles/21/translate")
     assert len(sent) == 1
     assert client.post("/api/kb/xarticles/999/translate").status_code == 404
+
+
+def test_xarticle_search_splits_cjk_and_matches_fulltext(client):
+    from app.modules import _xart
+    _xart.init()
+    db.execute("INSERT INTO x_art (id,user,title,text,stage,q) VALUES ('31','a','Agent 手册','讲 AI 公司怎么创业，找客户','scored',3)")
+    assert [r["id"] for r in _xart.listing("AI创业")] == ["31"]
+    assert _xart.listing("AI融资") == []

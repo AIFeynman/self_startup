@@ -57,7 +57,7 @@ DOMAINS = {
     "agent": "Agent / 多 Agent / 工作流编排", "coding": "AI 编程工具与实践（Claude Code、Codex、Cursor 等）",
     "prompt": "提示词 / 上下文工程 / Skill / MCP", "model": "模型发布 / 能力评测 / 对比",
     "rag": "检索 / 记忆 / 知识库", "train": "训练 / 微调 / 对齐 / 推理优化", "infra": "部署 / 成本 / 工程基础设施",
-    "product": "AI 产品 / 创业 / 商业", "research": "论文解读 / 研究观点", "other": "其他",
+    "product": "AI 产品", "startup": "AI 创业 / 商业模式 / 增长", "org": "AI 与组织 / 管理 / 团队协作", "strategy": "AI 战略 / 行业与投资判断", "research": "论文解读 / 研究观点", "other": "其他",
 }
 KINDS = ("经验", "教程", "观点", "研究", "新闻汇总", "产品介绍", "其他")
 MKT = re.compile(r"完全保存版|【保存版】|プロンプト公開|販売|限定|配布|無料プレゼント|収益化|副業|月収|LINE登録|講座|サロン|附.{0,6}提示词|先收藏|公式LINE|マガジン|入群|课程")
@@ -295,11 +295,14 @@ def titles(limit: int = 0, workers: int = 3) -> dict:
     return {**stat, "todo": len(rows)}
 
 
-def grab(limit: int = 0, workers: int = 8, per_day: int = 0) -> dict:
+def grab(limit: int = 0, workers: int = 8, per_day: int = 0, min_views: int = 0) -> dict:
     """vx 被限流后的主路径：每天阅读数前 GRAB_PER_DAY 的直接取全文（$0.001/篇），标题预览同时拿到。"""
     w = watch()
-    rows = db.rows("SELECT id FROM (SELECT id,fol,user,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
-                   f"WHERE rk<={per_day or GRAB_PER_DAY}" + ("" if per_day else f" OR fol>={VIP_FOL} OR lower(user) IN ({','.join('?' * len(w))})") + (f" LIMIT {limit}" if limit else ""), [] if per_day else w)
+    if min_views:
+        rows = db.rows("SELECT id FROM x_art WHERE stage='found' AND views>=?" + (f" LIMIT {limit}" if limit else ""), [min_views])
+    else:
+        rows = db.rows("SELECT id FROM (SELECT id,fol,user,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
+                       f"WHERE rk<={per_day or GRAB_PER_DAY}" + ("" if per_day else f" OR fol>={VIP_FOL} OR lower(user) IN ({','.join('?' * len(w))})") + (f" LIMIT {limit}" if limit else ""), [] if per_day else w)
     stat = {"ok": 0, "drop": 0}
 
     def one(r):
@@ -321,10 +324,10 @@ def grab(limit: int = 0, workers: int = 8, per_day: int = 0) -> dict:
 
 REL_PROMPT = """你是 AI 内容库的筛选员。对每篇 X 长文（只给标题和开头预览）判断它与 AI 的关系，只输出 JSON 数组，不要其他文字。
 元素: {"id":"...","rel":"core|topic|none","why":"≤20字中文理由"}
-- core: 主要讲 AI 模型、Agent、AI 编程工具(Claude Code/Codex/Cursor 等)、提示词/上下文/工作流实践、AI 产品、AI 论文或技术
-- topic: AI 只是话题或噱头(AI 副业赚钱、泛 AI 新闻汇总、含 AI 字样的泛生活/营销文、AI 概念股/加密货币)
+- core: 主要讲 AI 模型、Agent、AI 编程工具(Claude Code/Codex/Cursor 等)、提示词/上下文/工作流实践、AI 产品、AI 论文或技术；也包括 AI 战略与行业判断、AI 对组织/管理/团队协作的影响、AI 创业(做 AI 产品或公司的经验、商业模式、增长、融资、市场分析)
+- topic: AI 只是话题或噱头(AI 副业赚钱教程、泛 AI 新闻汇总、含 AI 字样的泛生活/营销文、AI 概念股/加密货币行情)
 - none: 与 AI 无关(标题含 Claude/Grok 等名字也要看内容是不是真讲 AI)
-从严：只有标题或预览明确在讲 AI 本身（模型、Agent、AI 编程、提示词/上下文、AI 论文与技术）才给 core；拿不准给 topic。
+从严：只有标题或预览明确在讲 AI 本身，或 AI 带来的战略、组织、创业问题，才给 core；拿不准给 topic。
 """
 
 
@@ -363,9 +366,9 @@ def relevance(limit: int = 0, batch: int = 20, workers: int = 4) -> dict:
     return {**stat, "todo": len(rows)}
 
 
-def fulltext(limit: int = 0, workers: int = 8) -> dict:
+def fulltext(limit: int = 0, workers: int = 8, per_day: int = FULL_PER_DAY) -> dict:
     rows = db.rows("SELECT id,text FROM (SELECT id,text,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='rel') "
-                   f"WHERE rk<={FULL_PER_DAY}" + (f" LIMIT {limit}" if limit else ""))
+                   f"WHERE rk<={per_day}" + (f" LIMIT {limit}" if limit else ""))
     stat = {"ok": 0, "short": 0, "failed": 0}
 
     def one(r):
@@ -397,6 +400,7 @@ SCORE_PROMPT = """你是 AI 内容库的严格评审。对每篇 X 长文打分�
 3 个人经验里有可迁移的做法，并说明了原因或适用边界；或观点有自己的论据
 4 有机制解释(为什么这样)，加数据、日志、实验或对比，并给出自己的判断与局限
 5 深度实践或原创研究：有完整的方法、可复现的证据、对机制的洞察，别人读完能直接改变做法
+战略/组织/创业类同样按上面的标准：「机制」指商业或组织机制(为什么这样做有效、适用边界)，有数据、案例、复盘和自己的判断才给 3 分以上；空谈趋势、鸡汤、融资新闻搬运最多 2 分。
 单次实测、没有解释原理、没有边界说明的，最多 2 分。take 写不出可迁移内容的，不能超过 2 分。
 mkt=true: 主要目的是引流/售卖课程/社群/服务/代币，或软广；教程若信息完整可独立复现则 mkt=false。
 """
@@ -505,9 +509,9 @@ def _ts(created: str | None) -> float:
 def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> list[dict]:
     init()
     where, args = ["stage='scored'", "mkt=0", "q>=?"], [q_min]
-    for w in q.split():
-        where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\')")
-        args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 5
+    for w in re.findall(r"[\u4e00-\u9fff]+|[^\s\u4e00-\u9fff]+", q):
+        where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\')")
+        args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 6
     order = "day DESC, q DESC" if sort == "date" else "q DESC, day DESC, views DESC"
     rows = db.rows(f"SELECT id,user,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
     for r in rows:

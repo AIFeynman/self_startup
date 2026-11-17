@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>元认知卡片 Schema 设计</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--ink:#1d1d1b;--mut:#6b6a66;--line:#e7e4dc;--ok:#1f7a4d;--okbg:#e4f3ea;--mid:#9a6a00;--midbg:#fbf0d4;--hot:#b4381f;--hotbg:#fbe4de;--blue:#2457a6;--bluebg:#e3ecf9}
+@media(prefers-color-scheme:dark){:root{--bg:#161614;--card:#1f1f1c;--ink:#ecebe6;--mut:#a09f98;--line:#33322d;--ok:#6fd0a0;--okbg:#17342a;--mid:#e8b84a;--midbg:#3a2f12;--hot:#f08a72;--hotbg:#3d1c14;--blue:#8fb4f0;--bluebg:#1b2a44}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+.w{max-width:940px;margin:0 auto;padding:28px 16px 80px}h1{font-size:26px;margin:0 0 6px}h2{font-size:19px;margin:34px 0 10px;padding-top:6px;border-top:1px solid var(--line)}h3{font-size:15px;margin:16px 0 4px}
+.sub,.m{color:var(--mut)}.m{font-size:13px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:12px 0}
+.concl{border-left:6px solid var(--ok)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:block;overflow-x:auto}
+th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}th{background:var(--bg);white-space:nowrap}
+code{font:12.5px ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,monospace;margin:8px 0}
+.layers{display:grid;gap:10px;margin:12px 0}.ly{border-radius:10px;padding:10px 14px;border:1.5px solid var(--line);background:var(--card)}
+.ly b{display:block}.ly.a{border-color:var(--blue);background:var(--bluebg)}.ly.b{border-color:var(--mid);background:var(--midbg)}.ly.c{border-color:var(--ok);background:var(--okbg)}.ly.d{border-color:var(--hot);background:var(--hotbg)}
+.face{border:2px solid var(--ink);border-radius:14px;background:var(--card);margin:12px 0;overflow:hidden}
+.face .hd{background:var(--ink);color:var(--bg);padding:10px 16px;font-weight:700;font-size:16px}
+.slot{display:grid;grid-template-columns:96px 1fr;border-top:1px solid var(--line)}.slot:first-of-type{border-top:0}
+.slot>b{background:var(--bg);padding:8px 12px;font-size:13px;color:var(--mut)}.slot>div{padding:8px 14px;font-size:14px}
+.tag{display:inline-block;font-size:11.5px;padding:0 8px;border-radius:99px;margin-right:4px;font-weight:600}
+.t1{background:var(--okbg);color:var(--ok)}.t2{background:var(--hotbg);color:var(--hot)}.t3{background:var(--midbg);color:var(--mid)}.t4{background:var(--bluebg);color:var(--blue)}
+@media(max-width:600px){.slot{grid-template-columns:1fr}h1{font-size:22px}}
+</style></head><body><div class="w">
+<h1>元认知卡片 Schema 设计</h1>
+<p class="sub">依据：38 篇样例长文抽出的 369 个认知单元（判断 86、数据 83、做法 77、批评 64、前提 34、动机 25）和 9 张结论卡的实际制作过程。</p>
+
+<div class="box concl"><b>结论</b>：用“三层 + 一张边表”。<br>
+① <b>单元</b>（每篇文章里一句话的最小认知）→ ② <b>结论卡</b>（跨文章聚合出的一个判断，卡面固定 6 个槽位）→ ③ <b>关系边</b>（卡与卡、单元与卡之间带类型和原文依据的连线）；另有 <b>概念 / 场景词表</b> 作为所有层共用的连接键。<br>
+样例暴露的核心缺陷是：旧的“单元类型”把<b>它是什么</b>和<b>它对结论起什么作用</b>混在一起，并且<b>缺少“场景”和“结构化数据”</b>。新 schema 把这三件事拆开。</div>
+
+<h2>1　现有数据暴露的 5 个问题</h2>
+<table><tr><th>问题</th><th>证据（样例里的真实情况）</th><th>后果</th></tr>
+<tr><td>类型和角色混用</td><td>“批评”共 64 条，但里面既有“无 harness 时 20 个任务只有 8 个真完成”（其实是<b>支持</b>“不能自评”的数据），也有“网关剥离缓存标记会让历史全按未缓存计费”（是<b>踩坑</b>）。</td><td>同一个单元放进不同卡片，角色不同；类型无法稳定复用，只能靠人工分支持/反驳。</td></tr>
+<tr><td>没有“场景”槽</td><td>没有任何字段回答“什么情况下用 / 不用”。限定条件散在“前提”里，有 34 条，措辞各异。</td><td>卡片只能说“是什么”，不能说“在哪成立”；也无法按场景检索或把两张卡关联到同一场景。</td></tr>
+<tr><td>数据是自由文本</td><td>“84→79”“52.8%→66.5%”“33/60”都是我手挑的大数字，靠正则加粗。</td><td>无法自动选 hero 数字，也无法判断“有没有基线、样本多大”。</td></tr>
+<tr><td>来源独立性靠手工修正</td><td>8 篇同题“Harness, Loops, Graphs”互相转述，被我手工合并成 1 个来源；论文被引用多次也要手工归并。</td><td>共识强度会被虚高；必须在 schema 里留“被引来源”字段自动去重。</td></tr>
+<tr><td>关系只有隐含的</td><td>结论间的 8 条关系（支撑、落地、依赖…）是我手画的；卡内“演进”是手写句子。</td><td>要建立关系必须有独立的边表，带类型、原文依据、判定者。</td></tr></table>
+
+<h2>2　三层模型</h2>
+<div class="layers">
+<div class="ly a"><b>L1 认知单元 unit　（每篇文章 8–12 条，模型抽取）</b>一句话的最小认知：判断 / 做法 / 事实 / 踩坑 / 原因 / 场景。带原文引文、来源层级、数字。</div>
+<div class="ly b"><b>L2 结论卡 card　（跨文章聚合，约每 3–6 篇产生 1 张）</b>一个判断 + 适用场景 + 怎么做 + 证据强度 + 边界 + 演进。卡面槽位固定，扫一眼能懂。</div>
+<div class="ly c"><b>L3 关系边 rel　（卡↔卡、单元↔卡）</b>类型固定、必带原文依据、标明由模型还是人判定、可被人改。</div>
+<div class="ly d"><b>共用词表 vocab　（概念 concept、场景 scene、实体 entity）</b>所有层都挂这些 ID；两张卡只要共享同一个概念或场景，就能自动被推荐关联。</div></div>
+
+<h2>3　L1 认知单元：把“是什么”和“起什么作用”拆开</h2>
+<p class="m">单元只描述自己是什么。它对某张卡是支持还是反驳，写在边表里（同一单元可以对 A 卡支持、对 B 卡限定）。</p>
+<table><tr><th>字段</th><th>取值 / 说明</th></tr>
+<tr><td><code>kind</code> 内容类型</td><td><b>判断</b> claim（作者的观点）· <b>做法</b> practice（具体怎么做）· <b>事实</b> fact（数据 / 实测 / 案例结果）· <b>踩坑</b> pitfall（失败、陷阱、例外）· <b>原因</b> rationale（为什么 / 动机）· <b>场景</b> context（在什么条件下）</td></tr>
+<tr><td><code>text</code></td><td>一句话 ≤60 字，自成一句，不依赖上下文。</td></tr>
+<tr><td><code>quote</code></td><td>原文逐字引文 ≤40 字；入库前程序逐字核对，对不上就丢弃（样例 144/144 通过）。</td></tr>
+<tr><td><code>polarity</code> 倾向</td><td>主张 / 反对 / 中性。表示作者对<b>自己讨论的对象</b>的态度，不是对卡的角色。</td></tr>
+<tr><td><code>scene[]</code> 场景</td><td>三个维度，从词表选：任务类型（编码 / 研究 / 长任务…）· 技术栈（Claude Code / Codex / 自建 harness…）· 规模（单 Agent / 多 Agent / 团队）。</td></tr>
+<tr><td><code>concept</code></td><td>归一化概念 ID（如“验证闭环”“缓存”），解决同义不同词。</td></tr>
+<tr><td><code>metric</code> 结构化数据</td><td>仅 kind=事实：<code>{what, value, baseline, n, unit}</code>，例：<code>{what:"完成属实率", value:8, baseline:20, unit:"个任务"}</code>。有基线、有样本才算强证据。</td></tr>
+<tr><td><code>tier</code> 来源层级</td><td>一手实测（作者自己跑的）· 引用论文 / 官方 · 自报 · 转述 · 纯观点。决定证据强度，也决定能不能算“一手”。</td></tr>
+<tr><td><code>cites[]</code> / <code>origin</code></td><td>被转述的原始来源 ID（论文、他人文章）。同一 <code>cites</code> 自动合并成一个独立来源。</td></tr>
+<tr><td><code>article_id, user, posted_at</code></td><td>溯源；点击能回到 x.com 原文。</td></tr></table>
+
+<h2>4　L2 结论卡：6 个固定槽位</h2>
+<p class="m">下面是“不能自评”这张卡按新 schema 填出来的样子（数据取自样例，场景槽和做法槽是新增的）。</p>
+<div class="face"><div class="hd">不能让模型自己验收自己：验证必须来自外部，最好是程序能判“不通过”</div>
+<div class="slot"><b>① 结论</b><div>一句话判断 + 为什么重要：Agent 报告“完成”不可信（20 个任务只有 8 个属实）。</div></div>
+<div class="slot"><b>② 适用场景</b><div><span class="tag t4">任务：自主长任务 / 编码</span><span class="tag t4">栈：Claude Code · Codex · 自建 loop</span><span class="tag t4">规模：单 Agent 起</span></div></div>
+<div class="slot"><b>③ 怎么做</b><div>把完成标准写成脚本可判定的终态（Done when）；验证者与执行者分开；验证强度取决于它接受的最弱证据。</div></div>
+<div class="slot"><b>④ 证据强度</b><div>独立来源 10 · 一手 1 · 反驳 1 &nbsp;→&nbsp; <span class="tag t3">共识，但有保留</span><br><span class="m">hero：8 / 20（一手实测，有基线）；论文：217 个循环仅 76 个有验证器</span></div></div>
+<div class="slot"><b>⑤ 边界与反例</b><div><span class="tag t3">边界</span>/goal 评估者只读对话时仍不可信；<span class="tag t2">反例</span>对抗式 AI 评审“多半浪费 token”。</div></div>
+<div class="slot"><b>⑥ 关联与演进</b><div>落地 ← 先写完成标准；被依赖 ← 评测驱动改动；支撑 → Harness 影响不亚于换模型。<br><span class="m">Oct 23 首次提出 → Nov 4 收紧 → Nov 14 出现反驳</span></div></div></div>
+<p class="m">“认知 / 经验”怎么落在卡上：<b>认知</b>＝①（判断 + 原因）；<b>经验</b>＝②③⑤（场景 + 做法 + 踩坑）。两者各占固定位置，所以元认知扫一眼就能分辨“这是道理”还是“这是打法”。</p>
+
+<h3>卡片字段（存储）</h3>
+<pre>card {
+  id, statement(≤40字), why(≤60字),
+  scene[],             // 并集或人工校正
+  actions[],           // 做法类单元 id，≤3 条置顶
+  hero: {unit_id, text},   // 自动选：tier最高且有 baseline 的 metric
+  verdict: 广泛共识|共识但有保留|有争议|缺一手数据|单一来源,   // 规则计算，不用模型
+  counts: {articles, sources, first_hand, counter},
+  open_gap,            // 缺的证据，如“没有写 / 没写完成标准的对照数据”
+  status: draft|confirmed|retired, version
+}</pre>
+
+<h2>5　L3 关系边：便于和其他卡建立关系</h2>
+<pre>rel { id, from, to,            // card 或 unit 的 id
+      type, basis_quote,       // 必须带原文依据，没有依据不入库
+      by: model|human, confidence, created_at }</pre>
+<table><tr><th>关系</th><th>方向含义</th><th>样例里的例子</th></tr>
+<tr><td><span class="tag t1">支持</span></td><td>单元 → 卡</td><td>实测“20 个任务只有 8 个属实”支持“不能自评”</td></tr>
+<tr><td><span class="tag t2">反驳</span></td><td>单元 → 卡</td><td>“同设置下换模型差距仍然很大”反驳 Harness 影响</td></tr>
+<tr><td><span class="tag t3">限定</span></td><td>单元 → 卡</td><td>“60 行只是一家公司的经验值”限定“规则越短越好”</td></tr>
+<tr><td>具体化</td><td>卡 → 卡</td><td>规则越短越好 → 机制优于文字</td></tr>
+<tr><td>依赖 / 落地</td><td>卡 → 卡</td><td>先写完成标准 落地 不能自评；评测驱动 依赖 不能自评</td></tr>
+<tr><td>解法 / 前提</td><td>卡 → 卡</td><td>多 Agent 以“隔离上下文”为前提，是上下文污染的一种解法</td></tr>
+<tr><td>同源</td><td>卡 ↔ 卡</td><td>成本大头 与 上下文污染 共同指向“反复重读历史”</td></tr>
+<tr><td>演进</td><td>卡 → 卡（新取代 / 收紧旧）</td><td>“验证强度取决于最弱证据” 收紧为 “必须程序可判否”</td></tr></table>
+<h3>为什么这样更容易建关系</h3>
+<ul>
+<li><b>共享词表就是天然的连接点</b>：两张卡只要共用同一概念或同一场景，系统就能自动提示“可能相关”，由模型补类型、给依据，人只确认。</li>
+<li><b>单元可被多卡复用</b>：同一个单元对 A 卡是支持、对 B 卡是限定，不用复制。</li>
+<li><b>关系带依据且可追责</b>：每条边有原文引文和判定者，错了能改；人改过的边不被模型覆盖。</li>
+<li><b>卡的版本化</b>：新文章进来只追加单元和边，卡的 verdict 重算，旧结论不丢（对应“演进”）。</li></ul>
+
+<h2>6　抽取与聚类的落地方式</h2>
+<ol>
+<li><b>逐篇抽单元</b>（现有 Haiku 流程，改 prompt）：输出 kind / polarity / scene / metric / tier / cites；引文程序逐字核对，失败丢弃。</li>
+<li><b>概念与场景归一化</b>：先从已有单元聚出候选词表，人批量合并改名（可复用已有 <code>kb_concept_edit</code> 的重命名与隐藏逻辑）。</li>
+<li><b>归簇成卡</b>：同一概念下的判断类单元，模型归成候选卡并起草 statement；每张候选卡必须带支持与反驳单元。</li>
+<li><b>规则算 verdict 与 hero</b>：不交给模型，保证可复核。</li>
+<li><b>提边</b>：对共享概念 / 场景的卡对，模型判关系类型并附引文，人确认后入库。</li></ol>
+<p class="m">成本：抽取已验证约等于免费（本机 Claude CLI 轻量档）；新增的是归一化与提边两步，量级为“卡数 × 近邻数”，远小于逐篇抽取。</p>
+
+<h2>7　验证与已知风险</h2>
+<ul>
+<li><b>验证方式</b>：拿样例 38 篇用新 schema 重抽一遍，检查三件事：① 同一单元能否稳定分到同一 kind；② 9 张卡的场景和做法槽是否填得出（填不出的比例）；③ 手画的 8 条边模型能复现几条（召回）以及多出的边是否合理。</li>
+<li><b>风险</b>：轻量模型抽 metric（基线、样本量）可能不准，数据类需抽样人工复核；场景词表一开始太细会碎，先控制在 ≤30 个；长文有大量营销或转述，tier 判断要允许“不确定”。</li>
+<li><b>不做</b>：不引入图数据库；SQLite 三张表（unit / card / rel）加词表足够。</li></ul>
+
+<h2>自主决策</h2>
+<table><tr><th>选了什么</th><th>备选</th><th>理由</th><th>改回代价</th></tr>
+<tr><td>单元类型与对卡角色拆开，角色只存在边表</td><td>沿用 claim / evidence / counter 混合类型</td><td>样例里“批评”类被不同卡当成支持、反驳、踩坑，混用无法复用</td><td>中，需重新抽取</td></tr>
+<tr><td>新增“场景”为一等字段和词表</td><td>把场景写进“前提”文本</td><td>场景是跨卡建关系和检索的主要连接键</td><td>低，可后补</td></tr>
+<tr><td>verdict 和 hero 用规则算</td><td>让模型判断</td><td>可复核、可解释，且已在样例验证</td><td>低</td></tr>
+<tr><td>关系边必带原文依据</td><td>只存类型</td><td>没有依据的边无法被人审，会累积噪声</td><td>低</td></tr>
+<tr><td>卡面固定 6 槽</td><td>自由排版</td><td>扫一眼可比，缺的槽（如“没有对照数据”）直接暴露缺口</td><td>低</td></tr></table>
+<p class="m">未做：没有改任何代码或数据库，本页仅是设计。想落地的话，下一步是用上述 schema 重抽样例 38 篇做验证。</p>
+</div></body></html>
