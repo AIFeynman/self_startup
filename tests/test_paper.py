@@ -422,8 +422,9 @@ def test_ingest_feed_marks_hot_and_labels(client, monkeypatch, labeled):
     new = detail("HOT", "Fresh hot paper", 2026, 0, arxiv="2610.00001", refs=["A"], pub=datetime.now().strftime("%Y-%m-%d"))
     monkeypatch.setattr(col, "batch", lambda ids, c, fields=col.DETAIL_FIELDS: [new if i.endswith("00001") else None for i in ids])
     monkeypatch.setattr(lab, "judge_recent", lambda: {"judged": 0})
+    monkeypatch.setattr(padd._paper_orgs, "backfill", lambda: {"found": 3})
     st = padd.ingest_feed()
-    assert (st["feed"], st["new"], st["admitted"], st["labeled"]) == (2, 1, 1, 1)
+    assert (st["feed"], st["new"], st["admitted"], st["labeled"], st["orgs"]) == (2, 1, 1, 1, {"found": 3})
     r = db.row("SELECT * FROM paper_items WHERE s2id='HOT'")
     assert (r["status"], r["tier"], r["hot"], r["src"]) == ("in", "recent", 1, "feed")
     assert padd.ingest_feed()["labeled"] == 0                  # 再跑一次不重复标

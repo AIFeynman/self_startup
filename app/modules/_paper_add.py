@@ -16,7 +16,7 @@ import re
 import threading
 
 from .. import db
-from . import _paper_collect as col, _paper_label as lab
+from . import _paper_collect as col, _paper_label as lab, _paper_orgs
 
 log = logging.getLogger(__name__)
 
@@ -290,4 +290,8 @@ def ingest_feed(days: float = FEED_DAYS) -> dict:
     stat["admitted"] = len(s2ids)
     st = label_ids(s2ids)
     stat |= {"labeled": st["labeled"], "cost": st["cost"], "errors": stat["errors"] + st["errors"][-5:]}
+    try:
+        stat["orgs"] = _paper_orgs.backfill()
+    except Exception as e:  # noqa: BLE001
+        stat["errors"].append(f"机构：{type(e).__name__}: {str(e)[:120]}")
     return stat
