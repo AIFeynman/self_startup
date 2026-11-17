@@ -125,6 +125,32 @@ def _save_found(t: dict, day: str) -> bool:
          int(t.get("viewCount") or 0), t.get("createdAt") or "", day, db.now()]))
 
 
+def heads() -> dict[str, dict]:
+    init()
+    return {r["id"]: {"title": r["title"], "preview": r["preview"]}
+            for r in db.rows("SELECT id,title,preview FROM x_art WHERE title<>''")}
+
+
+def register(items: list[dict]) -> int:
+    """信息推荐抓到的、自己发的 X 长文登记进长文库（已有的不动），后续取全文打分走长文库流水线。"""
+    init()
+    n = 0
+    for it in items:
+        ex = it.get("extra") or {}
+        if ex.get("x_article") != "own" or not it.get("date"):
+            continue
+        tid = it["id"].split(":", 1)[1]
+        if db.row("SELECT 1 FROM x_art WHERE id=?", [tid]):
+            continue
+        at = datetime.fromisoformat(it["date"].replace("Z", "+00:00")).astimezone(timezone.utc)
+        db.execute(
+            "INSERT INTO x_art (id,user,fol,likes,views,posted_at,day,updated) VALUES (?,?,?,?,?,?,?,?)",
+            [tid, ex.get("author") or "", int(ex.get("followers") or 0), int(it.get("popularity") or 0),
+             int(ex.get("views") or 0), at.strftime("%a %b %d %H:%M:%S +0000 %Y"), at.strftime("%Y-%m-%d"), db.now()])
+        n += 1
+    return n
+
+
 def crawl_day(day: str, step: int = START_STEP) -> dict:
     init()
     if db.row("SELECT 1 FROM x_art_day WHERE day=?", [day]):
