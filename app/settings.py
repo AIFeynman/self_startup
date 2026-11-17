@@ -65,6 +65,9 @@ DEFAULTS: dict = {
     # 论文脉络的标注 / 脉络生成用哪个模型：haiku = 本机 Claude Code 登录（model_tiers.light）；deepseek = 官方 API
     # X 长文库每日定时抓取开关；判相关和打分走 paper.llm_engine（默认本机 haiku），大批量回捞时用环境变量 PAPER_LLM_ENGINE=deepseek
     "xart": {"daily": True},
+    # 吸收：向量用本机 Embedding 模型，embed_python 是装了 torch / transformers 的解释器；strong_model 用来定选题范围、定问题、复核矛盾、写现状
+    "absorb": {"embed_python": "/Users/libiao/project/test_feynman/learn_evolve-work-agent-design/.venv/bin/python",
+               "embed_model": "Qwen/Qwen3-Embedding-0.6B", "strong_model": "claude-opus-5-5"},
     "paper": {"llm_engine": "haiku", "feed_ingest": True, "maintain_days": 7},
     # 理财：信号变化 / 每日汇总提醒（行情只在页面上手动刷新，刷新后才检查）；target = 一年收益目标；
     # proxy = 实时报价 WebSocket 走的代理（如 "http://127.0.0.1:12000"），空 = 按进程环境变量
