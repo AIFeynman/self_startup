@@ -355,7 +355,7 @@ def relevance(limit: int = 0, batch: int = 20, workers: int = 4) -> dict:
     def one(ch):
         user = "\n".join(f"### id={r['id']}\n标题: {r['title']}\n预览: {r['preview'][:200]}" for r in ch)
         try:
-            txt, _ = pl.chat(REL_PROMPT, user, engine_name=_engine())
+            txt, _ = pl.chat(REL_PROMPT, user)
         except Exception as e:  # noqa: BLE001
             log.warning("rel batch failed: %s", e)
             return
@@ -428,7 +428,7 @@ def score(limit: int = 0, batch: int = 3, workers: int = 4, ids: list[str] | Non
 
     def one(ch):
         try:
-            txt, _ = pl.chat(system, "\n".join(_excerpt(r) for r in ch), engine_name=_engine())
+            txt, _ = pl.chat(system, "\n".join(_excerpt(r) for r in ch))
         except Exception as e:  # noqa: BLE001
             log.warning("score batch failed: %s", e)
             return
@@ -531,10 +531,6 @@ def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> l
 # ---------- 每日定时 ----------
 
 _lock = threading.Lock()
-
-
-def _engine() -> str:
-    return str(settings.get("xart.llm_engine", "deepseek") or "deepseek")
 
 
 def _month_calls(today: str) -> int:
