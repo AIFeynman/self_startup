@@ -26,3 +26,30 @@ def test_sync_removes_stale_files(client):
     db.execute("DELETE FROM review_notes WHERE id=?", [nid])
     kb.sync()
     assert not list((kb.KB_DIR / "notes").glob(f"2026-01-03-{nid}-*.md"))
+
+
+def test_xarticle_fulltext_endpoint(client):
+    from app.modules import _xart
+    _xart.init()
+    db.execute("INSERT INTO x_art (id,user,title,text,stage,q) VALUES ('11','a','t','正文第一段\n\n第二段','scored',3)")
+    db.execute("INSERT INTO x_art (id,user,title,text,stage) VALUES ('12','a','t','没打分','titled')")
+    assert client.get("/api/kb/xarticles/11").json() == {"text": "正文第一段\n\n第二段"}
+    assert client.get("/api/kb/xarticles/12").status_code == 404
+    assert client.get("/api/kb/xarticles/search").json()["running"] is False
+
+
+def test_xarticle_blocks_keep_images_and_translate_skips_them(client, monkeypatch):
+    from app.modules import _xart
+    _xart.init()
+    text = _xart._blocks_text({"contents": [{"type": "unstyled", "text": "Hello"},
+                                            {"type": "image", "url": "https://pbs.twimg.com/media/a.jpg"},
+                                            {"type": "unstyled", "text": "World"}]})
+    assert text == "Hello\n![](https://pbs.twimg.com/media/a.jpg)\nWorld"
+    db.execute("INSERT INTO x_art (id,user,title,text,stage,q) VALUES ('21','a','t',?,'scored',3)", [text])
+    sent = []
+    monkeypatch.setattr(_xart.pl, "chat", lambda system, user, *a, **k: (sent.append(user) or "你好\n![](https://pbs.twimg.com/media/a.jpg)\n世界", 0))
+    zh = client.post("/api/kb/xarticles/21/translate").json()["text"]
+    assert "![](https://pbs.twimg.com/media/a.jpg)" in zh and "你好" in zh
+    client.post("/api/kb/xarticles/21/translate")
+    assert len(sent) == 1
+    assert client.post("/api/kb/xarticles/999/translate").status_code == 404
