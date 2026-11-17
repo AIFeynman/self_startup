@@ -1404,7 +1404,7 @@ async function renderChapter(el, ctx, pid, sid) {
     extra ? h('button.outline', { title: '对某个子方向感兴趣，或哪里没懂：在本章后加一节针对性讲解 + 小测试', onclick: () => extra.open() }, [ui.icon('plus'), '按需加一节']) : null,
     h('span.grow'),
     s.chapter_job ? h('a.muted', { href: `/api/jobs/${s.chapter_job}`, target: '_blank' }, `job ${s.chapter_job}`) : null,
-    h('button.ghost', { disabled: s.chapter_status === 'generating', onclick: async () => {
+    s.chapter_status === 'ready' ? null : h('button.ghost', { disabled: s.chapter_status === 'generating', onclick: async () => {
       const note = prompt('重新生成本章。有什么要求？（如「多讲推导」「换更新的资料」，可留空）', '');
       if (note === null) return;
       await api.post(`/api/learn/steps/${sid}/open`, { force: true, note }); toast('正在重新生成本章'); softRefresh();
