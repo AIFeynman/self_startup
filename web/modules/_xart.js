@@ -40,9 +40,12 @@ export function xartTab(body, ctx) {
   const out = h('div');
   body.append(bar, out);
 
+  let seq = 0;
   async function load() {
+    const mine = ++seq;
     const p = new URLSearchParams({ q: f.q, sort: f.sort, q_min: f.q_min, limit: 200 });
     const items = (await api.get('/api/kb/xarticles?' + p)).items;
+    if (mine !== seq) return;
     const n = items.length;
     out.replaceChildren(
       ui.section(f.q ? `「${f.q}」` : 'X 长文', [`${n}${n >= 200 ? '+' : ''} 篇 · ${f.sort === 'q' ? '质量分高的在前' : '最新的在前'}`,
@@ -67,7 +70,7 @@ export function xartTab(body, ctx) {
     if (s.result) {
       const r = s.result;
       xnote.textContent = `搜到 ${r.found} 篇，新读 ${r.new} 篇，入库打分 ${r.scored} 篇。`;
-      f.q_min = '1'; f.q = s.q.replace(/\bfrom:/gi, '');
+      f.q_min = '1'; f.q = s.q.replace(/"/g, '').split(/\s+/).map((w) => w.replace(/^from:/i, '')).filter((w) => w && !w.includes(':')).join(' ');
       load();
     }
   }

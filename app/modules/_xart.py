@@ -326,7 +326,7 @@ def _excerpt(r: dict) -> str:
 
 
 def score(limit: int = 0, batch: int = 3, workers: int = 4, ids: list[str] | None = None) -> dict:
-    rows = db.rows("SELECT id,title,text,n FROM x_art WHERE stage='full'" + (f" AND id IN ({','.join('?' * len(ids))})" if ids else "") + (f" LIMIT {limit}" if limit else ""), ids or [])
+    rows = db.rows("SELECT id,title,text,n FROM x_art WHERE stage='full'" + (f" AND id IN ({','.join('?' * len(ids))})" if ids is not None else "") + (f" LIMIT {limit}" if limit else ""), ids or [])
     chunks = [rows[i:i + batch] for i in range(0, len(rows), batch)]
     system = SCORE_PROMPT.replace("__DOMAINS__", "；".join(f"{k}={v}" for k, v in DOMAINS.items()))
     stat = {"scored": 0, "miss": 0}
@@ -402,6 +402,7 @@ def adhoc(query: str, days: int = 30) -> dict:
             a = _article(c, str(t["id"]))
             text = _blocks_text(a)
             if not a.get("title") or len(text) < MIN_CHARS:
+                db.execute("UPDATE x_art SET stage='drop_short',updated=? WHERE id=?", [db.now(), str(t["id"])])
                 continue
             db.execute("UPDATE x_art SET title=?,preview=?,text=?,n=?,rel='core',stage='full',updated=? WHERE id=?",
                        [a["title"], a.get("preview_text") or text[:200], text, len(text), db.now(), str(t["id"])])
@@ -422,8 +423,8 @@ def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> l
     init()
     where, args = ["stage='scored'", "mkt=0", "q>=?"], [q_min]
     for w in q.split():
-        where.append("(title LIKE ? OR summary LIKE ? OR tags LIKE ? OR take LIKE ? OR user LIKE ?)")
-        args += [f"%{w}%"] * 5
+        where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\')")
+        args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 5
     order = "day DESC, q DESC" if sort == "date" else "q DESC, day DESC, views DESC"
     rows = db.rows(f"SELECT id,user,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
     for r in rows:

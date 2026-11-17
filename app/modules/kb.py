@@ -116,6 +116,7 @@ def list_docs(type: str = "", limit: int = 200):
 
 # ---------- X 长文库（逻辑在 app/modules/_xart.py） ----------
 
+_xlock = threading.Lock()
 _xsearch = {"running": False, "q": "", "result": None, "error": ""}
 
 
@@ -134,10 +135,12 @@ class XSearchIn(BaseModel):
 def xarticles_search(body: XSearchIn):
     """指定 X 搜索（X 搜索语法，如 `Claude Code`、`from:omarsar0`）：后台抓取并提炼，完成后同步知识库。"""
     from . import _xart
-    if _xsearch["running"]:
-        raise HTTPException(409, f"正在搜索「{_xsearch['q']}」，等它结束")
     if not body.q.strip():
         raise HTTPException(400, "搜索词不能为空")
+    with _xlock:
+        if _xsearch["running"]:
+            raise HTTPException(409, f"正在搜索「{_xsearch['q']}」，等它结束")
+        _xsearch.update(running=True, q=body.q.strip(), result=None, error="")
 
     def run():
         try:
@@ -148,7 +151,6 @@ def xarticles_search(body: XSearchIn):
         finally:
             _xsearch["running"] = False
 
-    _xsearch.update(running=True, q=body.q.strip(), result=None, error="")
     threading.Thread(target=run, daemon=True).start()
     return {"ok": True}
 
