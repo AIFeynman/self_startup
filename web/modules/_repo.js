@@ -10,10 +10,10 @@ const st = { q: '', by: 'rel', kind: '', domain: '', lang: '', active: '0', offs
 const fmtStars = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
 
 const CSS = `
-.os-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 14px; }
-.os-bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel); color: var(--text); max-width: 180px; }
+.os-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 4px 0 14px; }
+.os-bar select { width: auto; font-size: 12.5px; padding: 3px 6px; border-radius: 8px; max-width: 130px; }
 .os-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
-.os-seg button { border: none; border-radius: 0; padding: 4px 14px; font-size: 12.5px; background: var(--panel); color: var(--muted); }
+.os-seg button { border: none; border-radius: 0; padding: 3px 10px; font-size: 12.5px; background: var(--panel); color: var(--muted); }
 .os-seg button.on { background: var(--accent-soft); color: var(--accent); }
 .os-item .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
 .os-item .why { color: var(--accent); font-size: 13px; margin-top: 4px; }
