@@ -259,8 +259,9 @@ def public(d: dict) -> dict:
                                         "rel", "rr", "why", "score")}
 
 
-def browse(domain: str = "", kind: str = "", lang: str = "", active_days: int = 0, offset: int = 0, k: int = 30) -> dict:
-    """没输入时按领域浏览：按 star 倒序。"""
+def browse(domain: str = "", kind: str = "", lang: str = "", active_days: int = 0, offset: int = 0, k: int = 30,
+           added_days: int = 0, order: str = "stars") -> dict:
+    """没输入时按领域浏览：默认 star 倒序；order=time 按入库时间倒序；added_days=N 只看最近 N 天（1=今天）入库的。"""
     where, args = ["r.status='ok'", "r.stars>=900"], []
     if domain:
         where.append("(l.d=? OR l.d2 LIKE ?)")
@@ -274,10 +275,13 @@ def browse(domain: str = "", kind: str = "", lang: str = "", active_days: int = 
     if active_days:
         where.append("substr(r.pushed,1,10)>=? AND r.archived=0")
         args.append((datetime.now() - timedelta(days=active_days)).strftime("%Y-%m-%d"))
+    if added_days:
+        where.append("substr(r.first_seen,1,10)>=?")
+        args.append((datetime.now() - timedelta(days=added_days - 1)).strftime("%Y-%m-%d"))
     sql = (" FROM oss_repos r JOIN oss_labels l ON l.name=r.name WHERE " + " AND ".join(where))
     total = db.row("SELECT count(*) AS n" + sql, args)["n"]
-    rows = db.rows("SELECT r.name, r.stars, r.lang, r.pushed, r.archived, r.descr, l.k, l.d, l.d2, l.ai, l.t, l.s" + sql +
-                   " ORDER BY r.stars DESC LIMIT ? OFFSET ?", args + [k, offset])
+    rows = db.rows("SELECT r.name, r.stars, r.lang, r.pushed, substr(r.first_seen,1,10) AS added, r.archived, r.descr, l.k, l.d, l.d2, l.ai, l.t, l.s" + sql +
+                   (" ORDER BY r.first_seen DESC, r.stars DESC" if order == "time" else " ORDER BY r.stars DESC") + " LIMIT ? OFFSET ?", args + [k, offset])
     for r in rows:
         r["t"], r["d2"] = json.loads(r["t"] or "[]"), json.loads(r["d2"] or "[]")
     return {"total": total, "results": rows}

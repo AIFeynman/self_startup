@@ -3,9 +3,10 @@
 // 有输入：改写 + 多路召回 + 精排，可切「相关性 | star」；没输入：按领域浏览（star 倒序）。
 // 路由：#kb/repo/<查询>（信息推荐卡片的「同类项目」跳这里）。
 const TASKS = { collect: '全量采集', label: '标注', daily: '每日新增', weekly: '每周刷新' };
+const ADDED = [['1', '今天入库'], ['3', '近 3 天入库'], ['7', '近 7 天入库'], ['30', '近 30 天入库'], ['0', '全部时间']];
 const ACTIVE = [['0', '不限活跃'], ['30', '30 天内有更新'], ['180', '半年内有更新'], ['365', '一年内有更新']];
 const AI_NAME = { core: 'AI 本身', for_ai: '给 AI 用', ai_powered: 'AI 应用', none: '' };
-const st = { q: '', by: 'rel', kind: '', domain: '', lang: '', active: '0', offset: 0 };
+const st = { q: '', by: 'rel', kind: '', domain: '', lang: '', active: '0', offset: 0, added: '1', order: 'time' };
 const fmtStars = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
 
 const CSS = `
@@ -76,7 +77,9 @@ export async function repoTab(body, ctx, q0 = '') {
     const seg = (id, name) => h('button' + (st.by === id ? '.on' : ''), { onclick: () => { st.by = id; drawBar(); load(); } }, name);
     const domOpts = [['', '全部领域'], ...tax.domains.flatMap((d) => d.children.map((c) => [c.code, `${d.name} · ${c.name}${status0.by_domain[c.code] ? ` (${status0.by_domain[c.code]})` : ''}`]))];
     bar.replaceChildren(...[
-      st.q ? h('div.os-seg', {}, [seg('rel', '相关性'), seg('stars', 'star')]) : null,
+      st.q ? h('div.os-seg', {}, [seg('rel', '相关性'), seg('stars', 'star')])
+        : h('div.os-seg', {}, [['time', '按入库时间'], ['stars', '按 star']].map(([id, name]) => h('button' + (st.order === id ? '.on' : ''), { onclick: () => { st.order = id; drawBar(); load(); } }, name))),
+      st.q ? null : sel('added', ADDED, load),
       sel('domain', domOpts, load), sel('kind', [['', '全部类型'], ...tax.kinds.map((k) => [k.code, k.name])], load),
       sel('lang', [['', '全部语言'], ...['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust', 'Java', 'C++', 'C', 'Swift', 'Kotlin', 'C#', 'Shell', 'Jupyter Notebook'].map((l) => [l, l])], load),
       sel('active', ACTIVE, load),
@@ -89,6 +92,7 @@ export async function repoTab(body, ctx, q0 = '') {
       h('span.tag.gray', {}, kname[x.k] || x.k), h('span.tag', { title: '点击只看这个领域', style: { cursor: 'pointer' }, onclick: () => { st.domain = x.d; st.offset = 0; drawBar(); load(); } }, dname[x.d] || x.d),
       AI_NAME[x.ai] ? h('span.tag.ok', {}, AI_NAME[x.ai]) : null,
       x.archived ? h('span.tag.warn', {}, '已归档') : x.pushed ? h('span.muted', {}, '更新于 ' + x.pushed.slice(0, 10)) : null,
+      x.added ? h('span.muted', {}, '入库 ' + x.added) : null,
       h('span.acts', {}, [
         h('button.ghost', { title: '用学习板块的项目深读', onclick: () => deep(x) }, '深读'),
         h('button.ghost', { title: '这个作者以后的新仓库进信息推荐', onclick: () => follow(x) }, '关注作者')]),
@@ -107,7 +111,7 @@ export async function repoTab(body, ctx, q0 = '') {
 
   async function load(more = false) {
     if (!more) st.offset = 0;
-    const p = new URLSearchParams({ q: st.q, by: st.by, kind: st.kind, domain: st.domain, lang: st.lang, active: st.active, offset: st.offset, k: st.q ? 30 : 40 });
+    const p = new URLSearchParams({ q: st.q, by: st.by, kind: st.kind, domain: st.domain, lang: st.lang, active: st.active, added: st.added, order: st.order, offset: st.offset, k: st.q ? 30 : 40 });
     if (!more) listBox.replaceChildren(h('div.muted', {}, st.q ? '检索中（改写需求 → 召回 → 精排，首次约几秒）…' : '加载中…'));
     let r;
     try { r = await api.get('/api/intel/oss/search?' + p); } catch (e) { listBox.replaceChildren(ui.empty('检索失败', e.message)); return; }
@@ -118,10 +122,10 @@ export async function repoTab(body, ctx, q0 = '') {
       r.reranked ? '' : ' · 未精排', ...(r.errors || []).map((e) => h('div', { style: { color: 'var(--warn)' } }, e))]) : '');
     const items = r.results.map(card);
     if (more) { listBox.querySelector('.list')?.append(...items); } else {
-      const title = r.mode === 'search' ? `「${st.q}」` : (st.domain ? dname[st.domain] : '全部领域') + ' · 按 star';
+      const title = r.mode === 'search' ? `「${st.q}」` : (st.domain ? dname[st.domain] : '全部领域') + (st.order === 'time' ? ' · 按入库时间' : ' · 按 star');
       listBox.replaceChildren(ui.section(title, r.mode === 'search' ? `${r.results.length} 个` : `共 ${r.total} 个`),
         items.length ? h('div.card', {}, h('div.list', {}, items))
-          : ui.empty(status0.labeled ? '没找到' : '库还是空的', status0.labeled ? '换个说法，或去掉筛选' : '先点上面的「全量采集」，再点「标注」'));
+          : ui.empty(status0.labeled ? '没找到' : '库还是空的', status0.labeled ? (st.added !== '0' ? '这段时间没有新入库的项目，可以放宽入库时间' : '换个说法，或去掉筛选') : '先点上面的「全量采集」，再点「标注」'));
     }
     listBox.querySelector('.os-more')?.remove();
     if (r.mode === 'browse' && st.offset + r.results.length < r.total) {
