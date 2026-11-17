@@ -110,8 +110,10 @@ export default {
       } }, '开始吸收'),
       h('span.ab-m', {}, '两周的量大约 40 分钟、4–5 美元，跑完留在这里；同一选题和时间窗再点会接着上次的进度。'),
     ]);
+    const label = (r) => `${r.topic} · ${r.start.slice(5)}–${r.end.slice(5)}${r.done ? '' : r.running ? ' · 进行中' : ' · 中断'}`;
+    const chips = {};
     head.append(h('div.tabs', {}, [
-      ...runs.map((r) => h('button', { class: r.id === cur ? 'active' : '', onclick: () => go(r.id) }, `${r.topic} · ${r.start.slice(5)}–${r.end.slice(5)}${r.done ? '' : r.running ? ' · 进行中' : ' · 中断'}`)),
+      ...runs.map((r) => chips[r.id] = h('button', { class: r.id === cur ? 'active' : '', onclick: () => go(r.id) }, label(r))),
       h('button', { onclick: () => form.classList.toggle('ab-hide') }, '＋ 新选题'),
     ]), form);
     el.append(h('style', {}, CSS), ui.pageHead('吸收', '按选题把一段时间的长文压成认知卡：每个问题先看现状，再看哪些挑战或加强了你已有的判断', []), head, body);
@@ -120,6 +122,7 @@ export default {
     const show = async () => {
       if (!el.isConnected) return stop();
       const r = await api.get('/api/absorb/runs/' + encodeURIComponent(cur));
+      if (chips[cur]) chips[cur].textContent = label(r);
       if (!r.data) {
         body.innerHTML = `<div class="ab-run"><b>${E(r.topic)}</b> <span class="ab-m">${E(r.start)} 至 ${E(r.end)}</span>
 <div class="ab-prog"><i style="width:${Math.max(2, Math.round((r.step - (r.running ? 0.5 : 0)) / r.steps * 100))}%"></i></div>
