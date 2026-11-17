@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X 长文与重点作者方案</title>
+<style>
+:root { --bg:#faf8f4; --panel:#fff; --text:#2b2723; --muted:#7a7268; --line:#e6e0d6; --accent:#c4512d; --soft:#f4ebe3; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1d1b19; --panel:#26231f; --text:#ece7df; --muted:#a39a8e; --line:#3a352f; --accent:#e07a56; --soft:#2f2a25; } }
+body { margin:0; background:var(--bg); color:var(--text); font:15px/1.7 -apple-system,"PingFang SC",sans-serif; }
+main { max-width:860px; margin:0 auto; padding:28px 16px 60px; }
+h1 { font-size:24px; margin:0 0 4px; } h2 { font-size:18px; margin:30px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+.sub { color:var(--muted); margin:0 0 18px; font-size:14px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 16px; margin:10px 0; }
+table { width:100%; border-collapse:collapse; font-size:14px; background:var(--panel); border:1px solid var(--line); }
+th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { background:var(--soft); }
+.rec { border-color:var(--accent); background:var(--soft); }
+code { background:var(--soft); padding:1px 5px; border-radius:4px; font-size:13px; }
+.flow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:13.5px; }
+.flow span { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:3px 9px; }
+.flow i { color:var(--muted); font-style:normal; }
+@media (max-width:640px) { table { font-size:13px; } th, td { padding:6px; } }
+</style>
+</head>
+<body>
+<main>
+<h1>X 长文与重点作者方案</h1>
+<p class="sub">整体合并版：长文库、信息推荐的 X 长文、重点作者抓取与提炼，共用一套每日增量抓取和一个月度预算。只出方案，没有改代码。</p>
+
+<h2>结论</h2>
+<div class="card rec">三件事并成一条每日流水线，每天都抓，靠「已见过就不再取」避免重复花钱。长文库是长文的唯一来源，信息推荐的「X 长文」标签改读它；重点作者另建推文库，做相关判断、打分和提炼。月度预算上限 100 美元，计划用约 60 美元，月累计到 90 美元自动停。</div>
+
+<h2>每天都抓，不重复抓</h2>
+<div class="card flow">
+<span>每日定时</span><i>→</i><span>长文搜索：昨天+今天</span><i>→</i><span>已见过的 id 只更新阅读数</span><i>→</i><span>新 id 过门槛才取全文</span><i>→</i><span>重点作者时间线（只取比上次新的）</span><i>→</i><span>判相关 / 打分提炼</span><i>→</i><span>同步知识库</span>
+</div>
+<ul>
+<li><b>不重复的做法：</b>所有 id 按表主键去重；取全文前先查库，已有全文的跳过；作者时间线记每人「上次抓到的最新推文 id」，下次只要更新的；同一天跑两次，第二次不产生取全文和打分的花费。</li>
+<li><b>当天就抓：</b>搜索窗口取「昨天+今天」。今天刚发的长文阅读数还低，会被门槛挡下，但行保留；第二天窗口再扫到时更新阅读数，过线就补取全文。这样既当天可见，又不漏。</li>
+<li><b>名单作者和大号：</b>不受阅读门槛限制，发了就取。</li>
+</ul>
+
+<h2>重点作者：扩充和提炼</h2>
+<table>
+<tr><th></th><th>做法</th></tr>
+<tr><td>现状</td><td>信息推荐里关注名单 96 个账号，每人最多取 2 条，互动数≥100，只做排序，不提炼。</td></tr>
+<tr><td>扩充</td><td>从长文库里找候选：质量分≥4 的长文作者，出现 2 篇以上的，列成「建议加入」清单，你一键确认才入名单（名单是你的口味，不自动加）。名单目标 150 到 200 人。</td></tr>
+<tr><td>抓取</td><td>每人每天 1 次时间线调用（约 20 条），取比上次更新的推文。名单 200 人约 0.2 美元/天。</td></tr>
+<tr><td>提炼</td><td>本机 haiku 免费：先判是否 AI 相关，再对相关的串推和长推打分，提炼一句要点和可迁移的点；每个作者每周生成一条「作者动态」进知识库，新类型 <code>xauthor</code>，同样可检索。</td></tr>
+<tr><td>和长文的关系</td><td>作者发的长文走长文库的全文和打分，不在推文库里重复提炼；推文库只放非长文推文，引用长文的推文把长文 id 交给长文库。</td></tr>
+</table>
+
+<h2>预算（上限 100 美元/月，计划约 60）</h2>
+<table>
+<tr><th>项目</th><th>每天</th><th>每月</th><th>依据</th></tr>
+<tr><td>长文搜索（昨天+今天，部分重叠）</td><td>约 0.6 美元</td><td>约 18 美元</td><td>此前一天约 400 次搜索，每次 0.001 美元；窗口重叠按 1.5 倍估</td></tr>
+<tr><td>长文取全文（阅读前 200 篇+名单+粉丝≥50 万）</td><td>约 0.3 美元</td><td>约 9 美元</td><td>每篇 0.001 美元，已有全文的不再取</td></tr>
+<tr><td>阅读数更新后补取（过线的）</td><td>约 0.5 美元</td><td>约 15 美元</td><td>估算，按过线篇数逐步放开到阅读≥500</td></tr>
+<tr><td>重点作者时间线（200 人）</td><td>约 0.2 美元</td><td>约 6 美元</td><td>每人每天 1 次</td></tr>
+<tr><td>作者取引用长文、临时手动搜索</td><td>约 0.3 美元</td><td>约 9 美元</td><td>留余量</td></tr>
+<tr class="rec"><td>合计</td><td>约 1.9 美元</td><td>约 57 美元</td><td>打分提炼用本机 haiku，不花钱</td></tr>
+</table>
+<p class="sub">这些是估算，上线第一周按实际调用数校准。保护：每天花费超过 3 美元停当天剩余任务并提醒；月累计到 90 美元停止全部抓取并提醒你。当前余额约 119 美元，计划用量下约够 2 个月。</p>
+
+<h2>改动清单</h2>
+<table>
+<tr><th>位置</th><th>改什么</th></tr>
+<tr><td><code>app/modules/_xart.py</code></td><td>新增 <code>daily()</code>：昨天+今天窗口、按 id 去重、阅读数更新后补取；新增按 id 入库；记录每次调用数和花费</td></tr>
+<tr><td>新增推文库（<code>x_post</code> 表）</td><td>作者时间线增量抓取、相关判断、打分提炼；每人每周生成「作者动态」</td></tr>
+<tr><td>知识库</td><td>新类型 <code>xauthor</code>，知识库页加「X 作者」标签，可检索</td></tr>
+<tr><td><code>app/modules/feed.py</code>、<code>_feed_sources.py</code></td><td>「X 长文」标签改读长文库；删长文补标题逻辑；作者推文改读推文库</td></tr>
+<tr><td>定时任务</td><td>每天凌晨 4 点跑一次，结束后同步知识库；花费保护和失败提醒</td></tr>
+<tr><td>名单管理</td><td>「建议加入」清单一键确认</td></tr>
+<tr><td>测试</td><td>去重和幂等（同一天跑两次不新增花费）、阅读数更新后补取、预算保护触发</td></tr>
+</table>
+
+<h2>风险和回退</h2>
+<ul>
+<li>定时任务停了，两个标签都会不更新。缓解：失败提醒，标签页顶部显示最近一次抓取时间。</li>
+<li>作者时间线的接口花费和返回条数我还没实测，上线第一天先只跑 20 个账号，核对后再放开。</li>
+<li>质量分口径还没按你的留/弃结果校准，标签阈值先放 ≥2。</li>
+<li>回退：旧逻辑在 git 历史里，一个提交可还原；预算常量集中在一处。</li>
+</ul>
+
+<h2>要你定的</h2>
+<table>
+<tr><th>问题</th><th>推荐</th><th>备选</th></tr>
+<tr><td>预算</td><td>计划约 60 美元/月，90 美元自动停</td><td>计划约 80 美元/月，阅读门槛放到 500 以上全取</td></tr>
+<tr><td>标签阈值</td><td>质量≥2，近 7 天</td><td>≥3，更精但条数少</td></tr>
+<tr><td>作者名单扩充</td><td>建议清单，你确认才加</td><td>满足条件自动加</td></tr>
+<tr><td>作者提炼粒度</td><td>每人每周一条动态</td><td>每天一条</td></tr>
+</table>
+</main>
+</body>
+</html>
