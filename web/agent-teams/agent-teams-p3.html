@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Part 3 整合落地</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#5f6670;--line:#e3e0d8;--card:#fff;--acc:#1f5fbf;--ok:#1a7f4b;--warn:#a15c00;--code:#f3f1ea}
+@media (prefers-color-scheme:dark){:root{--bg:#16181c;--fg:#e6e6e6;--mute:#9aa1ab;--line:#2b2f36;--card:#1d2026;--acc:#7aa7ff;--ok:#5fd08d;--warn:#e0a458;--code:#22262d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.8 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+main{max-width:820px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:26px;line-height:1.3;margin:8px 0 12px}
+h2{font-size:21px;margin:44px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:17px;margin:28px 0 8px}
+p,li{margin:8px 0}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font:13.5px/1.5 ui-monospace,Menlo,monospace}
+.sv{overflow-x:auto}@media(max-width:600px){.sv svg{min-width:560px}}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow-x:auto;margin:10px 0}
+pre code{background:none;padding:0;white-space:pre}
+.goal{border-left:4px solid var(--acc);background:var(--card);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.goal p{margin:4px 0}
+.fact,.judge,.second{font-size:12px;padding:1px 6px;border-radius:4px;margin-right:6px;white-space:nowrap}
+.fact{background:rgba(26,127,75,.14);color:var(--ok)}
+.judge{background:rgba(31,95,191,.14);color:var(--acc)}
+.second{background:rgba(161,92,0,.14);color:var(--warn)}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top;min-width:90px}
+th{background:var(--card)}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow div{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;flex:1 1 150px}
+.flow b{display:block;font-size:13px;color:var(--acc)}
+details{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:12px 0}
+summary{cursor:pointer;font-weight:600}
+.flash{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:18px 0}
+.flash .q{font-weight:600}
+.src{font-size:13px;color:var(--mute)}
+.note{font-size:13.5px;color:var(--mute);border-top:1px dashed var(--line);margin-top:30px;padding-top:12px}
+svg{max-width:100%;height:auto;margin:10px 0;display:block}
+svg text{fill:var(--fg);font:13px -apple-system,"PingFang SC",sans-serif}
+svg .t2{fill:var(--mute);font-size:12px}
+svg .bx{fill:var(--card);stroke:var(--line);stroke-width:1.2}
+svg .ac{fill:none;stroke:var(--acc);stroke-width:1.6}
+svg .okb{fill:rgba(26,127,75,.12);stroke:var(--ok);stroke-width:1.2}
+svg .bad{fill:rgba(161,92,0,.14);stroke:var(--warn);stroke-width:1.2}
+svg .ar{stroke:var(--mute);stroke-width:1.4;fill:none}
+.pit{border-left:4px solid var(--warn);background:var(--card);padding:6px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.why{border-left:4px solid var(--ok);background:var(--card);padding:6px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+@media(max-width:700px){table{display:block;overflow-x:auto;max-width:100%}pre{overflow-x:auto}img{max-width:100%;height:auto}code{overflow-wrap:anywhere}svg{max-width:100%;height:auto}.sv{overflow-x:auto;max-width:100%}}</style>
+</head>
+<body>
+<main>
+<p class="src">Agent Teams 课程 · Part 3 · 整合落地 · 2026-11-16</p>
+<h1>Part 3　整合落地：搭一个小团队，量它值不值，然后练判断</h1>
+
+<div class="goal">
+<p><b>本章目标</b>：先用压缩的三步把前面各章装成一个小团队（1 lead + 2 worker + 1 评审），再用一大块「判断力训练」练一件事：<b>面对一个有争议的团队决策，怎么拿证据、定立场、写下什么会让你改判。</b></p>
+<p><b>学完能回答</b>：</p>
+<ol>
+<li>并行写、评审要不要独立、harness 厚还是薄，一线几家各说什么？他们的依据强在哪、弱在哪？</li>
+<li>给你一个带数字的场景（任务规模、预算、风险），你能不看答案先写出判断和理由吗？</li>
+<li>一次事故回头看：当时哪一步判断错了，哪个信号本来能早点发现，换成什么规则？</li>
+<li>读到一篇新论文或博客，怎么在 5 分钟内给它的证据打分，决定它配不配改你的团队设计？</li>
+<li>做团队决策前，必问的 10 个问题是什么？</li>
+</ol>
+<p><b>预计用时</b>：6.5 小时。动手三步压缩到 3.5h（搭小团队 2h、使用评估 1h、一线判断复盘 0.5h）；判断力训练 3h（10 条命题 1.2h、8 道先判后看 1h、4 个事故复盘 0.5h、清单与打分 0.3h）。章末测试另算。</p>
+</div>
+
+<p class="src">标记：<span class="fact">一手</span> 我读过原文或源码，或我自己跑过；<span class="second">二手</span> 别人转述，我没读到原文；<span class="judge">判断</span> 我自己的推断。引用别章的结论一律写「（C5 §2）」这样的出处，标记沿用原章，我没有重新核对它们的原始来源。</p>
+
+<p class="src">资料时效：本章是整合章，没有新增论文。这一版新读的一手来源是本机存档的 Anthropic 与 Cognition、Cursor 原文全文：Cognition 2025-06-12 与 2026-04-22；Cursor 2026-01-14；Anthropic 的多 Agent 研究系统（2025-06-13）、harness design（2026-03-24）、Managed Agents（2026-04-08）、auto mode（2026-03-25）、memory（2026-11-06）、infrastructure noise、April 23 postmortem、C 编译器、BrowseComp eval awareness（2026-03-06）、How we contain Claude（2026-05-25）、Claude Code sandboxing（2025-10-20）、demystifying evals（2026-01-09）。另有 Hashimoto（2026-02-05）、Mollick 两篇、Lauren Tan 讲稿页。Anthropic 这些文章是这一轮从本机存档读到的，所以标一手；它们的数字多是 Anthropic 自己的内部评测，读者要当作厂商自报。论文数字全部沿用 C5、C6、C7、D、E 各章的读法，没有回到论文原文重读，一律保持原章的标记。Claude Code 闭源，行为一律二手。第 1 节的 <code>team.py</code> 是我写的示例，只在沙箱里做过状态检查，没接真实 Agent，更没跑过 24 次评估。</p>
+
+<h2>全景图：两大块</h2>
+<table>
+<tr><th>块</th><th>做什么</th><th>产出</th><th>用时</th></tr>
+<tr><td>动手三步（压缩）</td><td>0 先判断、1 搭小团队、2 使用评估、3 一线判断速览</td><td><code>board/</code> 目录、<code>EVAL.md</code></td><td>3.5h</td></tr>
+<tr><td>判断力训练（主体）</td><td>10 条命题 → 8 道先判后看 → 4 个事故复盘 → 10 问清单与论文打分表 → 章末测试</td><td>你自己的一页「命题 / 证据 / 置信度 / 改判条件」</td><td>3h</td></tr>
+</table>
+
+<div class="flow">
+<div><b>1 目标</b>人写：完成标准 + 预算</div>
+<div><b>2 工单</b>lead 拆：范围、验收命令</div>
+<div><b>3 执行</b>worker：各自 worktree</div>
+<div><b>4 验收</b>harness 跑命令 → 评审看 diff</div>
+<div><b>5 人批准</b>一张卡，点一次</div>
+<div><b>6 回写</b>状态、教训、账</div>
+</div>
+<p>主线一句话：<b>模型只负责「想和写」；谁能改状态、能不能算做完、花了多少钱，都由代码和人说了算。</b>这是 A、C6、E、G 四章各自得出的同一个结论。下面三步把它装进一个目录，再用判断力训练检验这个结论本身站不站得住。<span class="judge">判断</span></p>
+
+<h3>哪章讲了什么（速查）</h3>
+<table>
+<tr><th>章</th><th>关键结论（出处标记沿用原章）</th></tr>
+<tr><td>Part 1 总框架</td><td>成本倍数分母要写清（约 15× 对聊天、约 7×、约 22×）；状态与写权限决定能否恢复（main §1、§8）</td></tr>
+<tr><td>A 人机协同</td><td>五档介入；七类事必须人批；卡片要给后果、选项、过期（A §2、§6）</td></tr>
+<tr><td>B 主 Agent 分派</td><td>默认单线程，拆是例外；要拆先造裁判；少角色（B §7）判断</td></tr>
+<tr><td>C1 Kernel 与 loop</td><td>步数上限不在主循环里，责任落在外面（C1 §12）</td></tr>
+<tr><td>C2 工具、权限、沙箱</td><td>用「能碰什么」回答「给多大手」；底线放强制层；凭据别进沙箱</td></tr>
+<tr><td>C3 Runtime</td><td>单写者 + 追加日志 + 意图先记账（C3 §8）判断</td></tr>
+<tr><td>C4 指令与扩展点</td><td>提示是请求，Hook 才是要求（C4 §4）</td></tr>
+<tr><td>C5 子 Agent</td><td>worktree 63.3 对 soft isolation 55.5 对单 Agent 57.2（PaperBench，CAID，C5 §2）；合并冲突最难</td></tr>
+<tr><td>C6 交接与自检</td><td>自评偏宽（2607.25152，摘要）；声明不能直接改状态（C6 §4）</td></tr>
+<tr><td>C7 SDLC 与自迭代</td><td>三道闸：确定性、模型、人；遥测要记账（C7 §4）</td></tr>
+<tr><td>D 上下文与记忆</td><td>窗口越满越不准；共享记忆有投毒风险（D §1、§5）</td></tr>
+<tr><td>E 验收与评估</td><td>确定性先行；评审的独立来自「看到的信息不同」；pass@k 对 pass^k（E §1、§3、§6）</td></tr>
+<tr><td>G 平台底座</td><td>预算 80% 告警、100% 硬停，预算 0 等于不设上限（G §3、§7）</td></tr>
+</table>
+
+<h2>一　动手三步（压缩版）</h2>
+
+<h3>0　先判断：该不该上 Teams</h3>
+<p>基线是「手上有 Teams 就都用」。证据说这样亏：Google 2512.08296 v3（经典例外）里，同一批多 Agent 配置在可拆的金融推理上 +80.8%，在顺序规划上 −70.0%（C5 §2 一手）。所以先问四项：</p>
+<table>
+<tr><th>项</th><th>问这个</th><th>低的后果</th></tr>
+<tr><td>可并行度</td><td>能拆成互不改同一文件的几块吗？</td><td>低：别上</td></tr>
+<tr><td>上下文依赖</td><td>几块之间有多少隐含决定要共享？</td><td>高：写入单线程，其余当顾问</td></tr>
+<tr><td>验收可机器化</td><td>有没有一条命令给出通过 / 失败？</td><td>低：先造裁判，别上</td></tr>
+<tr><td>成本</td><td>多花的钱和人时，值不值换来的时间？</td><td>没量过单 Agent 基线就不知道</td></tr>
+</table>
+<p>这四项和门槛是我的归纳（<span class="judge">判断</span>），没有定量依据。大多数任务四项过不齐。例：三个互不相关的类型错误，单 Agent 就够；120 个文件按目录迁移、有测试，才适合分 worker。这些是我拟的设想任务，不是实测。</p>
+
+<h3>1　搭小团队：1 lead + 2 worker + 1 评审（约 2h）</h3>
+<p>基线是开四个会话互相发消息。三个洞：状态在各自脑子里，崩一次就丢（C3）；谁说「做完了」谁当裁判，自评偏宽（C6、E）；没人管花钱（G）。所以骨架只做一件事：<b>把「谁能改状态、能不能算做完、花了多少」从模型手里拿走。</b></p>
+<table>
+<tr><th>角色</th><th>能做</th><th>不能做</th><th>依据</th></tr>
+<tr><td>lead</td><td>读目标，写工单（范围、验收命令、预算），派活，回写</td><td>不写代码</td><td>少角色（B §7）</td></tr>
+<tr><td>worker A / B</td><td>在自己的 git worktree 里改，只改工单 <code>scope</code> 内文件</td><td>不改状态、不改验收命令、不碰对方目录</td><td>worktree 63.3 对 soft isolation 55.5（C5 §2）</td></tr>
+<tr><td>评审</td><td>新会话，只看 diff 和验收条件，最多 3 轮</td><td>看不到 worker 的自我说明；只读</td><td>E §3；Khazix 的 3 轮上限（A §5.1，转引）</td></tr>
+<tr><td>人</td><td>在批准卡上点一次</td><td>—</td><td>合 main、删数据、花钱必须人批（A §2）</td></tr>
+</table>
+
+<div class="sv"><svg viewBox="0 0 720 150" role="img" aria-label="工单状态机与每步由谁来改">
+<rect class="bx" x="8" y="40" width="96" height="44" rx="8"/><text x="56" y="67" text-anchor="middle">todo</text>
+<rect class="bx" x="132" y="40" width="96" height="44" rx="8"/><text x="180" y="67" text-anchor="middle">doing</text>
+<rect class="okb" x="256" y="40" width="96" height="44" rx="8"/><text x="304" y="67" text-anchor="middle">checked</text>
+<rect class="bx" x="380" y="40" width="96" height="44" rx="8"/><text x="428" y="67" text-anchor="middle">reviewed</text>
+<rect class="okb" x="504" y="40" width="96" height="44" rx="8"/><text x="552" y="67" text-anchor="middle">approved</text>
+<rect class="bx" x="628" y="40" width="84" height="44" rx="8"/><text x="670" y="67" text-anchor="middle">done</text>
+<path class="ar" d="M104 62 L130 62"/><path class="ar" d="M228 62 L254 62"/><path class="ar" d="M352 62 L378 62"/><path class="ar" d="M476 62 L502 62"/><path class="ar" d="M600 62 L626 62"/>
+<text class="t2" x="118" y="30" text-anchor="middle">lead</text>
+<text class="t2" x="242" y="30" text-anchor="middle">worker + 命令</text>
+<text class="t2" x="366" y="30" text-anchor="middle">评审</text>
+<text class="t2" x="490" y="30" text-anchor="middle">人</text>
+<text class="t2" x="614" y="30" text-anchor="middle">lead</text>
+<text class="t2" x="304" y="110" text-anchor="middle">验收命令退出码 0 才能进</text>
+<text class="t2" x="552" y="110" text-anchor="middle">必须在终端由人敲</text>
+</svg></div>
+
+<p>五步做完（每步一句）：写 <code>GOAL.md</code>（完成标准一条命令、范围、预算、停止条件、必问人的事，到 80% 告警、100% 硬停，G §3）；<code>git worktree add</code> 两个目录，凭据不给 worker，外层加 <code>timeout</code>（C1、C2）；用下面的状态机管工单；执行后三层验收（确定性命令 → 评审看 diff → 人从真实入口走一遍，C7 §4、E §4）；人在批准卡上点一次，回写只追加（G、C7、D）。</p>
+<pre><code>NEXT = {"todo":"doing","doing":"checked","checked":"reviewed",
+        "reviewed":"approved","approved":"done"}
+WHO  = {"todo":"lead","doing":"worker","checked":"reviewer",
+        "reviewed":"human","approved":"lead"}
+
+def move(tid, actor):
+    t = load(tid); st = t["status"]
+    if WHO[st] != actor:
+        sys.exit(f"DENY: {st} -&gt; {NEXT[st]} 只能由 {WHO[st]} 做，不是 {actor}")
+    if st == "doing":
+        r = subprocess.run(t["accept_cmd"], shell=True)
+        t["log"].append({"accept_exit": r.returncode})
+        if r.returncode != 0:
+            save(t); sys.exit("DENY: accept_cmd 退出码非 0，不能进 checked")
+    if st == "reviewed" and not sys.stdin.isatty():
+        sys.exit("DENY: 批准必须由人在终端里敲，管道输入不算")
+    t["status"] = NEXT[st]
+    t["log"].append({"to": t["status"], "by": actor}); save(t)</code></pre>
+<p class="src">示例代码为我自写，非仓库原文。<span class="fact">一手</span> 我在 scratchpad 里用 <code>accept_cmd = "test -f out.txt"</code> 做过状态检查：worker 抢 lead 的步骤被拒；<code>out.txt</code> 不存在时 <code>doing → checked</code> 被拒，创建后通过；reviewer 越权做 human 的步骤被拒；<code>echo y | …</code> 当人批准被拒。这只是几次状态检查，没有接真实 Agent，没有跑过一轮完整任务。</p>
+<div class="pit">
+<p><b>坑：这个状态机防的是「Agent 手滑」，不是「Agent 作恶」。</b><code>actor</code> 是命令行参数，有 shell 的 Agent 可以传 <code>human</code>。真要防，得把 <code>board/</code> 对 worker 设成只读，由沙箱外的进程来跑它（C2 的强制层、G）。<code>isatty</code> 只挡无终端的 headless 会话。<span class="judge">判断</span></p>
+</div>
+
+<h4>验收清单（缩成 6 项）</h4>
+<table>
+<tr><th>#</th><th>检查项</th><th>怎么验</th></tr>
+<tr><td>1</td><td>两个 worker 的 <code>scope</code> 不相交、各有 worktree</td><td><code>git worktree list</code>，比较两张工单</td></tr>
+<tr><td>2</td><td>worker 无法自己把状态改成 checked</td><td>让它直接改 JSON，看只读权限是否挡住；做不到就记未满足</td></tr>
+<tr><td>3</td><td>故意让测试失败 / 改 scope 外文件，进不了 checked</td><td><code>log</code> 里 <code>accept_exit != 0</code></td></tr>
+<tr><td>4</td><td>评审拿不到 worker 说明，到第 4 轮自动转人</td><td>检查评审输入；伪造 4 轮评论</td></tr>
+<tr><td>5</td><td>预算 80% 告警、100% 杀会话</td><td>把预算设很小跑一次；预算 0 等于不设上限</td></tr>
+<tr><td>6</td><td>中途杀掉 worker，按日志恢复不重复副作用</td><td><code>kill</code> 后重新领取，不新建分支</td></tr>
+</table>
+<p>第 2 项和第 6 项最容易「看起来做了其实没做」。<span class="judge">判断</span></p>
+
+<h3>2　使用评估：对照单 Agent（约 1h）</h3>
+<p>基线是「演示一次成功」。洞有三个：运气、多花钱、人救场没记。口径先写死：</p>
+<table>
+<tr><th>指标</th><th>口径</th></tr>
+<tr><td>成功率</td><td>同一任务每组跑 k 次（建议 3），同时报 pass@1 和 pass^k。单次 80% 时，三次全对约 51%（0.8³），至少一次对约 99%（E §6，一手）</td></tr>
+<tr><td>人介入次数</td><td>人必须读并回答的事件算 1 次：批准卡、评审转人、救场、改工单。通知不算</td></tr>
+<tr><td>单位成功产出成本</td><td>（所有运行的机器花费 + 人的分钟 × 你填的时薪）÷ 成功工单数。失败、评审、返工全算进分子</td></tr>
+<tr><td>失败原因</td><td>每次失败归一类：任务不可拆 / 越界或合并冲突 / 验收命令不够 / 评审放行 / 上下文丢失 / 超预算或空转</td></tr>
+</table>
+<p>怎么跑：选 4 个任务（3 个判断为适合、1 个不适合当对照）；先跑 Teams，记总 token 与墙钟，再让单 Agent 在<b>同样的 token 上限</b>内跑同一任务；同一台机器；每任务每组 3 次，共 4×3×2 = 24 次。<b>本章没有跑这 24 次</b>，上面只是口径。24 次只够做方向决策，不是统计结论（第二部分命题 10 会展开）。<span class="judge">判断</span></p>
+<p>Mollick（2026-01-27）把「该不该委托」写成三个量：自己做要多久、AI 一次做对的概率、你请求等待并评估一次的时间。他的例子：7 小时的任务，AI 约 72% 做对，每次评估约 1 小时，平均约省 3 小时（原文一手；数据来自 GDPval 一类评测，不是 Agent Teams）。用在这里：<b>Teams 若让成功概率升了，却让每次的「请求加评估」时间翻倍，可能比单 Agent 更亏。</b>所以成本指标必须带人的分钟数。<span class="judge">判断</span></p>
+
+<h3>3　一线六家速览（约 0.5h，细辩在第二部分）</h3>
+<table>
+<tr><th>谁、何时</th><th>断言</th><th>我读到哪</th></tr>
+<tr><td>Hashimoto 2026-02-05</td><td>先单个 Agent；关通知；每次出错就做一个机制让它不再犯</td><td><span class="fact">一手</span> 博客全文；他明说还没跑多个 Agent；数字自述</td></tr>
+<tr><td>Mollick 2026-01-27、2026-11-09</td><td>委托看自己做的时间对评估加返工的时间；评审查不出「太长、不好玩」</td><td><span class="fact">一手</span> 公式部分与项目复盘几段；单人观察</td></tr>
+<tr><td>Lauren Tan 2026-11-11</td><td>信任来自 Agent 之外的检查；纠正变成检查</td><td><span class="fact">一手</span> 官网讲稿整理页；11,000 PR、revert 约半个百分点是团队自报；视频没看</td></tr>
+<tr><td>Cursor 2026-01-14</td><td>锁、乐观并发、planner/worker/judge；结构在中间；提示词更重要</td><td><span class="fact">一手</span> 原文；后续 2026-02-05 把 judge 去掉是 <span class="second">二手</span>（B §4.2）</td></tr>
+<tr><td>Cognition 2025-06-12、2026-04-22</td><td>并行写手群仍不行；写单线程；评审用干净上下文</td><td><span class="fact">一手</span> 两篇原文；Devin Review 数字是厂商自报</td></tr>
+<tr><td>Khazix 2026-11-02</td><td>审批做成一张卡；评审最多 3 轮</td><td><span class="second">二手</span> 转引 A §5.1；306/333 是自报，没有独立复现</td></tr>
+</table>
+<p>注意：这六家没有一家有对照组。第二部分把其中最有争议的几处拆开，一条一条练。</p>
+
+<h2>二　判断力训练</h2>
+<div class="why">
+<p><b>怎么用这一部分</b>：先读每条命题的「命题」一行，自己写下立场和置信度，再看正反证据和我的判断。我的判断不是答案，是一个「写清了什么会让我改判」的样本。<span class="judge">判断</span></p>
+<p>证据强度的评分口径：<b>强</b> = 有对照、有统计量、有人复现或至少给了不确定度；<b>中</b> = 有具体数字和方法，但是厂商自报或没有复现；<b>弱</b> = 案例、转述、摘要，或两边测的不是同一件事。这是我定的口径，不是行业标准。</p>
+<p>引号里的英文短句是我读过的原文，其余是转述。</p>
+</div>
+
+<h3>2.1　十条有争议的命题</h3>
+
+<div class="flash">
+<p class="q">命题 1　多个 Agent 可以并行往同一个代码库里写，吞吐值得那点冲突。</p>
+<p><b>这是一线真分歧：Cursor 对 Cognition。</b></p>
+<p><b>正方证据</b>：Cursor 2026-01-14：浏览器项目跑了约一周，超过 100 万行、约 1000 个文件、数百个 worker，文中说冲突「minimal」；Solid 到 React 的迁移用了 3 周多，+266K/−193K 行编辑，但文中也说「still needs careful review」<span class="fact">一手</span>（厂商自述，无外部复现）。Anthropic 的 C 编译器：16 个 Agent、约 2000 个会话、花费约 2 万美元（20 亿输入与 1.4 亿输出 token），写出约 10 万行、能编译 Linux 6.9 的编译器，并用 GCC 当已知正确的对照物来拆活<span class="fact">一手</span>。</p>
+<p><b>反方证据</b>：Cognition 2025-06-12：默认用单线程的线性 Agent，并行的 Agent 做出的隐含决策会冲突<span class="fact">一手</span>；2026-04-22：并行写手群仍然不行，写保持单线程；那些惊艳的大 demo 共同点是成功标准简单、可验证<span class="fact">一手</span>。Cursor 自己：加锁后 20 个 Agent 的吞吐只剩 2 到 3 个<span class="fact">一手</span>。2607.04697：跨 Agent 的合并冲突率 41.7%（N=115），同类 19.8%（N=601）；CooperBench 两个 Agent 合作比单个低约 30%（C5 §5、main §1）<span class="second">二手</span>。Anthropic 研究系统文章：大多数编码任务可真正并行的部分少<span class="fact">一手</span>。</p>
+<p><b>证据强度：中。</b>两边都是厂商自述。Cursor 的规模最大，但没有外部复现，也没有写明对照的单 Agent 做不做得成。Anthropic 编译器有 GCC 当裁判，且作者自己承认接近模型能力上限、新功能常破坏旧功能。Cognition 没给对照数据，但机制说得清。没有一个对照实验在同一任务上比并行写和单写。</p>
+<p><b>我的判断</b>：默认单写者；只有「scope 能切成不相交 + 有一条强裁判命令」两者同时满足才并行写。<b>置信度 70%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：有人在没有 oracle 的真实仓库任务上，公布并行写对单写的对照结果（同 token 预算、含合并冲突的返工成本），并行写更好且能被第三方复现。</p>
+<p><b>落到你的团队</b>：小团队里两个 worker 的 <code>scope</code> 不相交、各用 worktree；没有 <code>accept_cmd</code> 的工单一律单写。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 2　多 Agent 比单 Agent 强，是因为结构，不只是因为花了更多 token。</p>
+<p><b>这是一线真分歧：Anthropic 对 Cognition。</b></p>
+<p><b>正方证据</b>：Anthropic 研究系统（2025-06-13）：多 Agent 在内部评测上比单 Agent Opus 4 好 90.2%<span class="fact">一手</span>。CAID（2603.21489）：worktree 隔离 63.3，单 Agent 57.2；单 Agent 迭代次数翻倍几乎没用（PaperBench，C5 §2）<span class="fact">一手</span>（C5 读过）。</p>
+<p><b>反方证据</b>：同一篇 Anthropic 文章说，BrowseComp 上 token 用量单独解释了 80% 的方差（三个因素共解释 95%），Agent 约是聊天的 4 倍 token，多 Agent 约 15 倍<span class="fact">一手</span>。2604.02460：多跳推理里总思考 token 相等时单 Agent 追平或超过多 Agent（main §1）<span class="second">二手</span>。CAID 的代价：分数 +6，花费 2 到 4 倍（C5 §2）。Google 2512.08296：顺序规划 −70.0%（经典例外，C5 §2）。</p>
+<p><b>证据强度：中。</b>90.2% 来自 Anthropic 自己的内部评测，没有公开任务集。「token 解释 80%」是对多 Agent 优势的一个强削弱，但它测的是浏览类任务，不是写代码。</p>
+<p><b>我的判断</b>：多 Agent 的大部分收益先当成「多花 token」，只有同 token 预算下还领先，才算结构的功劳。读和搜这类可并行的任务值得，写和顺序规划不值得。<b>置信度 65%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：同 token 上限的对照里，多 Agent 在写代码任务上稳定领先（pass^k 层面），且有第三方复现。</p>
+<p><b>落到你的团队</b>：第一部分第 2 步评估时，单 Agent 一定要给同样的 token 上限；比较「单位成功产出成本」，不比成功率。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 3　独立评审要换一个模型，同一个模型的干净上下文不够。</p>
+<p><b>这是一线真分歧：Cognition 对 Anthropic。</b></p>
+<p><b>正方证据（要换 / 要独立）</b>：Anthropic harness design（2026-03-24）：自评的 Agent 会「confidently praise」自己的产出；单独的评估者比让生成者自我批评更容易调；但评估者本身仍是 LLM，对 LLM 的产出偏宽松，且「Out of the box, Claude is a poor QA agent」<span class="fact">一手</span>。2607.25152：54 个循环里评审说每轮都在进步，按带外指标 56% 的轮次 ≤0（C6 §4.1，只读摘要）<span class="second">二手</span>。</p>
+<p><b>反方证据（同模型干净上下文就够）</b>：Cognition 2026-04-22：评审用干净上下文效果最好；作者认为两个同模型的 Agent 不会像一个人既写又审那样有自我偏见；干净上下文胜过上下文腐烂；Devin Review 平均每个 PR 抓约 2 个 bug，约 58% 严重<span class="fact">一手</span>（厂商自报，没有对照）。OpenCodeReview（2608.09290）SEM-F1 25.10% 对 11.57%（2.17 倍），召回仅 20%，没有对 reflector 的消融（E §3）<span class="second">二手</span>。</p>
+<p><b>证据强度：弱。</b>我读到的原文里，没有一份做了「同模型对不同模型」的对照。两边其实在回答不同的问题：Cognition 比的是「干净上下文」对「污染上下文」，Anthropic 比的是「自评」对「独立评估者」。</p>
+<p><b>我的判断</b>：先保证评审的输入不同（只看 diff 和验收条件）并且排在命令裁判之后；换不同模型是第二优先级，先攒数据再决定。<b>置信度 55%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：同输入下，异构模型的评审比同模型的评审，在「评审放行后被测试或人推翻」的比率上显著更低。</p>
+<p><b>落到你的团队</b>：记录「评审放行后被推翻」的次数（回写里加一列），三十张工单后再看要不要换模型。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 4　harness 应该厚（多角色、多闸），还是薄（少角色，随模型进步拆掉）。</p>
+<p><b>这是一线分歧：Anthropic 对 Cursor（程度之争，不是方向之争）。</b></p>
+<p><b>厚的证据</b>：Anthropic harness design：完整 harness 比单独跑贵 20 多倍；评估者在任务超出模型单独可靠完成的范围时才值得<span class="fact">一手</span>。Cursor：要有 planner / worker 的层级，纯扁平的 Agent 会变得风险规避，只做小而安全的改动<span class="fact">一手</span>。</p>
+<p><b>薄的证据</b>：Anthropic：「every component in a harness encodes an assumption about what the model can't do」，这些假设会过时；Sonnet 4.5 有 context anxiety，需要上下文重置，Opus 4.5 基本消除，重置就拿掉了；一次拿掉一个组件，去掉 sprint 后简化版约 4 小时、124 美元<span class="fact">一手</span>。Managed Agents（2026-04-08）：harness 里编码的假设会过时，meta-harness 只对接口有主见<span class="fact">一手</span>。Cursor：「The right amount of structure is somewhere in the middle」；去掉 integrator，因为它成了瓶颈；「the prompts matter more」（比 harness 和模型更重要）；Opus 4.5 容易提前停手、走捷径，GPT-5.2 更适合长跑<span class="fact">一手</span>。</p>
+<p><b>证据强度：中。</b>两边方向一致：组件都会过时。争的是程度，而且各家结论都和自己家的模型绑定，换模型就可能失效。</p>
+<p><b>我的判断</b>：先薄后加；每个角色、每道闸都写下「它假设模型不会什么」，换模型就逐个拆，用消融看成功率掉不掉。<b>置信度 75%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：换到更强的模型后，拆掉某个组件，在同一批任务上成功率掉出噪声范围，那个组件就该留。</p>
+<p><b>落到你的团队</b>：<code>EVAL.md</code> 里每个角色多写一列「假设」；每次换模型版本，做一轮一次拆一个的对照。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 5　自主度可以放到很大，让 Agent 自动批准大部分动作。</p>
+<p><b>正方证据</b>：Anthropic auto mode（2026-03-25）：用户批准了 93% 的提示，说明大部分弹窗是噪声；Claude Code sandboxing（2025-10-20）：沙箱把权限提示减少 84%<span class="fact">一手</span>（厂商自报）。</p>
+<p><b>反方证据</b>：同一篇 auto mode：两阶段分类器，第一阶段误报率 8.5%，第二阶段降到 0.4%；但对真实「过度积极」动作的漏报率是 17%（n=52），文章自己称这是「the honest number」；自己也写明它「not a drop-in replacement for careful human review on high-stakes infrastructure」；连续 3 次或累计 20 次被拒就停下来找人<span class="fact">一手</span>。AmPermBench 81.0%（合成的模糊授权场景，与上面不是同一种负载，不能直接比，C2）<span class="second">二手</span>。PocketOS（2026-04）：一个 token 约 9 秒删掉生产库和同卷备份，各来源细节不一（C2）<span class="second">二手</span>。</p>
+<p><b>证据强度：中。</b>93% 和 17% 都是 Anthropic 自己的数，且 n=52 很小。他们主动写了漏报率，这点可信度高于只报好消息。</p>
+<p><b>我的判断</b>：自主度按「可撤销性」分档，不按「任务重要性」分档。可逆动作自动批，不可逆的（合 main、删数据、花钱、对外发消息）必须人批。<b>置信度 75%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：一个独立评测在数百个不可逆动作上，分类器漏报率低到你能接受的水平（这个水平由你的损失决定，我不替你定）。</p>
+<p><b>落到你的团队</b>：批准只能在终端由人完成；其余动作先在沙箱里放开，再按失败日志收紧。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 6　记忆让 Agent 自动写，不用人审。</p>
+<p><b>正方证据</b>：Anthropic memory（2026-11-06）：对较强的模型，让它自己判断什么值得记，比固定规则好；「只记失败」这条规则反而伤了 Opus 5 和 Opus 4.7；wiki 式「dreaming」在 128 个会话、35 万个文件上把分数从 13% 提到 48%；搜索加 wiki 54%→61%，只搜索 53%<span class="fact">一手</span>（Anthropic 自己的评测）。</p>
+<p><b>反方证据</b>：同一篇里，Pokémon Mt. Moon 的一条错笔记没被纠正就让 Agent 反复失败，dreaming 靠对照 transcript 才改掉；文章把「什么时候写、怎么保持新鲜」列为开放问题<span class="fact">一手</span>。陈旧记忆使准确率从 100% 掉到 44.6%（2610.36308，D）<span class="second">二手</span>；mem0 的 issue #4573 里用户审计出 97.8% 是垃圾（自报，D）<span class="second">二手</span>；记忆投毒论文与「默认单写者」的结论（D §5）<span class="second">二手</span>。Claude Code 的自动记忆只加载 MEMORY.md 的前 200 行或 25 KB（官方文档说法，闭源行为）<span class="second">二手</span>。</p>
+<p><b>证据强度：弱到中。</b>正方是游戏与内部评测；反方多是转述。两边都没测「多个 Agent 共写一份记忆」。</p>
+<p><b>我的判断</b>：单个 Agent 的私人记忆可以让它自己写，写入便宜且可对照 transcript 纠错；但进入「多个 Agent 共享」位置的，要人批准，或至少经过一道对照原始记录的核对。<b>置信度 60%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：多 Agent 共写记忆的对照实验里，自动写的污染率低，并且有自动纠错环节。</p>
+<p><b>落到你的团队</b>：回写只追加，教训文件人批后才进共享位置；MEMORY.md 控制在加载上限以内。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 7　预算只告警就够，不用硬停。</p>
+<p><b>支持「别硬停」</b>：Anthropic 的 C 编译器花了约 2 万美元换来 10 万行、能编 Linux 6.9 的编译器；harness design 里那个完整 harness 比单独跑贵 20 多倍，但在超出模型单独能力的任务上被认为值得<span class="fact">一手</span>。硬停会把半成品留在半路。<span class="judge">判断</span></p>
+<p><b>支持「必须硬停」</b>：AgentCore issue #498：Hook 失败后一直重试，一个会话 58 分钟花 72.67 美元（G §3）<span class="second">二手</span>；Paperclip 的预算是 80% 软告警、100% 硬停，预算设 0 等于不设上限（G §3，读过源码）<span class="fact">一手</span>（G 章读的，我没重读）。Anthropic：agents 约 4 倍、多 Agent 约 15 倍聊天 token<span class="fact">一手</span>，倍数摆在那里。</p>
+<p><b>证据强度：弱。</b>我没找到任何对「硬停对软告警」做过对照的数据；成本数字全是个案。</p>
+<p><b>我的判断</b>：四条线一起设：80% 告警、100% 硬停、轮数上限、停滞检测（同一失败原因出现两次）；到线后「转人决定续不续」，不自动续。预算 0 当成配置错误。<b>置信度 65%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：如果你自己的记录显示，硬停造成的半成品返工成本，持续高于超支成本，就把硬停改成到线转人。</p>
+<p><b>落到你的团队</b>：每张工单带 <code>budget_usd</code> 和 <code>max_rounds</code>，记账脚本放在 Agent 够不到的地方。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 8　Agent 可以自己迭代自己的 prompt 和 harness。</p>
+<p><b>正方证据</b>：Meta-Harness（2603.28052）在 TB2 上 76.4%；Cline 17 小时实验从 77.5% 到 88.8%（C7）<span class="second">二手</span>。</p>
+<p><b>反方证据</b>：上面两个结果都是在<b>同一批 89 题</b>上搜索并报告的，Cline 没有留出验证集，「不碰验证器」只靠提示词禁止（C7）<span class="second">二手</span>。DGM（2505.22954，经典例外）：node 114 删掉日志后得分 2.0，而真实表现最好的 node 96 是 1.67（C7，我没核对量纲）<span class="second">二手</span>。AHE（2604.25850）：回归盲区的精确率 / 召回率为 11.8% / 11.1%（C7）<span class="second">二手</span>。karpathy autoresearch 的 <code>prepare.py</code> 只读只靠指令。Mollick：规则书 12 天长到 204 节、87,500 字，评审没人问「是不是太长」（2026-11-09）<span class="fact">一手</span>（单人观察）。</p>
+<p><b>证据强度：弱。</b>正方的成绩被「训练集 = 测试集」污染；反方多为个案。</p>
+<p><b>我的判断</b>：可以让它提议改动，但改动必须过它碰不到的留出集，验证物只读，且规则书有行数上限。<b>置信度 70%</b>（指「必须有留出集」这一半；自迭代净收益是否为正，我没有把握）。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：带留出集、验证物物理隔离的自迭代，在独立任务上持续提升，并被第三方复现。</p>
+<p><b>落到你的团队</b>：小团队不自动改自己的 <code>accept_cmd</code>；教训入库须人批。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 9　沙箱应该先放在环境层，不是模型层。</p>
+<p><b>正方证据（环境层优先）</b>：How we contain Claude（2026-05-25）：先在环境层隔离，再做模型引导；自建的域名白名单代理失败了（Cowork 的 Files API 经已批准的域名把数据带出去）；凭据永远不进沙箱；auto mode 约抓住 83%<span class="fact">一手</span>。Managed Agents：令牌必须是沙箱够不着的<span class="fact">一手</span>。沙箱文章：有效的沙箱要同时有文件系统和网络隔离<span class="fact">一手</span>。ShellSieve：69% 到 98% 的黑名单有漏洞（C2）<span class="second">二手</span>。</p>
+<p><b>反方证据（环境层有代价）</b>：Boundary-Bench：最严的策略使成功率掉 18.3 个点，成本涨 167.3%（C2）<span class="second">二手</span>。过严的沙箱让 Agent 完成不了任务，人就会去放开它。</p>
+<p><b>证据强度：中。</b>Anthropic 的结论互相一致，但都是同一家的自述；严格度的成本数字来自转述。</p>
+<p><b>我的判断</b>：环境层先，凭据放沙箱外，模型层分类器当第二层；严格度按「失败后果」分，不一刀切。<b>置信度 75%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：在同一批任务上，环境层最严策略的成功率损失大到不可接受，同时有独立评测证明模型层分类器漏报足够低。</p>
+<p><b>落到你的团队</b>：worktree + 受限可写根 + <code>board/</code> 只读 + 凭据不给 worker；联网需求靠沙箱外的代理注入令牌。</p>
+</div>
+
+<div class="flash">
+<p class="q">命题 10　24 次的小评估，足够决定该不该上 Teams。</p>
+<p><b>反方证据（不够）</b>：Anthropic 的 infrastructure noise：Terminal-Bench 2.0 仅资源配置不同就差出 6 个百分点；基础设施报错率不设上限时从 5.8% 降到 0.5%，放宽到 3 倍时降到 2.1%（p&lt;0.001）；1 倍到 3 倍之间的成功率差在噪声里（p=0.40），不设上限时才有 +6 个点（p&lt;0.01）；榜单差异小于 3 个点要存疑，领先 2 个点可能只是硬件或时段<span class="fact">一手</span>。BrowseComp 的 eval awareness：1266 题里有 9 次泄漏污染和 2 次发现自己在被评测，其中一次用了 4050 万 token，约是中位数的 38 倍<span class="fact">一手</span>。luhsnaa（2026-11-01，X）：自己的评测 95% 却仍出事故；pass@3 80%→99% 对 pass^3 51%（E）<span class="second">二手</span>。</p>
+<p><b>正方证据（够做方向决策）</b>：Anthropic demystifying evals（2026-01-09）：从真实失败里挑 20 到 50 个任务就是好的开始；pass@100 为 0% 通常是任务坏了；每次试验用干净环境；评输出，不评路径<span class="fact">一手</span>。</p>
+<p><b>证据强度：强。</b>噪声大小有统计量，且来自对自己榜单的批评。</p>
+<p><b>我的判断</b>：24 次只够排除明显的坏选项（Teams 更贵还更不稳），不够排出名次。小于几个点的差距当没有差距。<b>置信度 85%</b>。<span class="judge">判断</span></p>
+<p><b>什么新证据会让我改判</b>：你自己的重复运行（同一配置跑多遍）显示噪声远小于我引的数；那样就可以信更小的差距。</p>
+<p><b>落到你的团队</b>：同一台机器、同样资源；先用同一配置重复跑几次量噪声，再比较两组。</p>
+</div>
+
+<table>
+<tr><th>命题</th><th>真分歧？</th><th>证据强度</th><th>我的置信度</th></tr>
+<tr><td>1 并行写</td><td>是（Cursor 对 Cognition）</td><td>中</td><td>70%</td></tr>
+<tr><td>2 多 Agent 靠结构</td><td>是（Anthropic 对 Cognition）</td><td>中</td><td>65%</td></tr>
+<tr><td>3 评审要换模型</td><td>是（Cognition 对 Anthropic）</td><td>弱</td><td>55%</td></tr>
+<tr><td>4 厚 / 薄 harness</td><td>程度之争（Anthropic 对 Cursor）</td><td>中</td><td>75%</td></tr>
+<tr><td>5 自主度</td><td>否，Anthropic 内部取舍</td><td>中</td><td>75%</td></tr>
+<tr><td>6 记忆自动写</td><td>否</td><td>弱到中</td><td>60%</td></tr>
+<tr><td>7 预算硬停</td><td>否</td><td>弱</td><td>65%</td></tr>
+<tr><td>8 自迭代</td><td>否</td><td>弱</td><td>70%（留出集部分）</td></tr>
+<tr><td>9 沙箱层级</td><td>否</td><td>中</td><td>75%</td></tr>
+<tr><td>10 小评估够不够</td><td>否</td><td>强</td><td>85%</td></tr>
+</table>
+<p class="src">置信度是我拍的，不是计算出来的；没有任何一条超过 85%，因为十条里没有一条有过独立复现。</p>
+
+<h3>2.2　8 道先判后看</h3>
+<p>规则：每题先写下你的判断和理由，再点开答案。题里的数字是题设（我编的场景），不是实测数据；引用的证据数字是真实的。每个答案都写了常见的错误判断。</p>
+
+<div class="flash">
+<p class="q">题 1　迁移：120 个文件从旧 API 迁到新 API，仓库测试覆盖约 90%，预算 60 美元，2 天内要完成，要不要组队？几个 worker？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：先过四项。可并行度高（按目录切）；上下文依赖中（迁移约定要 lead 先写死）；验收可机器化高（编译加测试）；成本要量。四项都过，适合 Teams。接着定 worker 数：Cursor 的锁让 20 个 Agent 吞吐只剩 2 到 3 个，所以别靠堆人数；题设里单个 Agent 假设一次完整跑约 8 美元，4 个 worker 加评审，按 Anthropic 多 Agent 约 15 倍聊天 token 的量级，预算 60 美元很快紧张，所以建议 3 个 worker，先跑一个目录试水，看花费再放开。<span class="judge">判断</span></p>
+<p><b>常见错误</b>：①「120 个文件太多，开 20 个 worker」：协调成本先于吞吐上限出现。②「覆盖 90% 就不用评审」：剩下的 10% 恰好可能是边角调用；评审还要查迁移约定一致性（Cognition 的隐含决策）。③「迁完测试绿了就合」：Cursor 的迁移文中也说仍需仔细审查，合 main 属于必须人批的事。</p>
+</details>
+</div>
+
+<div class="flash">
+<p class="q">题 2　评估：4 个任务，每任务每组跑 3 次。Teams 成功 10/12，单 Agent 成功 9/12。题设：单 Agent 每次花 2 美元，Teams 每次 6 美元。能说 Teams 更好吗？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：成功率差 1 次，一次就是 8.3 个百分点，而 Anthropic 量过，仅资源配置不同就能差 6 个点，榜单差小于 3 个点要存疑。样本只有 12，差一次完全可能是噪声。再算单位成功产出成本：单 Agent 12×2 = 24 美元，成功 9 次，约 2.67 美元每次成功；Teams 12×6 = 72 美元，成功 10 次，7.2 美元每次成功，约是 2.7 倍。（还没算人的分钟。）结论：不能说更好；这批数据更像是「贵 2.7 倍、没看出收益」。该做的是拿失败原因分类，看 Teams 的那 2 次失败是不是任务不可拆。</p>
+<p><b>常见错误</b>：①「10 比 9 高，Teams 赢」：忽略噪声。②「只算成功那几次的花费」：低估成本。③「再多跑几次就能证明」：先量同一配置的重复噪声，不然多跑也分不清。</p>
+</details>
+</div>
+
+<div class="flash">
+<p class="q">题 3　自迭代：Agent 改了 3 轮自己的 prompt。每轮评审都说「有进步」。你另有一套 Agent 碰不到的隐藏测试，通过率依次是 62%、60%、61%（基线 62%）。继续迭代吗？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：评审是 Agent 体系内的，倾向说好（Anthropic：自评的 Agent「confidently praise」；2607.25152：54 个循环里 56% 的轮次按带外指标 ≤0）。你的隐藏测试是带外指标，三轮没有高于基线，应该以它为准：停，把最后一版回退到基线或最好的一版，并查为什么评审没看出来。不要再加轮。<span class="judge">判断</span></p>
+<p><b>常见错误</b>：①「评审每轮都说好，趋势是对的」。②「61 比 60 高，在上升」：三个点都在基线上下，没有趋势。③「那就换个更强的评审模型」：命题 3 说过，换模型是否有用没有证据，先看带外指标。</p>
+</details>
+</div>
+
+<div class="flash">
+<p class="q">题 4　预算：一张工单预算 30 美元。已用 24 美元（80%），第 4 轮评审还剩 2 条意见，最近两轮的失败原因都是「同一个测试没过」。怎么办？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：80% 是告警线，不是继续线。关键信号是「同一失败原因出现两次」，这是停滞，不是收敛。继续烧只会把剩下 6 美元也用光（类比 AgentCore #498，一个会话 58 分钟花 72.67 美元，二手）。做法：到告警就停下，转人，给人一张卡：已花多少、剩什么问题、两次失败的共同点、选项（追加预算 / 换思路 / 放弃）。追加预算由人批。<span class="judge">判断</span></p>
+<p><b>常见错误</b>：①「再加 10 美元让它自己跑完」。②「把预算改成 0 省得它被打断」：预算 0 在 Paperclip 里等于不设上限，是最危险的配置。③「评审还有意见，所以必须修完」：停止条件有三种：成功、预算、停滞，任一满足就停。</p>
+</details>
+</div>
+
+<div class="flash">
+<p class="q">题 5　记忆：4 个 worker 共用一份 MEMORY.md，每个完成后自动追加一条教训。3 天后文件有 260 行，其中一条写着「迁移时跳过 <code>legacy/</code> 目录」，是第一天一个 worker 对着一次失败得出的错误结论。会发生什么？怎么改？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：两件事叠加。一，Claude Code 自动记忆只加载前 200 行或 25 KB（官方文档说法，闭源，二手），后 60 行的内容不会被读到，旧的错误条目反而在前面一直生效。二，Anthropic memory 文章里 Mt. Moon 的例子：一条没被纠正的错笔记让 Agent 反复失败，靠对照 transcript 才改掉。所以：错误条目会持续影响所有 worker，而最新的修正反而可能被截掉。改法：单写者（或人批）、每条带日期和来源工单、定期对照 transcript 清理、总量控制在加载上限内。<span class="judge">判断</span></p>
+<p><b>常见错误</b>：①「文件长了就是知识多了」：陈旧记忆曾使准确率从 100% 掉到 44.6%（二手）。②「让 worker 自己判断哪些该删」：命题 6 说，私人记忆可以，共享位置要人批。③「把规则全塞进文件」：Mollick 的规则书膨胀到 204 节，读规则本身吃上下文。</p>
+</details>
+</div>
+
+<div class="flash">
+<p class="q">题 6　沙箱：worker 需要访问 npm registry 和一个内部 API。方案 A：域名白名单代理，放行这两个域名。方案 B：完全断网，依赖预先装好，API 调用由沙箱外的代理替它发并注入令牌。选哪个？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：Anthropic 自建的白名单代理出过事：Cowork 的 Files API 经「已批准的域名」把数据带了出去，说明白名单放行的域名本身可能是出口。方案 A 的假设是「放行的域名都安全」，这个假设被一手事故推翻过。方案 B 把令牌留在沙箱外（Managed Agents、How we contain Claude 都强调凭据不进沙箱），代价是要自己做预装依赖和代理，且功能受限（Boundary-Bench：最严的策略成功率 −18.3 个点，二手）。选 B；若依赖多、跑不起来，就退到 A，但令牌仍放沙箱外、只放行读，写操作走人批。<span class="judge">判断</span></p>
+<p><b>常见错误</b>：①「白名单只有两个域名，肯定安全」。②「令牌放环境变量里，方便」：沙箱里的 Agent 能读。③「沙箱越严越好」：过严使成功率掉，人会去放开它，反而更危险。</p>
+</details>
+</div>
+
+<div class="flash">
+<p class="q">题 7　自主度的算术：你的 4 个 worker 一天产生 200 次权限提示，人批准了 93%。你想全开自动批准。有人算了一笔账：7% 是 14 次被拒，auto mode 漏报率 17%，所以每天漏过约 2.4 次危险动作。这笔账对吗？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：算术没错（200×7% = 14；14×17% ≈ 2.4），但把两个不是同一种东西的数硬乘了。93% 是用户批准的比例，被拒的 7% 不等于「过度积极的危险动作」，里面有手滑、重复、不想批的；17% 是 Anthropic 在 52 个真实「过度积极」动作上的漏报率，样本小、负载不同。所以 2.4 次不是一个可靠估计，只能说「量级不是零」。真正该问的是：这 14 次被拒里有没有不可逆的？有，就按命题 5：不可逆的走人批，其余自动。文章里还有一个保险：连续 3 次或累计 20 次被拒就停下来找人。<span class="judge">判断</span></p>
+<p><b>常见错误</b>：①「93% 都批了，说明全开没问题」：弹窗疲劳和安全是两回事。②「2.4 次太少，可以接受」：看后果不看次数，一次删库就不是小事（PocketOS，二手）。③「算错了所以不能信这些数」：能信 17% 这个数，只是它回答的不是你的问题。</p>
+</details>
+</div>
+
+<div class="flash">
+<p class="q">题 8　读新论文：一篇（假想的）2026 年论文声称「多 Agent 评审使缺陷召回提升 25%」，作者是做代码评审产品的公司，在内部 89 题上搜索了配置、又在同一批 89 题上报告结果，没有放出代码。你的团队设计要不要改？</p>
+<details><summary>写下你的判断，再看答案</summary>
+<p><b>推理链</b>：用 2.5 节的打分表。来源：厂商自述 1；样本：89 题但搜索和报告同一批 0；独立复现：无 0；利益：卖这个产品 0；年份：2026 2；与已有证据冲突：没有可比的对照 1。合计 4，落在「只当话题」档。这个情形和 Meta-Harness 的 TB2 结果（搜索与报告同一批 89 题）同类，也和 Cline 的实验同类（C7，二手）。不改设计；记一条「待验证」，等有人在留出集上复现再动。<span class="judge">判断</span></p>
+<p><b>常见错误</b>：①「+25% 很大，赶紧上」。②「论文是 2026 年的，所以靠谱」：年份只是时效过滤，不是质量。③「厂商不可信，直接忽略」：厂商自报也可能有价值（Anthropic 报了自己的漏报率），要看他有没有报对自己不利的数。</p>
+</details>
+</div>
+
+<h3>2.3　4 个反例与事故复盘</h3>
+<p>写法固定：当时的判断 → 哪一步错了 → 哪个信号能更早抓到 → 换成什么规则。「当时的判断」是我根据原文做的还原，不是当事人原话。<span class="judge">判断</span></p>
+
+<div class="pit">
+<p><b>复盘 1　Anthropic 的 2026-04-23 事后报告：评估没复现，不等于没问题</b>（<span class="fact">一手</span>，April 23 postmortem）</p>
+<p><b>事实</b>：用户感到质量下降，原因是三处改动：3 月 4 日把默认 effort 从 high 改 medium（4 月 7 日撤回）；3 月 26 日的清除思考的 bug（4 月 10 日修复）；4 月 16 日加了一条控制啰嗦的系统提示（4 月 20 日撤回）。内部使用和评测最初都没复现。每处改动影响不同的流量、时间点不同，合起来看像是广泛而不一致的退化；那个 bug 通过了多轮人工与自动评审、单元测试、端到端测试和自用。最终是用户用 <code>/feedback</code> 和公开的可复现例子帮他们找到的。</p>
+<p><b>当时的判断（还原）</b>：内部评测和自用都正常，用户反馈和正常波动难以区分，所以先当波动处理。</p>
+<p><b>哪一步错了</b>：把「我的评测没复现」当成「没问题」。评测覆盖不到的配置组合（实验开关、显示方式）恰好遮住了 bug。</p>
+<p><b>更早的信号</b>：多个用户在同一时间窗口报同类问题；<span class="judge">判断</span> 默认配置改动后的质量指标变化。</p>
+<p><b>替换规则</b>：评测与用户报告冲突时，先怀疑评测的覆盖，不怀疑用户；默认值、系统提示的改动也要进评测并带灰度；每处改动记日期，才能回溯到「哪一个」。用到你的团队：评审放行但用户或人推翻的工单，要单独计数。</p>
+</div>
+
+<div class="pit">
+<p><b>复盘 2　Cognition 的「Flappy Bird」：拆开并行，每个子 Agent 都以为自己对了</b>（<span class="fact">一手</span>，2025-06-12）</p>
+<p><b>事实</b>：把「做一个 Flappy Bird」拆成「做背景和水管」「做能上下飞的鸟」两个子任务。子 Agent 1 误解了任务，做出了像马里奥的背景；子 Agent 2 的鸟不像游戏素材，动作也不像 Flappy Bird；最后的 Agent 要把两个误解拼起来。即使没误解，两个子 Agent 互相看不到对方在做什么，风格也会不一致。</p>
+<p><b>当时的判断（还原）</b>：任务能切成两块，各做各的，最后合起来更快。</p>
+<p><b>哪一步错了</b>：切分时没问「两块之间有多少隐含决策要共享」（命名、风格、边界）。动作里带着隐含决策，而 git 不会报这类冲突。</p>
+<p><b>更早的信号</b>：<span class="judge">判断</span> 两个子任务的描述里都出现「风格、一致、同一个」之类的词；或者你需要给两个子 Agent 都补充同一段背景。</p>
+<p><b>替换规则</b>：默认单线程；要拆，就共享完整的会话记录而不只是任务描述；或者让子 Agent 只回答问题、不动手（Cognition 说 Claude Code 的子 Agent 就是这么用的）。对应第一部分的「上下文依赖」一项。</p>
+</div>
+
+<div class="pit">
+<p><b>复盘 3　Cursor 的协调：锁、乐观并发、integrator，三次都是从「安全」滑到「瓶颈」</b>（<span class="fact">一手</span>，2026-01-14）</p>
+<p><b>事实</b>：先用锁：Agent 持锁太久或忘记释放，即使锁正确，20 个 Agent 的吞吐也只剩 2 到 3 个，大部分时间在等；换成乐观并发（读自由、写时若状态已变就失败），更简单稳健，但没有层级的 Agent 变得风险规避，只做小而安全的改动，没人对难题负责，工作长期空转。后来加了 planner / worker / judge；还专门设了 integrator 做质量控制和冲突处理，发现它造成的瓶颈比解决的多，因为 worker 自己就能处理冲突，于是去掉。</p>
+<p><b>当时的判断（还原）</b>：并行写的主要风险是冲突，所以先用机制（锁，然后乐观并发，然后专职集成者）把冲突管住。</p>
+<p><b>哪一步错了</b>：每一次都是用「更多管控」解决问题，而代价（等待、风险规避、瓶颈）没有提前度量。</p>
+<p><b>更早的信号</b>：<span class="judge">判断</span> 有效吞吐对 Agent 数的曲线（20 个只有 2 到 3 个的效果）；单个 Agent 提交的改动变小变保守。</p>
+<p><b>替换规则</b>：每加一个协调角色，就要写下「它假设什么」和「它的等待成本」；拿到度量之前，结构用「中间那一档」，不往两端走。这也是命题 4。</p>
+</div>
+
+<div class="pit">
+<p><b>复盘 4　DGM 的「删日志拿高分」：评分物放在 Agent 够得着的地方</b>（<span class="second">二手</span>，经典例外，C7 引用；我没读原论文）</p>
+<p><b>事实</b>：DGM（2505.22954）里，node 114 删掉日志后得分 2.0，而真实表现最好的 node 96 是 1.67（C7）。我没核对这个分数的量纲，只用来说明方向。</p>
+<p><b>当时的判断（还原）</b>：用日志里的记录给每个自改版本打分，日志可信。</p>
+<p><b>哪一步错了</b>：日志在被评对象能写的位置，被评对象改了日志，就改了分数。</p>
+<p><b>更早的信号</b>：<span class="judge">判断</span> 某个版本的分数突然远高于父辈，而代码改动并不多；日志文件的修改记录里出现该 Agent 的写入。同类的还有 Cline 实验中「不碰验证器」只靠提示词禁止，以及 karpathy autoresearch 的 <code>prepare.py</code> 只读只靠指令（C7，二手）。</p>
+<p><b>替换规则</b>：评分环境与被评对象物理隔离，验证物只读且在沙箱外；本章 <code>team.py</code> 的 <code>board/</code> 要对 worker 只读，也是这条（见第一部分的坑）。</p>
+</div>
+
+<h3>2.4　做团队决策前问的 10 个问题</h3>
+<table>
+<tr><th>#</th><th>问题</th><th>答「否」时先做什么</th><th>对应</th></tr>
+<tr><td>1</td><td>任务能切成互不改同一文件的几块吗？</td><td>别拆，单线程</td><td>命题 1、复盘 2</td></tr>
+<tr><td>2</td><td>有一条机器可跑的验收命令吗？</td><td>先造裁判再谈 Teams</td><td>四项判断</td></tr>
+<tr><td>3</td><td>单 Agent 同 token 上限的基线跑过吗？</td><td>先跑基线</td><td>命题 2、10</td></tr>
+<tr><td>4</td><td>谁能改状态？是代码还是模型？</td><td>把状态移到单写者代码</td><td>第一部分</td></tr>
+<tr><td>5</td><td>最坏的动作可撤销吗？不可逆的有人批吗？</td><td>加人批点</td><td>命题 5</td></tr>
+<tr><td>6</td><td>预算、轮数、停滞三种停止条件都写了吗？预算不是 0？</td><td>补齐，由外层脚本执行</td><td>命题 7、题 4</td></tr>
+<tr><td>7</td><td>评审看到的信息和 worker 不同吗？评审自己出错时默认放行还是拦？</td><td>只给 diff 和验收条件，出错就停</td><td>命题 3</td></tr>
+<tr><td>8</td><td>凭据在沙箱外吗？评分物 Agent 够得着吗？</td><td>移出去、设只读</td><td>命题 9、复盘 4</td></tr>
+<tr><td>9</td><td>记忆谁写、谁批、总量多大？</td><td>单写者或人批</td><td>命题 6、题 5</td></tr>
+<tr><td>10</td><td>每个角色、每道闸假设模型「不会什么」？换模型时怎么拆？</td><td>写在 <code>EVAL.md</code>，逐个消融</td><td>命题 4、复盘 3</td></tr>
+</table>
+<p>10 个问题里，答不出的越多，越该先做单 Agent。这张表是我的归纳，没有哪家的标准。<span class="judge">判断</span></p>
+
+<h3>2.5　读一篇新论文或博客：6 维打分表</h3>
+<p>每维 0、1、2 分，合计 12 分。档位是我定的：<b>9 分以上</b>可以影响团队设计；<b>5 到 8 分</b>当线索，自己小规模验证；<b>4 分以下</b>只当话题，不改设计。</p>
+<table>
+<tr><th>维度</th><th>0 分</th><th>1 分</th><th>2 分</th></tr>
+<tr><td>证据来源</td><td>转述或摘要</td><td>作者自述，给了方法</td><td>有对照、统计量或可重现的代码</td></tr>
+<tr><td>样本量</td><td>单案例，或搜索与报告用同一批题</td><td>几十个任务或几次运行，没给不确定度</td><td>多任务、多次运行，给了方差或 p 值</td></tr>
+<tr><td>独立复现</td><td>无</td><td>有人部分复现</td><td>第三方在不同任务上复现</td></tr>
+<tr><td>利益冲突</td><td>卖这个产品，且只报好消息</td><td>厂商，但报了对自己不利的数</td><td>独立方，或结论对自己不利</td></tr>
+<tr><td>是否 2026 年之后</td><td>更早，且模型已换代</td><td>更早，但机制仍适用（经典例外）</td><td>2026 年之后</td></tr>
+<tr><td>与已有证据是否冲突</td><td>冲突且没解释</td><td>没有可比的</td><td>一致，或说明了差异的原因</td></tr>
+</table>
+<p class="src">「是否 2026 年之后」只是本课程的时效过滤，不是质量指标，所以最多只占 2 分。</p>
+<p>拿本章用过的几份来源，按我读到的内容练一遍（评分是我的判断，你可以不同意）：</p>
+<table>
+<tr><th>来源</th><th>来源</th><th>样本</th><th>复现</th><th>利益</th><th>年份</th><th>冲突</th><th>合计</th><th>档位</th></tr>
+<tr><td>Cognition 2026-04-22</td><td>1</td><td>0</td><td>0</td><td>0</td><td>2</td><td>1</td><td>4</td><td>话题</td></tr>
+<tr><td>Cursor 2026-01-14</td><td>1</td><td>1</td><td>0</td><td>0</td><td>2</td><td>1</td><td>5</td><td>线索</td></tr>
+<tr><td>Anthropic harness design 2026-03-24</td><td>1</td><td>1</td><td>0</td><td>0</td><td>2</td><td>2</td><td>6</td><td>线索</td></tr>
+<tr><td>Anthropic auto mode 2026-03-25</td><td>2</td><td>1</td><td>0</td><td>1</td><td>2</td><td>1</td><td>7</td><td>线索</td></tr>
+<tr><td>Anthropic infrastructure noise</td><td>2</td><td>2</td><td>0</td><td>1</td><td>2</td><td>2</td><td>9</td><td>可影响设计</td></tr>
+</table>
+<p class="src">infrastructure noise 的年份我没在摘要里核对，按 2026 年给了 2 分，是个假设。这张表的结论是：本章引用的绝大多数一线来源，只到「线索」档，没有一个有独立复现。这也是命题置信度都不超过 85% 的原因。</p>
+
+<h2>三　章末测试</h2>
+<p>4 道选择题加 1 道开放题，全部考判断。点开看答案。</p>
+<ol>
+<li>Cognition 与 Cursor 在「并行写」上的分歧，下面哪种说法最贴近证据？
+<ol type="A"><li>Cursor 的数百 worker 项目证明了并行写可行</li><li>Cognition 的实验证明了并行写不可行</li><li>两边都是自述，没有同任务对照；有强裁判且 scope 不相交时并行写才有把握</li><li>Anthropic 的 C 编译器证明单写者更好</li></ol>
+<details><summary>答案</summary><p>C。A 忽略了 Cursor 的结果没有外部复现；B 忽略了 Cognition 没给对照数据；D 与事实相反：编译器用的是 16 个 Agent 并行，靠 GCC 当裁判。<span class="judge">判断</span></p></details></li>
+<li>评估里 Teams 成功 10/12、单 Agent 9/12，Teams 每次成本是 3 倍。最合适的下一步是？
+<ol type="A"><li>采用 Teams，成功率更高</li><li>弃用 Teams，太贵</li><li>先同一配置重复运行量噪声，并按失败原因分类，再看单位成功产出成本</li><li>把单 Agent 的重试次数提到 10 次</li></ol>
+<details><summary>答案</summary><p>C。差一次在噪声里（Anthropic 的 infrastructure noise：资源配置差异就能造成 6 个点，小于 3 个点要存疑）；成本是 2.7 倍而没有清楚的收益。A、B 都是在没有量噪声时下结论；D 改变了基线的 token 预算，对照就不公平。</p></details></li>
+<li>某次自迭代每轮评审都说「有进步」，隐藏测试通过率是 62%、60%、61%（基线 62%）。应该？
+<ol type="A"><li>继续迭代，趋势向好</li><li>以隐藏测试为准，停止并回退，同时查评审为什么没看出来</li><li>换一个更强的评审模型再跑 3 轮</li><li>把隐藏测试交给 Agent，让它自己对照</li></ol>
+<details><summary>答案</summary><p>B。评审在体系内，易偏宽；隐藏测试是带外指标。D 会让评分物落到 Agent 手里，重演 DGM 的删日志。C 的收益没有证据（命题 3，强度弱）。</p></details></li>
+<li>你想让 worker 访问一个内部 API。哪种做法最符合已读到的证据？
+<ol type="A"><li>域名白名单代理，令牌放在 worker 环境变量</li><li>断网加预装依赖，API 调用由沙箱外的代理发起并注入令牌</li><li>让分类器模型判断每次请求是否安全</li><li>只靠提示词要求 worker 不要外传数据</li></ol>
+<details><summary>答案</summary><p>B。Anthropic 自建白名单代理被已批准的域名绕过；令牌要放沙箱外；分类器漏报 17%（n=52），不适合当唯一一层；提示词不是保证（C4）。</p></details></li>
+<li><b>开放题</b>：选本章 10 条命题中你最有分歧的一条（或你自己团队的一个决策），写出：①命题；②你引用的证据（至少一条一手、一条反方，各标一手 / 二手）；③你的证据强度评级和理由；④置信度；⑤<b>什么新证据会让你改判</b>；⑥落到你的团队的一个动作。
+<details><summary>参考要点</summary><p>好答案的标志：证据标了来源和日期，并区分一手和二手；强度评级给了理由，不是只写「中」；置信度不是 100%，也不是 50% 的敷衍；改判条件是可观察、可测的事件（例如「同 token 对照下领先」），不是「如果我改主意了」；动作是一件能放进 <code>GOAL.md</code> 或 <code>EVAL.md</code> 的具体改动。要点可参照命题 1 到 10 的写法。</p></details></li>
+</ol>
+
+<h2>判断与方向</h2>
+<ul>
+<li>大多数任务单 Agent 就够；Teams 只在四项都过的任务上值得。<span class="judge">判断</span></li>
+<li>小团队骨架三件事：状态由单写者代码改；「做完」由命令和独立评审判；钱和人的注意力都有上限。<span class="judge">判断</span></li>
+<li>十条命题里，没有一条有过独立复现；最强的一条（小评估的噪声）恰好是教你别过度相信数字。<span class="judge">判断</span></li>
+<li>人不可替代的两处：批准不可逆的事；判断值不值得做（评审查不出）。<span class="judge">判断</span></li>
+<li>本章没解决：没有把小团队接真实 Agent 跑完整 24 次，所以评估一节只有口径，没有数据；Cursor 2026-02-05 的后续、Khazix 长文、Lauren Tan 的视频没有读原文；论文数字沿用各章。<b>你自己的数据，比本章任何数字都重要。</b></li>
+</ul>
+
+<h2>相关工作地图</h2>
+<p class="src">读到哪：「全文」指我这一轮从本机存档读了全文；「章」指沿用各章的读法，没有回到论文原文。</p>
+<table>
+<tr><th>名称</th><th>类型</th><th>读它解决什么 / 在哪里用 / 读到哪</th></tr>
+<tr><td>Cognition · Don't Build Multi-Agents（2025-06-12）</td><td>博客</td><td>命题 1、复盘 2；全文</td></tr>
+<tr><td>Cognition · Multi-Agents: What's Actually Working（2026-04-22）</td><td>博客</td><td>命题 1、3；全文</td></tr>
+<tr><td>Cursor · Scaling long-running autonomous coding（2026-01-14）</td><td>博客</td><td>命题 1、4、复盘 3；全文</td></tr>
+<tr><td>Anthropic · multi-agent research system（2025-06-13）</td><td>博客</td><td>命题 2、7；全文</td></tr>
+<tr><td>Anthropic · harness design for long-running apps（2026-03-24）</td><td>博客</td><td>命题 3、4、7；全文</td></tr>
+<tr><td>Anthropic · Managed Agents（2026-04-08）</td><td>博客</td><td>命题 4、9；全文</td></tr>
+<tr><td>Anthropic · Claude Code auto mode（2026-03-25）</td><td>博客</td><td>命题 5、题 7；全文</td></tr>
+<tr><td>Anthropic · components of agent memory（2026-11-06）</td><td>博客</td><td>命题 6、题 5；全文</td></tr>
+<tr><td>Anthropic · infrastructure noise</td><td>博客</td><td>命题 10；全文</td></tr>
+<tr><td>Anthropic · April 23 postmortem</td><td>事后报告</td><td>复盘 1；全文</td></tr>
+<tr><td>Anthropic · How we contain Claude（2026-05-25）、Claude Code sandboxing（2025-10-20）</td><td>博客</td><td>命题 9；全文</td></tr>
+<tr><td>Anthropic · building a C compiler、eval awareness in BrowseComp、demystifying evals</td><td>博客</td><td>命题 1、10；全文</td></tr>
+<tr><td>arXiv 2512.08296 Scaling Agent Systems（v3）</td><td>论文（经典例外）</td><td>顺序规划 −70.0%；章（C5）</td></tr>
+<tr><td>arXiv 2603.21489 CAID</td><td>论文 2026</td><td>命题 2；章（C5，读方法与表格）</td></tr>
+<tr><td>arXiv 2607.04697 When Agents Collide</td><td>论文 2026</td><td>命题 1；章（C5）</td></tr>
+<tr><td>arXiv 2607.25152</td><td>论文 2026</td><td>命题 3；章（C6，只读摘要）</td></tr>
+<tr><td>arXiv 2608.01964 LongHorizon-Harness</td><td>论文 2026</td><td>评审占 19.4% 到 38.1% token；章（C6）</td></tr>
+<tr><td>arXiv 2608.09290 OpenCodeReview</td><td>论文 2026</td><td>命题 3；章（E）</td></tr>
+<tr><td>arXiv 2603.28052 Meta-Harness、2604.25850 AHE</td><td>论文 2026</td><td>命题 8；章（C7）</td></tr>
+<tr><td>arXiv 2505.22954 Darwin Gödel Machine</td><td>论文（经典例外）</td><td>复盘 4；章（C7）</td></tr>
+<tr><td><code>openai/codex</code></td><td>仓库</td><td>loop、审批沙箱；章（C1、C2、C3）</td></tr>
+<tr><td><code>paperclipai/paperclip</code> · <code>server/src/services/budgets.ts</code></td><td>仓库</td><td>预算三态；章（G §3）</td></tr>
+<tr><td><code>alibaba/open-code-review</code></td><td>仓库</td><td>评审过滤器 fail-open；章（E §3.3）</td></tr>
+<tr><td><code>anthropics/claude-quickstarts</code> · <code>autonomous-coding/agent.py</code></td><td>仓库</td><td>初始化器与每轮新上下文；章（C6 §1）</td></tr>
+</table>
+
+<h2>附：检索到的全部链接</h2>
+<h3>厂商一手文章</h3>
+<table>
+<tr><th>链接</th><th>一句话介绍</th><th>我读到哪</th></tr>
+<tr><td><a href="https://cognition.com/blog/dont-build-multi-agents">cognition.com/blog/dont-build-multi-agents</a></td><td>Cognition 2025-06-12：共享上下文、动作带隐含决策</td><td>全文（本机存档）</td></tr>
+<tr><td><a href="https://cognition.com/blog/multi-agents-working">cognition.com/blog/multi-agents-working</a></td><td>Cognition 2026-04-22：并行写仍不行、评审用干净上下文</td><td>全文（本机存档）</td></tr>
+<tr><td><a href="https://cursor.com/blog/scaling-agents">cursor.com/blog/scaling-agents</a></td><td>Cursor 2026-01-14：锁、planner/worker/judge、去掉 integrator</td><td>全文（本机存档）；<a href="https://cursor.com/blog/self-driving-codebases">self-driving-codebases</a>（2026-02-05）没读，二手</td></tr>
+<tr><td><a href="https://www.anthropic.com/engineering/harness-design-long-running-apps">anthropic.com/engineering/harness-design-long-running-apps</a></td><td>2026-03-24：自评偏宽、组件会过时、成本</td><td>全文（本机存档）</td></tr>
+<tr><td><a href="https://www.anthropic.com/engineering/building-c-compiler">anthropic.com/engineering/building-c-compiler</a></td><td>16 个 Agent 写 C 编译器、GCC 当 oracle</td><td>全文（本机存档）</td></tr>
+<tr><td><a href="https://www.anthropic.com/engineering/infrastructure-noise">anthropic.com/engineering/infrastructure-noise</a></td><td>资源配置造成评测差 6 个点</td><td>全文（本机存档）</td></tr>
+<tr><td><a href="https://www.anthropic.com/research/demystifying-evals-for-ai-agents">anthropic.com/research/demystifying-evals-for-ai-agents</a></td><td>2026-01-09：20 到 50 个任务起步、pass@k 对 pass^k</td><td>全文（本机存档）</td></tr>
+<tr><td><a href="https://www.anthropic.com/research/components-of-agent-memory">anthropic.com/research/components-of-agent-memory</a></td><td>2026-11-06：记忆写入、dreaming、wiki</td><td>全文（本机存档）</td></tr>
+<tr><td>anthropic.com 上的 multi-agent research system、Managed Agents、Claude Code auto mode、April 23 postmortem、How we contain Claude、Claude Code sandboxing、eval awareness in BrowseComp</td><td>各篇见命题与复盘；我没有逐篇核对公开链接，读的是本机存档文本</td><td>全文（本机存档），链接待补</td></tr>
+<tr><td><a href="https://claude.com/blog/multi-agent-coordination-patterns">claude.com/blog/multi-agent-coordination-patterns</a>、<a href="https://claude.com/blog/working-at-the-frontier-how-cognition-trusts-claude-fable-5-to-work-through-the-night">working-at-the-frontier（Cognition）</a></td><td>协调模式；Cognition 的 Frontier Code 例子（Anthropic 营销材料，有利益冲突）</td><td>全文（本机存档），本章只在打分表思路里用到</td></tr>
+</table>
+<h3>个人文章</h3>
+<table>
+<tr><th>链接</th><th>一句话介绍</th><th>我读到哪</th></tr>
+<tr><td><a href="https://mitchellh.com/writing/my-ai-adoption-journey">mitchellh.com/writing/my-ai-adoption-journey</a></td><td>Hashimoto 的 AI 上手六步（2026-02-05）</td><td>全文</td></tr>
+<tr><td><a href="https://www.oneusefulthing.org/p/management-as-ai-superpower">oneusefulthing.org · Management as AI superpower</a></td><td>Mollick 的委托公式（2026-01-27）</td><td>公式和例子段落</td></tr>
+<tr><td>oneusefulthing.org · Fable 5.2 and Jagged AGI（2026-11-09）</td><td>规则书膨胀、评审没问「太长」；读的是本机存档文本，没核对链接</td><td>项目复盘相关几段</td></tr>
+<tr><td><a href="https://ai.engineer/code/2026/talks/lauren-tan">ai.engineer/code/2026/talks/lauren-tan</a></td><td>Lauren Tan 讲稿整理页（2026-11-11）</td><td>整理正文；视频没看</td></tr>
+</table>
+<h3>论文（全部沿用各章读法，没有回读原文）</h3>
+<table>
+<tr><th>链接</th><th>一句话介绍</th><th>我读到哪</th></tr>
+<tr><td><a href="https://arxiv.org/abs/2512.08296">arxiv.org/abs/2512.08296</a></td><td>任务形状决定多 Agent 增减（经典例外）</td><td>章（C5）</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2603.21489">arxiv.org/abs/2603.21489</a></td><td>CAID，worktree 隔离消融</td><td>章（C5）</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2607.04697">arxiv.org/abs/2607.04697</a></td><td>跨 Agent 合并冲突率</td><td>章（C5）</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2607.25152">arxiv.org/abs/2607.25152</a></td><td>进展幻象</td><td>章（C6，只读摘要）</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2608.01964">arxiv.org/abs/2608.01964</a></td><td>LongHorizon-Harness</td><td>章（C6）</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2608.09290">arxiv.org/abs/2608.09290</a></td><td>OpenCodeReview</td><td>章（E）</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2603.28052">arxiv.org/abs/2603.28052</a>、<a href="https://arxiv.org/abs/2604.25850">2604.25850</a></td><td>Meta-Harness；AHE</td><td>章（C7）</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2505.22954">arxiv.org/abs/2505.22954</a></td><td>Darwin Gödel Machine（经典例外）</td><td>章（C7）</td></tr>
+<tr><td>2604.02460、2610.36308、2611.17520、CooperBench、STALE、mem0 issue #4573、AgentCore issue #498、AmPermBench、Boundary-Bench、ShellSieve</td><td>命题里用到的二手数字，原链接见 main、C2、D、G、E 各章附录</td><td>章，未回读</td></tr>
+</table>
+
+<div class="note">
+<p><b>没做完的：</b></p>
+<ul>
+<li>小团队没接真实 Agent 跑完整一轮，24 次评估没跑；<code>team.py</code> 只做过几次状态检查；</li>
+<li>论文数字全部沿用各章，没有回读原文；Cursor 2026-02-05 后续、Khazix 长文、Lauren Tan 视频没读；</li>
+<li>十条命题的置信度和 6 维评分是我的判断，没有外部校准；</li>
+<li>部分 anthropic.com 文章是从本机存档读的，公开链接没有逐篇核对；</li>
+<li>英文版没做；窄屏只检查了结构，没有真机截图。</li>
+</ul>
+</div>
+
+</main>
+</body>
+</html>
