@@ -523,3 +523,15 @@ def test_map_counts_papers_added_since_built(client, labeled):
     paper("P2", "faster speculative decoding", 2025, 100)
     lab.run()
     assert [m["new"] for m in pmap.overview()["maps"]] == [1]
+
+
+def test_recent_groups_new_papers_by_day_with_total(client):
+    from datetime import timedelta
+    paper("r1", "low cited today", 2026, 1)
+    paper("r2", "high cited today", 2026, 90)
+    paper("r3", "old day", 2026, 5)
+    db.execute("UPDATE paper_items SET first_seen=? WHERE s2id='r3'", [(datetime.now() - timedelta(days=2)).isoformat(timespec="seconds")])
+    paper("r4", "too old", 2026, 5)
+    db.execute("UPDATE paper_items SET first_seen=? WHERE s2id='r4'", [(datetime.now() - timedelta(days=20)).isoformat(timespec="seconds")])
+    got = client.get("/api/kb/papers/recent?days=7&per_day=1").json()
+    assert [(g["n"], [p["s2id"] for p in g["items"]]) for g in got] == [(2, ["r2"]), (1, ["r3"])]

@@ -1,4 +1,4 @@
-"""产品雷达的「开源雷达」标签：stars ≥ 1000 的 GitHub 项目按功能检索（docs/designs/2026-11-01-oss-radar-design.md）。
+"""知识库「GitHub 项目」标签的后端（原产品雷达的开源雷达）：stars ≥ 1000 的 GitHub 项目按功能检索（docs/designs/2026-11-01-oss-radar-design.md）。
 
 采集 / 标注 / 检索在 _oss_collect / _oss_label / _oss_search；长任务在独立进程 _oss_run 里跑，不新建服务。
 路由由 intel.py 挂在 /api/intel/oss/ 下；SCHEMA / on_startup / agent_context 也由 intel.py 汇总。

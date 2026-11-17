@@ -660,7 +660,7 @@ export default {
       x.source === 'twitter' && x.extra?.author && h('span.fd-chip', {}, `@${x.extra.author} · ${fmtN(x.extra.followers)} 粉丝 · ${fmtN(x.extra.views)} 阅读`),
       x.extra?.x_article && h('span.fd-chip.art', { title: '长文正文未抓取，点标题去 X 上看' }, x.extra.x_article === 'own' ? 'X 长文' : '引用 X 长文'),
       x.extra?.origin === 'learn_evolve' && h('span.fd-chip', {}, 'learn_evolve'),
-      x.extra?.oss?.t?.length && h('a.fd-chip', { href: '#intel/oss/' + encodeURIComponent(x.extra.oss.t[0]), title: `开源雷达里按「${x.extra.oss.t[0]}」找同类` }, [ui.icon('radar'), '同类项目']),
+      x.extra?.oss?.t?.length && h('a.fd-chip', { href: '#kb/repo/' + encodeURIComponent(x.extra.oss.t[0]), title: `知识库 GitHub 项目里按「${x.extra.oss.t[0]}」找同类` }, [ui.icon('radar'), '同类项目']),
       x.extra?.hn_url && h('a.fd-chip', { href: x.extra.hn_url, target: '_blank', rel: 'noopener' }, [ui.icon('chat'), `HN 讨论${x.extra.comments ? ' ' + x.extra.comments : ''}`]),
       ...Object.entries((x.also || []).reduce((m, a) => { const k = a.source_label || a.source || a; m[k] = (m[k] || 0) + 1; return m; }, {}))
         .slice(0, 2).map(([k, n]) => h('span.fd-chip', {}, `也见 ${k}${n > 1 ? '×' + n : ''}`)),
