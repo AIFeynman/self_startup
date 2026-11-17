@@ -1,4 +1,4 @@
-// X 长文库：AI 相关 X 长文，按质量分 / 时间排序，可设最低质量；顶部主搜索输入的关键词在库内筛选，没有就一键去 X 上搜（后端见 app/modules/_xart.py）。
+// X 长文库：AI 相关 X 长文，按质量分 / 时间 / 观看数 / 作者粉丝排序，可设最低质量；顶部主搜索输入的关键词在库内筛选，没有就一键去 X 上搜（后端见 app/modules/_xart.py）。
 // 路由：#kb/xart
 const CSS = `
 .xa-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
@@ -45,7 +45,7 @@ export function xartTab(body, ctx) {
   const sel = (key, opts, label) => h('select', { 'aria-label': label, onchange: (e) => { f[key] = e.target.value; keep(key === 'q_min' ? 'qmin' : key, f[key]); load(); } },
     opts.map(([v, n]) => h('option', { value: v, ...(f[key] === v ? { selected: true } : {}) }, n)));
   const bar = h('div.xa-bar', {}, [
-    sel('sort', [['q', '按质量分'], ['date', '按时间']], '排序'),
+    sel('sort', [['q', '按质量分'], ['date', '按时间'], ['views', '按观看数'], ['fol', '按作者粉丝']], '排序'),
     sel('q_min', [['1', '质量 ≥1'], ['2', '质量 ≥2'], ['3', '质量 ≥3'], ['4', '质量 ≥4']], '最低质量'),
   ]);
   const out = h('div');
@@ -59,7 +59,7 @@ export function xartTab(body, ctx) {
     if (mine !== seq) return;
     const n = items.length;
     out.replaceChildren(
-      ui.section(f.q ? `「${f.q}」` : 'X 长文', [`${n}${n >= 200 ? '+' : ''} 篇 · ${f.sort === 'q' ? '质量分高的在前' : '最新的在前'}`,
+      ui.section(f.q ? `「${f.q}」` : 'X 长文', [`${n}${n >= 200 ? '+' : ''} 篇 · ${{ q: '质量分高的在前', date: '最新的在前', views: '观看数多的在前', fol: '作者粉丝多的在前' }[f.sort] || ''}`,
         ...(f.q ? [' · ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); f.q = ''; load(); } }, '清除关键词')] : [])]),
       f.q ? h('div.card.xa-x', {}, [h('div.row', {}, [
         h('span.muted', {}, '库里没有想要的？'),
@@ -105,7 +105,7 @@ export function xartTab(body, ctx) {
       toggle.textContent = '收起全文';
       try { orig = (await api.get('/api/kb/xarticles/' + a.id)).text || '（没有存全文）'; showZh = false; tr.textContent = '翻译成中文'; tr.style.display = ''; fill(h, box, orig); } catch (err) { box.textContent = '加载失败：' + err.message; }
     } }, '展开全文');
-    const info = h('div.xa-meta', {}, [`@${a.user}`, a.day, `${fmt(a.views)} 阅读`, a.kind].map((t) => h('span', {}, t)).concat(...a.tags.map((t) => h('span.xa-tag', {}, t)), toggle, tr));
+    const info = h('div.xa-meta', {}, [`@${a.user}`, `${fmt(a.fol)} 粉丝`, a.day, `${fmt(a.views)} 观看`, `${fmt(a.likes)} 赞`, a.kind].map((t) => h('span', {}, t)).concat(...a.tags.map((t) => h('span.xa-tag', {}, t)), toggle, tr));
     return h('div.xa-it', {}, [
       h('div.xa-q' + (a.q >= 4 ? '.hi' : ''), {}, [String(a.q), h('small', {}, '质量')]),
       h('div', {}, [

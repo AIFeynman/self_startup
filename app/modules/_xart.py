@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import httpx
 
-from .. import db
+from .. import db, settings
 from . import _paper_label as pl
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ CREATE INDEX IF NOT EXISTS x_art_ix_stage ON x_art(stage);
 CREATE INDEX IF NOT EXISTS x_art_ix_day ON x_art(day);
 CREATE TABLE IF NOT EXISTS x_art_zh (id TEXT PRIMARY KEY, zh TEXT, updated TEXT);
 CREATE TABLE IF NOT EXISTS x_art_day (day TEXT PRIMARY KEY, found INTEGER, calls INTEGER, done_at TEXT);
+CREATE TABLE IF NOT EXISTS x_art_run (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT, status TEXT, calls INTEGER DEFAULT 0, result TEXT DEFAULT '{}', started TEXT, finished TEXT);
 """
 
 API = "https://api.getxapi.com"
@@ -53,6 +55,12 @@ GRAB_PER_DAY = 200
 VIP_FOL = 500000
 FOL_EXCEPTION = 20000
 MIN_CHARS = 300
+CRAWL_LAG = 2
+CATCHUP_DAYS = 3
+GRAB_CAP = 800
+MONTH_STOP_CALLS = 90000
+RUN_HOUR = 4
+ALL = 10 ** 6
 DOMAINS = {
     "agent": "Agent / 多 Agent / 工作流编排", "coding": "AI 编程工具与实践（Claude Code、Codex、Cursor 等）",
     "prompt": "提示词 / 上下文工程 / Skill / MCP", "model": "模型发布 / 能力评测 / 对比",
@@ -512,9 +520,68 @@ def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100) -> l
     for w in re.findall(r"[\u4e00-\u9fff]+|[^\s\u4e00-\u9fff]+", q):
         where.append("(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR take LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\')")
         args += ["%" + w.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"] * 6
-    order = "day DESC, q DESC" if sort == "date" else "q DESC, day DESC, views DESC"
-    rows = db.rows(f"SELECT id,user,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
+    order = {"date": "day DESC, q DESC", "views": "views DESC, q DESC", "fol": "fol DESC, views DESC"}.get(sort, "q DESC, day DESC, views DESC")
+    rows = db.rows(f"SELECT id,user,fol,likes,views,day,title,summary,tags,take,q,kind FROM x_art WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, limit])
     for r in rows:
         r["tags"] = json.loads(r["tags"] or "[]")
         r["url"] = f"https://x.com/{r['user']}/status/{r['id']}"
     return rows
+
+
+# ---------- 每日定时 ----------
+
+_lock = threading.Lock()
+
+
+def _month_calls(today: str) -> int:
+    return db.row("SELECT COALESCE(SUM(calls),0) n FROM x_art_run WHERE status!='failed' AND substr(day,1,7)=?", [today[:7]])["n"]
+
+
+def due(now: datetime | None = None) -> bool:
+    now = now or datetime.now()
+    if not settings.get("xart.daily", True) or now.hour < RUN_HOUR:
+        return False
+    init()
+    return not db.row("SELECT 1 FROM x_art_run WHERE day=? AND status!='failed'", [now.strftime("%Y-%m-%d")])
+
+
+def daily(now: datetime | None = None) -> dict:
+    """每天一轮：补抓到 CRAWL_LAG 天前为止还没抓的日子（让阅读数先涨一涨再过门槛）→ 阅读门槛 → 取全文标题 → 判相关 → 取全文 → 打分。
+    关注名单作者自己发的长文由信息推荐刷新随时登记进库，这里一并过同一条流水线。按已用调用数记账，月累计到 MONTH_STOP_CALLS 停。"""
+    init()
+    now = now or datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if _month_calls(today) >= MONTH_STOP_CALLS:
+        return {"stopped": "月调用数到上限"}
+    rid = db.insert("x_art_run", {"day": today, "status": "running", "started": db.now()})
+    try:
+        end = (now - timedelta(days=CRAWL_LAG)).strftime("%Y-%m-%d")
+        res = {"crawl": [crawl_day(d) for d in days((now - timedelta(days=CRAWL_LAG + CATCHUP_DAYS - 1)).strftime("%Y-%m-%d"), end)]}
+        res["gate"] = gate()
+        res["grab"] = grab(limit=GRAB_CAP, per_day=ALL)
+        res["rel"] = relevance()
+        res["full"] = fulltext()
+        res["score"] = score()
+        calls = sum(c.get("calls", 0) for c in res["crawl"]) + res["grab"]["ok"] + res["grab"]["drop"] + res["full"]["ok"] + res["full"]["short"] + res["full"]["failed"]
+    except Exception as e:  # noqa: BLE001
+        db.execute("UPDATE x_art_run SET status='failed', result=?, finished=? WHERE id=?", [json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"}, ensure_ascii=False), db.now(), rid])
+        raise
+    db.execute("UPDATE x_art_run SET status='ok', calls=?, result=?, finished=? WHERE id=?", [calls, json.dumps(res, ensure_ascii=False), db.now(), rid])
+    return res | {"calls": calls}
+
+
+def start(force: bool = False) -> bool:
+    if not (force or due()) or not _lock.acquire(blocking=False):
+        return False
+
+    def go():
+        try:
+            daily()
+            from .. import kb
+            kb.schedule_sync()
+        except Exception:  # noqa: BLE001  已记在 x_art_run
+            log.exception("X 长文每日抓取失败")
+        finally:
+            _lock.release()
+    threading.Thread(target=go, daemon=True, name="xart-daily").start()
+    return True

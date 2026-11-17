@@ -61,3 +61,34 @@ def test_xarticle_search_splits_cjk_and_matches_fulltext(client):
     db.execute("INSERT INTO x_art (id,user,title,text,stage,q) VALUES ('31','a','Agent 手册','讲 AI 公司怎么创业，找客户','scored',3)")
     assert [r["id"] for r in _xart.listing("AI创业")] == ["31"]
     assert _xart.listing("AI融资") == []
+
+
+def test_xart_daily_runs_once_a_day_and_stops_over_budget(client, monkeypatch):
+    from datetime import datetime
+    from app.modules import _xart as x
+    x.init()
+    crawled = []
+    monkeypatch.setattr(x, "crawl_day", lambda d: crawled.append(d) or {"day": d, "calls": 400})
+    monkeypatch.setattr(x, "gate", lambda: {})
+    monkeypatch.setattr(x, "grab", lambda **k: {"ok": 10, "drop": 2})
+    monkeypatch.setattr(x, "relevance", lambda **k: {})
+    monkeypatch.setattr(x, "fulltext", lambda **k: {"ok": 3, "short": 0, "failed": 0})
+    monkeypatch.setattr(x, "score", lambda **k: {})
+    now = datetime(2026, 11, 17, 5, 0)
+    assert x.due(now) and not x.due(datetime(2026, 11, 17, 3, 0))
+    res = x.daily(now)
+    assert crawled[-1] == "2026-11-15" and res["calls"] == 400 * len(crawled) + 15
+    assert not x.due(now)
+    db.execute("UPDATE x_art_run SET calls=?", [x.MONTH_STOP_CALLS])
+    assert x.daily(datetime(2026, 11, 18, 5, 0)) == {"stopped": "月调用数到上限"}
+
+
+def test_xart_listing_sorts_by_views_and_followers(client):
+    from app.modules import _xart as x
+    x.init()
+    for i, (v, f) in enumerate([(100, 9000), (900, 10), (500, 500)]):
+        db.execute("INSERT INTO x_art (id,user,fol,views,stage,q,title,day) VALUES (?,?,?,?,'scored',3,?,'2026-11-01')", [f"sort{i}", f"u{i}", f, v, f"t{i}"])
+    pick = lambda sort: [r for r in x.listing(sort=sort) if r["id"].startswith("sort")]
+    assert [r["id"] for r in pick("views")] == ["sort1", "sort2", "sort0"]
+    top = pick("fol")
+    assert [r["id"] for r in top] == ["sort0", "sort2", "sort1"] and top[0]["fol"] == 9000

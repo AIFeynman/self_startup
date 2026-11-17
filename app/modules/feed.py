@@ -1405,6 +1405,10 @@ def _auto_loop():
         except Exception as e:  # noqa: BLE001
             log.warning("people check failed: %s", e)
         try:
+            _xart.start()                    # X 长文库每日抓取：每天 RUN_HOUR 点后跑一次
+        except Exception as e:  # noqa: BLE001
+            log.warning("xart daily check failed: %s", e)
+        try:
             from . import _paper_maintain
             _paper_maintain.start()          # 论文库每周维护：到期才跑（paper.maintain_days）
         except Exception as e:  # noqa: BLE001
