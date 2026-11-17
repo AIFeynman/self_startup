@@ -572,9 +572,12 @@ def _ts(created: str | None) -> float:
         return time.time()
 
 
-def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100, domain: str = "", kind: str = "") -> list[dict]:
+def listing(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100, domain: str = "", kind: str = "", days: int = 0) -> list[dict]:
     init()
     where, args = ["stage='scored'", "mkt=0", "q>=?"], [q_min]
+    if days > 0:
+        where.append("day>=?")
+        args.append((datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d"))
     for col, v in (("domain", domain), ("kind", kind)):
         if v:
             where.append(f"{col}=?")

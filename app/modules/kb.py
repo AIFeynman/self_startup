@@ -141,9 +141,9 @@ _xsearch = {"running": False, "q": "", "result": None, "error": ""}
 
 
 @router.get("/xarticles")
-def xarticles(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100, domain: str = "", kind: str = ""):
+def xarticles(q: str = "", sort: str = "q", q_min: int = 1, limit: int = 100, domain: str = "", kind: str = "", days: int = 0):
     from . import _xart
-    return {"items": _xart.listing(q, sort, q_min, limit, domain, kind), "domains": _xart.DOMAINS, "kinds": _xart.KINDS}
+    return {"items": _xart.listing(q, sort, q_min, limit, domain, kind, days), "domains": _xart.DOMAINS, "kinds": _xart.KINDS}
 
 
 class XSearchIn(BaseModel):
@@ -371,19 +371,6 @@ def _paper_cards(rows: list[dict]) -> list[dict]:
              **({"read": read[r["s2id"]]} if r["s2id"] in read else {})} for r in rows]
 
 
-@router.get("/papers/recent")
-def papers_recent(days: int = 7, per_day: int = 100):
-    """最近几天新入库的论文，按入库那天分组（新的天在前），天内按被引排序；n 是当天入库总数。"""
-    paper_map._init()
-    days, per_day = max(1, min(days, 30)), max(1, min(per_day, 300))
-    since = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
-    counts = paper_map.db.rows("SELECT substr(first_seen,1,10) d, count(*) n FROM paper_items WHERE status='in' AND first_seen>=? "
-                               "GROUP BY d ORDER BY d DESC", [since])
-    return [{"day": c["d"], "n": c["n"], "items": _paper_cards(paper_map.db.rows(
-        f"SELECT {PAPER_CARD} FROM paper_items WHERE status='in' AND substr(first_seen,1,10)=? ORDER BY cites DESC LIMIT ?", [c["d"], per_day]))}
-        for c in counts]
-
-
 def _paper_tax() -> dict:
     return json.loads((Path(__file__).with_name("paper_taxonomy.json")).read_text())
 
@@ -406,11 +393,18 @@ def papers_facets():
 
 
 @router.get("/papers/browse")
-def papers_browse(domain: str = "", kind: str = "", org: str = "", year: int = 0, sort: str = "cites", limit: int = 100):
-    """按领域 / 类型 / 机构 / 年份筛论文；sort=cites 被引多的在前，date 新入库的在前。"""
+def papers_browse(q: str = "", domain: str = "", kind: str = "", org: str = "", year: int = 0, added: int = 0, sort: str = "cites", limit: int = 100):
+    """按关键词 / 领域 / 类型 / 机构 / 年份 / 入库天数筛论文；sort=cites 被引多的在前，date 新入库的在前。"""
     paper_map._init()
     _paper_orgs.init()
     where, args = ["p.status='in'"], []
+    if q.strip():
+        ids = paper_map._fts(q.strip())
+        where.append(f"p.rowid IN ({','.join('?' * len(ids))})" if ids else "0")
+        args += ids
+    if added > 0:
+        where.append("substr(p.first_seen,1,10)>=?")
+        args.append((datetime.now() - timedelta(days=added - 1)).strftime("%Y-%m-%d"))
     if domain:
         kids = [c["code"] for d in _paper_tax()["domains"] if d["code"] == domain for c in d["children"]]
         where.append(f"l.d IN ({','.join('?' * len(kids))})" if kids else "0")
@@ -425,15 +419,20 @@ def papers_browse(domain: str = "", kind: str = "", org: str = "", year: int = 0
         where.append("p.year=?")
         args.append(year)
     order = "p.first_seen DESC, p.cites DESC" if sort == "date" else "p.cites DESC"
-    rows = paper_map.db.rows(f"SELECT {', '.join('p.' + c.strip() for c in PAPER_CARD.split(','))}, o.orgs orgs, l.k kind, l.d dcode FROM paper_items p "
+    rows = paper_map.db.rows(f"SELECT {', '.join('p.' + c.strip() for c in PAPER_CARD.split(','))}, o.orgs orgs, l.k kind, l.d dcode, substr(p.first_seen,1,10) added FROM paper_items p "
                              "LEFT JOIN paper_labels l USING(s2id) LEFT JOIN paper_orgs o USING(s2id) "
                              f"WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?", [*args, max(1, min(limit, 300))])
     total = paper_map.db.row("SELECT count(*) n FROM paper_items p LEFT JOIN paper_labels l USING(s2id) LEFT JOIN paper_orgs o USING(s2id) "
                              f"WHERE {' AND '.join(where)}", args)["n"]
+    tax = _paper_tax()
+    kinds = {k["code"]: k["name"] for k in tax["kinds"]}
+    domains = {c["code"]: c["name"] for d in tax["domains"] for c in d["children"]}
     cards = _paper_cards(rows)
     for c, r in zip(cards, rows):
         c["orgs"] = json.loads(r["orgs"] or "[]")
-        c["kind"] = r["kind"]
+        c["kind"] = kinds.get(r["kind"], "")
+        c["domain"] = domains.get(r["dcode"], "")
+        c["added"] = r["added"]
     return {"total": total, "items": cards}
 
 

@@ -207,6 +207,11 @@ def test_xarticle_listing_filters_by_domain_and_kind_and_score_unhides_good_mark
     assert [r["id"] for r in _xart.listing(domain="agent", kind="教程")] == ["40"]
     assert sorted(r["id"] for r in _xart.listing(kind="教程")) == ["40", "42"]
     assert all(r["domain"] for r in _xart.listing(limit=1000) if r["id"] in {"40", "41", "42"})
+    from datetime import datetime, timedelta
+    db.execute("UPDATE x_art SET day=? WHERE id='40'", [datetime.now().strftime("%Y-%m-%d")])
+    db.execute("UPDATE x_art SET day=? WHERE id='41'", [(datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")])
+    mine = lambda days: sorted(r["id"] for r in _xart.listing(days=days, limit=1000) if r["id"] in {"40", "41", "42"})
+    assert mine(1) == ["40"] and mine(7) == ["40", "41"] and mine(0) == ["40", "41", "42"]
 
     db.execute("INSERT INTO x_art (id,user,title,text,stage) VALUES ('51','a','t','课程 正文','full')")
     db.execute("INSERT INTO x_art (id,user,title,text,stage) VALUES ('52','a','t','课程 正文','full')")

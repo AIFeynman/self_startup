@@ -143,7 +143,7 @@ async function home(el, ctx, tab, arg = '') {
   const status = h('span.kb-status');
   const refreshBtn = h('button.outline', { title: '用大模型把新的判断和材料整理进概念图谱', onclick: () => runRefresh() }, [ui.icon('refresh'), '整理']);
   const results = h('div');
-  let xart = null, repo = null;
+  let xart = null, repo = null, papers = null;
 
   el.append(
     ui.pageHead('知识库', `${g.nodes.length} 个概念 · ${g.signals.judgment || 0} 条我写下的想法 · ${g.signals.material || 0} 份看过的材料 · 来源文件 ${st.total} 份`, [refreshBtn]),
@@ -168,7 +168,7 @@ async function home(el, ctx, tab, arg = '') {
   else if (cur === 'graph') graphTab(body, ctx, g);
   else if (cur === 'topics') topicsTab(body, ctx, g);
   else if (cur === 'stream') streamTab(body, ctx);
-  else if (cur === 'papers') papersTab(body, ctx, arg);
+  else if (cur === 'papers') papers = papersTab(body, ctx, arg);
   else if (cur === 'xart') xart = xartTab(body, ctx);
   else if (cur === 'repo') repo = repoTab(body, ctx, arg);
   else sourceTab(body, ctx, st);
@@ -194,6 +194,7 @@ async function home(el, ctx, tab, arg = '') {
   async function search(q) {
     if (cur === 'xart') { results.replaceChildren(); return xart.search(q); }
     if (cur === 'repo') { results.replaceChildren(); return (await repo).search(q); }
+    if (cur === 'papers') { results.replaceChildren(); return (await papers).search(q); }
     const rs = await api.get(`/api/kb/search?q=${enc(q)}&limit=30`);
     const cs = rs.filter((d) => d.type === 'concept');
     const ds = rs.filter((d) => d.type !== 'concept');
