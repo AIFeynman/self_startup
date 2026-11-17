@@ -63,6 +63,8 @@ const CSS = `
 .pm-add .muted { font-size: 12.5px; margin-top: 6px; }
 .pm-add ol { margin: 8px 0 4px; padding-left: 22px; font-size: 13px; max-height: 320px; overflow: auto; } .pm-add li { margin: 2px 0; }
 .pm-add .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+.pm-hist { margin: 14px 0; }
+.pm-hist > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; margin-bottom: 8px; }
 .pm-new { color: var(--accent); font-size: 12px; display: block; margin-top: 2px; }
 .pm-mt { width: 100%; font-size: 12px; color: var(--muted); display: flex; gap: 4px 12px; flex-wrap: wrap; align-items: center; }
 .pm-mt .bad { color: var(--err); }
@@ -106,12 +108,32 @@ export async function papersTab(body, ctx, topic = '') {
 
   function list() {
     out.replaceChildren(
-      ui.section('已梳理的主题', `${ov.maps.length} 个`),
-      ov.maps.length ? h('div.pm-maps', {}, ov.maps.map((m) => h('a', { href: pLink(m.topic) }, [
-        h('b', {}, m.topic), h('small', {}, `${m.lines} 条研究线 · ${m.chosen} 篇候选 · ${ago(m.created)}`),
-        m.new ? h('span.pm-new', {}, `自生成后相关论文多了 ${m.new} 篇（新入库或重新标注），可重新生成`) : null])))
-        : ui.empty('还没有梳理过的主题', '在上面输入一个主题试试'),
+      h('div', {}, '加载中…'),
     );
+    recent().then((box) => out.replaceChildren(
+      box,
+      h('details.pm-hist', {}, [
+        h('summary', {}, `已梳理的主题 · ${ov.maps.length} 个（点开展开）`),
+        ov.maps.length ? h('div.pm-maps', {}, ov.maps.map((m) => h('a', { href: pLink(m.topic) }, [
+          h('b', {}, m.topic), h('small', {}, `${m.lines} 条研究线 · ${m.chosen} 篇候选 · ${ago(m.created)}`),
+          m.new ? h('span.pm-new', {}, `自生成后相关论文多了 ${m.new} 篇（新入库或重新标注），可重新生成`) : null])))
+          : ui.empty('还没有梳理过的主题', '在上面输入一个主题试试')]),
+    ));
+  }
+
+  async function recent() {
+    const days = await api.get('/api/kb/papers/recent?days=7');
+    const dayName = (d, i) => (i === 0 ? '今天' : i === 1 ? '昨天' : '') + (i < 2 ? ' · ' : '') + d.slice(5);
+    const card = (p) => h('div', {}, [h('a', { href: p.url, target: '_blank', rel: 'noopener' }, p.title),
+      p.read ? h('a.pm-rd.done', { href: `#learn/item/${p.read.id}` }, '已深读') : null,
+      h('small', {}, `${p.year || ''} · 被引 ${fmt(p.cites)}${p.tldr ? ' · ' + p.tldr : ''}`)]);
+    const grp = (d, i) => {
+      const more = d.n > d.items.length ? `，仅列被引最高的 ${d.items.length} 篇` : '';
+      const head = `${dayName(d.day, i)} · 新入库 ${fmt(d.n)} 篇${more}`;
+      const grid = h('div.pm-found', {}, d.items.map(card));
+      return i === 0 ? h('div', {}, [ui.section(head), grid]) : h('details.pm-hist', {}, [h('summary', {}, head), grid]);
+    };
+    return h('div', {}, days.length ? days.map(grp) : [ui.section('新入库论文', '最近 7 天'), ui.empty('最近 7 天没有新入库的论文')]);
   }
 
   async function go(t, force = false) {

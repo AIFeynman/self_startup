@@ -2,6 +2,7 @@
 import json
 import subprocess
 import threading
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -51,7 +52,6 @@ def stats():
 @router.get("/library")
 def library():
     """长文 / 论文 / GitHub 项目三个库的总数，和最近 24 小时新增的数量。"""
-    from datetime import datetime, timedelta
     from . import _xart
     _xart.init()
     paper_map._init()
@@ -368,6 +368,19 @@ def _paper_cards(rows: list[dict]) -> list[dict]:
              "tldr": r["tldr"] or (r["abstract"] or "")[:300],
              "url": paper_map.paper_url(r) or f"https://www.semanticscholar.org/paper/{r['s2id']}",
              **({"read": read[r["s2id"]]} if r["s2id"] in read else {})} for r in rows]
+
+
+@router.get("/papers/recent")
+def papers_recent(days: int = 7, per_day: int = 100):
+    """最近几天新入库的论文，按入库那天分组（新的天在前），天内按被引排序；n 是当天入库总数。"""
+    paper_map._init()
+    days, per_day = max(1, min(days, 30)), max(1, min(per_day, 300))
+    since = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    counts = paper_map.db.rows("SELECT substr(first_seen,1,10) d, count(*) n FROM paper_items WHERE status='in' AND first_seen>=? "
+                               "GROUP BY d ORDER BY d DESC", [since])
+    return [{"day": c["d"], "n": c["n"], "items": _paper_cards(paper_map.db.rows(
+        f"SELECT {PAPER_CARD} FROM paper_items WHERE status='in' AND substr(first_seen,1,10)=? ORDER BY cites DESC LIMIT ?", [c["d"], per_day]))}
+        for c in counts]
 
 
 @router.get("/papers/search")
