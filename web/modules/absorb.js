@@ -108,7 +108,7 @@ export default {
       h('button.primary', { onclick: async () => {
         try { go((await api.post('/api/absorb/runs', { topic: fTopic.value, start: fStart.value, end: fEnd.value })).id); } catch (e) { toast(e.message || '发起失败'); }
       } }, '开始吸收'),
-      h('span.ab-m', {}, '两周的量大约 40–60 分钟，跑完留在这里；同一选题和时间窗再点会接着上次的进度。'),
+      h('span.ab-m', {}, '两周的量大约 40 分钟、4–5 美元，跑完留在这里；同一选题和时间窗再点会接着上次的进度。'),
     ]);
     head.append(h('div.tabs', {}, [
       ...runs.map((r) => h('button', { class: r.id === cur ? 'active' : '', onclick: () => go(r.id) }, `${r.topic} · ${r.start.slice(5)}–${r.end.slice(5)}${r.done ? '' : r.running ? ' · 进行中' : ' · 中断'}`)),
