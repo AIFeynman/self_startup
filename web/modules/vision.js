@@ -204,9 +204,6 @@ async function home(el, ctx) {
   el.append(h('div.vs-page', {}, [
     ui.pageHead('视野', statusLine(d.status), [btn]),
     askBar(ctx, 'vision:home', '视野'),
-    ui.section('最近 30 天的解读', d.cards.length > 6 ? `共 ${d.cards.length} 张，显示最显著的 6 张` : ''),
-    d.cards.length ? h('div.vs-cards', {}, d.cards.slice(0, 6).map((c) => cardView(h, c, byId[c.series_id], { onAsk: (x) => askCard(ctx, x) })))
-      : ui.empty('还没有解读卡', '每天更新数据后，程序挑出变化最显著的指标写卡；卡要先通过数字对账和审稿才会出现在这里。'),
     ...d.themes.flatMap((t) => themeBlock(h, ui, t)),
     ui.section('判断与对账', '每张卡至少一条到期能对账的判断'),
     hitStats(ui, d.hits, d.themes),
