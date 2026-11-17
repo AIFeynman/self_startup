@@ -29,6 +29,7 @@ from . import _feed_profile as prof
 from . import _feed_judge as judge
 from . import _feed_rank as rk
 from . import _feed_sources as src
+from . import _xart
 from . import _feed_topics as topics
 
 log = logging.getLogger(__name__)
@@ -505,9 +506,7 @@ def _collectors(stats: dict | None = None) -> dict:
                                          queries=q("zhihu"),
                                          days=int(cfg("zhihu_days")),
                                          rsshub_bases=list(fc.get("rsshub_bases") or []) or None),
-        "x": lambda: src.fetch_x(x_accounts_to_fetch(), q("x"),
-                                 days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
-                                 per_account=int(cfg("x_per_account")), known_articles=_known_articles()),
+        "x": lambda: _fetch_x(q("x")),
         "producthunt": lambda: src.fetch_producthunt(days=int(cfg("producthunt_days"))),
         "yc": lambda: src.fetch_yc_launches(days=int(cfg("yc_days"))),
         "trustmrr": lambda: src.fetch_trustmrr(days=int(cfg("trustmrr_days")), known=_known_extra("trustmrr")),
@@ -523,6 +522,16 @@ def _url_of(v) -> str:
 def _enriched_hn() -> set[str]:
     """已经有原文简介的 HN 条目（summary 不再是「链接到 …」占位），刷新时不再读原文页。"""
     return {r["id"] for r in db.rows("SELECT id FROM feed_items WHERE source='hn' AND summary NOT LIKE '链接到%'")}
+
+
+def _fetch_x(queries: list[str]) -> tuple[list[dict], list[str]]:
+    """信息推荐的 X 来源；长文标题优先用长文库已有的，自己发的长文登记进长文库，由它统一取全文和打分。"""
+    items, errors = src.fetch_x(x_accounts_to_fetch(), queries,
+                                days=int(cfg("x_days")), min_likes=int(cfg("x_min_likes")),
+                                per_account=int(cfg("x_per_account")), known_articles=_known_articles(),
+                                heads=_xart.heads())
+    _xart.register(items)
+    return items, errors
 
 
 def _known_articles() -> set[str]:

@@ -620,10 +620,11 @@ def _article_head(c: httpx.Client, tid: str) -> dict:
 
 
 def fetch_x(accounts: list[str], queries: list[str], days: int = 3, min_likes: int = 100,
-            per_account: int = 2, known_articles: set[str] | frozenset = frozenset()) -> tuple[list[dict], list[str]]:
+            per_account: int = 2, known_articles: set[str] | frozenset = frozenset(),
+            heads: dict[str, dict] | None = None) -> tuple[list[dict], list[str]]:
     """名单账号：每人最近一页里 days 天内、≥min_likes 赞的原创推文取前 per_account 条；搜索词：days 天内全取。
     每个账号 / 搜索词一次请求（GetXAPI 约 $0.001/次）。
-    自己发的 X 长文另调一次 twitterapi.io 补标题和开头（known_articles 里已补过的不再调）；
+    自己发的 X 长文另调一次 twitterapi.io 补标题和开头（known_articles 里已补过的不再调；heads 是长文库里已有的 {推文 id: {title, preview}}，直接用不再调）；
     搜索来的长文补完标题后再按 AI 词过滤，补不到标题的丢掉。"""
     provs = _x_providers()
     if not provs:
@@ -658,7 +659,8 @@ def fetch_x(accounts: list[str], queries: list[str], days: int = 3, min_likes: i
 
         def enrich(g):
             try:
-                return g, _article_head(c, g["id"].split(":", 1)[1]), None
+                tid = g["id"].split(":", 1)[1]
+                return g, (heads or {}).get(tid) or _article_head(c, tid), None
             except Exception as e:  # noqa: BLE001
                 return g, {}, f"article {g['id']}: {type(e).__name__}: {str(e)[:80]}"
 

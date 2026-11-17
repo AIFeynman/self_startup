@@ -525,6 +525,32 @@ def test_x_article_title_enrichment(monkeypatch):
     assert "1" not in article_calls and "twitter:1" in {i["id"] for i in items}
 
 
+def test_x_article_head_from_library_and_register(monkeypatch, client):
+    from app import db
+    from app.modules import _xart
+    monkeypatch.setenv("GETXAPI_KEY", "k1")
+    monkeypatch.setenv("TWITTER_API_KEY", "k2")
+    recent = datetime.now(timezone.utc).strftime("%a %b %d %H:%M:%S +0000 %Y")
+    stub = dict(text="https://t.co/abc", entities={"urls": []}, createdAt=recent)
+    article_calls = []
+
+    def handler(req):
+        if req.url.path == "/twitter/article":
+            article_calls.append(req.url.params["tweet_id"])
+            return httpx.Response(200, json={"article": {"title": "Agent eval notes", "preview_text": "p"}})
+        return httpx.Response(200, json={"tweets": [_tw(id="1", **stub), _tw(id="2", **stub)]})
+
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    items, _ = src.fetch_x(["a"], [], min_likes=0, heads={"1": {"title": "LLM agent harness", "preview": "from library"}})
+    got = {i["id"]: i for i in items}
+    assert got["twitter:1"]["summary"] == "from library" and article_calls == ["2"]
+    assert _xart.register(items) == 2 and _xart.register(items) == 0
+    row = db.row("SELECT user, stage, day FROM x_art WHERE id='1'")
+    assert row["stage"] == "found" and row["user"] == "a" and row["day"] == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    db.execute("UPDATE x_art SET title='t1' WHERE id='1'")
+    assert _xart.heads() == {"1": {"title": "t1", "preview": ""}}
+
+
 def test_upsert_keeps_enriched_article_title(client):
     from app.modules import feed
     base = _it("twitter:77", "@a：Real article title", source="twitter", extra={"x_article": "own", "article_title": "Real article title"})
