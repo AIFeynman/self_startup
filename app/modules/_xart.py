@@ -40,6 +40,7 @@ CREATE INDEX IF NOT EXISTS x_art_ix_stage ON x_art(stage);
 CREATE INDEX IF NOT EXISTS x_art_ix_day ON x_art(day);
 CREATE TABLE IF NOT EXISTS x_art_zh (id TEXT PRIMARY KEY, zh TEXT, updated TEXT);
 CREATE TABLE IF NOT EXISTS x_art_day (day TEXT PRIMARY KEY, found INTEGER, calls INTEGER, done_at TEXT);
+CREATE TABLE IF NOT EXISTS x_art_mark (k TEXT PRIMARY KEY, v INTEGER);
 CREATE TABLE IF NOT EXISTS x_art_run (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT, status TEXT, calls INTEGER DEFAULT 0, result TEXT DEFAULT '{}', started TEXT, finished TEXT);
 """
 
@@ -48,16 +49,19 @@ VX = "https://api.vxtwitter.com"
 SPLIT_AT = 20
 MIN_WINDOW = 60
 START_STEP = 900
-VIEW_GATE = 500
+CAND_VIEWS = 100
+CAND_LIKES = 5
 FULL_PER_DAY = 120
 TITLE_PER_DAY = 500
 GRAB_PER_DAY = 200
 VIP_FOL = 500000
 FOL_EXCEPTION = 20000
 MIN_CHARS = 300
-CRAWL_LAG = 2
-CATCHUP_DAYS = 3
-GRAB_CAP = 800
+OVERLAP = 3600
+FIRST_SPAN = 86400
+MAX_GAP = 3 * 86400
+STALE_DAYS = 2
+GRAB_CAP = 600
 MONTH_STOP_CALLS = 90000
 RUN_HOUR = 4
 ALL = 10 ** 6
@@ -127,11 +131,16 @@ def search_window(c: httpx.Client, t0: int, t1: int, stat: dict) -> list[dict]:
 
 
 def _save_found(t: dict, day: str) -> bool:
+    """新长文入库返回 True；已有的只把阅读/点赞/粉丝往大了更新，被阅读门槛挡掉的在阅读数涨了后放回 found 重新过门槛。"""
     a = t.get("author") or {}
-    return bool(db.execute(
-        "INSERT OR IGNORE INTO x_art (id,user,fol,likes,views,posted_at,day,updated) VALUES (?,?,?,?,?,?,?,?)",
-        [str(t["id"]), a.get("userName") or "", int(a.get("followers") or 0), int(t.get("likeCount") or 0),
-         int(t.get("viewCount") or 0), t.get("createdAt") or "", day, db.now()]))
+    tid, fol, likes, views = str(t["id"]), int(a.get("followers") or 0), int(t.get("likeCount") or 0), int(t.get("viewCount") or 0)
+    if not db.row("SELECT 1 FROM x_art WHERE id=?", [tid]):
+        db.execute("INSERT INTO x_art (id,user,fol,likes,views,posted_at,day,updated) VALUES (?,?,?,?,?,?,?,?)",
+                   [tid, a.get("userName") or "", fol, likes, views, t.get("createdAt") or "", day, db.now()])
+        return True
+    db.execute("UPDATE x_art SET stage=CASE WHEN stage='drop_view' AND ?>views THEN 'found' ELSE stage END, "
+               "views=MAX(views,?), likes=MAX(likes,?), fol=MAX(fol,?), updated=? WHERE id=?", [views, views, likes, fol, db.now(), tid])
+    return False
 
 
 def heads() -> dict[str, dict]:
@@ -176,17 +185,53 @@ def crawl_day(day: str, step: int = START_STEP) -> dict:
     return {"day": day, "found": len(seen), "new": new, "calls": stat["calls"]}
 
 
+def _mark() -> int | None:
+    r = db.row("SELECT v FROM x_art_mark WHERE k='crawl'")
+    return r["v"] if r else None
+
+
+def crawl_since(now: int | None = None, step: int = START_STEP) -> dict:
+    """从上次抓到的时刻（水位线）往前重叠 OVERLAP 抓到现在；第一次抓最近 FIRST_SPAN；断更超过 MAX_GAP 只补最近 MAX_GAP，并报出缺口。
+    整段抓完才推进水位线，中途失败下次从原水位线重来；day 取推文发布日（UTC）。"""
+    init()
+    now = int(now or time.time())
+    mark = _mark()
+    t0 = now - FIRST_SPAN if mark is None else max(mark - OVERLAP, now - MAX_GAP)
+    gap = mark is not None and mark - OVERLAP < t0
+    stat, new, seen = {"calls": 0}, 0, set()
+    with _client() as c:
+        for s in range(t0, now, step):
+            for t in search_window(c, s, min(s + step, now), stat):
+                if t["id"] not in seen:
+                    seen.add(t["id"])
+                    new += _save_found(t, datetime.fromtimestamp(_ts(t.get("createdAt")), timezone.utc).strftime("%Y-%m-%d"))
+    db.execute("INSERT OR REPLACE INTO x_art_mark (k,v) VALUES ('crawl',?)", [now])
+    return {"from": t0, "to": now, "found": len(seen), "new": new, "calls": stat["calls"], **({"gap": True} if gap else {})}
+
+
 def watch() -> list[str]:
     from . import feed
     return [a.lower() for a in feed.x_accounts_to_fetch()]
 
 
 def gate() -> dict:
-    """阅读门槛：未处理的行里，阅读不够又不是大粉账号的标 drop_view（可回捞）。"""
+    """候选门槛：未处理的行里，阅读和点赞都不够、又不是大粉账号 / 关注作者的标 drop_view（阅读数涨了会被放回）。"""
     w = watch()
-    n = db.execute(f"UPDATE x_art SET stage='drop_view', updated=? WHERE stage='found' AND views<? AND fol<? AND lower(user) NOT IN ({','.join('?' * len(w))})",
-                   [db.now(), VIEW_GATE, FOL_EXCEPTION, *w])
+    n = db.execute(f"UPDATE x_art SET stage='drop_view', updated=? WHERE stage='found' AND views<? AND likes<? AND fol<? AND lower(user) NOT IN ({','.join('?' * len(w))})",
+                   [db.now(), CAND_VIEWS, CAND_LIKES, FOL_EXCEPTION, *w])
     return {"drop_view": n}
+
+
+def dedupe() -> dict:
+    """同一作者同一标题只留最早的一篇，后来的标 drop_dup。"""
+    n = db.execute("UPDATE x_art SET stage='drop_dup', updated=? WHERE stage IN ('titled','rel','full') AND title<>'' AND EXISTS "
+                   "(SELECT 1 FROM x_art o WHERE o.user=x_art.user AND o.title=x_art.title AND o.id<x_art.id AND o.stage NOT IN ('drop_dup','drop_view','drop_notitle'))", [db.now()])
+    return {"drop_dup": n}
+
+
+def stale(now: datetime | None = None) -> int:
+    day = ((now or datetime.now(timezone.utc)) - timedelta(days=STALE_DAYS)).strftime("%Y-%m-%d")
+    return db.execute("UPDATE x_art SET stage='drop_view', updated=? WHERE stage='found' AND day<?", [db.now(), day])
 
 
 def _vx(c: httpx.Client, row: dict) -> dict:
@@ -303,10 +348,21 @@ def titles(limit: int = 0, workers: int = 3) -> dict:
     return {**stat, "todo": len(rows)}
 
 
-def grab(limit: int = 0, workers: int = 8, per_day: int = 0, min_views: int = 0) -> dict:
+def grab_ids(cap: int = GRAB_CAP) -> list[str]:
+    """优先级：关注作者、≥VIP_FOL、≥FOL_EXCEPTION 的粉丝大号必取，其余按阅读数从高到低取 cap 篇。"""
+    w = watch()
+    must = f"(fol>={FOL_EXCEPTION} OR lower(user) IN ({','.join('?' * len(w))}))"
+    ids = [r["id"] for r in db.rows(f"SELECT id FROM x_art WHERE stage='found' AND {must}", w)]
+    ids += [r["id"] for r in db.rows(f"SELECT id FROM x_art WHERE stage='found' AND NOT {must} ORDER BY views DESC, likes DESC LIMIT ?", [*w, cap])]
+    return ids
+
+
+def grab(limit: int = 0, workers: int = 8, per_day: int = 0, min_views: int = 0, ids: list[str] | None = None) -> dict:
     """vx 被限流后的主路径：每天阅读数前 GRAB_PER_DAY 的直接取全文（$0.001/篇），标题预览同时拿到。"""
     w = watch()
-    if min_views:
+    if ids is not None:
+        rows = [{"id": i} for i in ids]
+    elif min_views:
         rows = db.rows("SELECT id FROM x_art WHERE stage='found' AND views>=?" + (f" LIMIT {limit}" if limit else ""), [min_views])
     else:
         rows = db.rows("SELECT id FROM (SELECT id,fol,user,ROW_NUMBER() OVER (PARTITION BY day ORDER BY views DESC) rk FROM x_art WHERE stage='found') "
@@ -546,7 +602,7 @@ def due(now: datetime | None = None) -> bool:
 
 
 def daily(now: datetime | None = None) -> dict:
-    """每天一轮：补抓到 CRAWL_LAG 天前为止还没抓的日子（让阅读数先涨一涨再过门槛）→ 阅读门槛 → 取全文标题 → 判相关 → 取全文 → 打分。
+    """一轮：从水位线抓到现在 → 超过 STALE_DAYS 还没处理的放弃 → 候选门槛 → 优先级取全文标题 → 去重 → 判相关 → 取全文 → 打分。每天定时跑一次，也可手动刷新（只抓上次到现在）。
     关注名单作者自己发的长文由信息推荐刷新随时登记进库，这里一并过同一条流水线。按已用调用数记账，月累计到 MONTH_STOP_CALLS 停。"""
     init()
     now = now or datetime.now()
@@ -555,19 +611,25 @@ def daily(now: datetime | None = None) -> dict:
         return {"stopped": "月调用数到上限"}
     rid = db.insert("x_art_run", {"day": today, "status": "running", "started": db.now()})
     try:
-        end = (now - timedelta(days=CRAWL_LAG)).strftime("%Y-%m-%d")
-        res = {"crawl": [crawl_day(d) for d in days((now - timedelta(days=CRAWL_LAG + CATCHUP_DAYS - 1)).strftime("%Y-%m-%d"), end)]}
+        res = {"crawl": crawl_since(int(now.timestamp()))}
+        res["stale"] = stale()
         res["gate"] = gate()
-        res["grab"] = grab(limit=GRAB_CAP, per_day=ALL)
+        res["grab"] = grab(ids=grab_ids())
+        res["dedupe"] = dedupe()
         res["rel"] = relevance()
-        res["full"] = fulltext()
+        res["full"] = fulltext(per_day=ALL)
         res["score"] = score()
-        calls = sum(c.get("calls", 0) for c in res["crawl"]) + res["grab"]["ok"] + res["grab"]["drop"] + res["full"]["ok"] + res["full"]["short"] + res["full"]["failed"]
+        calls = res["crawl"]["calls"] + res["grab"]["ok"] + res["grab"]["drop"] + res["full"]["ok"] + res["full"]["short"] + res["full"]["failed"]
     except Exception as e:  # noqa: BLE001
         db.execute("UPDATE x_art_run SET status='failed', result=?, finished=? WHERE id=?", [json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"}, ensure_ascii=False), db.now(), rid])
         raise
     db.execute("UPDATE x_art_run SET status='ok', calls=?, result=?, finished=? WHERE id=?", [calls, json.dumps(res, ensure_ascii=False), db.now(), rid])
     return res | {"calls": calls}
+
+
+def status() -> dict:
+    last = db.row("SELECT status,calls,result,started,finished FROM x_art_run ORDER BY id DESC LIMIT 1")
+    return {"running": _lock.locked(), "mark": _mark(), "last": last}
 
 
 def start(force: bool = False) -> bool:
