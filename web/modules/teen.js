@@ -42,6 +42,7 @@ function itemCard(ctx, it, refresh) {
     h('div.row.between', {}, [h('div', {}, [h(`span.tag${it.kind === '时事' ? '.ok' : ''}`, {}, it.kind), ' ', h('span.tag.gray', {}, it.domain)]),
       h('a.muted', { href: s.url, target: '_blank', rel: 'noopener' }, `出处：${s.name}${s.date ? `（${s.date}）` : ''}`)]),
     h('h3.vs-card-title', {}, it.headline),
+    b.hook ? h('div.tn-hook', {}, b.hook) : null,
     h('div.tn-train', {}, [h('span.card-label', {}, '为什么练这个'),
       h('div', {}, [h('b', {}, `${b.ability} · ${b.train_focus}`), '。', b.why_this]),
       h('div.muted', {}, `三层怎么递进：${b.ladder}`)]),
@@ -68,33 +69,40 @@ function scoreStats(ctx, d) {
     ui.stats(d.scores.map((s) => ({ k: `第${s.level}层 · ${s.ability}（${s.n} 次）`, v: s.avg.toFixed(1) })))];
 }
 
+async function build(ctx) {
+  const { api, h, ui, toast } = ctx;
+  const page = h('div.vs-page');
+  const refresh = async () => page.replaceWith(await build(ctx));
+  const d = await api.get('/api/teen/overview');
+  const btn = h('button.ghost', { onclick: async () => {
+    const r = await api.post('/api/teen/refresh', {});
+    toast(r.ok ? '开始出题，几分钟后刷新' : (r.reason || '正在出题'));
+  } }, [ui.icon('refresh'), ' 现在出题']);
+  const [first, ...older] = d.days;
+  page.append(...[
+    ui.pageHead('青少年', statusLine(d), [btn]),
+    d.last?.status === 'rejected' && d.last.problems.length ? h('div.card.muted', {}, `上一版被打回：${d.last.problems.join('；')}`) : null,
+    first ? [ui.section(first.day === d.today ? '今天' : first.day, '一个时事 + 一个往事'), ...first.items.map((it) => itemCard(ctx, it, refresh))]
+      : ui.empty('还没有题材', '每天自动挑两个：一个最近的真实事件，一个从过去知识里挖出来的题材。'),
+    scoreStats(ctx, d),
+    older.length ? ui.section('往天的题材', '作答和想法都留着，可以回头补写') : null,
+    ...older.map((day) => h('details.card', {}, [h('summary', {}, `${day.day} · ${day.items.map((i) => i.headline).join(' / ')}`),
+      ...day.items.map((it) => itemCard(ctx, it, refresh))])),
+  ].flat().filter(Boolean));
+  return page;
+}
+
 export default {
   async render(el, ctx) {
     injectStyle();
-    const { api, h, ui, toast } = ctx;
-    const refresh = async () => { el.innerHTML = ''; await this.render(el, ctx); };
-    const d = await api.get('/api/teen/overview');
-    const btn = h('button.ghost', { onclick: async () => {
-      const r = await api.post('/api/teen/refresh', {});
-      toast(r.ok ? '开始出题，几分钟后刷新' : (r.reason || '正在出题'));
-    } }, [ui.icon('refresh'), ' 现在出题']);
-    const [first, ...older] = d.days;
-    el.append(h('div.vs-page', {}, [
-      ui.pageHead('青少年', statusLine(d), [btn]),
-      d.last?.status === 'rejected' && d.last.problems.length ? h('div.card.muted', {}, `上一版被打回：${d.last.problems.join('；')}`) : null,
-      first ? [ui.section(first.day === d.today ? '今天' : first.day, '一个时事 + 一个往事'), ...first.items.map((it) => itemCard(ctx, it, refresh))]
-        : ui.empty('还没有题材', '每天自动挑两个：一个最近的真实事件，一个从过去知识里挖出来的题材。'),
-      scoreStats(ctx, d),
-      older.length ? ui.section('往天的题材', '作答和想法都留着，可以回头补写') : null,
-      ...older.map((day) => h('details.card', {}, [h('summary', {}, `${day.day} · ${day.items.map((i) => i.headline).join(' / ')}`),
-        ...day.items.map((it) => itemCard(ctx, it, refresh))])),
-    ].flat().filter(Boolean)));
+    el.append(await build(ctx));
   },
 };
 
 const CSS = `
 .tn-card { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; min-width: 0; }
 .tn-train { background: var(--bg-2); border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.65; }
+.tn-hook { color: var(--accent); font-size: 14px; margin-top: -6px; }
 .tn-phe { font-size: 15px; font-weight: 600; }
 .tn-q { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .tn-qtext { margin: 0; font-size: 15px; line-height: 1.7; }

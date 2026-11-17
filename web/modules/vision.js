@@ -1,4 +1,4 @@
-// 视野板块：AI 发展 → 吃喝玩乐 / 生活 / 学习 → 国家宏观与行业 的大数据变化和解读卡。
+// 视野板块（含「青少年」标签页，见 teen.js）：AI 发展 → 吃喝玩乐 / 生活 / 学习 → 国家宏观与行业 的大数据变化和解读卡。
 // 数据和统计全在后端 /api/vision/*；「变了多少」「口径提醒」由程序算，解读卡正文来自通过校验和审稿的卡片。
 const FREQ = { Y: '年', H: '半年', Q: '季', M: '月', W: '周', D: '日' };
 const STATUS = { running: '在写', reviewing: '审稿中', done: '已发布', rejected: '被打回', failed: '失败' };
@@ -188,6 +188,11 @@ function seriesTips(s) {
   return [who ? `${who} 是谁家的，强在哪？` : `${s.name}为什么会这样变？`, '接下来一年会怎么走？', '这对我意味着什么？'];
 }
 
+function tabs(h, active) {
+  return h('div.tabs', {}, [['', '数据'], ['teen', '青少年']].map(([id, name]) =>
+    h('button' + (id === active ? '.active' : ''), { onclick: () => { location.hash = id ? `#vision/${id}` : '#vision'; } }, name)));
+}
+
 function statusLine(st) {
   const r = st.run;
   const errs = r ? Object.entries(r.results || {}).filter(([, v]) => v.error) : [];
@@ -201,7 +206,7 @@ async function home(el, ctx) {
   const byId = Object.fromEntries(d.themes.flatMap((t) => t.series).map((s) => [s.id, s]));
   const btn = h('button.ghost', { onclick: async () => { await api.post('/api/vision/refresh', {}); toast('开始更新：取数 → 找显著变化 → 写解读卡，几分钟后刷新'); } },
     [ui.icon('refresh'), ' 立即更新']);
-  el.append(h('div.vs-page', {}, [
+  el.append(tabs(h, ''), h('div.vs-page', {}, [
     ui.pageHead('视野', statusLine(d.status), [btn]),
     askBar(ctx, 'vision:home', '视野'),
     ...d.themes.flatMap((t) => themeBlock(h, ui, t)),
@@ -318,6 +323,10 @@ function injectStyle() {
 export default {
   async render(el, ctx) {
     injectStyle();
+    if (ctx.sub[0] === 'teen') {
+      el.append(tabs(ctx.h, 'teen'));
+      return (await import(`./teen.js?v=${Date.now()}`)).default.render(el, ctx);
+    }
     if (ctx.sub[0]) return detail(el, ctx, decodeURIComponent(ctx.sub[0]));
     return home(el, ctx);
   },

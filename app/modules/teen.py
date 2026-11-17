@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 TITLE = "青少年"
 ORDER = 37
+PAGE = "vision/teen"  # 没有自己的侧边栏入口，是视野里的一个标签页
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teen_days (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
