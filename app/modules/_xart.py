@@ -494,10 +494,12 @@ def score(limit: int = 0, batch: int = 3, workers: int = 4, ids: list[str] | Non
             if not x or not isinstance(x.get("q"), int):
                 stat["miss"] += 1
                 continue
-            mkt = int(bool(x.get("mkt")) or bool(MKT.search(r["title"] + r["text"][:300] + r["text"][-300:])) and x["q"] < 4)
             tags = [str(t).strip() for t in (x.get("tags") or []) if str(t).strip()][:5]
             domain = x.get("d") if x.get("d") in DOMAINS else "other"
             kind = x.get("kind") if x.get("kind") in KINDS else "其他"
+            mkt = int(bool(x.get("mkt")) or bool(MKT.search(r["title"] + r["text"][:300] + r["text"][-300:])) and x["q"] < 4)
+            if x["q"] >= 3 and kind != "产品介绍":
+                mkt = 0
             db.execute("UPDATE x_art SET q=?,mkt=?,kind=?,domain=?,summary=?,tags=?,take=?,why=?,stage='scored',updated=? WHERE id=?",
                        [max(0, min(5, x["q"])), mkt, kind, domain, str(x.get("sum") or "")[:120], json.dumps(tags, ensure_ascii=False),
                         str(x.get("take") or "")[:120], str(x.get("why") or "")[:80], db.now(), r["id"]])
