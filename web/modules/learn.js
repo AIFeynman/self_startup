@@ -23,6 +23,8 @@ const CSS = `
 .ln-card-click { cursor: pointer; transition: border-color .12s, transform .12s; }
 .ln-card-click:hover { border-color: var(--accent); }
 .ln-pcard h3 { font-size: 19px; margin: 2px 0 10px; }
+.ln-pdel { padding: 2px 6px; color: var(--muted); }
+.ln-pdel:hover { color: var(--danger, #c0392b); }
 .ln-pcard .next { font-size: 13px; margin-top: 8px; color: var(--text); }
 .ln-pcard .next b { color: var(--accent); font-weight: 500; margin-right: 4px; }
 .ln-icard { display: flex; flex-direction: column; }
@@ -639,15 +641,22 @@ async function renderHome(el, ctx, scrollToPlans) {
 }
 
 function planCard(p, ctx) {
-  const { h, ui } = ctx;
-  return h('div.card.ln-pcard.ln-card-click', { onclick: () => { location.hash = `#learn/plan/${p.id}`; } }, [
+  const { api, h, toast, ui } = ctx;
+  const del = async (e) => {
+    e.stopPropagation();
+    if (!confirm(`删除学习计划「${p.topic}」？它的所有步骤也会一起删除。`)) return;
+    try { await api.del(`/api/learn/plans/${p.id}`); card.remove(); toast('已删除'); } catch (err) { toast(err.message, true); }
+  };
+  const card = h('div.card.ln-pcard.ln-card-click', { onclick: () => { location.hash = `#learn/plan/${p.id}`; } }, [
     h('div.row.between', {}, [h('span.card-label', {}, `每周 ${p.hours_per_week}h · 约 ${p.progress.hours}h`),
-      h('span.row', {}, [p.progress.unread && p.status !== 'archived' ? unreadTag(h, `${p.progress.unread} 章未看`) : null, tag(h, p.status)])]),
+      h('span.row', {}, [p.progress.unread && p.status !== 'archived' ? unreadTag(h, `${p.progress.unread} 章未看`) : null, tag(h, p.status),
+        h('button.ghost.sm.ln-pdel', { title: '删除这个学习计划', 'aria-label': '删除学习计划', onclick: del }, ui.icon('trash'))])]),
     h('h3', {}, p.topic),
     h('div.row', {}, [h('div.grow', {}, ui.progress(p.progress.pct)), h('span.muted', {}, `${p.progress.done}/${p.progress.total} · ${p.progress.pct}%`)]),
     p.goal ? h('div.muted.clamp2', { style: { marginTop: '8px' } }, '目标：' + p.goal) : null,
     BUSY.includes(p.status) ? h('div.muted.dots', { style: { marginTop: '6px' } }, p.status === 'generating' ? (p.layout === 'course' ? 'Agent 正在读课表' : 'Agent 正在生成计划') : (p.layout === 'course' ? 'Agent 正在同步课表' : 'Agent 正在调整计划')) : null,
   ]);
+  return card;
 }
 
 // 深读记录按类型分类：论文 / 项目 / 文章 / 视频；只显示有内容的分类，选中的分类在本次打开期间记住；
