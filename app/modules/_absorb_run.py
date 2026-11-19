@@ -91,7 +91,8 @@ P_EVID = """给你一条认知 C 和若干候选材料（论文、开源项目�
 只输出 JSON：{"r":{"编号":{"v":"佐证|反对|无关","why":"依据≤25字"}}}"""
 
 P_NOW = """你为一个“问题”写现状综述，材料只有下面这些认知卡（编号、说法、独立作者数、是否有矛盾）。
-写 3–5 句：先写多数人的共识，再写分歧点，最后写哪些只有单一来源、还待验证。每句话末尾必须用 [C编号] 标出依据的卡，可多个；不许写卡片里没有的内容。
+写 2–3 句自然连贯的话，总共不超过 150 字，像同事口头汇报：先说多数人的共识，再说分歧或还没验证的地方。不要用分号堆砌，不要罗列做法清单，不要复述卡片原句。
+每句话末尾用 [C编号] 标出依据的卡（可多个，只放句末，句中不放编号）；不许写卡片里没有的内容。
 再给一个状态：共识为主 / 有分歧 / 证据少。
 只输出 JSON：{"now":"……[C12]。……[C3][C7]。","status":"共识为主|有分歧|证据少"}"""
 
@@ -391,6 +392,20 @@ def s_cards(r: Run) -> dict:
     return {"C": cards, "conf": conf, "conf_candidates": len(cpl)}
 
 
+def summarize(r: Run, qs: list, cards: list, sh: list, d: dict) -> dict:
+    def runq(q):
+        cs = sorted([cards[i] for i in sh if cards[i]["qid"] == q["id"]], key=lambda c: -len(c["authors"]))[:60]
+        if not cs:
+            return q["id"], {"now": "", "raw": "", "status": "证据少"}
+        ids = {c["id"] for c in cs}
+        conf = [x for x in d["conf"] if x["a"] in ids or x["b"] in ids]
+        o = r.call(r.strong, P_NOW, f"问题：{q['q']}\n\n认知卡：\n" + "\n".join(f"C{c['id']} | {c['claim']}（{c['scope']}）| {len(c['authors'])} 个作者" for c in cs)
+                   + "\n\n矛盾：\n" + "\n".join(f"C{x['a']} 与 C{x['b']}：{x['point']}" for x in conf)) or {"now": "", "status": "证据少"}
+        keep = [s for s in re.split(r"(?<=\])(?=[^\[])", o.get("now", "")) if (n := re.findall(r"\[C(\d+)\]", s)) and all(int(x) in ids for x in n)]
+        return q["id"], {"now": "".join(keep), "raw": o.get("now", ""), "status": o.get("status", "证据少")}
+    return dict(_pmap(runq, qs, 5))
+
+
 def s_evidence(r: Run) -> dict:
     qd = r.load("questions.json")
     units, qs = qd["U"], qd["Q"]
@@ -431,17 +446,7 @@ def s_evidence(r: Run) -> dict:
         return cid, ev
     evid = dict(_pmap(run, range(len(sh)), 10))
 
-    def runq(q):
-        cs = sorted([cards[i] for i in sh if cards[i]["qid"] == q["id"]], key=lambda c: -len(c["authors"]))[:60]
-        if not cs:
-            return q["id"], {"now": "", "raw": "", "status": "证据少"}
-        ids = {c["id"] for c in cs}
-        conf = [x for x in d["conf"] if x["a"] in ids or x["b"] in ids]
-        o = r.call(r.strong, P_NOW, f"问题：{q['q']}\n\n认知卡：\n" + "\n".join(f"C{c['id']} | {c['claim']}（{c['scope']}）| {len(c['authors'])} 个作者" for c in cs)
-                   + "\n\n矛盾：\n" + "\n".join(f"C{x['a']} 与 C{x['b']}：{x['point']}" for x in conf)) or {"now": "", "status": "证据少"}
-        keep = [s for s in re.split(r"(?<=\])(?=[^\[])", o.get("now", "")) if (n := re.findall(r"\[C(\d+)\]", s)) and all(int(x) in ids for x in n)]
-        return q["id"], {"now": "".join(keep), "raw": o.get("now", ""), "status": o.get("status", "证据少")}
-    return {"shown": sh, "ev": {str(k): v for k, v in evid.items()}, "sum": dict(_pmap(runq, qs, 5))}
+    return {"shown": sh, "ev": {str(k): v for k, v in evid.items()}, "sum": summarize(r, qs, cards, sh, d)}
 
 
 TAGS = "chml"
