@@ -1,6 +1,6 @@
-"""吸收：按选题把一段时间的 X 长文压成认知卡，对照知识库里“我的判断”和论文 / 开源项目 / 产品动态 / 讨论，标出挑战你判断的、有争议的、印证你判断的、与你判断相关的和新的。
+"""吸收：按选题把一段时间的 X 长文压成认知卡，对照论文 / 开源项目 / 产品动态 / 讨论，按独立来源的人数和佐证给出每条认知的置信度，标出有争议的。
 流水线在 _absorb_run.py，作为独立进程跑，每个选题一个目录 data/absorb/<选题>_<起>_<止>/；这里只负责发起、报进度、读结果、存表态。
-表态存在该目录的 reactions.json，不进 app.db。"""
+表态存在该目录的 reactions.json（页面状态），同时追加到 data/absorb/_feedback.jsonl（带卡片快照，换选题、重跑、删目录都不丢），供“反馈”页按提炼角度分析哪类认知对你有用，不进 app.db。"""
 import json
 import os
 import re
@@ -19,7 +19,9 @@ TITLE = "吸收"
 ORDER = 32
 router = APIRouter()
 
-ACTS = ("已知", "采纳", "不信", "想试")
+ACTS = ("已知", "有启发", "想试", "不信")
+BENEFIT = {"已知": 0, "有启发": 1, "想试": 2}
+FB = ar.BASE / "_feedback.jsonl"
 PROCS: dict[int, subprocess.Popen] = {}
 
 
@@ -107,6 +109,31 @@ def get(rid: str):
     return {"id": rid, **_read(d / "run.json", {}), **st, "data": data, "reactions": _read(d / "reactions.json", {})}
 
 
+def _snap(d, rid: str, card: int) -> dict:
+    cards = _read(d / "cards.json", {}).get("cards", [])
+    c = next((x for x in cards if x["id"] == card), None)
+    if not c:
+        return {}
+    t = c.get("type")
+    if not t:
+        merged, qd = _read(d / "merged.json", {}), _read(d / "questions.json", {})
+        try:
+            t = qd["U"][merged["C"][card]["rep"]]["type"]
+        except (KeyError, IndexError):
+            t = ""
+    g, rep = c.get("conf") or {}, (c.get("src") or [{}])[0]
+    q = next((x["q"] for x in _read(d / "cards.json", {}).get("questions", []) if x["id"] == c["qid"]), "")
+    return {"run": rid, "topic": _read(d / "run.json", {}).get("topic", ""), "card": card, "claim": c["claim"], "type": t, "tag": c["tag"], "level": g.get("level", ""),
+            "authors": len(c.get("authors", [])), "first": g.get("first", 0), "hard": g.get("papers", 0) + g.get("repos", 0) + g.get("intel", 0), "disc": g.get("disc", 0),
+            "against": g.get("against", 0), "has_num": bool(re.search(r"\d", c["claim"])), "has_why": bool(rep.get("why")), "has_evidence": bool(rep.get("evidence")),
+            "len": len(c["claim"]), "qid": c["qid"], "question": q}
+
+
+def _log(ev: dict) -> None:
+    with open(FB, "a", encoding="utf-8") as f:
+        f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+
+
 class ReactIn(BaseModel):
     card: int
     act: str = ""
@@ -118,6 +145,9 @@ def react(rid: str, body: ReactIn):
     if body.act and body.act not in ACTS:
         raise HTTPException(400, "表态只能是：" + " / ".join(ACTS))
     r = _read(d / "reactions.json", {})
+    snap = _snap(d, rid, body.card)
+    if snap:
+        _log({**snap, "act": body.act, "at": time.time()})
     if body.act:
         r[str(body.card)] = {"act": body.act, "at": time.time()}
     else:
@@ -126,3 +156,43 @@ def react(rid: str, body: ReactIn):
     tmp.write_text(json.dumps(r, ensure_ascii=False), "utf-8")
     tmp.replace(d / "reactions.json")
     return {"ok": True}
+
+
+def _latest() -> list[dict]:
+    last = {}
+    if FB.exists():
+        for line in FB.read_text("utf-8").splitlines():
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            last[(e.get("run"), e.get("claim"))] = e
+    return [e for e in last.values() if e.get("act") in ACTS]
+
+
+DIMS = [("type", "认知类型", lambda e: e.get("type") or "未知"),
+        ("level", "置信度", lambda e: {"h": "高", "m": "中", "l": "低"}.get(e.get("level"), "—") + ("（有争议）" if e.get("tag") == "c" else "")),
+        ("authors", "独立作者数", lambda e: "1 位" if e.get("authors", 0) <= 1 else "2 位及以上"),
+        ("hard", "有论文 / 项目 / 产品佐证", lambda e: "有" if e.get("hard") else "没有"),
+        ("has_num", "结论里带数字", lambda e: "带" if e.get("has_num") else "不带"),
+        ("has_why", "写了原因 / 机制", lambda e: "写了" if e.get("has_why") else "没写"),
+        ("has_evidence", "附了依据", lambda e: "附了" if e.get("has_evidence") else "没附"),
+        ("len", "结论长度", lambda e: "≤40 字" if e.get("len", 0) <= 40 else "41–70 字" if e.get("len", 0) <= 70 else "70 字以上"),
+        ("topic", "选题", lambda e: e.get("topic") or "—")]
+
+
+@router.get("/feedback")
+def feedback():
+    ev = _latest()
+    dims = []
+    for key, name, f in DIMS:
+        b: dict[str, dict] = {}
+        for e in ev:
+            x = b.setdefault(f(e), {"n": 0, **{a: 0 for a in ACTS}})
+            x["n"] += 1
+            x[e["act"]] += 1
+        rows = [{"v": v, **x, "gain": round(sum(BENEFIT.get(a, 0) * x[a] for a in ACTS) / x["n"], 2), "try": round(x["想试"] / x["n"], 2), "known": round(x["已知"] / x["n"], 2),
+                 "doubt": round(x["不信"] / x["n"], 2)} for v, x in b.items()]
+        dims.append({"key": key, "name": name, "rows": sorted(rows, key=lambda r: -r["n"])})
+    pick = lambda act: [{"claim": e["claim"], "type": e.get("type", ""), "topic": e.get("topic", "")} for e in sorted(ev, key=lambda e: -e["at"]) if e["act"] == act][:8]
+    return {"n": len(ev), "acts": {a: sum(e["act"] == a for e in ev) for a in ACTS}, "dims": dims, "try": pick("想试"), "known": pick("已知")}

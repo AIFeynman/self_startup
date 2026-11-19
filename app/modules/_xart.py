@@ -406,7 +406,7 @@ def _json_list(text: str) -> list[dict]:
 def relevance(limit: int = 0, batch: int = 20, workers: int = 4) -> dict:
     rows = db.rows("SELECT id,title,preview FROM x_art WHERE stage='titled'" + (f" LIMIT {limit}" if limit else ""))
     chunks = [rows[i:i + batch] for i in range(0, len(rows), batch)]
-    stat = {"core": 0, "topic": 0, "none": 0, "miss": 0}
+    stat = {"core": 0, "topic": 0, "none": 0, "miss": 0, "err": 0}
 
     def one(ch):
         user = "\n".join(f"### id={r['id']}\n标题: {r['title']}\n预览: {r['preview'][:200]}" for r in ch)
@@ -414,8 +414,13 @@ def relevance(limit: int = 0, batch: int = 20, workers: int = 4) -> dict:
             txt, _ = pl.chat(REL_PROMPT, user)
         except Exception as e:  # noqa: BLE001
             log.warning("rel batch failed: %s", e)
+            stat["err"] += len(ch)
+            stat["last_err"] = str(e)[:200]
             return
         got = {str(x.get("id")): x for x in _json_list(txt) if isinstance(x, dict)}
+        if not got:
+            log.warning("rel batch unparsable: %s", txt[:200])
+            stat["last_err"] = "无法解析：" + txt[:150]
         for r in ch:
             x = got.get(r["id"])
             if not x or x.get("rel") not in ("core", "topic", "none"):
@@ -480,13 +485,15 @@ def score(limit: int = 0, batch: int = 3, workers: int = 4, ids: list[str] | Non
     rows = db.rows("SELECT id,title,text,n FROM x_art WHERE stage='full'" + (f" AND id IN ({','.join('?' * len(ids))})" if ids is not None else "") + (f" LIMIT {limit}" if limit else ""), ids or [])
     chunks = [rows[i:i + batch] for i in range(0, len(rows), batch)]
     system = SCORE_PROMPT.replace("__DOMAINS__", "；".join(f"{k}={v}" for k, v in DOMAINS.items()))
-    stat = {"scored": 0, "miss": 0}
+    stat = {"scored": 0, "miss": 0, "err": 0}
 
     def one(ch):
         try:
             txt, _ = pl.chat(system, "\n".join(_excerpt(r) for r in ch))
         except Exception as e:  # noqa: BLE001
             log.warning("score batch failed: %s", e)
+            stat["err"] += len(ch)
+            stat["last_err"] = str(e)[:200]
             return
         got = {str(x.get("id")): x for x in _json_list(txt) if isinstance(x, dict)}
         for r in ch:
@@ -607,7 +614,14 @@ def due(now: datetime | None = None) -> bool:
     if not settings.get("xart.daily", True) or now.hour < RUN_HOUR:
         return False
     init()
-    return not db.row("SELECT 1 FROM x_art_run WHERE day=? AND status!='failed'", [now.strftime("%Y-%m-%d")])
+    day = now.strftime("%Y-%m-%d")
+    return not db.row("SELECT 1 FROM x_art_run WHERE day=? AND status IN ('ok','running')", [day]) and db.row("SELECT COUNT(*) n FROM x_art_run WHERE day=? AND status='failed'", [day])["n"] < 2
+
+
+def _check(step: str, r: dict) -> None:
+    bad = r["miss"] + r["err"]
+    if r["todo"] >= 20 and bad * 2 > r["todo"]:
+        raise RuntimeError(f"{step}失败过半（{bad}/{r['todo']}）：{r.get('last_err', '模型返回无法解析')}")
 
 
 def daily(now: datetime | None = None) -> dict:
@@ -626,8 +640,10 @@ def daily(now: datetime | None = None) -> dict:
         res["grab"] = grab(ids=grab_ids())
         res["dedupe"] = dedupe()
         res["rel"] = relevance()
+        _check("判相关", res["rel"])
         res["full"] = fulltext(per_day=ALL)
         res["score"] = score()
+        _check("打分", res["score"])
         calls = res["crawl"]["calls"] + res["grab"]["ok"] + res["grab"]["drop"] + res["full"]["ok"] + res["full"]["short"] + res["full"]["failed"]
     except Exception as e:  # noqa: BLE001
         db.execute("UPDATE x_art_run SET status='failed', result=?, finished=? WHERE id=?", [json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"}, ensure_ascii=False), db.now(), rid])

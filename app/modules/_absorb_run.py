@@ -1,4 +1,4 @@
-"""吸收流水线：给一个选题和时间窗，把 X 长文抽成认知、归到问题、合并成卡，对照知识库里“我的判断”，再挂上论文 / 开源项目 / 产品动态 / 讨论四类证据。
+"""吸收流水线：给一个选题和时间窗，把 X 长文抽成认知、归到问题、合并成卡、标出矛盾，再挂上论文 / 开源项目 / 产品动态 / 讨论四类证据。
 
 每一步的结果存在 data/absorb/<run>/ 下，已有结果的步骤不重跑；页面读最后一步的 cards.json（接口见 absorb.py）。
 只读 app.db 和知识库，不写正式库。向量用本机的 Embedding 模型，解释器和模型路径在设置 absorb.* 里。
@@ -32,7 +32,7 @@ BASE = DATA_DIR / "absorb"
 KB = DATA_DIR / "kb"
 STAGES = ["profile", "theme", "extract", "questions", "pools", "compare", "cards", "evidence", "page"]
 STAGE_NAME = {"profile": "定选题范围", "theme": "筛选长文", "extract": "抽取认知", "questions": "定问题并归位", "pools": "准备证据池",
-              "compare": "问题内比对", "cards": "合并成卡并对照已有判断", "evidence": "挂证据并写现状", "page": "生成页面数据"}
+              "compare": "问题内比对", "cards": "合并成卡并复核矛盾", "evidence": "挂证据并写现状", "page": "生成页面数据"}
 SIM_PAIR = 0.68
 SIM_EVID = 0.45
 POOL_LABEL = {"papers": "论文", "repos": "开源项目", "intel": "产品动态", "disc": "讨论"}
@@ -51,18 +51,19 @@ P_THEME = """选题“{topic}”：{scope}
 不算：{exclude}
 只输出 JSON：{{"in":[序号,...]}}"""
 
-P_EXTRACT = """你从一篇X长文里抽取“认知卡”。只收有信息量、值得别人记住并复用的认知，宁缺毋滥。
-每条必须同时满足：
-1) 有具体信息：数字、条件、机制、步骤、因果或明确取舍，读完能多知道点什么；
+P_EXTRACT = """你从一篇X长文里抽取“认知卡”。认知卡的核心是作者想让读者带走的结论、观点、判断，不是实验数据。
+先通读全文，找出作者的核心主张：每篇至少抽 1–2 条，通常 2–5 条，最多 6 条；文章确实没有可复用的主张才返回空数组。
+每条认知必须同时满足：
+1) 是一条结论 / 判断 / 做法 / 教训 / 预测，说清“做了什么或认为什么、为什么、效果或后果”，读者没看过原文也能懂；
 2) 可复用：换个场景、过一段时间仍然有用，不是某天某事的流水账；
 3) 不是常识、口号、愿景，也不是“某工具可以做某事”这种泛泛能力介绍。
+实验数字、评测分数、成本对比不要单独成条，写进它所支撑的那条结论的 evidence 里。只有产品发布或重大变更改变了读者能做什么或该怎么选时，才收为“变更”，并写清变了什么。
+claim 写法：一句完整的话，带上对象和场景，先给结论再给原因或效果，例如“注释无法被强制执行、会过时还给智能体找借口，因此团队禁止了 99% 的注释，改用 lint 强制”。禁止出现“该”“此”“其”“这个方案”等需要回头找指代的词，工具、方法、数据集第一次出现要写全名。
 一律不收：奖项荣誉、促销价和折扣、活动日程、公司自夸、导流话术、对未来的空泛展望、单纯罗列功能名。
-例外：产品发布或重大变更，只要改变了读者能做什么或该怎么选，就收，并写清变了什么。
-做法类要写出关键步骤或参数，不要只写“应该做好X”。
-输出严格JSON：{"units":[{"id":"u1","type":"判断|做法|事实|教训|预测|变更","claim":"一句话≤60字，一条命题，带上关键数字或条件","key":"同一命题的英文规范表述≤25词，用于跨语言比对","scope":"成立条件/适用场景≤15字，没有写空串","quote":"原文逐字摘录≤40字","source_kind":"实践者|官方|推广|转述"}]}
-type：判断=是什么/好坏；做法=怎么做；事实=数据或已发生的事；教训=踩坑；预测=将会怎样；变更=发布/更新/变动。
+输出严格JSON：{"units":[{"id":"u1","type":"判断|做法|教训|预测|变更|事实","claim":"一句话≤90字，结论+原因/效果，自带背景","why":"为什么成立或怎么起作用≤50字，没有写空串","evidence":"支撑它的关键数据或事实≤60字，没有写空串","key":"同一结论的英文规范表述≤25词，用于跨语言比对","scope":"成立条件/适用场景≤15字，没有写空串","quote":"原文逐字摘录≤40字","source_kind":"实践者|官方|推广|转述"}]}
+type：判断=是什么/好坏；做法=怎么做（写出关键步骤或参数）；教训=踩坑；预测=将会怎样；变更=发布/更新/变动；事实=只在它本身改变决策时才收。
 source_kind：作者讲亲身做过的=实践者；官方账号发布=官方；带卖货/导流目的=推广；转述他人=转述。
-最多25条，不够就少给。只输出JSON。"""
+只输出JSON。"""
 
 P_QUESTIONS = """你在为选题“{topic}”设计一组长期稳定的“问题”，用来归拢大量零散的认知。问题是做这件事的人反复要回答的决策性问题，答案会随时间变化，问题本身不变。
 要求：8–10 个问题；互不重叠；合起来能装下样本里绝大多数说法；每个问题是一句具体的疑问句（不是名词短语），再给一句范围说明（什么算、什么不算）。
@@ -77,10 +78,6 @@ P_PAIR = """你严格判断每一对认知的关系。A是新来的，B是库里
 
 P_CONFLICT = """逐对判断两条说法是否真的互相矛盾（针对同一件事给出相反结论或相反建议，读者必须二选一）。只是侧重点、范围、条件不同或互补，不算矛盾。
 输入每行“编号 | A：… | B：…”。只输出 JSON：{"r":{"编号":{"c":true或false,"point":"矛盾点≤30字，非矛盾写空串"}}}"""
-
-P_JUDG = """用户已有一条自己的判断 J。下面是若干条新进来的说法，逐条判断它和 J 的关系：
-一致=说的是同一个结论，支持 J；补充=同一个结论上给了 J 没有的数据、条件或做法；相反=与 J 的结论相反或指出 J 不成立；无关=其余（只是同一话题不算）。
-只输出 JSON：{"r":{"编号":"一致|补充|相反|无关"}}"""
 
 P_EVID = """给你一条认知 C 和若干候选材料（论文、开源项目、产品动态、社区讨论）。逐条严格判断：
 佐证=材料内容直接支持 C：论文给出相符的数据或结论；项目实现了 C 说的做法；产品按 C 说的方式做了；讨论里有人给出相符的经验。
@@ -233,7 +230,7 @@ def s_questions(r: Run) -> dict:
                 bad += 1
                 continue
             units.append({"aid": a["id"], "user": a["user"], "day": a["day"], "q": a["q"],
-                          **{k: str(u.get(k) or "") for k in ("type", "claim", "key", "scope", "quote", "source_kind")}})
+                          **{k: str(u.get(k) or "") for k in ("type", "claim", "why", "evidence", "key", "scope", "quote", "source_kind")}})
     for i, u in enumerate(units):
         u["i"] = i
     if not units:
@@ -290,22 +287,11 @@ def s_pools(r: Run) -> dict:
         g = ex.get("gist") or ""
         disc.append({"source": x[0], "title": x[1], "date": (x[4] or "")[:10], "url": ex.get("hn_url") or x[3], "pop": x[5] or 0, "s": (x[2] or "")[:300],
                      "text": f"{x[1]}。{(x[2] or '')[:300]} {str(g)[:200]}"[:600]})
-    judg, seen = [], set()
-    for f in sorted(glob.glob(str(KB / "concepts" / "*.md"))):
-        t = Path(f).read_text("utf-8")
-        if pf["in_kb"] and f'topic: "{r.topic}"' not in t:
-            continue
-        for m in re.finditer(r"^\d+\. \*\*(.+?)\*\*\s*\n\s+(.+?) · (\d{4}-\d\d-\d\d)", t, re.M):
-            s = m.group(1).strip()
-            if s in seen or s.startswith(("疑问", "想")) or "？" in s[-2:]:
-                continue
-            seen.add(s)
-            judg.append({"text": s, "concept": Path(f).stem, "kind": m.group(2), "date": m.group(3)})
-    return {"papers": papers, "repos": repos, "intel": intel, "disc": disc, "judg": judg}
+    return {"papers": papers, "repos": repos, "intel": intel, "disc": disc}
 
 
 def _pool_emb(r: Run, pools: dict) -> np.ndarray:
-    return r.embed([x["text"] for k in ("papers", "repos", "intel", "disc", "judg") for x in pools[k]], "pool_emb.npy", 160)
+    return r.embed([x["text"] for k in ("papers", "repos", "intel", "disc") for x in pools[k]], "pool_emb.npy", 160)
 
 
 def s_compare(r: Run) -> dict:
@@ -340,7 +326,6 @@ def s_cards(r: Run) -> dict:
     units = r.load("questions.json")["U"]
     links = r.load("compare.json")["J"]
     emb = np.load(r.dir / "unit_emb.npy")
-    judg = r.load("pools.json")["judg"]
     par = list(range(len(units)))
 
     def find(x):
@@ -383,16 +368,7 @@ def s_cards(r: Run) -> dict:
         res = (r.call(r.strong, P_CONFLICT, "\n".join(f"{k} | A：{line(x)} | B：{line(y)}" for k, (_, (x, y)) in enumerate(b))) or {}).get("r", {})
         return [{"a": ca, "b": cb, "ua": x, "ub": y, "point": res[str(k)].get("point", "")} for k, ((ca, cb), (x, y)) in enumerate(b) if (res.get(str(k)) or {}).get("c")]
     conf = [x for o in _pmap(run, [cpl[i:i + 12] for i in range(0, len(cpl), 12)], 6) for x in o]
-    jl = []
-    if judg and cards:
-        sim = np.load(r.dir / "pool_emb.npy")[-len(judg):] @ np.stack([emb[c["rep"]] for c in cards]).T
-
-        def runj(k):
-            idx = [int(i) for i in np.argsort(-sim[k])[:10]]
-            res = (r.call(r.light, P_JUDG, f"J：{judg[k]['text']}\n\n" + "\n".join(f"{n} | {cards[i]['claim']}（{cards[i]['scope']}）" for n, i in enumerate(idx))) or {}).get("r", {})
-            return [{"j": k, "c": i, "rel": res[str(n)], "sim": float(sim[k, i])} for n, i in enumerate(idx) if res.get(str(n)) in ("一致", "补充", "相反")]
-        jl = [x for o in _pmap(runj, range(len(judg)), 8) for x in o]
-    return {"C": cards, "conf": conf, "jl": jl, "conf_candidates": len(cpl)}
+    return {"C": cards, "conf": conf, "conf_candidates": len(cpl)}
 
 
 def s_evidence(r: Run) -> dict:
@@ -402,7 +378,7 @@ def s_evidence(r: Run) -> dict:
     cards = d["C"]
     pools = r.load("pools.json")
     pe = np.load(r.dir / "pool_emb.npy")
-    shown = {c["id"] for c in cards if len(c["authors"]) >= 2} | {x["c"] for x in d["jl"]} | {x["a"] for x in d["conf"]} | {x["b"] for x in d["conf"]}
+    shown = {c["id"] for c in cards if len(c["authors"]) >= 2} | {x["a"] for x in d["conf"]} | {x["b"] for x in d["conf"]}
     for q in qs:
         s = [c for c in cards if c["qid"] == q["id"] and c["id"] not in shown and c["maxq"] >= 4 and units[c["rep"]]["source_kind"] in ("实践者", "官方")]
         s.sort(key=lambda c: (-c["maxq"], -bool(re.search(r"\d", c["claim"])), -len(c["claim"])))
@@ -448,55 +424,60 @@ def s_evidence(r: Run) -> dict:
     return {"shown": sh, "ev": {str(k): v for k, v in evid.items()}, "sum": dict(_pmap(runq, qs, 5))}
 
 
-TAGS = "jcsrn"
+TAGS = "chml"
+
+
+def grade(authors: int, first: int, ev: list, against: int) -> dict:
+    n = lambda pools: sum(x["v"] == "佐证" and x["pool"] in pools for x in ev)
+    hard, disc = n(("papers", "repos", "intel")), n(("disc",))
+    score = min(authors, 3) + (first > 0) + min(hard, 2) + (disc > 0) - 2 * (against > 0)
+    return {"level": "h" if score >= 5 else "m" if score >= 3 else "l", "score": score, "authors": authors, "first": first,
+            "papers": n(("papers",)), "repos": n(("repos",)), "intel": n(("intel",)), "disc": disc, "against": against}
 
 
 def s_page(r: Run) -> dict:
     th, qd, d, e, pools = r.load("theme.json"), r.load("questions.json"), r.load("merged.json"), r.load("evidence.json"), r.load("pools.json")
-    units, qs, cards, judg = qd["U"], qd["Q"], d["C"], pools["judg"]
+    units, qs, cards = qd["U"], qd["Q"], d["C"]
     links = r.load("compare.json")["J"]
     shown = set(e["shown"])
-    cj, cc = collections.defaultdict(list), collections.defaultdict(list)
-    for x in d["jl"]:
-        cj[x["c"]].append({"rel": x["rel"], "text": judg[x["j"]]["text"], "concept": judg[x["j"]]["concept"], "date": judg[x["j"]].get("date", "")})
+    cc = collections.defaultdict(list)
     for x in d["conf"]:
         cc[x["a"]].append({"o": x["b"], "point": x["point"], "claim": cards[x["b"]]["claim"]})
         cc[x["b"]].append({"o": x["a"], "point": x["point"], "claim": cards[x["a"]]["claim"]})
     out = []
     for i in e["shown"]:
-        c, ev, jd, seen, src = cards[i], sorted(e["ev"].get(str(i), []), key=lambda x: -x["sim"]), cj[i], set(), []
+        c, ev, seen, src = cards[i], sorted(e["ev"].get(str(i), []), key=lambda x: -x["sim"]), set(), []
         for m in c["members"]:
             u = units[m]
             if u["aid"] in seen:
                 continue
             seen.add(u["aid"])
             src.append({"user": u["user"], "url": f"https://x.com/{u['user']}/status/{u['aid']}", "day": u["day"], "kind": u["source_kind"],
-                        "gain": c["gain"].get(str(m), ""), "claim": u["claim"], "quote": u["quote"]})
-        hard = any(x["v"] == "佐证" and x["pool"] in ("papers", "repos", "intel") for x in ev)
-        tag = ("j" if any(j["rel"] == "相反" for j in jd) else "c" if cc[i] or any(x["v"] == "反对" for x in ev)
-               else "s" if any(j["rel"] == "一致" for j in jd) and (len(c["authors"]) >= 2 or hard) else "r" if jd else "n")
-        jd.sort(key=lambda j: {"相反": 0, "一致": 1}.get(j["rel"], 2))
-        out.append({"id": i, "qid": c["qid"], "tag": tag, "claim": c["claim"], "scope": c["scope"], "authors": c["authors"], "ev": ev, "conf": cc[i], "judg": jd, "src": src})
-    out.sort(key=lambda c: (TAGS.index(c["tag"]), -len(c["authors"]), -len(c["ev"])))
+                        "gain": c["gain"].get(str(m), ""), "claim": u["claim"], "why": u["why"], "evidence": u["evidence"], "quote": u["quote"]})
+        against = len(cc[i]) + sum(x["v"] == "反对" for x in ev)
+        g = grade(len(c["authors"]), sum(u["kind"] in ("实践者", "官方") for u in src), ev, against)
+        out.append({"id": i, "qid": c["qid"], "type": units[c["rep"]]["type"], "tag": "c" if against else g["level"], "conf": g, "claim": c["claim"], "scope": c["scope"], "authors": c["authors"],
+                    "ev": ev, "opp": cc[i], "src": src})
+    out.sort(key=lambda c: (TAGS.index(c["tag"]), -c["conf"]["score"], -len(c["ev"])))
     qout = []
     for q in qs:
         cs, sc = [c for c in cards if c["qid"] == q["id"]], [c for c in out if c["qid"] == q["id"]]
         s = e["sum"].get(q["id"], {})
         qout.append({"id": q["id"], "q": q["q"], "scope": q.get("scope", ""), "status": s.get("status", "证据少"), "now": s.get("now", ""),
                      "n_units": sum(u["qid"] == q["id"] for u in units), "n_cards": len(cs), "n_shown": len(sc),
-                     "n_multi": sum(len(c["authors"]) >= 2 for c in sc), "n_conf": sum(bool(c["conf"]) for c in sc),
+                     "n_multi": sum(len(c["authors"]) >= 2 for c in sc), "n_conf": sum(bool(c["opp"]) for c in sc),
                      "ev": dict(collections.Counter(x["pool"] for c in sc for x in c["ev"])),
                      "fold": [[c["claim"], units[c["rep"]]["user"], units[c["rep"]]["aid"]] for c in sorted(cs, key=lambda c: -c["maxq"]) if c["id"] not in shown]})
     st = r.load("status.json")
     cost = st["cost"]
     meta = {"topic": r.topic, "window": f"{r.start} 至 {r.end}", "cost": round(sum(cost.values()), 2), "scanned": th["scanned"], "theme": len(th["keep"]),
             "extracted": len(r.load("extract.json")), "min_q": r.min_q, "units": len(units), "cards": len(cards), "shown": len(out),
-            "multi": sum(len(c["authors"]) >= 2 for c in out), "conf": len(d["conf"]), "jrel": sum(bool(c["judg"]) for c in out),
+            "multi": sum(len(c["authors"]) >= 2 for c in out), "conf": len(d["conf"]),
             "evcards": sum(bool(c["ev"]) for c in out), "ratio": round(len(units) / max(1, len(out))), "folded": len(cards) - len(out),
             "unassigned": sum(u["qid"] == "X" for u in units), "quote_bad": qd.get("quote_bad", 0), "pairs": len(links),
             "rel": dict(collections.Counter(j["rel"] for j in links)), "tags": dict(collections.Counter(c["tag"] for c in out)),
             "pools": {k: len(v) for k, v in pools.items()}, "evn": {f"{k[0]}:{k[1]}": v for k, v in collections.Counter((x["pool"], x["v"]) for c in out for x in c["ev"]).items()},
-            "judg_scope": "这个选题下概念页" if r.load("profile.json")["in_kb"] else "知识库全部概念页", "minutes": round(sum(st["secs"].values()) / 60), "fails": sum(st.get("fails", {}).values())}
+            "minutes": round(sum(st["secs"].values()) / 60), "fails": sum(st.get("fails", {}).values())}
     return {"meta": meta, "profile": r.load("profile.json"), "questions": qout, "cards": out}
 
 
@@ -520,9 +501,9 @@ README = """# 吸收的中间结果：{topic}，{start} 至 {end}
 | theme.json | 2 筛选长文 | scanned 扫描篇数；keep 判为属于选题的文章（id、作者、质量分、标题、摘要、发布时间） |
 | extract.json | 3 抽取认知 | 每篇文章抽出的认知（type、claim、key、scope、quote 原文引文） |
 | questions.json | 4 定问题并归位 | Q 问题列表；U 通过引文核对的认知，qid 是归到的问题 |
-| pools.json、pool_emb.npy | 5 准备证据池 | papers 论文、repos 开源项目、intel 产品动态、disc 窗口内讨论、judg 知识库里“我的判断”；向量顺序同上 |
+| pools.json、pool_emb.npy | 5 准备证据池 | papers 论文、repos 开源项目、intel 产品动态、disc 窗口内讨论；向量顺序同上 |
 | compare.json、unit_emb.npy | 6 问题内比对 | 相近认知两两判 重复 / 增益 / 反驳 / 不同；向量顺序同 questions.json 的 U |
-| merged.json | 7 合并成卡 | 合并后的卡、复核过的矛盾、每张卡和已有判断的关系 |
+| merged.json | 7 合并成卡 | 合并后的卡、复核过的矛盾 |
 | evidence.json、shown_emb.npy | 8 挂证据并写现状 | 需要看的卡、每张卡挂上的佐证和反对、各问题的现状 |
 | cards.json | 9 生成页面数据 | 页面直接用的数据：meta 漏斗数字、questions、cards |
 | reactions.json | | 你在页面上的表态（已知 / 采纳 / 不信 / 想试） |
