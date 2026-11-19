@@ -68,8 +68,8 @@ const N = (n) => (n || 0).toLocaleString();
 const TG = { c: ['有争议', 'ab-tc'], h: ['高置信', 'ab-th'], m: ['中置信', 'ab-tm'], l: ['低置信', 'ab-tl'] };
 const LV = { h: '高', m: '中', l: '低' };
 const TAGS = Object.keys(TG);
-const ACT = ['已知', '有启发', '想试', '不信'];
-const ACT_TIP = { 已知: '早就知道，对我没有增量', 有启发: '认知收益：改变或补充了我的想法，但没有要做的事', 想试: '行动收益：我要拿来用、动手试', 不信: '我觉得这条不成立' };
+const ACT = ['没增量', '有收获', '很受用', '会用上'];
+const ACT_TIP = { 没增量: '受用程度 0：早就知道，或与我无关', 有收获: '受用程度 1：新知道的，值得记一下', 很受用: '受用程度 2：加深或改变了我对这个问题的理解', 会用上: '受用程度 3：会影响我之后的判断、取舍或做法' };
 const ST = { 共识为主: 'ab-st0', 有分歧: 'ab-st1', 证据少: 'ab-st2' };
 const POOL = { papers: '论文', repos: '开源项目', intel: '产品动态', disc: '讨论' };
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -88,7 +88,7 @@ function vs(c) {
 function detail(c, byId) {
   let s = '';
   if (c.opp.length) s += '<h5>与它矛盾的说法</h5>' + c.opp.map((x) => `<div class="ab-e"><span class="v v0">矛盾</span>${E(byId[x.o] ? byId[x.o].claim : x.claim)} <span class="ab-m">· 分歧点：${E(x.point)}</span></div>`).join('');
-  s += '<h5>各作者的说法（按时间）</h5>' + c.src.map((u) => `<div class="ab-s"><a href="${E(u.url)}" target="_blank" rel="noopener">@${E(u.user)}</a> <span class="ab-m">${E(u.day.slice(5))} · ${E(u.kind)}</span>${u.gain ? ` <span class="g">＋${E(u.gain)}</span>` : ''}<br>${E(u.claim)}${u.why ? `<br><span class="ab-m">为什么：${E(u.why)}</span>` : ''}${u.evidence ? `<br><span class="ab-m">依据：${E(u.evidence)}</span>` : ''}<br><q>${E(u.quote)}</q></div>`).join('');
+  s += '<h5>各作者的说法（按时间）</h5>' + c.src.map((u) => `<div class="ab-s"><a href="${E(u.url)}" target="_blank" rel="noopener">@${E(u.user)}</a> <span class="ab-m">${E(u.day.slice(5))} · ${E(u.kind)}</span>${u.gain ? ` <span class="g">＋${E(u.gain)}</span>` : ''}<br>${E(u.claim)}${u.thesis ? `<br><span class="ab-m">这篇文章的主张：${E(u.thesis)}</span>` : ''}<br><q>${E(u.quote)}</q></div>`).join('');
   if (c.ev.length) s += '<h5>其他来源的证据</h5>' + c.ev.map((e) => `<div class="ab-e"><span class="v ${e.v === '反对' ? 'v0' : 'v1'}">${POOL[e.pool]}·${e.v}</span>${/^https?:/.test(e.url) ? `<a href="${E(e.url)}" target="_blank" rel="noopener">${E(e.title)}</a>` : E(e.title)} <span class="ab-m">${E(e.date)}${e.pool === 'repos' ? ` · ★${N(e.meta)}` : e.pool === 'papers' ? (e.meta ? ` · 引用 ${e.meta}` : '') : e.meta ? ` · ${E(e.meta)}` : ''} · ${E(e.why)}</span></div>`).join('');
   return s;
 }
@@ -110,11 +110,11 @@ function how(D) {
 }
 
 function fb(F) {
-  if (!F.n) return '<div class="ab-fb ab-m">还没有表态。在卡片上点“已知 / 有启发 / 想试 / 不信”，这里会按提炼的角度统计哪类认知对你有用。</div>';
+  if (!F.n) return '<div class="ab-fb ab-m">还没有表态。在卡片上点“没增量 / 有收获 / 很受用 / 会用上”，这里会按提炼的角度统计哪类认知对你有用。</div>';
   const pc = (x) => Math.round(x * 100) + '%', w = (x) => Math.max(1, Math.round(x * 90));
-  const tbl = (d) => `<h3>${E(d.name)}</h3><table><tr><th></th><th>条数</th><th>想试（行动收益）</th><th>已知（没增量）</th><th>不信</th><th>平均收益</th></tr>${d.rows.map((r) => `<tr><td>${E(r.v)}</td><td>${r.n}</td><td><i class="bar" style="width:${w(r.try)}px"></i>${pc(r.try)}</td><td><i class="bar k" style="width:${w(r.known)}px"></i>${pc(r.known)}</td><td>${r.doubt ? `<i class="bar d" style="width:${w(r.doubt)}px"></i>${pc(r.doubt)}` : '—'}</td><td>${r.gain}</td></tr>`).join('')}</table>`;
+  const tbl = (d) => `<h3>${E(d.name)}</h3><table><tr><th></th><th>条数</th><th>会用上</th><th>很受用及以上</th><th>没增量</th><th>平均受用（0–3）</th></tr>${d.rows.map((r) => `<tr><td>${E(r.v)}</td><td>${r.n}</td><td><i class="bar" style="width:${w(r.try)}px"></i>${pc(r.try)}</td><td><i class="bar" style="width:${w(r.useful)}px;opacity:.55"></i>${pc(r.useful)}</td><td><i class="bar k" style="width:${w(r.none)}px"></i>${pc(r.none)}</td><td>${r.gain}</td></tr>`).join('')}</table>`;
   const ex = (t, l) => l.length ? `<h3>${t}</h3><ul>${l.map((x) => `<li>${E(x.claim)} <span class="ab-m">· ${E(x.type)} · ${E(x.topic)}</span></li>`).join('')}</ul>` : '';
-  return `<div class="ab-fb"><div class="ab-note">共 ${F.n} 条表态：${ACT.map((a) => `${a} ${F.acts[a]}`).join('，')}。收益分：已知 0、有启发 1、想试 2，取平均。样本少时只看趋势，别当结论；表态存在独立日志里，换选题、重跑都不丢。</div>${F.dims.filter((d) => d.key !== 'topic' || d.rows.length > 1).map(tbl).join('')}${ex('最近想试的', F.try)}${ex('最近判为已知的（提炼时该少抽这类）', F.known)}</div>`;
+  return `<div class="ab-fb"><div class="ab-note">共 ${F.n} 条表态：${ACT.map((a) => `${a} ${F.acts[a]}`).join('，')}。受用程度分：没增量 0、有收获 1、很受用 2、会用上 3，取平均。样本少时只看趋势，别当结论；表态存在独立日志里，换选题、重跑都不丢。</div>${F.dims.filter((d) => d.key !== 'topic' || d.rows.length > 1).map(tbl).join('')}${ex('最近判为会用上的', F.try)}${ex('最近判为没增量的（提炼时该少抽这类）', F.none)}</div>`;
 }
 
 export default {
@@ -197,7 +197,7 @@ ${flt === 'all' && q.fold.length ? `<details class="ab-fold"><summary>另有 ${N
       const T = M.tags || {};
       const draw = () => {
         body.innerHTML = `<div class="ab-m">${E(M.window)} · 抽取与比对由模型完成，未经人工校对${M.minutes ? ` · 耗时 ${M.minutes} 分钟` : ''} · 模型花费 $${M.cost}</div>
-<div class="ab-note">${N(M.units)} 条认知压成 ${N(M.shown)} 张需要看（约 ${M.ratio} : 1）。先看<b>有争议 ${N(T.c)}</b>：来源之间互相冲突；再看<b>高置信 ${N(T.h)}</b>，多个独立来源和硬证据撑着，可以放心用；<b>中置信 ${N(T.m)}</b>和<b>低置信 ${N(T.l)}</b>多为单一或少量来源，用前再核。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张，<kbd>1</kbd>–<kbd>4</kbd> 表态（已知 / 有启发 / 想试 / 不信）并跳到下一张，<kbd>o</kbd> 展开原话和证据。</span></div>
+<div class="ab-note">${N(M.units)} 条认知压成 ${N(M.shown)} 张需要看（约 ${M.ratio} : 1）。先看<b>有争议 ${N(T.c)}</b>：来源之间互相冲突；再看<b>高置信 ${N(T.h)}</b>，多个独立来源和硬证据撑着，可以放心用；<b>中置信 ${N(T.m)}</b>和<b>低置信 ${N(T.l)}</b>多为单一或少量来源，用前再核。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张，<kbd>1</kbd>–<kbd>4</kbd> 表态（没增量 / 有收获 / 很受用 / 会用上，受用程度由低到高）并跳到下一张，<kbd>o</kbd> 展开原话和证据。</span></div>
 <div class="ab-bar">${[['brief', '卡片'], ['map', '问题'], ['how', '口径'], ['fb', '反馈']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span>
 ${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['todo', '未表态']].map((x) => `<button data-f="${x[0]}" class="${flt === x[0] ? 'on' : ''}">${x[1]}${T[x[0]] ? ' ' + T[x[0]] : ''}</button>`).join('') + `<span class="ab-m ab-done">${done()}</span>` : ''}</div>
 <div>${view === 'brief' ? brief() : view === 'map' ? qmap() : view === 'how' ? how(D) : '<div class="ab-fb ab-m">加载中</div>'}</div>`;

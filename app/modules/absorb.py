@@ -19,8 +19,8 @@ TITLE = "吸收"
 ORDER = 32
 router = APIRouter()
 
-ACTS = ("已知", "有启发", "想试", "不信")
-BENEFIT = {"已知": 0, "有启发": 1, "想试": 2}
+ACTS = ("没增量", "有收获", "很受用", "会用上")
+BENEFIT = {a: i for i, a in enumerate(ACTS)}
 FB = ar.BASE / "_feedback.jsonl"
 PROCS: dict[int, subprocess.Popen] = {}
 
@@ -114,18 +114,19 @@ def _snap(d, rid: str, card: int) -> dict:
     c = next((x for x in cards if x["id"] == card), None)
     if not c:
         return {}
-    t = c.get("type")
-    if not t:
+    t, w = c.get("type"), c.get("w")
+    if not t or not w:
         merged, qd = _read(d / "merged.json", {}), _read(d / "questions.json", {})
         try:
-            t = qd["U"][merged["C"][card]["rep"]]["type"]
+            u = qd["U"][merged["C"][card]["rep"]]
+            t, w = t or u["type"], w or u.get("w", 0)
         except (KeyError, IndexError):
-            t = ""
-    g, rep = c.get("conf") or {}, (c.get("src") or [{}])[0]
+            t, w = t or "", w or 0
+    g = c.get("conf") or {}
     q = next((x["q"] for x in _read(d / "cards.json", {}).get("questions", []) if x["id"] == c["qid"]), "")
     return {"run": rid, "topic": _read(d / "run.json", {}).get("topic", ""), "card": card, "claim": c["claim"], "type": t, "tag": c["tag"], "level": g.get("level", ""),
             "authors": len(c.get("authors", [])), "first": g.get("first", 0), "hard": g.get("papers", 0) + g.get("repos", 0) + g.get("intel", 0), "disc": g.get("disc", 0),
-            "against": g.get("against", 0), "has_num": bool(re.search(r"\d", c["claim"])), "has_why": bool(rep.get("why")), "has_evidence": bool(rep.get("evidence")),
+            "against": g.get("against", 0), "has_num": bool(re.search(r"\d", c["claim"])), "w": w,
             "len": len(c["claim"]), "qid": c["qid"], "question": q}
 
 
@@ -175,8 +176,7 @@ DIMS = [("type", "认知类型", lambda e: e.get("type") or "未知"),
         ("authors", "独立作者数", lambda e: "1 位" if e.get("authors", 0) <= 1 else "2 位及以上"),
         ("hard", "有论文 / 项目 / 产品佐证", lambda e: "有" if e.get("hard") else "没有"),
         ("has_num", "结论里带数字", lambda e: "带" if e.get("has_num") else "不带"),
-        ("has_why", "写了原因 / 机制", lambda e: "写了" if e.get("has_why") else "没写"),
-        ("has_evidence", "附了依据", lambda e: "附了" if e.get("has_evidence") else "没附"),
+        ("w", "重要度", lambda e: {3: "文章核心主张", 2: "重要结论"}.get(e.get("w"), "未标注")),
         ("len", "结论长度", lambda e: "≤40 字" if e.get("len", 0) <= 40 else "41–70 字" if e.get("len", 0) <= 70 else "70 字以上"),
         ("topic", "选题", lambda e: e.get("topic") or "—")]
 
@@ -191,8 +191,8 @@ def feedback():
             x = b.setdefault(f(e), {"n": 0, **{a: 0 for a in ACTS}})
             x["n"] += 1
             x[e["act"]] += 1
-        rows = [{"v": v, **x, "gain": round(sum(BENEFIT.get(a, 0) * x[a] for a in ACTS) / x["n"], 2), "try": round(x["想试"] / x["n"], 2), "known": round(x["已知"] / x["n"], 2),
-                 "doubt": round(x["不信"] / x["n"], 2)} for v, x in b.items()]
+        rows = [{"v": v, **x, "gain": round(sum(BENEFIT[a] * x[a] for a in ACTS) / x["n"], 2), "useful": round((x["很受用"] + x["会用上"]) / x["n"], 2),
+                 "try": round(x["会用上"] / x["n"], 2), "none": round(x["没增量"] / x["n"], 2)} for v, x in b.items()]
         dims.append({"key": key, "name": name, "rows": sorted(rows, key=lambda r: -r["n"])})
     pick = lambda act: [{"claim": e["claim"], "type": e.get("type", ""), "topic": e.get("topic", "")} for e in sorted(ev, key=lambda e: -e["at"]) if e["act"] == act][:8]
-    return {"n": len(ev), "acts": {a: sum(e["act"] == a for e in ev) for a in ACTS}, "dims": dims, "try": pick("想试"), "known": pick("已知")}
+    return {"n": len(ev), "acts": {a: sum(e["act"] == a for e in ev) for a in ACTS}, "dims": dims, "try": pick("会用上"), "none": pick("没增量")}

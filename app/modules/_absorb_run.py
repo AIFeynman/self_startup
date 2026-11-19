@@ -51,19 +51,24 @@ P_THEME = """选题“{topic}”：{scope}
 不算：{exclude}
 只输出 JSON：{{"in":[序号,...]}}"""
 
-P_EXTRACT = """你从一篇X长文里抽取“认知卡”。认知卡的核心是作者想让读者带走的结论、观点、判断，不是实验数据。
-先通读全文，找出作者的核心主张：每篇至少抽 1–2 条，通常 2–5 条，最多 6 条；文章确实没有可复用的主张才返回空数组。
-每条认知必须同时满足：
-1) 是一条结论 / 判断 / 做法 / 教训 / 预测，说清“做了什么或认为什么、为什么、效果或后果”，读者没看过原文也能懂；
-2) 可复用：换个场景、过一段时间仍然有用，不是某天某事的流水账；
-3) 不是常识、口号、愿景，也不是“某工具可以做某事”这种泛泛能力介绍。
-实验数字、评测分数、成本对比不要单独成条，写进它所支撑的那条结论的 evidence 里。只有产品发布或重大变更改变了读者能做什么或该怎么选时，才收为“变更”，并写清变了什么。
-claim 写法：一句完整的话，带上对象和场景，先给结论再给原因或效果，例如“注释无法被强制执行、会过时还给智能体找借口，因此团队禁止了 99% 的注释，改用 lint 强制”。禁止出现“该”“此”“其”“这个方案”等需要回头找指代的词，工具、方法、数据集第一次出现要写全名。
-一律不收：奖项荣誉、促销价和折扣、活动日程、公司自夸、导流话术、对未来的空泛展望、单纯罗列功能名。
-输出严格JSON：{"units":[{"id":"u1","type":"判断|做法|教训|预测|变更|事实","claim":"一句话≤90字，结论+原因/效果，自带背景","why":"为什么成立或怎么起作用≤50字，没有写空串","evidence":"支撑它的关键数据或事实≤60字，没有写空串","key":"同一结论的英文规范表述≤25词，用于跨语言比对","scope":"成立条件/适用场景≤15字，没有写空串","quote":"原文逐字摘录≤40字","source_kind":"实践者|官方|推广|转述"}]}
-type：判断=是什么/好坏；做法=怎么做（写出关键步骤或参数）；教训=踩坑；预测=将会怎样；变更=发布/更新/变动；事实=只在它本身改变决策时才收。
+P_EXTRACT = """你从一篇X长文里抽取“认知卡”，供读者快速决定要不要采纳。认知卡收的是作者的观点、结论、认知、主张和亲身经验（做了什么、踩过什么坑、得出什么），不是文章里出现过的数字。
+步骤：
+1) 先用一句话写出这篇文章的主张 thesis：作者想让读者得出什么结论、改变什么做法。写不出来说明文章没有可复用的内容，units 返回空数组。
+2) 再列认知。每条给重要度 w：3=文章的核心主张；2=独立成立、换个场景也能用的重要结论或做法；1=附带的数字、细节、轶事、工具功能。只输出 w≥2 的条目，每篇通常 1–4 条，最多 5 条。
+3) 数字不是结论。实验数字、分数、成本、案例只有在“作者用它证明某个主张”时，才作为依据写进那条主张里，并写清比较对象和条件；孤立的数字、与主张无关的数据一律不收，也不要把某个案例的数字当成普遍结论。
+claim 写法：写成一段逻辑连贯、读起来自然的话，像同事口头转述，≤90 字；信息顺序是场景、观点、做法、依据，但不要出现“依据：”“原因：”“场景：”“做法：”等标签，不用分号和冒号堆砌，用“因为”“于是”“结果”等连接词把前后串起来，句子不拗口。内容上要说清：开头用几个字交代“在什么场景、解决什么问题”（如“Agent 长期运行时”“做浏览器自动化时”“评测 Agent 时”），再给观点，再用一两个关键动作说清“具体怎么做到的”（机制或步骤，读者据此判断自己用不用得上），最后给最关键的依据（带数字时写清比较对象）。凡是“缩短 / 提升 / 降低”类的数字，必须同时写清靠什么动作取得、取代了原来的什么（如“用仿真取代手写场景和真人试验，一次比较更多方案，因此每版从 21.2 天降到 4.4 天”）；原文没讲清怎么做到的，就只写原文给出的机制，不许自己编。观点类没有做法时，说清它为什么成立。读者没看过原文也要看懂。禁止“该”“此”“其”“这个方案”等需要回头找指代的词，工具、方法、数据集第一次出现要写全名。
+好例子：“客服 Agent 迭代时，Nubank 上线前先用带不同画像的合成客户做大规模对话仿真，替代手写场景和真人试验，一次就能比较更多提示词和模型组合，于是每个版本的迭代周期从 21.2 天降到了 4.4 天。”
+好例子：“让 Agent 参与大型代码库开发时，团队禁止了 99% 的注释，因为注释没法强制执行、容易过时，Agent 还会拿它给烂代码找借口，他们改用 lint 来强制约束。”
+坏例子：“Agent 反复出错时，把修复做成 lint；依据：规则从 7 条增至 167 条。”（有标签、分号，读着生硬）
+坏例子：“注释从 65,824 条降到 1,227 条。”（只有数字，没有观点和原因）
+一律不收：奖项荣誉、促销价和折扣、活动日程、公司自夸、导流话术、对未来的空泛展望、单纯罗列功能名、常识和口号。只有产品发布或重大变更改变了读者能做什么或该怎么选时，才收为“变更”，并写清变了什么。
+输出严格JSON：{"thesis":"…","units":[{"id":"u1","type":"观点|结论|认知|主张|经验|变更","w":2或3,"claim":"场景+观点+做法+依据，≤90字","key":"同一结论的英文规范表述≤25词，用于跨语言比对","scope":"成立条件/适用场景≤15字，没有写空串","quote":"原文逐字摘录≤40字","source_kind":"实践者|官方|推广|转述"}]}
+type：观点=作者对好坏、取舍的看法；结论=作者得出的因果或规律；认知=对某事物如何运作的理解；主张=作者建议该怎么做；经验=亲身做过或踩过的坑及其结果；变更=发布/更新/变动。
 source_kind：作者讲亲身做过的=实践者；官方账号发布=官方；带卖货/导流目的=推广；转述他人=转述。
 只输出JSON。"""
+
+P_SHORT = """把每条认知压缩成一段连贯自然的话，≤80 字，让读者一眼决策，不出现“依据：”之类的标签，不用分号堆砌。必须依次保留：开头交代场景或问题的几个字、观点、具体怎么做（一两个关键动作，数字要说清靠什么动作、取代了什么）、最有说服力的一个依据（依据带数字时写清比较对象）；删掉次要细节、修饰语和并列的第二、第三个例子；不许新增原文没有的信息，也不许改变观点的方向。
+输入每行“编号 | 原文”。只输出 JSON：{"r":{"编号":"压缩后"}}，每个编号都要有。"""
 
 P_QUESTIONS = """你在为选题“{topic}”设计一组长期稳定的“问题”，用来归拢大量零散的认知。问题是做这件事的人反复要回答的决策性问题，答案会随时间变化，问题本身不变。
 要求：8–10 个问题；互不重叠；合起来能装下样本里绝大多数说法；每个问题是一句具体的疑问句（不是名词短语），再给一句范围说明（什么算、什么不算）。
@@ -204,14 +209,29 @@ def s_theme(r: Run) -> dict:
     return {"scanned": len(rows), "keep": [dict(zip(cols, x)) for b in res for x in b[0]], "fail": sum(b[1] for b in res)}
 
 
+def shorten(r: Run, rows: list[dict], limit: int = 100) -> None:
+    long = [u for u in rows if len(u["claim"]) > limit]
+
+    def run(b):
+        res = (r.call(r.light, P_SHORT, "\n".join(f"{k} | {u['claim']}" for k, u in enumerate(b))) or {}).get("r", {})
+        for k, u in enumerate(b):
+            t = str(res.get(str(k)) or "")
+            if 0 < len(t) < len(u["claim"]):
+                u["claim"] = t
+    _pmap(run, [long[i:i + 15] for i in range(0, len(long), 15)], 8)
+
+
 def s_extract(r: Run) -> list:
     arts = [a for a in r.load("theme.json")["keep"] if (a["q"] or 0) >= r.min_q]
 
     def run(a):
         text = _ro().execute("select text from x_art where id=?", (a["id"],)).fetchone()[0] or ""
         ex = r.call(r.light, P_EXTRACT, f"标题：{a['title']}\n\n{text[:14000]}")
-        return {**a, "units": (ex or {}).get("units", []), "fail": ex is None}
-    return _pmap(run, arts, 10)
+        units = [u for u in (ex or {}).get("units", []) if isinstance(u, dict) and u.get("w") in (2, 3)]
+        return {**a, "thesis": str((ex or {}).get("thesis") or ""), "units": units, "fail": ex is None}
+    res = _pmap(run, arts, 10)
+    shorten(r, [u for a in res for u in a["units"]])
+    return res
 
 
 def s_questions(r: Run) -> dict:
@@ -229,8 +249,8 @@ def s_questions(r: Run) -> dict:
             if norm(u.get("quote"))[:60] not in text:
                 bad += 1
                 continue
-            units.append({"aid": a["id"], "user": a["user"], "day": a["day"], "q": a["q"],
-                          **{k: str(u.get(k) or "") for k in ("type", "claim", "why", "evidence", "key", "scope", "quote", "source_kind")}})
+            units.append({"aid": a["id"], "user": a["user"], "day": a["day"], "q": a["q"], "thesis": a.get("thesis", ""), "w": u["w"],
+                          **{k: str(u.get(k) or "") for k in ("type", "claim", "key", "scope", "quote", "source_kind")}})
     for i, u in enumerate(units):
         u["i"] = i
     if not units:
@@ -453,7 +473,7 @@ def s_page(r: Run) -> dict:
                 continue
             seen.add(u["aid"])
             src.append({"user": u["user"], "url": f"https://x.com/{u['user']}/status/{u['aid']}", "day": u["day"], "kind": u["source_kind"],
-                        "gain": c["gain"].get(str(m), ""), "claim": u["claim"], "why": u["why"], "evidence": u["evidence"], "quote": u["quote"]})
+                        "gain": c["gain"].get(str(m), ""), "claim": u["claim"], "thesis": u["thesis"], "quote": u["quote"]})
         against = len(cc[i]) + sum(x["v"] == "反对" for x in ev)
         g = grade(len(c["authors"]), sum(u["kind"] in ("实践者", "官方") for u in src), ev, against)
         out.append({"id": i, "qid": c["qid"], "type": units[c["rep"]]["type"], "tag": "c" if against else g["level"], "conf": g, "claim": c["claim"], "scope": c["scope"], "authors": c["authors"],
