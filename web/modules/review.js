@@ -166,7 +166,7 @@ const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn',
 const REVIEW_AREAS = ['产品迭代', '个人效率', 'AI协作', '学习提升'];
 const REVIEW_ASPECTS = { 做得好的: '做成了什么、有什么收获，一行一条，回车再加一条', 有问题的: '哪里有问题、下一步怎么办，一行一条，回车再加一条' };
 const reviewDraft = {};
-const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', reads: '已读历史' };
+const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', sessions: 'session复盘', reads: '已读历史' };
 const DAY_VIEWS = { review: '复盘', agent: 'Agent 效率', human: '人工效率' };
 const FRAGMENT_TARGET = 70;
 const foldOverride = {};
@@ -794,11 +794,33 @@ export default {
       ]));
     }
 
+    async function renderSessions() {
+      const response = await fetch('/static/review-sessions/index.json');
+      if (!response.ok) throw new Error('session复盘加载失败');
+      const entries = await response.json();
+      entries.sort((a, b) => b.added_at.localeCompare(a.added_at));
+      const timestamp = (value) => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + '（北京时间）';
+      statusLine.textContent = `共 ${entries.length} 份 session复盘 · 按收录时间倒序 · 不限顶部日期`;
+      body.replaceChildren(...entries.map((entry) => h('section.card', {}, [
+        h('h2', {}, entry.title),
+        h('p.muted', {}, `复盘范围：${entry.period}`),
+        h('p', {}, h('a', { href: entry.page, target: '_blank', rel: 'noopener' }, '打开复盘页面 ↗')),
+        h('h3', {}, '复盘结果'),
+        h('p', {}, entry.result),
+        h('p', {}, entry.evidence),
+        h('h3', {}, '下一步与未验证项'),
+        h('p', {}, entry.next_action),
+        h('p.muted', {}, `文档修改：${timestamp(entry.document_updated_at)}`),
+        h('p.muted', {}, `收录时间：${timestamp(entry.added_at)}`),
+      ])));
+    }
+
     async function show() {
       try {
         if (state.tab === 'day') await (state.view === 'agent' ? renderAgent() : state.view === 'human' ? renderHuman() : renderDay());
         else if (state.tab === 'timeline') await renderTimeline();
         else if (state.tab === 'notes') await renderNotes();
+        else if (state.tab === 'sessions') await renderSessions();
         else await renderReads();
       } catch (e) {
         body.replaceChildren(h('pre.error', {}, e.message));
