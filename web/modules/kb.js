@@ -2,7 +2,7 @@
 // 来源层是各板块同步来的 markdown 原文，可检索、可批注。
 // 另有「判断台账」：我的观点 / 预测 / 评价 / 疑问，按问题线看立场变化，到期回来复查。
 // 路由：#kb（判断）#kb/judge/<问题线> #kb/graph #kb/topics #kb/stream #kb/source #kb/xart #kb/repo/<查询> #kb/papers/<主题> · #kb/c/<概念> #kb/t/<主题> #kb/doc/<路径>
-import { annotate } from './_annotate.js';
+import { annotate, loadRatings, starFilter, starMark } from './_annotate.js';
 import { whyNotSection } from './_whynot.js';
 import { papersTab } from './_papermap.js';
 import { xartTab } from './_xart.js';
@@ -209,7 +209,7 @@ async function home(el, ctx, tab, arg = '') {
 function docRow(ctx, d, names = {}) {
   const { h } = ctx;
   return h('div.item', { style: { cursor: 'pointer' }, onclick: () => { location.hash = dLink(d.path); } }, [
-    h('div.row', {}, [h('span.tag', {}, names[d.type] || d.type), h('span.item-title.grow', {}, d.title), h('span.muted', {}, d.date || '')]),
+    h('div.row', {}, [h('span.tag', {}, names[d.type] || d.type), h('span.item-title.grow', {}, d.title), starMark(h, d.stars), h('span.muted', {}, d.date || '')]),
     d.snippet ? h('div.muted.clamp2', { html: esc(d.snippet).replace(/«/g, '<mark>').replace(/»/g, '</mark>') }) : h('div.muted.clamp2', {}, d.summary || ''),
   ]);
 }
@@ -832,15 +832,18 @@ function sourceTab(body, ctx, st) {
     k: st.names[k] || k, v, active: type === k,
     onClick: () => { type = type === k ? '' : k; drawStats(); drawList(); },
   }))));
+  let rt = null;
   const drawList = async () => {
-    if (!type) {
-      listBox.replaceChildren(ui.section('最近更新'),
-        st.recent.length ? h('div.card', {}, h('div.list', {}, st.recent.map((d) => docRow(ctx, d, st.names)))) : ui.empty('还没有知识', '在各板块记录、调研、学习后会自动出现在这里'));
-      return;
-    }
-    const ds = await api.get(`/api/kb/list?type=${enc(type)}`);
-    listBox.replaceChildren(ui.section(st.names[type] || type, [`${ds.length} 份 · `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); type = ''; drawStats(); drawList(); } }, '显示全部')]),
-      ds.length ? h('div.card', {}, h('div.list', {}, ds.map((d) => docRow(ctx, d, st.names)))) : ui.empty('这一类还没有内容'));
+    rt ||= await loadRatings(api, 'kb:');
+    const all = type ? await api.get(`/api/kb/list?type=${enc(type)}`) : st.recent;
+    all.forEach((d) => { d.stars = rt.get(`kb:${d.path}`) || 0; });
+    const sf = starFilter(ctx, 'kb:source', all, (d) => d.stars, drawList);
+    const ds = sf.shown;
+    const head = type ? ui.section(st.names[type] || type, [`${ds.length} 份 · `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); type = ''; drawStats(); drawList(); } }, '显示全部')])
+      : ui.section('最近更新');
+    listBox.replaceChildren(head, sf.bar || '',
+      ds.length ? h('div.card', {}, h('div.list', {}, ds.map((d) => docRow(ctx, d, st.names))))
+        : ui.empty(all.length ? '没有这个星级的内容' : type ? '这一类还没有内容' : '还没有知识', all.length || type ? '' : '在各板块记录、调研、学习后会自动出现在这里'));
   };
   drawStats();
   drawList();

@@ -277,6 +277,27 @@ function rateStars({ api, h, ui, toast }, { doc, title, link }) {
   return box;
 }
 
+const STAR_LEVELS = [[0, '全部评分'], [1, '★ 已评分'], [4, '★4 以上'], [5, '★5']];
+
+export async function loadRatings(api, prefix) {
+  const rs = await api.get(`/api/annotations/ratings?prefix=${encodeURIComponent(prefix)}`).catch(() => []);
+  return new Map(rs.map((r) => [r.doc, r.stars]));
+}
+
+// 列表按星级筛：key 区分各个列表（选中的星级在路由间保留），starOf(item) 给出这条的星级；没有打过分的列表不出筛选条
+export function starFilter({ h }, key, items, starOf, onPick) {
+  injectStyle();
+  const picks = (window.__starPick ||= {});
+  const atLeast = (n) => items.filter((it) => starOf(it) >= n).sort((a, b) => starOf(b) - starOf(a));
+  if (!items.some((it) => starOf(it) > 0)) return { bar: null, shown: items, active: false };
+  const min = picks[key] || 0;
+  const bar = h('div.an-starf', {}, STAR_LEVELS.map(([n, name]) => h('button' + (min === n ? '.on' : ''), { type: 'button', onclick: () => { picks[key] = n; onPick(); } },
+    [name, h('span', {}, String(n ? atLeast(n).length : items.length))])));
+  return { bar, shown: min ? atLeast(min) : items, active: !!min };
+}
+
+export const starMark = (h, n) => (n ? h('span.an-star-mark', { title: `我的评分 ${n}/5` }, `★${n}`) : null);
+
 function textIndex(root) {
   const nodes = [];
   // 公式的 TeX 源码（<annotation>）不显示也选不中，不算进正文
@@ -409,6 +430,11 @@ function injectStyle() {
   .an-rate button svg { width: 18px; height: 18px; }
   .an-rate button.on { color: var(--accent); } .an-rate button.on svg { fill: var(--accent); }
   .an-rate:hover button { color: var(--accent); } .an-rate button:hover ~ button:not(.on) { color: var(--line-2); }
+  .an-starf { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+  .an-starf button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; color: var(--muted); }
+  .an-starf button span { margin-left: 4px; opacity: .75; }
+  .an-starf button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .an-star-mark { color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
   .an-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
   .an-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 6px;
     transition: box-shadow .2s; }

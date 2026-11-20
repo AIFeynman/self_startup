@@ -1,5 +1,5 @@
 // 调研：新调研（大输入框，回车即开跑）/ 文档库 / 产品体验。路由 #research/<tab>，详情 #research/r/<id>，文档 #research/docs/<id>。
-import { annotate } from './_annotate.js';
+import { annotate, loadRatings, starFilter, starMark } from './_annotate.js';
 const STATUS = {
   queued: ['排队中', 'gray'], running: ['调研中', 'warn'], waiting: ['等待 GrokBot', 'warn'], timeout: ['等待超时', 'warn'],
   awaiting_paste: ['待粘贴', ''], awaiting_login: ['等待登录', 'warn'], done: ['完成', 'ok'], failed: ['失败', 'err'],
@@ -240,7 +240,7 @@ async function newResearch(el, ctx) {
   // 历史调研：按天的时间线 + 时间、状态、引擎筛选
   const cards = h('div.rs-timeline');
   const filterBar = h('div.rs-filters');
-  let q = '', all = [];
+  let q = '', all = [], rt = new Map();
   const f = { range: 'all', state: 'all', engine: '' };
   const RANGES = [['all', '全部时间'], ['7', '近 7 天'], ['30', '近 30 天']];
   const STATES = [['all', '全部状态'], ['running', '进行中'], ['synth', '已综合'], ['nosynth', '未综合'], ['failed', '有失败']];
@@ -262,7 +262,7 @@ async function newResearch(el, ctx) {
   };
   const card = (r) => h('div.card.rs-card', { onclick: () => go('r/' + r.id) }, [
     h('div.row', {}, [h('span.card-label', { style: { margin: 0 } }, `#${r.id} · ${r.created_at.slice(11, 16)}`), h('span.grow'),
-      r.synth_status === 'done' ? h('span.tag.line', {}, '已综合') : null, statusTag(h, r.status)]),
+      starMark(h, rt.get(`research:${r.id}:synth`)), r.synth_status === 'done' ? h('span.tag.line', {}, '已综合') : null, statusTag(h, r.status)]),
     h('div.t.clamp2', {}, r.topic),
     h('div.muted.clamp2', {}, r.angles.join(' · ') || '整体概况'),
     dots(h, r.progress?.length ? r.progress : r.engines.map((e) => ({ engine: e, status: r.status }))),
@@ -273,16 +273,17 @@ async function newResearch(el, ctx) {
     const since = f.range === 'all' ? '' : daysAgo(+f.range);
     const byRange = all.filter((r) => !since || r.created_at.slice(0, 10) >= since);
     const byState = byRange.filter((r) => stateOk[f.state](r));
-    const shown = byState.filter((r) => !f.engine || engsOf(r).includes(f.engine));
+    const sf = starFilter(ctx, 'research', byState.filter((r) => !f.engine || engsOf(r).includes(f.engine)), (r) => rt.get(`research:${r.id}:synth`) || 0, paint);
+    const shown = sf.shown;
     const engines = Object.keys(ENGINE_NAMES).map((e) => [e, byState.filter((r) => engsOf(r).includes(e)).length]).filter(([, n]) => n);
     const pick = (k, v) => () => { f[k] = v; paint(); };
     filterBar.replaceChildren(
       h('div.rs-fgroup', {}, RANGES.map(([k, t]) => chip(f.range === k, t, null, pick('range', k)))),
       h('div.rs-fgroup', {}, STATES.map(([k, t]) => chip(f.state === k, t, byRange.filter((r) => stateOk[k](r)).length, pick('state', k)))),
       h('div.rs-fgroup', {}, [chip(!f.engine, '全部引擎', null, pick('engine', '')),
-        ...engines.map(([e, n]) => chip(f.engine === e, ENGINE_NAMES[e], n, pick('engine', f.engine === e ? '' : e)))]));
+        ...engines.map(([e, n]) => chip(f.engine === e, ENGINE_NAMES[e], n, pick('engine', f.engine === e ? '' : e)))]), sf.bar || '');
     const days = [...new Set(shown.map((r) => r.created_at.slice(0, 10)))];
-    const filtered = q || f.range !== 'all' || f.state !== 'all' || f.engine;
+    const filtered = q || f.range !== 'all' || f.state !== 'all' || f.engine || sf.active;
     cards.replaceChildren(...(days.length ? days.map((d) => {
       const list = shown.filter((r) => r.created_at.slice(0, 10) === d);
       return h('section.rs-day', {}, [h('div.rs-day-head', {}, [h('b', {}, dayLabel(d)), h('span.muted', {}, `${list.length} 个调研`)]),
@@ -290,7 +291,7 @@ async function newResearch(el, ctx) {
     }) : [ui.empty(filtered ? '没有符合条件的调研' : '还没有调研', filtered ? '换个关键词或放宽筛选' : '在上面输入一个主题，回车就开始')]));
   };
   const load = async () => {
-    all = await api.get('/api/research?limit=1000&q=' + encodeURIComponent(q));
+    [all, rt] = await Promise.all([api.get('/api/research?limit=1000&q=' + encodeURIComponent(q)), loadRatings(api, 'research:')]);
     paint();
     clearTimeout(timer);
     if (all.some(isRunning)) timer = setTimeout(() => { if (cards.isConnected) load(); }, 6000);
@@ -443,17 +444,22 @@ async function docs(el, ctx, openId) {
   const since = h('input', { type: 'date', style: { width: '140px', borderRadius: '999px', padding: '5px 10px' } });
   const until = h('input', { type: 'date', style: { width: '140px', borderRadius: '999px', padding: '5px 10px' } });
   const list = h('div.list');
+  const starBox = h('div');
   const listBox = h('div');
   const view = h('div');
   const tags = await api.get('/api/research/docs/tags');
 
   const load = async () => {
     const p = new URLSearchParams({ q, tag, since: since.value, until: until.value });
-    const ds = await api.get('/api/research/docs?' + p);
+    const [all, rt] = await Promise.all([api.get('/api/research/docs?' + p), loadRatings(api, 'research_doc:')]);
+    all.forEach((d) => { d.stars = rt.get(`research_doc:${d.id}`) || 0; });
+    const sf = starFilter(ctx, 'research_doc', all, (d) => d.stars, load);
+    const ds = sf.shown;
+    starBox.replaceChildren(sf.bar || '');
     count.textContent = `${ds.length} 篇`;
     list.replaceChildren(...(ds.length ? ds.map((d) => h('div.item.rs-row', { onclick: () => go('docs/' + d.id) }, [
       h('div.row', {}, [h('span', { style: { color: 'var(--accent)' } }, ui.icon(d.research_id ? 'research' : 'edit')), h('span.item-title.grow', {}, d.title),
-        h('span.muted', {}, fmt(d.updated_at))]),
+        starMark(h, d.stars), h('span.muted', {}, fmt(d.updated_at))]),
       h('div.row', { style: { paddingLeft: '26px', marginTop: '2px' } }, [h('span.muted', {}, d.research_id ? `调研 #${d.research_id}` : '手写'), ...d.tags.slice(0, 6).map((t) => h('span.tag', {}, t))]),
     ])) : [ui.empty('没有文档', q || tag ? '换个条件试试' : '完成一次调研或新建一篇笔记')]));
   };
@@ -515,7 +521,7 @@ async function docs(el, ctx, openId) {
     h('div.row', {}, [sb, since, h('span.muted', {}, '至'), until, h('button.primary', { onclick: () => editor() }, [ui.icon('plus'), '新建文档'])]),
     tags.length ? tagPills : '',
     h('div.row', { style: { margin: '18px 0 8px' } }, [h('div.section-title.grow', { style: { margin: 0 } }, '全部文档'), count]),
-    h('div.card', {}, list));
+    starBox, h('div.card', {}, list));
   el.append(listBox, view);
   await load();
   if (openId) show(openId);
