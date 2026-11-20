@@ -88,3 +88,26 @@ def test_intel_card_annotation_reaches_kb(client):
     kb.sync()
     text = "".join(f.read_text() for f in (kb.KB_DIR / "annotations").glob("*.md"))
     assert "批注：产品变化 · 解读卡" in text and "#intel/e/152" in text and "和竞品对比一下" in text
+
+
+def test_doc_rating_set_list_and_clear(client):
+    doc = {"doc": "intel:growth:7", "title": "Acme · 冷启动", "link": "#intel/g/7"}
+    assert client.get("/api/annotations/rating", params={"doc": doc["doc"]}).json()["stars"] == 0
+
+    client.put("/api/annotations/rating", json={**doc, "stars": 4})
+    client.put("/api/annotations/rating", json={"doc": "research_doc:3", "title": "调研", "link": "#research/docs/3", "stars": 2})
+    assert client.get("/api/annotations/rating", params={"doc": doc["doc"]}).json()["stars"] == 4
+
+    got = client.get("/api/annotations/ratings", params={"min": 3}).json()
+    assert [(r["doc"], r["stars"], r["title"]) for r in got] == [("intel:growth:7", 4, "Acme · 冷启动")]
+    assert [r["doc"] for r in client.get("/api/annotations/ratings", params={"prefix": "research"}).json()] == ["research_doc:3"]
+
+    client.put("/api/annotations/rating", json={**doc, "stars": 0})
+    assert client.get("/api/annotations/rating", params={"doc": doc["doc"]}).json()["stars"] == 0
+    assert client.put("/api/annotations/rating", json={**doc, "stars": 6}).status_code == 422
+
+
+def test_doc_rating_on_deepread_item_updates_item(client):
+    iid = db.insert("learn_items", {"kind": "article", "url": "https://ex.com/a", "title": "A", "status": "done"})
+    client.put("/api/annotations/rating", json={"doc": f"learn:item:{iid}", "title": "A", "link": f"#learn/item/{iid}", "stars": 5})
+    assert db.row("SELECT rating FROM learn_items WHERE id=?", [iid])["rating"] == 5
