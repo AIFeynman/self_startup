@@ -16,9 +16,10 @@ const CSS = `
 .dm-n { position: absolute; left: 0; top: 0; box-sizing: border-box; border-radius: 999px; padding: 0 12px; display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-size: 13px; color: var(--text); border: 1.5px solid hsl(var(--h) 55% 50% / .55); background: hsl(var(--h) 60% 55% / .13); }
 .dm-n:hover, .dm-n.cur { border-color: hsl(var(--h) 65% 45%); background: hsl(var(--h) 60% 55% / .3); }
 .dm-n.dim { opacity: .16; }
-.dm-n.r { border-radius: 50%; justify-content: center; font: 700 18px var(--serif); background: var(--dark); color: var(--bg); border: 0; padding: 0; white-space: normal; text-align: center; }
+.dm-n.p, .dm-n.l { border-radius: 8px; }
+.dm-n.r { border-radius: 14px; justify-content: center; font: 700 18px var(--serif); background: var(--dark); color: var(--bg); border: 0; padding: 0; justify-content: center; }
 .dm-n.d { font: 700 16px var(--serif); background: hsl(var(--h) 55% 42%); color: #fff; border: 0; }
-.dm-n.s { font-weight: 700; background: hsl(var(--h) 60% 55% / .26); }
+.dm-n.s { font-weight: 700; font-size: 14px; background: hsl(var(--h) 60% 55% / .26); }
 .dm-n.p small { color: var(--muted); font-size: 11px; }
 .dm-n.l { font-size: 12.5px; padding: 0 9px; background: var(--bg); }
 .dm-n i { font-style: normal; font-size: 10.5px; color: var(--muted); }
@@ -55,7 +56,7 @@ const BM_COLOR = {};
 
 export async function renderDemand(el, ctx, tabs) {
   const { api, h, ui } = ctx;
-  let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', side = null, timer, tf = null, moved = false, rot = 0, LAY = null, anim = 0;
+  let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', side = null, timer, tf = null, moved = false, LAY = null, anim = 0;
   const SEEN = 'dm-seen';
   const seen = new Set((() => { try { return JSON.parse(localStorage.getItem(SEEN) || '[]'); } catch { return []; } })());
   const saveSeen = () => { try { localStorage.setItem(SEEN, JSON.stringify([...seen])); } catch { /* 无痕模式 */ } };
@@ -92,130 +93,102 @@ ${Object.keys(SRC).map((s) => `<span class="dm-chip ${src === s ? 'on' : ''}" da
 ${D.graph.tactics.map((t) => `<span class="dm-chip ${tac === t ? 'on' : ''}" data-t="${E(t)}">${E(t)} ${n((c) => c.tactics.includes(t))}</span>`).join('')}
 <span class="dm-m">&nbsp;商业模式</span>
 ${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''}" data-b="${E(t)}">${E(t)} ${n((c) => c.bm_type === t)}</span>`).join('')}
-<span class="dm-sp"></span><button data-open="all">全部展开到痛点</button><button data-open="none">收起</button><span class="dm-m">${D.graph.n} 个公司 · ${new Date(D.graph.updated * 1000).toLocaleDateString()}</span><button data-run="graph">重新聚类</button></div>`;
+<span class="dm-sp"></span><button data-open="all">展开全部公司</button><button data-open="none">收起公司</button><span class="dm-m">${D.graph.n} 个公司 · ${new Date(D.graph.updated * 1000).toLocaleDateString()}</span><button data-run="graph">重新聚类</button></div>`;
   };
 
   const hue = (i, n) => Math.round((i * 360) / Math.max(n, 1) + 205) % 360;
+  const CW = 250, GAP = 20, YD = 120, YS = 220, YP = 282;
   const layout = () => {
     const doms = D.graph.domains?.length ? D.graph.domains : [{ id: 'D0', name: '全部', desc: '', scenes: D.graph.scenes.map((x) => x.id) }];
-    const T = [];
-    let wt = 0;
-    const wPain = (n) => Math.max(1, n * 0.62);
-    doms.forEach((dm, di) => {
-      const d = { dm, h: hue(di, doms.length), scenes: [], w: 0 };
-      for (const id of dm.scenes) {
-        const sc = D.graph.scenes.find((x) => x.id === id);
-        if (!sc) continue;
-        const sn = { sc, pains: [], w: 0 };
-        for (const sb of sc.subs) {
-          const ks = filtering() ? hits(sb) : sb.products;
-          if (filtering() && !ks.length) continue;
-          const isOpen = open.has(sb.id) || filtering();
-          const pn = { sb, ks: isOpen ? ks : [], n: ks.length, isOpen, w: isOpen ? wPain(ks.length) : 1 };
-          sn.pains.push(pn);
-          sn.w += pn.w;
-        }
-        if (!sn.pains.length) continue;
-        sn.w += 0.5;
-        d.scenes.push(sn);
-        d.w += sn.w;
-      }
-      if (!d.scenes.length) return;
-      d.w += 1.4;
-      wt += d.w;
-      T.push(d);
-    });
-    const pS = Math.max(560, wt * 6.8), sS = pS - 230, dS = sS - 200, lS = pS + 190 + 60;
-    const per = (Math.PI * 2) / wt;
-    const pol = (a, r) => [Math.cos(a) * r, Math.sin(a) * r];
     const nodes = [], links = [];
-    const link = (a1, r1, a2, r2, h, hl) => {
-      links.push({ a1, r1, a2, r2, h, hl });
-    };
-    const put = (cls, a, r, h, html, attrs, w, hh, dim, cur, key) => nodes.push({ cls, a, r, h, html, attrs, w, hh, dim, cur, key });
-    let a0 = -Math.PI / 2;
-    for (const d of T) {
-      const da = d.w * per, dMid = a0 + da / 2;
-      put('d', dMid, dS, d.h, E(d.dm.name) + dot(newN(d.dm.scenes.flatMap((id) => (D.graph.scenes.find((x) => x.id === id)?.subs || []).flatMap((sb) => sb.products)))), `data-dom="${d.dm.id}"`, PW.d, PH.d, false, side?.dom === d.dm.id, d.dm.id);
-      link(0, 62, dMid, dS, d.h, side?.dom === d.dm.id);
-      let a1 = a0 + 0.7 * per;
-      for (const sn of d.scenes) {
-        const sa = sn.w * per, sMid = a1 + sa / 2;
-        put('s', sMid, sS, d.h, `${E(sn.sc.name)}${dot(newN(sn.sc.subs.flatMap((sb) => sb.products)))}`, `data-sc="${sn.sc.id}" title="${E(sn.sc.desc)}"`, PW.s, PH.s, false, side?.sc === sn.sc.id, sn.sc.id);
-        link(dMid, dS + PW.d, sMid, sS, d.h, side?.sc === sn.sc.id);
-        let a2 = a1 + 0.25 * per;
-        for (const pn of sn.pains) {
-          const pa = pn.w * per, pMid = a2 + pa / 2;
-          const tg = tacCount(pn.sb.products)[0];
-          put('p', pMid, pS, d.h, `${pn.isOpen ? '▾' : '▸'} ${E(pn.sb.name)} <small>${pn.n}</small>${dot(newN(pn.sb.products))}`, `data-sb="${pn.sb.id}" title="${E(pn.sb.pain)}${tg ? '｜主要增长：' + E(tg[0]) : ''}"`, PW.p, PH.p, false, side?.sb === pn.sb.id, pn.sb.id);
-          link(sMid, sS + PW.s, pMid, pS, d.h, side?.sb === pn.sb.id);
-          pn.ks.forEach((k, i) => {
-            const la = a2 + ((i + 0.5) / pn.ks.length) * pa, c = D.cards[k];
-            put('l', la, lS, d.h, `<i>${c.sources.map((x) => SRC[x]).join('')}</i>${E(c.name)}${c.bm_type ? ` <em>${E(c.bm_type)}</em>` : ''}${isNew(k) ? '<b class="dm-dot">新</b>' : ''}`, `data-k="${E(k)}" title="${E(c.scene)}"`, PW.l + 40, PH.l, !fit(c), side?.k === k, k);
-            link(pMid, pS + PW.p, la, lS, d.h, side?.k === k);
-          });
-          a2 += pa;
+    const put = (cls, x, y, w, h, hue, html, attrs, dim, cur, key) => nodes.push({ cls, x, y, w, h, hue, html, attrs, dim, cur, key });
+    const down = (a, b, h, hl) => links.push({ d: `M${a.x},${a.y} C${a.x},${(a.y + b.y) / 2} ${b.x},${(a.y + b.y) / 2} ${b.x},${b.y}`, h, hl });
+    const trunk = (px, py, kids, h, hl) => kids.forEach((c) => links.push({ d: `M${px},${py} V${c.y + c.h / 2} H${c.x}`, h, hl }));
+    let x = 0, H = 0;
+    const dRows = [];
+    doms.forEach((dm, di) => {
+      const h = hue(di, doms.length), x0 = x;
+      let any = false;
+      for (const id of dm.scenes) {
+        const sc = D.graph.scenes.find((v) => v.id === id);
+        if (!sc) continue;
+        const pains = sc.subs.filter((sb) => !filtering() || hits(sb).length);
+        if (!pains.length) continue;
+        any = true;
+        put('s', x, YS, CW, 40, h, `${E(sc.name)}${dot(newN(sc.subs.flatMap((sb) => sb.products)))}`, `data-sc="${sc.id}" title="${E(sc.desc)}"`, false, side?.sc === sc.id, sc.id);
+        let y = YP;
+        const pk = [];
+        for (const sb of pains) {
+          const ks = filtering() ? hits(sb) : sb.products, isOpen = open.has(sb.id) || filtering(), tg = tacCount(sb.products)[0];
+          const pnode = { x: x + 16, y, w: CW - 16, h: 32 };
+          put('p', pnode.x, y, pnode.w, 32, h, `${isOpen ? '▾' : '▸'} ${E(sb.name)} <small>${ks.length}</small>${dot(newN(sb.products))}`, `data-sb="${sb.id}" title="${E(sb.pain)}${tg ? '｜主要增长：' + E(tg[0]) : ''}"`, false, side?.sb === sb.id, sb.id);
+          pk.push(pnode);
+          y += 38;
+          if (isOpen) {
+            const lk = [];
+            for (const k of ks) {
+              const c = D.cards[k], lnode = { x: x + 40, y, w: CW - 40, h: 26 };
+              put('l', lnode.x, y, lnode.w, 26, h, `<i>${c.sources.map((v) => SRC[v]).join('')}</i>${E(c.name)}${isNew(k) ? '<b class="dm-dot">新</b>' : ''}`, `data-k="${E(k)}" title="${E(c.scene)}｜${E(c.bm_type || '')}"`, !fit(c), side?.k === k, k);
+              lk.push(lnode);
+              y += 30;
+            }
+            trunk(x + 28, pnode.y + 32, lk, h, false);
+            y += 6;
+          }
         }
-        a1 += sa;
+        trunk(x + 8, YS + 40, pk, h, side?.sc === sc.id);
+        
+        
+        
+        H = Math.max(H, y);
+        x += CW + GAP;
       }
-      a0 += da;
+      if (any) dRows.push({ dm, h, x0, x1: x - GAP });
+      x += 14;
+    });
+    const W = Math.max(x - GAP - 14, CW);
+    const root = { x: W / 2, y: 70 };
+    for (const r of dRows) {
+      const w = Math.max(r.x1 - r.x0, 140), cx = (r.x0 + r.x1) / 2;
+      put('d', cx - w / 2, YD, w, 46, r.h, E(r.dm.name) + dot(newN(r.dm.scenes.flatMap((id) => (D.graph.scenes.find((v) => v.id === id)?.subs || []).flatMap((sb) => sb.products)))), `data-dom="${r.dm.id}"`, false, side?.dom === r.dm.id, r.dm.id);
+      down({ x: root.x, y: root.y }, { x: cx, y: YD }, r.h, side?.dom === r.dm.id);
+      for (const n of nodes.filter((v) => v.cls === 's' && v.x >= r.x0 && v.x <= r.x1)) down({ x: cx, y: YD + 46 }, { x: n.x + CW / 2, y: YS }, r.h, side?.sc === n.key);
     }
-    return { nodes, links, R: lS + PW.l + 80 };
+    return { nodes, links: links.filter((l) => l.d), W, H: H + 20 };
   };
 
-  const view0 = (R, cv) => { const k = Math.min(cv.clientWidth, cv.clientHeight) / (2 * R + 40); return { k, x: cv.clientWidth / 2, y: cv.clientHeight / 2 }; };
+  const nodeCss = (n) => `left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px`;
+  const view0 = (cv) => { const k = Math.min(0.9, Math.max(0.16, (cv.clientWidth - 24) / (LAY.W + 40))); return { k, x: (cv.clientWidth - LAY.W * k) / 2, y: 12 }; };
   const applyTf = () => { const vp = body.querySelector('.dm-vp'); if (vp && tf) vp.style.transform = `translate(${tf.x}px,${tf.y}px) scale(${tf.k})`; };
-  const geom = (n, r0) => {
-    const a = n.a + r0, flip = Math.cos(a) < 0;
-    return { x: Math.cos(a) * n.r, y: Math.sin(a) * n.r, flip, deg: (a * 180) / Math.PI + (flip ? 180 : 0) };
-  };
-  const nodeCss = (n, r0) => {
-    const g = geom(n, r0);
-    return `width:${n.w}px;height:${n.hh}px;margin:${-n.hh / 2}px 0 0 ${g.flip ? -n.w : 0}px;transform-origin:${g.flip ? '100%' : '0'} 50%;transform:translate(${g.x.toFixed(1)}px,${g.y.toFixed(1)}px) rotate(${g.deg.toFixed(2)}deg)`;
-  };
-  const linkD = (l, r0) => {
-    const pol = (a, r) => [Math.cos(a + r0) * r, Math.sin(a + r0) * r], rm = (l.r1 + l.r2) / 2;
-    const [x1, y1] = pol(l.a1, l.r1), [x2, y2] = pol(l.a2, l.r2), [c1x, c1y] = pol(l.a1, rm), [c2x, c2y] = pol(l.a2, rm);
-    return `M${x1.toFixed(1)},${y1.toFixed(1)} C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
-  };
-  const place = (r0) => {
-    const cv = body.querySelector('.dm-cv');
-    if (!cv || !LAY) return;
-    cv.querySelectorAll('[data-i]').forEach((e) => { e.style.cssText = `--h:${LAY.nodes[+e.dataset.i].h};` + nodeCss(LAY.nodes[+e.dataset.i], r0); });
-    cv.querySelectorAll('path[data-li]').forEach((e) => e.setAttribute('d', linkD(LAY.links[+e.dataset.li], r0)));
-  };
   const graph = () => {
     const L = layout();
     LAY = L;
     const order = L.nodes.map((n, i) => i).sort((x, y) => (L.nodes[x].cur ? 1 : 0) - (L.nodes[y].cur ? 1 : 0));
-    const pn = (i) => { const n = L.nodes[i]; return `<div class="dm-n ${n.cls} ${n.dim ? 'dim' : ''} ${n.cur ? 'cur' : ''}" data-i="${i}" ${n.attrs} style="--h:${n.h};${nodeCss(n, rot)}">${n.html}</div>`; };
-    return `<div class="dm-cv" data-rad="${L.R}"><div class="dm-vp"><svg width="1" height="1">${L.links.map((l, i) => `<path class="${l.hl ? 'hl' : ''}" data-li="${i}" stroke="hsl(${l.h} 60% 45%)" d="${linkD(l, rot)}"/>`).join('')}</svg>
-<div class="dm-n r" style="width:124px;height:124px;margin:-62px 0 0 -62px">用户需求<br>图谱</div>${order.map(pn).join('')}</div>
-<div class="dm-hint">拖动平移 · 滚轮缩放 · 点节点转到正面</div><div class="dm-zoom"><button data-z="in">＋</button><button data-z="out">－</button><button data-z="fit" title="适应窗口">⤢</button></div></div>`;
+    const pn = (i) => { const n = L.nodes[i]; return `<div class="dm-n ${n.cls} ${n.dim ? 'dim' : ''} ${n.cur ? 'cur' : ''}" ${n.attrs} style="--h:${n.hue};${nodeCss(n)}">${n.html}</div>`; };
+    return `<div class="dm-cv"><div class="dm-vp"><svg width="1" height="1">${L.links.map((l) => `<path class="${l.hl ? 'hl' : ''}" stroke="hsl(${l.h} 60% 45%)" d="${l.d}"/>`).join('')}</svg>
+<div class="dm-n r" style="left:${L.W / 2 - 80}px;top:20px;width:160px;height:50px">用户需求图谱</div>${order.map(pn).join('')}</div>
+<div class="dm-hint">拖动平移 · 滚轮缩放 · 点节点聚焦并看详情</div><div class="dm-zoom"><button data-z="in">＋</button><button data-z="out">－</button><button data-z="fit" title="适应窗口">⤢</button></div></div>`;
   };
 
   const ease = (t) => 1 - (1 - t) ** 3;
-  const animateTo = (r1, t1, ms = 450) => {
+  const animateTo = (t1, ms = 400) => {
     cancelAnimationFrame(anim);
-    const r0 = rot, t0 = { ...tf }, t = performance.now();
+    const t0 = { ...tf }, t = performance.now();
     const step = (now) => {
       const p = Math.min(1, (now - t) / ms), e = ease(p);
-      rot = r0 + (r1 - r0) * e;
       tf = { k: t0.k + (t1.k - t0.k) * e, x: t0.x + (t1.x - t0.x) * e, y: t0.y + (t1.y - t0.y) * e };
-      place(rot);
       applyTf();
       if (p < 1) anim = requestAnimationFrame(step);
     };
     anim = requestAnimationFrame(step);
   };
-  const KMIN = { d: 0.6, s: 0.7, p: 0.9, l: 1 };
+  const KMIN = { d: 0.5, s: 0.6, p: 0.85, l: 0.95 };
   const focus = (key) => {
-    const cv = body.querySelector('.dm-cv'), n = LAY?.nodes.find((x) => x.key === key);
+    const cv = body.querySelector('.dm-cv'), n = LAY?.nodes.find((v) => v.key === key);
     if (!cv || !n) return;
-    const d = ((((-n.a - rot + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI, k = Math.min(2.5, Math.max(tf.k, KMIN[n.cls]));
-    const rc = cv.getBoundingClientRect(), wide = innerWidth > 900;
+    const rc = cv.getBoundingClientRect(), wide = innerWidth > 900, k = Math.min(2.5, Math.max(tf.k, KMIN[n.cls]));
     const visW = wide && side ? Math.max(280, Math.min(rc.right, innerWidth - 440) - rc.left) : cv.clientWidth;
-    animateTo(rot + d, { k, x: visW * 0.3 - n.r * k, y: !wide && side ? cv.clientHeight * 0.3 : cv.clientHeight / 2 });
+    animateTo({ k, x: visW / 2 - (n.x + n.w / 2) * k, y: (!wide && side ? cv.clientHeight * 0.18 : cv.clientHeight * 0.22) - n.y * k });
   };
 
   const matrix = () => {
@@ -273,7 +246,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     const wy = window.scrollY;
     body.innerHTML = notice() + bar() + (view === 'graph' ? graph() : matrix()) + sidebar();
     const cv = body.querySelector('.dm-cv');
-    if (cv) { if (!tf) tf = view0(+cv.dataset.rad, cv); applyTf(); }
+    if (cv) { if (!tf) tf = view0(cv); applyTf(); }
     window.scrollTo(0, wy);
   };
   const load = async () => {
@@ -297,7 +270,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     else if (ds.run === 'sync') { await api.post('/api/demand/run', {}); return load(); }
     else if (ds.z) {
       const cv = body.querySelector('.dm-cv'), k0 = tf.k;
-      if (ds.z === 'fit') return animateTo(0, view0(+cv.dataset.rad, cv));
+      if (ds.z === 'fit') return animateTo(view0(cv));
       { const k = Math.min(2.5, Math.max(0.12, k0 * (ds.z === 'in' ? 1.3 : 1 / 1.3))), cx = cv.clientWidth / 2, cy = cv.clientHeight / 2; tf = { ...tf, k, x: cx - (cx - tf.x) * (k / k0), y: cy - (cy - tf.y) * (k / k0) }; }
       return applyTf();
     }
