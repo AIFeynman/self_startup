@@ -289,6 +289,15 @@ def on_startup() -> None:
     threading.Thread(target=_hn_loop, daemon=True, name="absorb-hn-daily").start()
 
 
+@router.get("/hn/merged")
+def hn_merged():
+    ds = sorted((f.parent for f in hn.BASE.glob("*/run.json") if _hn_state(f.parent)["done"]), key=lambda d: d.name, reverse=True)
+    runs = [(d.name, _read(d / "page.json", {}), {p["id"]: p["ts"] for p in _read(d / "posts.json", [])}) for d in ds]
+    react = {f"{d.name}:{k}": v for d in ds for k, v in _read(d / "reactions.json", {}).items()}
+    undone = [{"id": f.parent.name, **_hn_state(f.parent)} for f in hn.BASE.glob("*/run.json") if not _hn_state(f.parent)["done"]]
+    return {"data": hn.merge_pages(runs) if runs else None, "reactions": react, "undone": sorted(undone, key=lambda x: x["id"], reverse=True)}
+
+
 @router.get("/hn/runs/{rid}")
 def hn_get(rid: str):
     d = _hn_dir(rid)

@@ -199,3 +199,49 @@ def test_maybe_run_once_a_day(tmp_path, monkeypatch):
     monkeypatch.setattr(absorb.settings, "get", lambda k, d=None: False if k == "absorb.hn_daily" else d)
     (d / "page.json").unlink()
     assert absorb.hn_maybe_run(now=1e9) == ""                                                 # 开关关掉
+
+
+def _page(start, end, tid, posts, res=()):
+    meta = {"start": start, "end": end, "queried": 10, "collected": 5, "ai": 3, "edge": 1, "digested": 2, "comments": 100, "people": 5,
+            "quotes_kept": 4, "quotes_raw": 5, "minutes": 3, "cost": 1.5, "fails": {"digest": 1}}
+    topics = [{"id": tid, "title": f"话题{tid}", "kind": "议题", "consensus": "有分歧", "verdict_unchecked": 0, "exps": [{}], "res": [0] if res else [],
+               "posts": [{"id": i, "hn_url": f"https://news.ycombinator.com/item?id={i}"} for i in posts]}]
+    rs = [{"url": u, "intent": "推荐"} for u in res]
+    tail = [{"hn_url": "https://news.ycombinator.com/item?id=t1"}, {"hn_url": f"https://news.ycombinator.com/item?id={posts[0]}"}]
+    return {"meta": meta, "topics": topics, "resources": rs, "tail": tail}
+
+
+def test_merge_pages_dedups_overlap_and_offsets_resources():
+    new = ("2026-11-14_2026-11-20", _page("2026-11-14", "2026-11-20", 0, ["a", "b"], ["https://x.com/n"]), {"a": 300, "b": 200})
+    old = ("2026-11-13_2026-11-19", _page("2026-11-13", "2026-11-19", 0, ["a", "b"], ["https://x.com/o"]), {"a": 300, "b": 200})
+    older = ("2026-11-06_2026-11-12", _page("2026-11-06", "2026-11-12", 0, ["c"], ["https://x.com/c"]), {"c": 100})
+    m = hn.merge_pages([new, old, older])
+    assert [t["key"] for t in m["topics"]] == ["2026-11-14_2026-11-20:0", "2026-11-06_2026-11-12:0"]
+    assert [t["ts"] for t in m["topics"]] == [300, 100]
+    assert [m["resources"][k]["url"] for t in m["topics"] for k in t["res"]] == ["https://x.com/n", "https://x.com/c"]
+    assert m["meta"]["start"] == "2026-11-06" and m["meta"]["end"] == "2026-11-20" and m["meta"]["topics"] == 2
+    assert m["meta"]["recommended"] == 2 and m["meta"]["cost"] == 4.5 and m["meta"]["fails"] == {"digest": 3}
+    assert [x["hn_url"][-2:] for x in m["tail"]] == ["t1"] and len(m["tail"]) == 1
+
+
+def test_api_hn_merged(client, tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(hn, "BASE", tmp_path / "hn")
+    for rid, tid, post in (("2026-11-06_2026-11-12", 0, "c"), ("2026-11-13_2026-11-19", 0, "a")):
+        d = tmp_path / "hn" / rid
+        d.mkdir(parents=True)
+        s, e = rid.split("_")
+        (d / "run.json").write_text(json.dumps({"start": s, "end": e}))
+        (d / "status.json").write_text(json.dumps({"done": True, "pid": 0}))
+        (d / "page.json").write_text(json.dumps(_page(s, e, tid, [post])))
+        (d / "posts.json").write_text(json.dumps([{"id": post, "ts": 1000 if post == "a" else 500}]))
+    d = tmp_path / "hn" / "2026-11-13_2026-11-19"
+    (d / "reactions.json").write_text(json.dumps({"0": {"act": "很受用"}}))
+    bad = tmp_path / "hn" / "2026-10-30_2026-11-05"
+    bad.mkdir()
+    (bad / "run.json").write_text("{}")
+    j = client.get("/api/absorb/hn/merged").json()
+    assert [t["key"] for t in j["data"]["topics"]] == ["2026-11-13_2026-11-19:0", "2026-11-06_2026-11-12:0"]
+    assert j["data"]["topics"][0]["ts"] == 1000
+    assert j["reactions"] == {"2026-11-13_2026-11-19:0": {"act": "很受用"}}
+    assert [u["id"] for u in j["undone"]] == ["2026-10-30_2026-11-05"]

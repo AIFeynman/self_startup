@@ -47,6 +47,7 @@ const OUT = ['成功', '失败', '有条件'];
 const COL = ['#3f7f4f', '#b8432f', '#b9781d', '#3b6ea8', '#8d857b'];
 const KO = ['产品', '仓库', '数据', '视频', '论文', '文档'];
 const kk = (k) => (k === '博客' ? '文档' : k);
+const day = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
 const hnc = (id) => `https://news.ycombinator.com/item?id=${id}`;
 const link = (u, t) => (/^https?:/.test(u) ? `<a href="${E(u)}" target="_blank" rel="noopener">${E(t)}</a>` : E(t));
 const src = (id) => `<a class="src" href="${hnc(id)}" target="_blank" rel="noopener">原评论 ↗</a>`;
@@ -82,24 +83,32 @@ function resHtml(t, D, F, full) {
 }
 
 function topic(t, R, D, F) {
-  const r = R[t.id] || {}, full = (!F.res && !F.exp) || F.open.has(t.id);
+  const r = R[t.key] || {}, full = (!F.res && !F.exp) || F.open.has(t.key);
   const nrec = res(t, D).rec.length;
   const oc = OUT.filter((o) => t.exps.some((x) => x.outcome === o)).map((o) => `<span class="hn-o hn-o${OUT.indexOf(o)}">${o}</span>${t.exps.filter((x) => x.outcome === o).length}`).join(' · ');
   const showCamps = full, showExps = full || F.exp, showRes = full || F.res;
-  return `<article class="hn-t" data-t="${t.id}"><h3><span class="ab-tg hn-kind">${t.kind}</span><span class="ab-tg ${CS[t.consensus]}">${t.consensus}</span>${E(t.title)}</h3>
-<div class="hn-meta">${t.stats.posts} 帖 · ${N(t.stats.comments)} 评论 · 最高 ${N(Math.max(...t.posts.map((p) => p.points)))} 分 · <details><summary>看帖子</summary><ul class="hn-ps">${t.posts.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· ${N(p.points)} 分 · <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a></span></li>`).join('')}</ul></details></div>
+  return `<article class="hn-t" data-t="${t.key}"><h3><span class="ab-tg hn-kind">${t.kind}</span><span class="ab-tg ${CS[t.consensus]}">${t.consensus}</span>${E(t.title)}</h3>
+<div class="hn-meta">${day(t.ts)} · ${t.stats.posts} 帖 · ${N(t.stats.comments)} 评论 · 最高 ${N(Math.max(...t.posts.map((p) => p.points)))} 分 · <details><summary>看帖子</summary><ul class="hn-ps">${t.posts.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· ${N(p.points)} 分 · <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a></span></li>`).join('')}</ul></details></div>
 ${full && t.verdict ? `<p class="hn-v">${E(t.verdict.replace(/\[\d+\]/g, '').trim())}</p>` : ''}
 ${showCamps && t.camps.length ? `<section class="hn-sx"><h4>社区怎么分 <span>按持该观点的评论数</span></h4>${campsHtml(t)}</section>` : ''}
 ${showExps && t.exps.length ? `<section class="hn-sx"><h4>做过的人 <span class="hn-oc">${oc}</span></h4>${expsHtml(t, F, full)}</section>` : ''}
 ${showRes ? `<section class="hn-sx"><h4>推荐的资源 <span>${nrec} 条评论者明确推荐</span></h4>${resHtml(t, D, F, full)}</section>` : ''}
 ${full && t.mine.length ? `<div class="hn-mine">${t.mine.map((m) => `<span class="${m.rel === '印证' ? 'ok' : ''}" title="${E(m.why)}">与你的判断${m.rel}：${E(m.judgment)}</span>`).join('')}</div>` : ''}
-${!full ? `<button class="hn-all" data-all="${t.id}">展开全部内容</button>` : ''}
+${!full ? `<button class="hn-all" data-all="${t.key}">展开全部内容</button>` : ''}
 <div class="hn-act">${ACT.map((a, i) => `<button data-a="${a}" title="键盘 ${i + 1}" class="${r.act === a ? 'on' : ''}">${a}</button>`).join('')}<span class="sp">｜</span>${STANCE.map((a) => `<button data-s="${a}" class="${r.stance === a ? 'on' : ''}">${a}</button>`).join('')}<span class="hn-st" title="这个话题整理得好不好用：1 星很差，5 星很好">${[1, 2, 3, 4, 5].map((n) => `<button data-n="${n}" class="${(r.stars || 0) >= n ? 'on' : ''}">★</button>`).join('')}</span></div></article>`;
 }
 
+function inTime(t, D, F) {
+  if (!F.time) return true;
+  const d = day(t.ts);
+  if (F.time.length === 7) return d.slice(0, 7) === F.time;
+  return t.ts >= Date.parse(D.meta.end + 'T23:59:59Z') / 1000 - +F.time * 86400;
+}
+
 function match(t, D, F, R) {
+  if (!inTime(t, D, F)) return false;
   if (F.cons && t.consensus !== F.cons) return false;
-  if (F.todo && R[t.id] && R[t.id].act) return false;
+  if (F.todo && R[t.key] && R[t.key].act) return false;
   if (F.res) { const { rec, oth } = res(t, D); if (![...rec, ...(F.incl ? oth : [])].some((r) => kk(r.kind) === F.res)) return false; }
   if (F.exp && !t.exps.some((x) => x.outcome === F.exp)) return false;
   return true;
@@ -118,52 +127,41 @@ function how(D) {
 <p class="ab-m">星级：每个话题可打 1–5 星，表示这个话题整理得好不好用，存在表态日志里，用来评估聚类和综合质量。没做的：与上周话题对照（需要上一周的数据）；原话没有翻译；表态“站某边”只记草稿，不写进你的判断库。HN 评论者偏工程师、偏怀疑，不代表市场上的用户。${F.digest ? `有 ${F.digest} 帖提炼失败已跳过；` : ''}${M.minutes ? `耗时 ${M.minutes} 分钟，` : ''}Claude 模型费用 $${M.cost}，Jev 调用费用没有统计。</p></div>`;
 }
 
-export async function hnView(el, ctx, rid) {
+export async function hnView(el, ctx) {
   const { api, h, ui, toast } = ctx;
-  const runs = await api.get('/api/absorb/hn/runs');
-  const cur = rid ? decodeURIComponent(rid) : (runs.find((r) => r.done) || runs[0] || {}).id;
   const body = h('div');
-  let timer = null;
-  const head = h('div', {}, [h('div.tabs', {}, [h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button.active', {}, 'HN 吸收')]),
-    h('div.tabs.ab-sub', {}, runs.map((r) => h('button', { class: r.id === cur ? 'active' : '', onclick: () => { location.hash = '#absorb/hn/' + encodeURIComponent(r.id); } }, r.id.replace('_', ' 至 ') + (r.done ? '' : r.running ? ' · 进行中' : ' · 中断'))))]);
-  el.append(h('style', {}, CSS), ui.pageHead('吸收', '过去一周 HN 上 AI 相关的讨论：按话题看社区站哪边、谁做过什么、推荐了什么', []), head, body);
-  if (!cur) { body.append(ui.empty('还没有跑过。每天会自动跑一次；也可以命令行：python -m app.modules._absorb_hn --start 起 --end 止')); return; }
-  const show = async () => {
-    if (!el.isConnected) return clearTimeout(timer);
-    const r = await api.get('/api/absorb/hn/runs/' + encodeURIComponent(cur));
-    if (!r.data) {
-      body.innerHTML = `<div class="ab-run"><b>HN ${E(r.start)} 至 ${E(r.end)}</b><div class="ab-prog"><i style="width:${Math.max(2, Math.round((r.step - (r.running ? 0.5 : 0)) / r.steps * 100))}%"></i></div>
-<div class="ab-m">${r.running ? `第 ${r.step} / ${r.steps} 步：${E(r.stage_name)} · 已花费 $${r.cost}` : `停在第 ${r.step} / ${r.steps} 步（${E(r.stage_name)}）：${E(r.error)}`}</div></div>`;
-      if (r.running) timer = setTimeout(show, 5000);
-      else body.append(h('button.primary', { onclick: async () => { await api.post('/api/absorb/hn/runs', { start: r.start, end: r.end }); show(); } }, '接着跑'));
-      return;
-    }
-    paint(r.data, r.reactions);
-  };
+  const head = h('div', {}, [h('div.tabs', {}, [h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button.active', {}, 'HN 吸收')])]);
+  el.append(h('style', {}, CSS), ui.pageHead('吸收', 'HN 上 AI 相关的讨论：按话题看社区站哪边、谁做过什么、推荐了什么', []), head, body);
+  const m = await api.get('/api/absorb/hn/merged');
+  if (!m.data) { body.append(ui.empty('还没有跑完的结果。每天会自动跑一次；也可以命令行：python -m app.modules._absorb_hn --start 起 --end 止')); return; }
+  paint(m.data, m.reactions, m.undone);
 
-  const paint = (D, R) => {
-    const M = D.meta, byId = Object.fromEntries(D.topics.map((t) => [t.id, t]));
-    const F = { cons: '', res: '', exp: '', incl: false, todo: false, open: new Set() };
+  function paint(D, R, undone) {
+    const M = D.meta, byKey = Object.fromEntries(D.topics.map((t) => [t.key, t]));
+    const F = { cons: '', res: '', exp: '', time: '', incl: false, todo: false, open: new Set() };
+    const months = [...new Set(D.topics.map((t) => day(t.ts).slice(0, 7)))].sort().reverse();
     let view = 'topic';
-    const done = () => `已表态 ${D.topics.filter((t) => R[t.id] && (R[t.id].act || R[t.id].stars)).length}/${D.topics.length}`;
+    const done = () => `已表态 ${D.topics.filter((t) => R[t.key] && (R[t.key].act || R[t.key].stars)).length}/${D.topics.length}`;
     const btn = (g, v, label) => `<button data-g="${g}" data-v="${v}" class="${(g === 'todo' ? F.todo : F[g]) === (g === 'todo' ? true : v) && (v !== '' || !F[g]) ? 'on' : ''}">${label}</button>`;
+    const nm = (mo) => D.topics.filter((t) => day(t.ts).slice(0, 7) === mo).length;
     const draw = () => {
       const L = D.topics.filter((t) => match(t, D, F, R));
       const cs = D.topics.reduce((a, t) => ({ ...a, [t.consensus]: (a[t.consensus] || 0) + 1 }), {});
-      const filters = `<div class="hn-fb"><div class="hn-fg"><span class="hn-fl">共识度</span>${btn('cons', '', '全部')}${btn('cons', '有分歧', '有分歧')}${btn('cons', '基本共识', '基本共识')}${btn('cons', '讨论少', '讨论少')}${btn('todo', '1', '未表态')}</div>
+      const filters = `<div class="hn-fb"><div class="hn-fg"><span class="hn-fl">时间</span>${btn('time', '', '全部')}${btn('time', '7', '近 7 天')}${btn('time', '30', '近 30 天')}${months.map((mo) => btn('time', mo, `${mo} · ${nm(mo)}`)).join('')}</div>
+<div class="hn-fg"><span class="hn-fl">共识度</span>${btn('cons', '', '全部')}${btn('cons', '有分歧', '有分歧')}${btn('cons', '基本共识', '基本共识')}${btn('cons', '讨论少', '讨论少')}${btn('todo', '1', '未表态')}</div>
 <div class="hn-fg"><span class="hn-fl">含推荐资源</span>${KO.map((k) => btn('res', k, k)).join('')}<label><input type="checkbox" data-incl ${F.incl ? 'checked' : ''}> 也算只被引用的</label></div>
 <div class="hn-fg"><span class="hn-fl">含经验</span>${OUT.map((k) => btn('exp', k, k)).join('')}<span class="ab-m">显示 ${L.length} / ${D.topics.length} 个话题 · ${done()}</span></div></div>`;
-      body.innerHTML = `<div class="ab-m">${E(M.start)} 至 ${E(M.end)} · 观点和经验的原话已逐字核对，归并和结论由模型完成，未经人工校对</div>
+      body.innerHTML = `<div class="ab-m">${E(M.start)} 至 ${E(M.end)} · ${M.weeks} 周合并 · 观点和经验的原话已逐字核对，归并和结论由模型完成，未经人工校对${undone.length ? ` · 另有 ${undone.length} 周没跑完：${undone.map((u) => E(u.id.replace('_', ' 至 ') + (u.running ? '（进行中）' : '（中断）'))).join('、')}` : ''}</div>
 <div class="ab-note">${N(M.collected)} 帖里 ${N(M.ai + M.edge)} 帖与 AI 相关，压成 <b>${M.topics} 个话题</b>（覆盖 ${M.in_topics} 帖），另有 ${M.tail} 帖在长尾。先看<b>有分歧 ${cs['有分歧'] || 0}</b>：社区没谈拢；<b>基本共识 ${cs['基本共识'] || 0}</b> 看一句话结论即可。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张 <kbd>1</kbd>–<kbd>4</kbd> 表态</span></div>
 <div class="ab-bar">${[['topic', '话题'], ['how', '口径']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span><span class="ab-m">推荐资源 ${M.recommended} · 经验 ${M.exps}</span></div>
-${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<div class="ab-m">这个筛选下没有话题</div>') + (!F.res && !F.exp && !F.cons && !F.todo ? `<details class="ab-fold hn-tail"><summary>长尾：另有 ${M.tail} 帖没并进话题</summary><ul>${D.tail.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a>${p.tldr ? ' · ' + E(p.tldr) : ''}</span></li>`).join('')}</ul></details>` : '') : how(D)}`;
+${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<div class="ab-m">这个筛选下没有话题</div>') + (!F.res && !F.exp && !F.cons && !F.todo && !F.time ? `<details class="ab-fold hn-tail"><summary>长尾：另有 ${M.tail} 帖没并进话题</summary><ul>${D.tail.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a>${p.tldr ? ' · ' + E(p.tldr) : ''}</span></li>`).join('')}</ul></details>` : '') : how(D)}`;
     };
     const vis = () => [...body.querySelectorAll('.hn-t')];
     const focus = (x) => { if (!x) return; body.querySelectorAll('.hn-t.cur').forEach((y) => y.classList.remove('cur')); x.classList.add('cur'); x.scrollIntoView({ block: 'nearest' }); };
     const react = async (c, patch) => {
-      const id = c.dataset.t, old = R[id] || {}, nx = { act: old.act || '', stance: old.stance || '', stars: old.stars || 0, ...patch };
+      const id = c.dataset.t, tp = byKey[id], old = R[id] || {}, nx = { act: old.act || '', stance: old.stance || '', stars: old.stars || 0, ...patch };
       for (const k of Object.keys(patch)) if (old[k] === patch[k]) nx[k] = k === 'stars' ? 0 : '';
-      try { await api.post(`/api/absorb/hn/runs/${encodeURIComponent(cur)}/react`, { topic: +id, act: nx.act, stance: nx.stance, stars: nx.stars }); } catch (err) { toast(err.message || '没存上'); return false; }
+      try { await api.post(`/api/absorb/hn/runs/${encodeURIComponent(tp.run)}/react`, { topic: tp.id, act: nx.act, stance: nx.stance, stars: nx.stars }); } catch (err) { toast(err.message || '没存上'); return false; }
       if (nx.act || nx.stance || nx.stars) R[id] = nx; else delete R[id];
       c.querySelectorAll('[data-a]').forEach((b) => b.classList.toggle('on', nx.act === b.dataset.a));
       c.querySelectorAll('[data-s]').forEach((b) => b.classList.toggle('on', nx.stance === b.dataset.s));
@@ -190,7 +188,7 @@ ${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<di
         else { F[d.g] = F[d.g] === d.v ? '' : d.v; F.open.clear(); }
         return draw();
       }
-      if (d.all) { F.open.add(+d.all); return draw(); }
+      if (d.all) { F.open.add(d.all); return draw(); }
       const c = t.closest('.hn-t');
       if (d.a) return react(c, { act: d.a });
       if (d.s) return react(c, { stance: d.s });
@@ -198,6 +196,5 @@ ${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<di
       if (c && !t.closest('a, summary, details')) focus(c);
     };
     draw();
-  };
-  await show();
+  }
 }

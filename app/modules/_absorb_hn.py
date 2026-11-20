@@ -400,6 +400,39 @@ def s_page(r: HRun) -> dict:
     return {"meta": meta, "topics": topics, "resources": rs, "tail": tail}
 
 
+def merge_pages(runs: list[tuple[str, dict, dict]]) -> dict:
+    """把多周结果并成一页：runs 是 (目录名, page, {帖子id: 发帖时间}) 按新到旧排；话题加 run / key / ts，窗口重叠时旧话题有一半以上帖子已在新话题里就丢掉。"""
+    seen: set[str] = set()
+    topics, resources, tail, seen_tail = [], [], [], set()
+    metas = []
+    for rid, page, ts in runs:
+        off = len(resources)
+        resources += page["resources"]
+        kept = []
+        for t in page["topics"]:
+            ids = {p["id"] for p in t["posts"]}
+            if len(ids & seen) * 2 >= len(ids):
+                continue
+            seen |= ids
+            kept.append({**t, "run": rid, "key": f"{rid}:{t['id']}", "res": [k + off for k in t["res"]], "ts": max(ts.get(i, 0) for i in ids)})
+        topics += kept
+        for x in page["tail"]:
+            i = x["hn_url"].rsplit("=", 1)[-1]
+            if i not in seen and x["hn_url"] not in seen_tail:
+                seen_tail.add(x["hn_url"])
+                tail.append(x)
+        metas.append(page["meta"])
+    used = {k for t in topics for k in t["res"]}
+    add = lambda k: sum(m.get(k, 0) for m in metas)  # noqa: E731
+    first = metas[0] if metas else {}
+    meta = {**first, "start": min((m["start"] for m in metas), default=""), "end": max((m["end"] for m in metas), default=""), "weeks": len(metas),
+            **{k: add(k) for k in ("queried", "collected", "ai", "edge", "digested", "comments", "people", "quotes_kept", "quotes_raw", "minutes", "cost")},
+            "topics": len(topics), "tail": len(tail), "in_topics": sum(len(t["posts"]) for t in topics), "unchecked": sum(t["verdict_unchecked"] for t in topics),
+            "resources": len(used), "recommended": sum(resources[k]["intent"] == "推荐" for k in used), "exps": sum(len(t["exps"]) for t in topics),
+            "fails": {"digest": sum((m.get("fails") or {}).get("digest", 0) for m in metas)}}
+    return {"meta": meta, "topics": topics, "resources": resources, "tail": tail}
+
+
 FILES = {"collect": "posts.json", "relevance": "relevance.json", "digest": "digests.json", "topics": "topics.json", "synth": "synth.json", "page": "page.json"}
 FUNCS = {"collect": s_collect, "relevance": s_relevance, "digest": s_digest, "topics": s_topics, "synth": s_synth, "page": s_page}
 
