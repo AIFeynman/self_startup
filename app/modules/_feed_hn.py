@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ..db import DATA_DIR
 from ._feed_gist import fit
 
 ALGOLIA = "https://hn.algolia.com/api/v1/items/{}"
@@ -61,6 +62,28 @@ SYSTEM = (
     "- quote 必须是评论原文里连续出现的一段，保持原语言，不改写、不翻译、不用省略号拼接；摘不出来的观点不要写。\n"
     "- 专有名词保留原文，不写空话套话，不评价帖子本身好坏。"
 )
+
+
+# ---------- 跨天缓存（HN 吸收写，信息推荐的 HN 精读读） ----------
+
+CACHE_DIR = DATA_DIR / "absorb" / "hn" / "_cache" / "digests"
+
+
+def cache_get(oid: str, comments: int) -> dict | None:
+    """HN 吸收已提炼过的帖子（带逐字原话和链接意图）。评论没涨到 1.5 倍且多 30 条以上就直接用，不重复调模型。"""
+    try:
+        e = json.loads((CACHE_DIR / f"{oid}.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    old = int(e.get("n") or 0)
+    return e["d"] if comments < old * 1.5 or comments - old < 30 else None
+
+
+def cache_put(oid: str, d: dict, comments: int) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CACHE_DIR / f"{oid}.json.tmp"
+    tmp.write_text(json.dumps({"d": d, "n": comments}, ensure_ascii=False), "utf-8")
+    tmp.replace(CACHE_DIR / f"{oid}.json")
 
 
 # ---------- 评论 ----------

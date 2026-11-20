@@ -728,13 +728,20 @@ def run_hn_digest(ids: list[str] | None = None) -> dict:
             todo = [it for it in items if it["id"] in set(ids)]
         else:
             todo = hnd.pick(items, int(cfg("hn_digest_top")), int(cfg("hn_digest_min_comments")))
+        reused = 0
+        for it in list(todo):
+            hit = hnd.cache_get(hnd.oid_of(it), hnd.comments_of(it))
+            if hit:
+                _save_hn_digest(it["id"], hit, hnd.comments_of(it))
+                todo.remove(it)
+                reused += 1
         if not todo:
-            return {"count": 0, "errors": []}
+            return {"count": reused, "errors": []}
         got, errors = hnd.generate(todo, model=str(cfg("gist_model")))
         for it in todo:
             if it["id"] in got:
                 _save_hn_digest(it["id"], got[it["id"]], hnd.comments_of(it))
-        return {"count": len(got), "errors": errors}
+        return {"count": len(got) + reused, "errors": errors}
     except Exception as e:  # noqa: BLE001
         log.warning("feed hn digest failed: %s", e)
         return {"count": 0, "errors": [f"{type(e).__name__}: {str(e)[:200]}"]}

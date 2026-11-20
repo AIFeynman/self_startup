@@ -114,7 +114,8 @@ def test_rel_label_thresholds():
     assert [hn.rel_label(p) for p in (0.29, 0.3, 0.59, 0.6, 0.95)] == ["no", "edge", "edge", "ai", "ai"]
 
 
-def test_digest_post_uses_light_model_and_checks_quotes(monkeypatch):
+def test_digest_post_uses_light_model_and_checks_quotes(monkeypatch, tmp_path):
+    monkeypatch.setattr(hn.hnd, "CACHE_DIR", tmp_path)
     comments = [{"id": 5, "depth": 0, "author": "u", "text": "I tried it and it saved us a lot of time", "replies": 0}]
     monkeypatch.setattr(hn.hnd, "fetch_thread", lambda pid, c: ("op", comments))
     seen = {}
@@ -127,6 +128,74 @@ def test_digest_post_uses_light_model_and_checks_quotes(monkeypatch):
             return {"tldr": "t", "opinions": [{"stance": "主流", "claim": "好用", "n": 1, "quote": "it saved us a lot of time"},
                                               {"stance": "少数", "claim": "编的", "n": 1, "quote": "nothing like this was said here"}]}
 
-    d = hn.digest_post(R(), {"id": "1", "title": "T", "url": "", "points": 9}, None)
+    d = hn.digest_post(R(), {"id": "1", "title": "T", "url": "", "points": 9, "comments": 5}, None)
     assert seen["model"] == "haiku" and [o["claim"] for o in d["opinions"]] == ["好用"]
-    assert hn.digest_post(type("R", (), {"light": "h", "call": lambda *a: None})(), {"id": "1", "title": "T", "url": "", "points": 9}, None) is None
+    assert hn.digest_post(type("R", (), {"light": "h", "call": lambda *a: None})(), {"id": "2", "title": "T", "url": "", "points": 9, "comments": 5}, None) is None   # 模型没返回：不写缓存
+
+
+def test_daily_window_ends_yesterday():
+    import datetime as dt
+    assert hn.daily_window(7, dt.date(2026, 11, 20)) == ("2026-11-13", "2026-11-19")
+
+
+def test_cache_reuses_until_comments_grow(tmp_path, monkeypatch):
+    monkeypatch.setattr(hn.hnd, "CACHE_DIR", tmp_path)
+    assert hn.hnd.cache_get("1", 100) is None
+    hn.hnd.cache_put("1", {"tldr": "x"}, 100)
+    assert hn.hnd.cache_get("1", 120)["tldr"] == "x"      # 涨得不够
+    assert hn.hnd.cache_get("1", 149)["tldr"] == "x"
+    assert hn.hnd.cache_get("1", 150) is None              # 涨到 1.5 倍且多 30 条以上才重做
+    hn.hnd.cache_put("2", {"tldr": "y"}, 10)
+    assert hn.hnd.cache_get("2", 40) is None               # 10 → 40：超过 1.5 倍且多 30 条，重做
+    assert hn.hnd.cache_get("2", 39)["tldr"] == "y"
+
+
+def test_digest_post_hits_cache_without_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(hn.hnd, "CACHE_DIR", tmp_path)
+    hn.hnd.cache_put("7", {"tldr": "cached", "opinions": []}, 90)
+
+    class R:
+        light = "h"
+
+        def call(self, *a):
+            raise AssertionError("命中缓存不该调模型")
+
+    assert hn.digest_post(R(), {"id": "7", "title": "T", "url": "", "points": 1, "comments": 95}, None)["tldr"] == "cached"
+
+
+def test_synth_cache_key_follows_member_digests():
+    a = {"opinions": [1]}
+    k = lambda ids, dg: hn.synth_key({"posts": ids}, dg, [])  # noqa: E731
+    assert k(["x", "y"], {"x": a, "y": a}) == k(["y", "x"], {"x": a, "y": a})
+    assert k(["x"], {"x": a}) != k(["x"], {"x": {"opinions": [2]}})
+
+
+def test_prune_keeps_latest_runs_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(hn, "BASE", tmp_path)
+    for n in ("2026-11-10_2026-11-16", "2026-11-11_2026-11-17", "2026-11-12_2026-11-18", "_cache", "_cmp"):
+        (tmp_path / n).mkdir()
+    assert hn.prune(2) == ["2026-11-10_2026-11-16"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["2026-11-11_2026-11-17", "2026-11-12_2026-11-18", "_cache", "_cmp"]
+
+
+def test_maybe_run_once_a_day(tmp_path, monkeypatch):
+    import json
+    from app.modules import absorb
+    monkeypatch.setattr(hn, "BASE", tmp_path)
+    monkeypatch.setattr(hn, "daily_window", lambda days=7, today=None: ("2026-11-14", "2026-11-20"))
+    launched = []
+    monkeypatch.setattr(absorb, "_hn_launch", lambda s, e: launched.append((s, e)) or f"{s}_{e}")
+    assert absorb.hn_maybe_run(now=1000.0) == "2026-11-14_2026-11-20" and launched          # 今天的窗口还没有，启动
+    d = tmp_path / "2026-11-14_2026-11-20"
+    d.mkdir()
+    (d / "run.json").write_text("{}")
+    (d / "status.json").write_text(json.dumps({"done": False, "updated": 1000.0, "error": "x"}))
+    assert absorb.hn_maybe_run(now=1000.0 + 3600) == ""                                       # 中断不到 3 小时，先不重试
+    assert absorb.hn_maybe_run(now=1000.0 + 4 * 3600) == "2026-11-14_2026-11-20"             # 3 小时后从断点接着跑
+    (d / "page.json").write_text("{}")
+    (d / "status.json").write_text(json.dumps({"done": True, "updated": 1.0}))
+    n = len(launched)
+    assert absorb.hn_maybe_run(now=1e9) == "" and len(launched) == n                         # 已跑完，不重复
+    monkeypatch.setattr(absorb.settings, "get", lambda k, d=None: False if k == "absorb.hn_daily" else d)
+    (d / "page.json").unlink()
+    assert absorb.hn_maybe_run(now=1e9) == ""                                                 # 开关关掉

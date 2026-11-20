@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime as dt
+import hashlib
 import json
 import math
 import os
 import re
+import shutil
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +29,7 @@ from . import _absorb_run as ar
 from . import _feed_hn as hnd
 
 BASE = DATA_DIR / "absorb" / "hn"
+CACHE = BASE / "_cache"     # 跨天缓存：每天滚动 7 天，只对新帖和评论涨得多的帖花模型
 KB_JUDGMENTS = DATA_DIR / "kb" / "judgments"
 STAGES = ["collect", "relevance", "digest", "topics", "synth", "page"]
 STAGE_NAME = {"collect": "采集帖子", "relevance": "判断是否 AI 相关", "digest": "单帖提炼评论区", "topics": "聚成话题", "synth": "话题内综合", "page": "生成页面数据"}
@@ -145,10 +148,13 @@ def s_relevance(r: HRun) -> dict:
     key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("未配置 JEV_API_KEY（项目根目录 .env）")
-    probs: dict[str, float] = {}
+    pf = CACHE / "relevance_p.json"
+    old = json.loads(pf.read_text("utf-8")) if pf.exists() else {}
+    probs: dict[str, float] = {p["id"]: old[p["id"]] for p in posts if p["id"] in old}
+    new = [p for p in posts if p["id"] not in old]
     with httpx.Client(timeout=60) as c:
-        for i in range(0, len(posts), 20):
-            refs = {f"i{n}": p for n, p in enumerate(posts[i:i + 20])}
+        for i in range(0, len(new), 20):
+            refs = {f"i{n}": p for n, p in enumerate(new[i:i + 20])}
             res = c.post(JEV_API, headers={"Authorization": f"Bearer {key}"}, json={
                 "model": "jev-latest",
                 "state": {"items": {k: {"title": p["title"], "domain": urlsplit(p["url"]).netloc, "points": p["points"], "comments": p["comments"]} for k, p in refs.items()}},
@@ -159,6 +165,8 @@ def s_relevance(r: HRun) -> dict:
                 if not isinstance(v, (int, float)) or not 0 <= v <= 1:
                     raise RuntimeError(f"Jev 没返回 {p['id']} 的概率")
                 probs[p["id"]] = round(float(v), 3)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    pf.write_text(json.dumps({**old, **probs}, ensure_ascii=False), "utf-8")
     r.save("relevance_p.json", probs)
     return {i: rel_label(v) for i, v in probs.items()}
 
@@ -166,13 +174,20 @@ def s_relevance(r: HRun) -> dict:
 # ---------- 3 单帖提炼 ----------
 
 def digest_post(r: HRun, p: dict, c: httpx.Client) -> dict | None:
+    hit = hnd.cache_get(p["id"], p["comments"])
+    if hit:
+        return hit
     it = {"id": f"hn:{p['id']}", "title": p["title"], "url": p["url"], "summary": "", "popularity": p["points"]}
     op, comments = hnd.fetch_thread(p["id"], c)
     if not comments:
         return None
     text = hnd.render(comments)
     raw = r.call(r.light, hnd.SYSTEM, hnd._payload(it, text))
-    return hnd.clean_digest(raw, comments, text, op) if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    d = hnd.clean_digest(raw, comments, text, op)
+    hnd.cache_put(p["id"], d, p["comments"])
+    return d
 
 
 def s_digest(r: HRun) -> dict:
@@ -291,11 +306,27 @@ def synth_one(r: HRun, t: dict, posts: dict, dg: dict, mine: list[dict]) -> dict
     return {"verdict": ver if ok else "", "verdict_unchecked": not ok, "camps": camps, "exps": es, "mine": mn, "ok": bool(j)}
 
 
+def synth_key(t: dict, dg: dict, mine: list[dict]) -> str:
+    return hashlib.sha1(json.dumps([[dg[i] for i in sorted(t["posts"])], mine], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20]
+
+
 def s_synth(r: HRun) -> list:
     posts = {p["id"]: p for p in r.load("posts.json")}
     dg, tp = r.load("digests.json"), r.load("topics.json")
     mine = judgments()
-    res = ar._pmap(lambda t: synth_one(r, t, posts, dg, mine), tp["topics"], JOBS)
+    sc = CACHE / "synth"
+    sc.mkdir(parents=True, exist_ok=True)
+
+    def one(t):
+        f = sc / f"{synth_key(t, dg, mine)}.json"
+        if f.exists():
+            return json.loads(f.read_text("utf-8"))
+        s = synth_one(r, t, posts, dg, mine)
+        if s["ok"]:
+            f.write_text(json.dumps(s, ensure_ascii=False), "utf-8")
+        return s
+
+    res = ar._pmap(one, tp["topics"], JOBS)
     return [{**t, **s} for t, s in zip(tp["topics"], res)]
 
 
@@ -371,6 +402,21 @@ def s_page(r: HRun) -> dict:
 
 FILES = {"collect": "posts.json", "relevance": "relevance.json", "digest": "digests.json", "topics": "topics.json", "synth": "synth.json", "page": "page.json"}
 FUNCS = {"collect": s_collect, "relevance": s_relevance, "digest": s_digest, "topics": s_topics, "synth": s_synth, "page": s_page}
+
+
+def daily_window(days: int = 7, today: dt.date | None = None) -> tuple[str, str]:
+    """到昨天为止（UTC）的最近 days 天：当天还没过完，不算。"""
+    end = (today or dt.datetime.now(dt.timezone.utc).date()) - dt.timedelta(days=1)
+    return (end - dt.timedelta(days=days - 1)).isoformat(), end.isoformat()
+
+
+def prune(keep: int) -> list[str]:
+    """只留最近 keep 个结果目录（目录名是 起_止 日期）；缓存和对比结果不动。"""
+    runs = sorted((d for d in BASE.iterdir() if d.is_dir() and re.fullmatch(r"\d{4}-\d\d-\d\d_\d{4}-\d\d-\d\d", d.name)), key=lambda d: d.name, reverse=True)
+    gone = runs[keep:]
+    for d in gone:
+        shutil.rmtree(d)
+    return [d.name for d in gone]
 
 
 def run(start: str, end: str) -> None:

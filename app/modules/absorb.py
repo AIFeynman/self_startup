@@ -6,12 +6,13 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import agent
+from .. import agent, settings
 from ..db import ROOT
 from . import _absorb_hn as hn
 from . import _absorb_run as ar
@@ -228,6 +229,17 @@ class HnRunIn(BaseModel):
     end: str
 
 
+def _hn_launch(start: str, end: str) -> str:
+    d = hn.BASE / f"{start}_{end}"
+    r = hn.HRun(start, end)
+    with open(d / "run.log", "a") as log:
+        p = subprocess.Popen([sys.executable, "-m", "app.modules._absorb_hn", "--start", start, "--end", end],
+                             cwd=str(ROOT), env=agent.clean_env(), stdout=log, stderr=log, start_new_session=True)
+    PROCS[p.pid] = p
+    r.save("status.json", {**_read(d / "status.json", {}), "pid": p.pid, "done": False, "error": "", "launched": time.time()})
+    return d.name
+
+
 @router.post("/hn/runs")
 def hn_start(body: HnRunIn):
     if not all(re.fullmatch(r"\d{4}-\d\d-\d\d", x) for x in (body.start, body.end)) or body.start > body.end:
@@ -235,13 +247,46 @@ def hn_start(body: HnRunIn):
     d = hn.BASE / f"{body.start}_{body.end}"
     if d.exists() and _hn_state(d)["running"]:
         raise HTTPException(409, "这个时间窗正在跑")
-    r = hn.HRun(body.start, body.end)
-    with open(d / "run.log", "a") as log:
-        p = subprocess.Popen([sys.executable, "-m", "app.modules._absorb_hn", "--start", body.start, "--end", body.end],
-                             cwd=str(ROOT), env=agent.clean_env(), stdout=log, stderr=log, start_new_session=True)
-    PROCS[p.pid] = p
-    r.save("status.json", {**_read(d / "status.json", {}), "pid": p.pid, "done": False, "error": ""})
-    return {"id": d.name}
+    return {"id": _hn_launch(body.start, body.end)}
+
+
+RETRY_S = 3 * 3600
+
+
+def hn_maybe_run(now: float | None = None) -> str:
+    """每天一次：最近 hn_days 天（到昨天为止）还没有跑完的结果、也没有在跑，就启动；中断的 3 小时后从断点接着跑。返回启动的目录名，没启动返回空。"""
+    if not settings.get("absorb.hn_daily", True):
+        return ""
+    now = now or time.time()
+    if any(_hn_state(f.parent)["running"] for f in hn.BASE.glob("*/run.json")):
+        return ""
+    start, end = hn.daily_window(int(settings.get("absorb.hn_days", 7)))
+    d = hn.BASE / f"{start}_{end}"
+    if d.exists():
+        st = _hn_state(d)
+        if st["done"]:
+            return ""
+        if now - float(_read(d / "status.json", {}).get("updated") or 0) < RETRY_S:
+            return ""
+    rid = _hn_launch(start, end)
+    hn.prune(int(settings.get("absorb.hn_keep", 14)))
+    return rid
+
+
+def _hn_loop() -> None:
+    time.sleep(180)
+    while True:
+        try:
+            hn_maybe_run()
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(1800)
+
+
+def on_startup() -> None:
+    if os.environ.get("SELF_STARTUP_NO_AUTOREFRESH"):
+        return
+    threading.Thread(target=_hn_loop, daemon=True, name="absorb-hn-daily").start()
 
 
 @router.get("/hn/runs/{rid}")
