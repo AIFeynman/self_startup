@@ -146,9 +146,9 @@ class Ctx:
         self.fails = 0
         self.lock = threading.Lock()
 
-    def call(self, model: str, system: str, user: str):
-        cmd = [settings.get("engines.claude.bin", "claude"), "-p", "--model", model, "--output-format", "json", "--tools", "",
-               "--system-prompt", system, "--settings", json.dumps({"disableAllHooks": True})]
+    def call(self, model: str, system: str, user: str, web: bool = False):
+        cmd = [settings.get("engines.claude.bin", "claude"), "-p", "--model", model, "--output-format", "json", "--tools", "WebSearch" if web else "",
+               *(["--allowedTools", "WebSearch"] if web else []), "--system-prompt", system, "--settings", json.dumps({"disableAllHooks": True})]
         for _ in range(3):
             try:
                 p = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=900, env=agent.clean_env(), cwd=str(BASE))
@@ -190,9 +190,15 @@ def _clean(o: dict, p: dict) -> dict | None:
     return card if card["scene"] and card["pain"] else None
 
 
+def _retry(card: dict, p: dict) -> bool:
+    """被跳过的卡（材料不足）：材料长到 600 字以上、且比上次多 300 字以上时重抽一次。"""
+    n = len(p["text"])
+    return bool(card.get("skip")) and n >= 600 and n >= card.get("tl", 0) + 300
+
+
 def extract(ctx: Ctx, P: dict, only: list[str], max_new: int = 0) -> dict:
     cards = _load("cards.json", {})
-    todo = [k for k in (only or P) if k in P and k not in cards]
+    todo = [k for k in (only or P) if k in P and (k not in cards or _retry(cards[k], P[k]))]
     if max_new:
         todo = sorted(todo, key=lambda k: P[k]["date"], reverse=True)[:max_new]
     rich = [k for k in todo if P[k]["rich"]]
@@ -210,7 +216,7 @@ def extract(ctx: Ctx, P: dict, only: list[str], max_new: int = 0) -> dict:
         with ctx.lock:
             for k in b:
                 card = _clean(got.get(k), P[k]) if k in got else None
-                cards[k] = card or {"name": P[k]["name"], "sources": P[k]["sources"], "skip": True}
+                cards[k] = card or {"name": P[k]["name"], "sources": P[k]["sources"], "skip": True, "tl": len(P[k]["text"])}
                 if card and (BASE / "graph.json").exists():
                     card["added"] = time.time()
             done[0] += len(b)
@@ -249,6 +255,54 @@ def fill_model(ctx: Ctx, P: dict, cards: dict) -> None:
     status(ctx, "model", 0, len(todo))
     with ThreadPoolExecutor(6) as ex:
         list(ex.map(run, batches))
+
+
+P_ENRICH = """你是产品研究员。用 WebSearch 查这个产品公开报道里的：收入规模、融资、增长做法、怎么收费。只写搜索结果里确有出处的内容，没有就写空串或空数组，不许编，不许猜。
+输入是 JSON：{"name","product","scene"}。只输出 JSON：{"arr":"年收入或 ARR，数字加口径和年月，≤40 字，如“ARR 约 $200M（媒体报道，2026-03）”","funding":"最近一轮融资：轮次、金额、估值、年月，≤50 字","growth":"它靠什么增长、怎么拉到用户，一两句连贯的话，≤80 字","tactics":[增长手段类别，从下面列表选 0–3 个，逐字一致：{tactics}],"model":"商业模式一句话，谁付钱、为什么付、怎么收，≤40 字","type":"商业模式分类，从下面列表选 1 个，逐字一致：{models}；没查到收费方式就写未披露"}"""
+
+
+def _enrich_todo(P: dict, cards: dict) -> list[str]:
+    heads, big = [], []
+    for k, v in cards.items():
+        if k not in P or v.get("skip") or v.get("enriched"):
+            continue
+        if "大公司 / AI native" in v["sources"]:
+            heads.append(k)
+        elif (v.get("arr_v") or 0) >= 50000 and (not v.get("growth") or v.get("bm_type") in (None, "", "未披露")):
+            big.append(k)
+    heads.sort(key=lambda k: "AICPB" in P[k]["text"])
+    return heads + sorted(big, key=lambda k: -(cards[k].get("arr_v") or 0))
+
+
+def enrich_web(ctx: Ctx, P: dict, cards: dict, limit: int) -> None:
+    """联网补：头部和高收入创业公司的收入规模、融资、增长做法、商业模式。只补卡里还空着的字段，已有的（支付渠道验证的收入、材料里抽到的）不覆盖。"""
+    todo = _enrich_todo(P, cards)[:limit]
+    done = [0]
+    system = P_ENRICH.replace("{tactics}", "、".join(TACTICS)).replace("{models}", "、".join(MODELS))
+
+    def run(k: str) -> None:
+        c = cards[k]
+        o = ctx.call(ctx.light, system, json.dumps({"name": c["name"], "product": c.get("product", ""), "scene": c.get("scene", "")}, ensure_ascii=False), web=True)
+        with ctx.lock:
+            if isinstance(o, dict):
+                s = lambda x, n: str(o.get(x) or "").strip()[:n]
+                if s("arr", 60) and not c.get("arr"):
+                    c["arr"], c["arr_grade"], c["arr_v"] = s("arr", 60), "reported", parse_usd(s("arr", 60))
+                if s("funding", 80):
+                    c["funding"] = s("funding", 80)
+                if s("growth", 160) and not c.get("growth"):
+                    c["growth"] = s("growth", 160)
+                    c["tactics"] = c.get("tactics") or [t for t in (o.get("tactics") or []) if t in TACTICS][:3]
+                if s("model", 90) and c.get("bm_type") in (None, "", "未披露"):
+                    c["bm"], c["bm_type"] = s("model", 90), (o.get("type") if o.get("type") in MODELS else "未披露")
+                c["enriched"] = time.strftime("%Y-%m-%d")
+            done[0] += 1
+            _save("cards.json", cards)
+            status(ctx, "enrich", done[0], len(todo))
+
+    status(ctx, "enrich", 0, len(todo))
+    with ThreadPoolExecutor(6) as ex:
+        list(ex.map(run, todo))
 
 
 def parse_usd(text: str) -> float:
@@ -416,6 +470,7 @@ def main() -> None:
     ap.add_argument("--domains-only", action="store_true")
     ap.add_argument("--rebuild", action="store_true")
     ap.add_argument("--max-new", type=int, default=0)
+    ap.add_argument("--enrich", type=int, default=0)
     a = ap.parse_args()
     ctx = Ctx()
     status(ctx, "start", pid=os.getpid(), error="", finished=False)
@@ -433,6 +488,8 @@ def main() -> None:
         if not a.graph_only:
             fill_model(ctx, P, cards)
             fill_arr(ctx, P, cards)
+            if a.enrich:
+                enrich_web(ctx, P, cards, a.enrich)
         if not only and not a.limit:
             g = _load("graph.json", None)
             if a.graph_only or a.rebuild or not g:
