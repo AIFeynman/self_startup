@@ -37,17 +37,18 @@ tactics：增长核心手段的类别，从下面固定列表选 0–3 个，必
 growth：增长核心手段的具体做法和依据（≤80 字，一两句连贯的话，数字只留量级，写清动作和结果；材料没讲就空串）。
 输入是 JSON 数组，每个元素 {{"id","name","sources","text"}}。只输出 JSON：{{"cards":[{{"id":..,"user":"","scene":"","pain":"","product":"","tactics":[],"growth":""}}]}}，每个 id 都要有。"""
 
-P_TAX = """下面每行是一个产品的“编号|场景|痛点”。请按场景大小建一棵两层分类：大场景（人在什么大领域里做事，如“育儿与家庭健康”“软件开发”“职场与学习”）8–14 个，每个大场景下 3–8 个子场景（具体到“一类决策或任务”，如“给宝宝加辅食的安全决策”）。
-要求：大场景之间不重叠；子场景名用一个短语（≤14 字）；每个大场景给一句话 desc（≤30 字）；不要有“其他”大场景，实在放不进的产品后面会单独处理。
-只输出 JSON：{"scenes":[{"name":"","desc":"","subs":[{"name":"","pain":"这个子场景里大家共同在打的痛点，≤40 字"}]}]}"""
+P_TAX = """下面每行是一个产品的“编号|场景|痛点”。请建一棵两层分类：第一层「用户场景」（用户在什么大领域里做事，如“育儿与家庭健康”“软件开发”“职场与学习”）8–14 个，每个给一句话 desc（≤30 字）；第二层「痛点」：该场景下一类用户共同卡住的具体痛点，每个场景 3–8 个。
+痛点名要写成痛点本身，一个短语（≤16 字，如“怕出错不敢开口”“喂辅食怕不安全”“线索响应太慢”），不要写成功能或任务名；pain 用一句话说清为什么痛、现有做法差在哪（≤40 字）。
+不同场景的痛点不重叠；不要有“其他”场景，实在放不进的产品后面会单独处理。
+只输出 JSON：{"scenes":[{"name":"","desc":"","subs":[{"name":"痛点短语","pain":"为什么痛"}]}]}"""
 
-P_ASSIGN = """把每个产品归入下面分类里最贴的一个子场景。分类（大场景/子场景，编号 S1、S2…）：
+P_ASSIGN = """把每个产品归入下面分类里最贴的一个痛点。分类（用户场景 / 痛点，编号 S1、S2…）：
 {tax}
 输入每行“编号|场景|痛点”。只输出 JSON：{{"r":{{"编号":"S编号"}}}}，每个编号都要有；真的一个都不贴就返回 "S0"。"""
 
-P_SUM = """你在为一个大场景写总结。输入是这个大场景下各子场景的产品（产品名、痛点、增长手段）。
-写两句话（总共≤110 字）：第一句说这个大场景里大家共同在打什么痛点；第二句说大家主要靠什么手段增长（只谈材料里有的，样本少或没讲增长就如实说“增长打法材料较少”）。不写具体数字。
-只输出 JSON：{"痛点增长":"…"}"""
+P_SUM = """你在为一个用户场景写总结。输入是这个场景下各痛点（编号、名称）及其产品（产品名、增长手段）。
+输出两部分：summary：两句话（≤110 字），先说这个场景里大家共同在打什么痛点，再说主要靠什么手段增长；subs：对每个痛点写一句增长方式聚合（≤60 字），概括这个痛点下的产品主要怎么拉到用户，只谈材料里有的，没有增长材料就写空串。不写具体数字。
+只输出 JSON：{"summary":"…","subs":{"痛点编号":"…"}}"""
 
 
 def _ro() -> sqlite3.Connection:
@@ -217,7 +218,7 @@ def build_graph(ctx: Ctx, cards: dict) -> dict:
     for i, s in enumerate(tax["scenes"]):
         mine = [(a, j) for a, i2, j in subs if i2 == i]
         scenes.append({"id": f"G{i + 1}", "name": s["name"], "desc": s.get("desc", ""), "summary": "",
-                       "subs": [{"id": a, "name": s["subs"][j]["name"], "pain": s["subs"][j].get("pain", ""), "products": []} for a, j in mine]})
+                       "subs": [{"id": a, "name": s["subs"][j]["name"], "pain": s["subs"][j].get("pain", ""), "growth": "", "products": []} for a, j in mine]})
     by_sid = {sb["id"]: sb for sc in scenes for sb in sc["subs"]}
     unplaced = []
     for k in keys:
@@ -227,9 +228,11 @@ def build_graph(ctx: Ctx, cards: dict) -> dict:
     scenes = [sc for sc in scenes if sc["subs"]]
 
     def summ(sc: dict) -> None:
-        inp = [{"子场景": sb["name"], "痛点": sb["pain"], "产品": [{"name": ok[k]["name"], "growth": ok[k]["growth"], "tactics": ok[k]["tactics"]} for k in sb["products"][:12]]} for sb in sc["subs"]]
-        o = ctx.call(ctx.light, P_SUM, json.dumps({"大场景": sc["name"], "子场景": inp}, ensure_ascii=False))
-        sc["summary"] = str((o or {}).get("痛点增长") or "")
+        inp = [{"编号": sb["id"], "痛点": sb["name"], "产品": [{"name": ok[k]["name"], "growth": ok[k]["growth"], "tactics": ok[k]["tactics"]} for k in sb["products"][:12]]} for sb in sc["subs"]]
+        o = ctx.call(ctx.light, P_SUM, json.dumps({"场景": sc["name"], "痛点": inp}, ensure_ascii=False))
+        sc["summary"] = str((o or {}).get("summary") or "")
+        for sb in sc["subs"]:
+            sb["growth"] = str(((o or {}).get("subs") or {}).get(sb["id"]) or "")
 
     status(ctx, "summary", 0, len(scenes))
     with ThreadPoolExecutor(6) as ex:
