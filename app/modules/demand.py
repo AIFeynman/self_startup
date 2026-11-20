@@ -38,17 +38,23 @@ def graph():
             "cards": {k: v for k, v in cards.items() if not v.get("skip")} if g else {}, "n_cards": sum(not v.get("skip") for v in cards.values())}
 
 
-@router.post("/run")
-def run(graph_only: bool = False):
+def start(graph_only: bool = False, max_new: int = 0) -> bool:
     st = dr._load("status.json", {})
     if not st.get("finished", True) and _alive(st.get("pid")):
-        raise HTTPException(409, "正在跑")
+        return False
     dr.BASE.mkdir(parents=True, exist_ok=True)
+    args = (["--graph-only"] if graph_only else []) + (["--max-new", str(max_new)] if max_new else [])
     with open(dr.BASE / "run.log", "a") as log:
-        p = subprocess.Popen([sys.executable, "-m", "app.modules._demand_run", *(["--graph-only"] if graph_only else [])],
-                             cwd=str(ROOT), env=agent.clean_env(), stdout=log, stderr=log, start_new_session=True)
+        p = subprocess.Popen([sys.executable, "-m", "app.modules._demand_run", *args], cwd=str(ROOT), env=agent.clean_env(), stdout=log, stderr=log, start_new_session=True)
     PROC[:] = [p]
     dr._save("status.json", {**st, "pid": p.pid, "finished": False, "error": "", "stage": "start"})
+    return True
+
+
+@router.post("/run")
+def run(graph_only: bool = False):
+    if not start(graph_only):
+        raise HTTPException(409, "正在跑")
     return {"ok": True}
 
 

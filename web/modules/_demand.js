@@ -15,7 +15,15 @@ const CSS = `
 .dm-it small { color: var(--muted); font-weight: 400; margin-left: 4px; }
 .dm-it .p { display: block; font-size: 12.5px; color: var(--muted); font-weight: 400; margin-top: 2px; line-height: 1.5; }
 .dm-box { font-size: 13.5px; background: var(--bg); border-radius: 8px; padding: 8px 10px; margin: 2px 2px 8px; line-height: 1.6; }
-.dm-co { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 10px; }
+.dm-strip { position: sticky; top: -8px; z-index: 2; background: var(--panel); margin: -8px -8px 10px; padding: 8px; border-bottom: 1px solid var(--line); }
+.dm-sort { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 13px; }
+.dm-sort button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; }
+.dm-sort button.on { background: var(--dark); color: var(--bg); border-color: var(--dark); }
+.dm-names { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.dm-names a { flex: none; border: 1px solid var(--line); border-radius: 8px; padding: 2px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; color: var(--text); background: var(--bg); }
+.dm-names a:hover { border-color: var(--accent); color: var(--accent); }
+.dm-names small { color: var(--muted); margin-left: 5px; font-size: 11.5px; }
+.dm-co { scroll-margin-top: 96px; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 10px; }
 .dm-co h4 { margin: 0 0 4px; font: 700 16px/1.4 var(--serif); }
 .dm-co dl { margin: 0; font-size: 14px; line-height: 1.6; } .dm-co dt { color: var(--muted); font-size: 12px; margin-top: 6px; } .dm-co dd { margin: 0; }
 .dm-tg { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 3px; }
@@ -36,12 +44,12 @@ const CSS = `
 `;
 
 const E = (s) => (s == null ? '' : String(s)).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const SRC = { '创业公司': '创', 'PH 日榜': 'PH', '增长 Case': '案' };
+const SRC = { '创业公司': '创', 'PH 日榜': 'PH', '增长 Case': '案', '大公司 / AI native': '大' };
 const STAGE = { start: '正在启动', extract: '逐个产品抽取需求卡', model: '补商业模式', arr: '补收入规模', taxonomy: '建场景和痛点分类', assign: '把产品归到痛点', summary: '写场景和痛点的增长总结', done: '完成' };
 
 export async function renderDemand(el, ctx, tabs) {
   const { api, h, ui } = ctx;
-  let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', S = '', P = '', timer;
+  let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', S = '', P = '', sortBy = 'def', timer;
   const fresh = new Set();
   const SEEN = 'dm-seen';
   const seen = new Set((() => { try { return JSON.parse(localStorage.getItem(SEEN) || '[]'); } catch { return []; } })());
@@ -67,6 +75,16 @@ export async function renderDemand(el, ctx, tabs) {
     const t = kind === 'tac' ? tacCount(keys) : bmCount(keys), mx = t[0]?.[1] || 1;
     return t.length ? `<div class="dm-bars">${t.map(([n, c]) => `<div><span>${E(n)}</span><i style="width:${Math.round(c / mx * 100)}%"></i><span>${c}</span></div>`).join('')}</div>` : '<span class="dm-m">材料里没讲</span>';
   };
+
+  const money = (v) => (v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${Math.round(v / 1e3)}k` : `$${Math.round(v)}`);
+  const ordered = (keys) => {
+    const a = [...keys];
+    if (sortBy === 'arr') a.sort((x, y) => (D.cards[y].arr_v || 0) - (D.cards[x].arr_v || 0));
+    else if (sortBy === 'new') a.sort((x, y) => (D.cards[y].date || '').localeCompare(D.cards[x].date || ''));
+    return a;
+  };
+  const strip = (keys) => `<div class="dm-strip"><div class="dm-sort"><span class="dm-m">${keys.length} 家 · 排序</span>${[['def', '默认'], ['arr', 'ARR 高→低'], ['new', '出现时间 新→旧']].map(([k, t]) => `<button data-sort="${k}" class="${sortBy === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+<div class="dm-names">${keys.map((k) => { const c = D.cards[k]; return `<a data-jump="${E(k)}" title="${E(c.scene)}">${E(c.name)}<small>${sortBy === 'new' ? E((c.date || '').slice(5)) : c.arr_v ? money(c.arr_v) : ''}</small></a>`; }).join('')}</div></div>`;
 
   const notice = () => {
     const nn = newN(Object.keys(D.cards)), run = D.status.running;
@@ -96,7 +114,7 @@ ${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''
 
   const company = (k) => {
     const c = D.cards[k], nw = fresh.has(k) || isNew(k);
-    return `<div class="dm-co"><h4>${E(c.name)}${nw ? '<b class="dm-dot">新</b>' : ''}</h4><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}</div>
+    return `<div class="dm-co" id="dm-c-${E(k)}"><h4>${E(c.name)}${nw ? '<b class="dm-dot">新</b>' : ''}</h4><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}${c.date ? ' · 出现于 ' + E(c.date) : ''}</div>
 <dl><dt>目标用户</dt><dd>${E(c.user)}</dd><dt>场景</dt><dd>「${E(c.scene)}」</dd><dt>痛点</dt><dd>${E(c.pain)}</dd><dt>产品</dt><dd>${E(c.product)}</dd>
 ${c.arr ? `<dt>收入规模</dt><dd>${E(c.arr)}<div class="dm-tg"><span class="b">${c.arr_grade === 'verified' ? '支付渠道验证' : '自述 / 报道，未验证'}</span></div></dd>` : ''}<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span class="b">${E(c.bm_type)}</span></div>` : ''}</dd>
 <dt>增长核心手段</dt><dd>${c.growth ? E(c.growth) : '<span class="dm-m">材料里没讲增长</span>'}${c.tactics.length ? `<div class="dm-tg">${c.tactics.map((t) => `<span>${E(t)}</span>`).join('')}</div>` : ''}</dd>
@@ -119,7 +137,7 @@ ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}
         + sc.subs.filter((sb) => hits(sb).length).map((sb) => `<div class="dm-it ${sb.id === P ? 'on' : ''}" data-sb="${sb.id}">${E(sb.name)}<small>${hits(sb).length}</small>${dot(newN(sb.products))}<span class="p">${E(sb.pain)}</span>${tacCount(sb.products).slice(0, 2).map((t) => `<span class="dm-chp">${E(t[0])}</span>`).join('')}</div>`).join('');
       const sb = sc.subs.find((x) => x.id === P);
       c3 = sb
-        ? `<div class="dm-box"><b>大家怎么增长：</b>${sb.growth ? E(sb.growth) : '<span class="dm-m">增长材料较少</span>'}<div class="dm-m" style="margin-top:4px">${tacCount(hits(sb)).map((t) => `<span class="dm-chp">${E(t[0])} ×${t[1]}</span>`).join('')}${bmCount(hits(sb)).map((t) => `<span class="dm-chp b">${E(t[0])} ×${t[1]}</span>`).join('')}</div></div>${hits(sb).map(company).join('')}`
+        ? `${strip(ordered(hits(sb)))}<div class="dm-box"><b>大家怎么增长：</b>${sb.growth ? E(sb.growth) : '<span class="dm-m">增长材料较少</span>'}<div class="dm-m" style="margin-top:4px">${tacCount(hits(sb)).map((t) => `<span class="dm-chp">${E(t[0])} ×${t[1]}</span>`).join('')}${bmCount(hits(sb)).map((t) => `<span class="dm-chp b">${E(t[0])} ×${t[1]}</span>`).join('')}</div></div>${ordered(hits(sb)).map(company).join('')}`
         : `<div class="dm-box">${E(sc.summary)}</div><div class="dm-m">增长手段分布（${ks.length} 家）</div>${bars(ks)}<div class="dm-m" style="margin-top:8px">商业模式分布</div>${bars(ks, 'bm')}`;
     }
     return `<div class="dm-3"><div>${c1}</div><div>${c2}</div><div>${c3}</div></div>`;
@@ -165,10 +183,12 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
   };
 
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
-    if (ds.v) view = ds.v;
+    if (ds.jump) { document.getElementById('dm-c-' + ds.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+    if (ds.sort) sortBy = ds.sort;
+    else if (ds.v) view = ds.v;
     else if (ds.s !== undefined) src = src === ds.s ? '' : ds.s;
     else if (ds.t !== undefined) tac = tac === ds.t ? '' : ds.t;
     else if (ds.b !== undefined) bm = bm === ds.b ? '' : ds.b;

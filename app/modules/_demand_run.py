@@ -23,7 +23,8 @@ from ..db import DATA_DIR, DB_PATH
 BASE = DATA_DIR / "demand"
 TACTICS = ["内容 / SEO", "付费投放", "创作者 / 达人", "社区 / UGC", "病毒 / 分享机制", "免费增值 / PLG", "嵌入现有产品 / 集成", "渠道 / 联盟合作", "发布平台 / 媒体", "线下 / 活动", "定价 / 订阅机制"]
 MODELS = ["订阅制", "按量付费", "一次性买断", "交易抽佣", "广告变现", "免费增值", "企业销售", "联盟分成", "开源+托管", "未披露"]
-SOURCES = ("创业公司", "PH 日榜", "增长 Case")
+SOURCES = ("创业公司", "PH 日榜", "增长 Case", "大公司 / AI native")
+ANON = re.compile(r"confidential|anonymous|stealth|unnamed|undisclosed", re.I)
 MAT_CHARS = 2600
 STATUS = BASE / "status.json"
 
@@ -38,10 +39,10 @@ tactics：增长核心手段的类别，从下面固定列表选 0–3 个，必
 growth：增长核心手段的具体做法和依据（≤80 字，一两句连贯的话，数字只留量级，写清动作和结果；材料没讲就空串）。
 输入是 JSON 数组，每个元素 {{"id","name","sources","text"}}。只输出 JSON：{{"cards":[{{"id":..,"user":"","scene":"","pain":"","product":"","tactics":[],"growth":""}}]}}，每个 id 都要有。"""
 
-P_TAX = """下面每行是一个产品的“编号|场景|痛点”。请建一棵两层分类：第一层「用户场景」（用户在什么大领域里做事，如“育儿与家庭健康”“软件开发”“职场与学习”）8–14 个，每个给一句话 desc（≤30 字）；第二层「痛点」：该场景下一类用户共同卡住的具体痛点，每个场景 3–8 个。
+P_TAX = """下面每行是一个产品的“编号|场景|痛点”。请建一棵两层分类：第一层「用户场景」（用户在什么大领域里做事，如“育儿与家庭健康”“软件开发”“职场与学习”）{ns} 个，每个给一句话 desc（≤30 字）；第二层「痛点」：该场景下一类用户共同卡住的具体痛点，每个场景 {nb} 个。
 痛点名要写成痛点本身，一个短语（≤16 字，如“怕出错不敢开口”“喂辅食怕不安全”“线索响应太慢”），不要写成功能或任务名；pain 用一句话说清为什么痛、现有做法差在哪（≤40 字）。
 不同场景的痛点不重叠；不要有“其他”场景，实在放不进的产品后面会单独处理。
-只输出 JSON：{"scenes":[{"name":"","desc":"","subs":[{"name":"痛点短语","pain":"为什么痛"}]}]}"""
+只输出 JSON：{{"scenes":[{{"name":"","desc":"","subs":[{{"name":"痛点短语","pain":"为什么痛"}}]}}]}}"""
 
 P_ASSIGN = """把每个产品归入下面分类里最贴的一个痛点。分类（用户场景 / 痛点，编号 S1、S2…）：
 {tax}
@@ -79,9 +80,11 @@ def collect() -> dict[str, dict]:
     P: dict[str, dict] = {}
 
     def get(name: str) -> dict:
-        return P.setdefault(norm(name), {"name": name.strip(), "sources": [], "parts": [], "links": [], "track": ""})
+        return P.setdefault(norm(name), {"name": name.strip(), "sources": [], "parts": [], "links": [], "track": "", "date": ""})
 
-    def add(p: dict, src: str, part: str, link: tuple[str, str] | None = None, track: str = "") -> None:
+    def add(p: dict, src: str, part: str, link: tuple[str, str] | None = None, track: str = "", date: str = "") -> None:
+        if date and (not p["date"] or date < p["date"]):
+            p["date"] = date[:10]
         if src not in p["sources"]:
             p["sources"].append(src)
         p["parts"].append(part)
@@ -89,14 +92,25 @@ def collect() -> dict[str, dict]:
             p["links"].append(link)
         p["track"] = p["track"] or track
 
-    for r in c.execute("SELECT c.name, c.slug, c.track, c.ext, p.content FROM intel_profile p JOIN intel_company c ON c.id=p.company_id "
+    for r in c.execute("SELECT c.name, c.slug, c.track, c.ext, c.created_at, p.content FROM intel_profile p JOIN intel_company c ON c.id=p.company_id "
                        "WHERE c.kind='startup' AND p.id IN (SELECT MAX(id) FROM intel_profile GROUP BY company_id) AND p.content!=''"):
         ext = json.loads(r["ext"] or "{}")
         slug = ext.get("trustmrr") or r["slug"]
-        add(get(r["name"]), "创业公司", "【生意拆解】\n" + r["content"], ("TrustMRR", f"https://trustmrr.com/startup/{slug}"), r["track"])
+        add(get(r["name"]), "创业公司", "【生意拆解】\n" + r["content"], ("TrustMRR", f"https://trustmrr.com/startup/{slug}"), r["track"], ext.get("listed_at") or r["created_at"] or "")
+    had = {norm(r["name"]) for r in c.execute("SELECT c.name FROM intel_profile p JOIN intel_company c ON c.id=p.company_id WHERE p.content!=''")}
+    for r in c.execute("SELECT name, slug, track, ext, created_at FROM intel_company WHERE kind='startup' AND enabled=1 AND ai!=0"):
+        ext = json.loads(r["ext"] or "{}")
+        if norm(r["name"]) in had or ANON.search(r["name"]) or not (ext.get("description") or ext.get("intro_zh")):
+            continue
+        f = lambda k, lab: f"{lab}：{ext[k]}" if ext.get(k) else ""
+        txt = "\n".join(x for x in (f("intro_zh", "一句话"), f("description", "描述")[:760], f("category", "分类"), f("audience", "受众"), f("persona", "用户画像"), f("website", "网站"), f("founded", "成立"), f("country", "国家"), f("payment", "收款渠道")) if x)
+        add(get(r["name"]), "创业公司", "【TrustMRR 档案】\n" + txt, ("TrustMRR", f"https://trustmrr.com/startup/{ext.get('trustmrr') or r['slug']}"), r["track"], ext.get("listed_at") or r["created_at"] or "")
+    for r in c.execute("SELECT id, name, category, note, created_at FROM intel_company WHERE kind!='startup' AND enabled=1"):
+        ev = c.execute("SELECT title, date, summary FROM intel_event WHERE company_id=? AND merged_into IS NULL ORDER BY date DESC LIMIT 8", (r["id"],)).fetchall()
+        add(get(r["name"]), "大公司 / AI native", f"【产品雷达】{r['name']}（{r['category']}）{r['note'] or ''}\n" + "\n".join(f"- {e['date']} {e['title']}：{(e['summary'] or '')[:120]}" for e in ev), None, "", r["created_at"] or "")
     for r in c.execute("SELECT g.company, g.content, i.url, i.source, i.date FROM intel_growth_case g JOIN intel_growth_item i ON i.id=g.item_id "
                        "WHERE g.status='done' AND g.content!='' AND g.id IN (SELECT MAX(id) FROM intel_growth_case WHERE status='done' GROUP BY item_id) AND g.company!=''"):
-        add(get(r["company"]), "增长 Case", "【增长 Case】\n" + r["content"], (r["source"] or "来源", r["url"]) if r["url"] else None)
+        add(get(r["company"]), "增长 Case", "【增长 Case】\n" + r["content"], (r["source"] or "来源", r["url"]) if r["url"] else None, "", r["date"] or "")
     seen: dict[str, dict] = {}
     for r in c.execute("SELECT date, items FROM intel_ph_day ORDER BY date"):
         for it in json.loads(r["items"] or "[]"):
@@ -105,14 +119,14 @@ def collect() -> dict[str, dict]:
     for k, it in seen.items():
         p = get(it["name"])
         add(p, "PH 日榜", f"【PH {it['day']} 第 {it.get('rank')} 名，{it.get('votes')} 票】\n{it.get('title', '')}\n解读：{it.get('why', '')}\n话题：{'、'.join(it.get('topics') or [])}",
-            ("Product Hunt", it.get("url", "")) if it.get("url") else None, it.get("track", ""))
+            ("Product Hunt", it.get("url", "")) if it.get("url") else None, it.get("track", ""), it["day"])
     rev: dict[str, dict] = {}
     for r in c.execute("SELECT c.name, m.metric, m.value, m.grade, m.date FROM intel_metric m JOIN intel_company c ON c.id=m.company_id WHERE m.metric IN ('arr','mrr') ORDER BY m.date"):
         rev.setdefault(norm(r["name"]), {})[r["metric"]] = (r["value"], r["grade"], r["date"])
     for k, p in P.items():
         p["rev"] = rev.get(k, {})
         p["text"] = "\n\n".join(p.pop("parts"))[:MAT_CHARS]
-        p["rich"] = any(s != "PH 日榜" for s in p["sources"])
+        p["rich"] = len(p["text"]) > 1200
     return P
 
 
@@ -168,13 +182,15 @@ def _clean(o: dict, p: dict) -> dict | None:
     s = lambda k, n: str(o.get(k) or "").strip()[:n]
     tac = [t for t in (o.get("tactics") or []) if t in TACTICS][:3]
     card = {"name": p["name"], "sources": p["sources"], "links": p["links"], "track": p["track"], "user": s("user", 60), "scene": s("scene", 60),
-            "pain": s("pain", 120), "product": s("product", 80), "tactics": tac, "growth": s("growth", 160)}
+            "pain": s("pain", 120), "product": s("product", 80), "tactics": tac, "growth": s("growth", 160), "date": p.get("date", "")}
     return card if card["scene"] and card["pain"] else None
 
 
-def extract(ctx: Ctx, P: dict, only: list[str]) -> dict:
+def extract(ctx: Ctx, P: dict, only: list[str], max_new: int = 0) -> dict:
     cards = _load("cards.json", {})
     todo = [k for k in (only or P) if k in P and k not in cards]
+    if max_new:
+        todo = sorted(todo, key=lambda k: P[k]["date"], reverse=True)[:max_new]
     rich = [k for k in todo if P[k]["rich"]]
     thin = [k for k in todo if not P[k]["rich"]]
     batches = [[k] for k in rich] + [thin[i:i + 8] for i in range(0, len(thin), 8)]
@@ -199,7 +215,7 @@ def extract(ctx: Ctx, P: dict, only: list[str]) -> dict:
         list(ex.map(run, batches))
     for k, v in list(cards.items()):
         if k in P and not v.get("skip"):
-            v["sources"], v["links"] = P[k]["sources"], P[k]["links"]
+            v["sources"], v["links"], v["date"] = P[k]["sources"], P[k]["links"], P[k]["date"]
     _save("cards.json", cards)
     return cards
 
@@ -226,6 +242,19 @@ def fill_model(ctx: Ctx, P: dict, cards: dict) -> None:
     status(ctx, "model", 0, len(todo))
     with ThreadPoolExecutor(6) as ex:
         list(ex.map(run, batches))
+
+
+def parse_usd(text: str) -> float:
+    """“ARR 约 $50M” / “MRR $55.1k，折合 ARR 约 $661.3k” → 年化美元；MRR 乘 12，取折合后的 ARR。"""
+    ms = re.findall(r"(ARR|MRR)?[^$]{0,12}\$\s?([\d,.]+)\s*([kKmMbB]?)", text)
+    best = 0.0
+    for lab, num, u in ms:
+        try:
+            v = float(num.replace(",", "").rstrip(".")) * {"": 1, "k": 1e3, "m": 1e6, "b": 1e9}[u.lower()]
+        except ValueError:
+            continue
+        best = max(best, v * (12 if lab == "MRR" and "折合" not in text else 1))
+    return best
 
 
 def usd(v: float) -> str:
@@ -261,9 +290,15 @@ def fill_arr(ctx: Ctx, P: dict, cards: dict) -> None:
                 if t:
                     cards[k]["arr"], cards[k]["arr_grade"] = t, "reported"
 
+    for v in cards.values():
+        if v.get("arr"):
+            v["arr_v"] = parse_usd(v["arr"])
     status(ctx, "arr", 0, len(need))
     with ThreadPoolExecutor(6) as ex:
         list(ex.map(run, batches))
+    for v in cards.values():
+        if v.get("arr"):
+            v["arr_v"] = parse_usd(v["arr"])
     _save("cards.json", cards)
 
 
@@ -298,7 +333,8 @@ def build_graph(ctx: Ctx, cards: dict) -> dict:
     keys = list(ok)
     line = lambda k: f"{k}|{ok[k]['scene']}|{ok[k]['pain'][:40]}"
     status(ctx, "taxonomy", 0, len(keys))
-    tax = ctx.call(ctx.strong, P_TAX, "\n".join(line(k) for k in keys))
+    big = len(keys) > 600
+    tax = ctx.call(ctx.strong, P_TAX.format(ns="12–20" if big else "8–14", nb="5–10" if big else "3–8"), "\n".join(line(k) for k in keys))
     if not tax or not tax.get("scenes"):
         raise RuntimeError("建场景分类失败：模型没有返回结果")
     subs: list[tuple[str, int, int]] = []
@@ -371,6 +407,8 @@ def main() -> None:
     ap.add_argument("--only", action="append", default=[])
     ap.add_argument("--graph-only", action="store_true")
     ap.add_argument("--domains-only", action="store_true")
+    ap.add_argument("--rebuild", action="store_true")
+    ap.add_argument("--max-new", type=int, default=0)
     a = ap.parse_args()
     ctx = Ctx()
     status(ctx, "start", pid=os.getpid(), error="", finished=False)
@@ -384,13 +422,13 @@ def main() -> None:
         only = [norm(x) for x in a.only]
         if a.limit:
             only = (only or sorted(P, key=lambda k: not P[k]["rich"]))[: a.limit]
-        cards = _load("cards.json", {}) if a.graph_only else extract(ctx, P, only)
+        cards = _load("cards.json", {}) if a.graph_only else extract(ctx, P, only, a.max_new)
         if not a.graph_only:
             fill_model(ctx, P, cards)
             fill_arr(ctx, P, cards)
         if not only and not a.limit:
             g = _load("graph.json", None)
-            if a.graph_only or not g:
+            if a.graph_only or a.rebuild or not g:
                 build_graph(ctx, cards)
             else:
                 add_new(ctx, g, cards)

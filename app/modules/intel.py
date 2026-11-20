@@ -218,6 +218,8 @@ CFG_DEFAULTS = {
     "profile_days": 30,        # 同一家多少天内不重复自动写
     "ph_top": 20,              # PH 日榜取前几名
     "tracks_per_round": 1500,  # 每轮最多归几家赛道（30 家一批、6 批并发）
+    "demand": True,            # 需求图谱：每天把新收录的产品抽成需求卡并归入图谱
+    "demand_max_new": 150,     # 每天最多新抽几个产品（按出现时间从新到旧）
     "growth": True,            # 每日增长 Case
     "growth_collect_hours": 12,  # 增长素材多久采一次（X 名单每次每个账号约 $0.001）
     "growth_score_per_round": 120,  # 每轮最多给几条素材打分（20 条一批）
@@ -1135,10 +1137,22 @@ def scan_reported_arr(limit: int = 80) -> dict:
     return {"reported": n, "arr_errors": errors}
 
 
+def demand_sync() -> dict:
+    """每天一次，TrustMRR 快照和 PH 日榜都更新后，起独立进程把新产品抽成需求卡并增量归位（页面「需求图谱」）。"""
+    day = datetime.now().strftime("%Y-%m-%d")
+    if not cfg("demand") or _state("demand_day") == day or _state("startup_day") != day:
+        return {"skipped": True}
+    from . import demand as dm
+    started = dm.start(max_new=int(cfg("demand_max_new") or 0))
+    if started:
+        _set_state("demand_day", day)
+    return {"started": started}
+
+
 def startup_cycle(force: bool = False, cards: bool = True) -> dict:
     res = {}
     for name, fn in (("growth", lambda: growth_daily(cards=cards) if cfg("growth") else {}), ("snapshot", lambda: startup_snapshot(force)), ("tracks", classify_startup_tracks), ("ph", ph_daily),
-                     ("arr", scan_reported_arr), ("profiles", lambda: queue_profiles() if cards else 0)):
+                     ("arr", scan_reported_arr), ("profiles", lambda: queue_profiles() if cards else 0), ("demand", demand_sync)):
         try:
             res[name] = fn()
         except Exception as e:  # noqa: BLE001
