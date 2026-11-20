@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from .. import db, jobs, settings
 from . import _intel_events as ev
+from . import _intel_head as head
 from . import _intel_growth as gr
 from . import _intel_snap as snap
 from . import _intel_startup as st
@@ -312,6 +313,13 @@ def seed() -> int:
                                        "product": s.get("product", ""), "every_hours": watch.EVERY_HOURS.get(s["kind"], 6),
                                        "note": s.get("note", ""), "created_at": db.now()})
             n += 1
+    for name, category, note in head.HEAD:
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "head-" + str(abs(hash(name)))[:8]
+        if db.row("SELECT 1 FROM intel_company WHERE slug=? OR lower(name)=lower(?)", [slug, name]):
+            continue
+        db.insert("intel_company", {"slug": slug, "name": name, "tier": 3, "kind": "native", "category": category, "note": note,
+                                    "created_at": db.now(), "updated_at": db.now()})
+        n += 1
     return n
 
 

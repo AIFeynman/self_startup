@@ -39,6 +39,9 @@ tactics：增长核心手段的类别，从下面固定列表选 0–3 个，必
 growth：增长核心手段的具体做法和依据（≤80 字，一两句连贯的话，数字只留量级，写清动作和结果；材料没讲就空串）。
 输入是 JSON 数组，每个元素 {{"id","name","sources","text"}}。只输出 JSON：{{"cards":[{{"id":..,"user":"","scene":"","pain":"","product":"","tactics":[],"growth":""}}]}}，每个 id 都要有。"""
 
+P_HEAD = P_CARD.replace("只根据材料写，材料没讲的字段写空串或空数组，不许编；增长手段尤其如此，PH 简介一般没讲增长，就返回空。",
+                        "这些是头部产品，材料只有名称和一句话。请结合材料和你确知的公开信息来写；不确定的字段写空串或空数组，不许编；增长手段只写你确知的公开做法，否则返回空。") + "\n每个 id 都必须给出 scene 和 pain。"
+
 P_TAX = """下面每行是一个产品的“编号|场景|痛点”。请建一棵两层分类：第一层「用户场景」（用户在什么大领域里做事，如“育儿与家庭健康”“软件开发”“职场与学习”）{ns} 个，每个给一句话 desc（≤30 字）；第二层「痛点」：该场景下一类用户共同卡住的具体痛点，每个场景 {nb} 个。
 痛点名要写成痛点本身，一个短语（≤16 字，如“怕出错不敢开口”“喂辅食怕不安全”“线索响应太慢”），不要写成功能或任务名；pain 用一句话说清为什么痛、现有做法差在哪（≤40 字）。
 不同场景的痛点不重叠；不要有“其他”场景，实在放不进的产品后面会单独处理。
@@ -193,12 +196,15 @@ def extract(ctx: Ctx, P: dict, only: list[str], max_new: int = 0) -> dict:
         todo = sorted(todo, key=lambda k: P[k]["date"], reverse=True)[:max_new]
     rich = [k for k in todo if P[k]["rich"]]
     thin = [k for k in todo if not P[k]["rich"]]
-    batches = [[k] for k in rich] + [thin[i:i + 8] for i in range(0, len(thin), 8)]
+    heads = [k for k in thin if "大公司 / AI native" in P[k]["sources"]]
+    thin = [k for k in thin if k not in heads]
+    batches = [[k] for k in rich] + [thin[i:i + 8] for i in range(0, len(thin), 8)] + [heads[i:i + 6] for i in range(0, len(heads), 6)]
     done = [0]
 
     def run(b: list[str]) -> None:
         inp = [{"id": k, "name": P[k]["name"], "sources": P[k]["sources"], "text": P[k]["text"]} for k in b]
-        o = ctx.call(ctx.light, P_CARD.format(tactics="、".join(TACTICS)), json.dumps(inp, ensure_ascii=False))
+        head = all("大公司 / AI native" in P[k]["sources"] for k in b)
+        o = ctx.call(ctx.strong if head else ctx.light, (P_HEAD if head else P_CARD).format(tactics="、".join(TACTICS)), json.dumps(inp, ensure_ascii=False))
         got = {str(x.get("id")): x for x in (o or {}).get("cards", []) if isinstance(x, dict)}
         with ctx.lock:
             for k in b:
