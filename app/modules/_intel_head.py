@@ -1,4 +1,69 @@
 """头部 AI 产品名单：只入库不监控（无信息源），供需求图谱按产品雷达公司库提炼。名单来自常见榜单的头部产品（a16z Top 100 / 流量榜同类），每季度对一次。"""
+import html
+import re
+
+import httpx
+
+AICPB = "https://aicpb.com/ai-rankings/products/"
+PAGES = {
+    "ai-agent-rankings": ("个人 Agent", "AI Agent 榜"), "ai-character-rankings": ("陪伴 / 角色对话", "AI 角色榜"), "ai-chatbot-rankings": ("模型 / 通用助手", "AI 聊天机器人榜"),
+    "ai-image-editor-rankings": ("图像 / 视频生成", "AI 图像编辑榜"), "ai-image-generator-rankings": ("图像 / 视频生成", "AI 图像生成榜"),
+    "ai-meeting-assistant-rankings": ("办公 / 生产力", "AI 会议助手榜"), "ai-music-generator-rankings": ("音乐 / 语音", "AI 音乐生成榜"), "ai-ppt-rankings": ("办公 / 生产力", "AI PPT 榜"),
+    "ai-search-rankings": ("搜索 / 研究", "AI 搜索榜"), "ai-video-editing-rankings": ("图像 / 视频生成", "AI 视频剪辑榜"), "ai-video-generators-rankings": ("图像 / 视频生成", "AI 视频生成榜"),
+    "vibe-coding-rankings": ("编程 / Agent", "AI 编程榜"), "openclaw-agent": ("个人 Agent", "Claw Agent 榜"), "china-ai-rankings": ("模型 / 通用助手", "国内 AI 榜"),
+    "global-ai-rankings": ("模型 / 通用助手", "全球 AI 榜"), "china-ai-growth-rate-ranking": ("模型 / 通用助手", "国内 AI 增速榜"), "ai-global-growth-rate-ranking": ("模型 / 通用助手", "全球 AI 增速榜"),
+    "claw-agent-growth-rate": ("个人 Agent", "Claw Agent 增速榜"),
+}
+DROP = {"shop", "百度网盘", "ai 搜索", "hostinger", "airtable", "supabase", "vercel", "ollama", "media", "z", "cal", "beautiful", "loom", "mentimeter", "阿里云", "腾讯云", "火山引擎", "讯飞开放平台", "硅基流动", "百度智能云", "百度文库"}
+ALIAS = {"chatgpt", "new bing", "newbing", "copilot", "bing", "google gemini", "claude by anthropic", "kimi", "qwen", "千问", "runwayml", "openart", "klingai", "kling ai", "dreamina", "you", "fireflies", "opus clip ai", "maxai", "github copilot"}
+
+
+def key(name: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", name.lower())
+
+
+def short(k: str) -> str:
+    return re.sub(r"(ai|app|io|com|cn)$", "", k)
+
+
+def vol(v: str) -> float:
+    m = re.match(r"^([\d.]+)([KMB]?)$", v)
+    return float(m.group(1)) * {"": 1, "K": 1e3, "M": 1e6, "B": 1e9}[m.group(2)] if m else 0.0
+
+
+MIN_VISITS = 2.5e6
+
+
+def clean(name: str) -> str:
+    n = re.split(r"[｜|]", name)[0]
+    return re.split(r" - |：|:\s|-阿里|-昆仑|-美图|-豆包|-「", n)[0].strip()
+
+
+def fetch_rows(client: httpx.Client | None = None) -> list[dict]:
+    """AICPB 各品类榜单（国内榜、增速榜能先看到新进榜的产品）→ [{name, cat, rank, visits, list}]。榜单页没有反爬，抓不到的页跳过。"""
+    own = client is None
+    client = client or httpx.Client(timeout=30, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+    out, seen = [], set()
+    try:
+        for page, (cat, label) in PAGES.items():
+            try:
+                t = client.get(AICPB + page).text
+            except httpx.HTTPError:
+                continue
+            t = re.sub(r"<script.*?</script>|<style.*?</style>", "", t, flags=re.S)
+            L = [x.strip() for x in html.unescape(re.sub(r"<[^>]+>", "\n", t)).split("\n") if x.strip()]
+            for i in range(len(L) - 3):
+                if L[i].isdigit() and re.match(r"^[\d.]+[KMB]?$", L[i + 2]) and re.match(r"^-?[\d.]+%$", L[i + 3]):
+                    name = clean(L[i + 1])
+                    k = key(name)
+                    if name and vol(L[i + 2]) >= MIN_VISITS and k not in seen and k not in DROP and name.lower() not in DROP and k not in {key(a) for a in ALIAS}:
+                        seen.add(k)
+                        out.append({"name": name, "cat": cat, "rank": int(L[i]), "visits": L[i + 2], "list": label})
+    finally:
+        if own:
+            client.close()
+    return out
+
 
 HEAD: list[tuple[str, str, str]] = [
     ("Character.AI", "陪伴 / 角色对话", "角色扮演和虚拟陪伴聊天，用户自建角色，年轻用户占比高。"),

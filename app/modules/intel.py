@@ -220,7 +220,9 @@ CFG_DEFAULTS = {
     "ph_top": 20,              # PH 日榜取前几名
     "tracks_per_round": 1500,  # 每轮最多归几家赛道（30 家一批、6 批并发）
     "demand": True,            # 需求图谱：每天把新收录的产品抽成需求卡并归入图谱
-    "demand_max_new": 150,     # 每天最多新抽几个产品（按出现时间从新到旧）
+    "demand_max_new": 150,
+    "demand_enrich": 30,        # 需求卡联网补收入 / 融资 / 增长：头部和高收入创业公司每天最多补多少个
+    "head_sync": True,          # 每周读 AICPB 榜单，把新进榜的 AI 产品入库     # 每天最多新抽几个产品（按出现时间从新到旧）
     "growth": True,            # 每日增长 Case
     "growth_collect_hours": 12,  # 增长素材多久采一次（X 名单每次每个账号约 $0.001）
     "growth_score_per_round": 120,  # 每轮最多给几条素材打分（20 条一批）
@@ -1145,13 +1147,37 @@ def scan_reported_arr(limit: int = 80) -> dict:
     return {"reported": n, "arr_errors": errors}
 
 
+def head_sync() -> dict:
+    """每周一次读 AICPB 各品类榜单（含国内榜、增速榜），公司库里没有的新进榜产品入库（只入库不监控），由 demand_sync 抽成需求卡。"""
+    day = db.today()
+    last = _state("head_day")
+    if not cfg("head_sync") or (last and (datetime.strptime(day, "%Y-%m-%d") - datetime.strptime(last, "%Y-%m-%d")).days < 7):
+        return {"skipped": True}
+    have = {f(head.key(r["name"])) for r in db.rows("SELECT name FROM intel_company") for f in (lambda k: k, head.short)}
+    n = 0
+    for x in head.fetch_rows():
+        k = head.key(x["name"])
+        if k in have or head.short(k) in have:
+            continue
+        have.update((k, head.short(k)))
+        slug = re.sub(r"[^a-z0-9]+", "-", x["name"].lower()).strip("-") or f"head-{int(time.time())}-{n}"
+        base, i = slug, 1
+        while db.row("SELECT 1 FROM intel_company WHERE slug=?", [slug]):
+            slug, i = f"{base}-{i}", i + 1
+        db.insert("intel_company", {"slug": slug, "name": x["name"], "tier": 3, "kind": "native", "category": x["cat"], "created_at": db.now(), "updated_at": db.now(),
+                                    "note": f"AICPB {day[:7]} {x['list']}第 {x['rank']} 名，月访问约 {x['visits']}。", "ext": {"aicpb": x}})
+        n += 1
+    _set_state("head_day", day)
+    return {"added": n}
+
+
 def demand_sync() -> dict:
     """每天一次，TrustMRR 快照和 PH 日榜都更新后，起独立进程把新产品抽成需求卡并增量归位（页面「知识库 · 产品需求」）。"""
     day = db.today()
     if not cfg("demand") or _state("demand_day") == day or _state("startup_day") != day:
         return {"skipped": True}
     from . import demand as dm
-    started = dm.start(max_new=int(cfg("demand_max_new") or 0))
+    started = dm.start(max_new=int(cfg("demand_max_new") or 0), enrich=int(cfg("demand_enrich") or 0))
     if started:
         _set_state("demand_day", day)
     return {"started": started}
@@ -1160,7 +1186,7 @@ def demand_sync() -> dict:
 def startup_cycle(force: bool = False, cards: bool = True) -> dict:
     res = {}
     for name, fn in (("growth", lambda: growth_daily(cards=cards) if cfg("growth") else {}), ("snapshot", lambda: startup_snapshot(force)), ("tracks", classify_startup_tracks), ("ph", ph_daily),
-                     ("arr", scan_reported_arr), ("profiles", lambda: queue_profiles() if cards else 0), ("demand", demand_sync)):
+                     ("arr", scan_reported_arr), ("profiles", lambda: queue_profiles() if cards else 0), ("head", head_sync), ("demand", demand_sync)):
         try:
             res[name] = fn()
         except Exception as e:  # noqa: BLE001

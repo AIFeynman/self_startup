@@ -92,7 +92,7 @@ export async function demandTab(host, ctx, q0 = '') {
   const buildIdx = () => {
     idx = new Map(Object.entries(D.cards).map(([k, c]) => {
       const name = low(c.name);
-      return [k, { name, words: name.split(/[^a-z0-9\u4e00-\u9fff]+/).filter((w) => w.length > 1), big: bigrams(name), all: low([c.name, c.user, c.scene, c.pain, c.product, c.bm, c.bm_type, c.growth, c.arr, (c.tactics || []).join(' '), (c.sources || []).join(' '), c.track].join(' | ')) }];
+      return [k, { name, words: name.split(/[^a-z0-9\u4e00-\u9fff]+/).filter((w) => w.length > 1), big: bigrams(name), all: low([c.name, c.user, c.scene, c.pain, c.product, c.bm, c.bm_type, c.growth, c.arr, c.funding, (c.tactics || []).join(' '), (c.sources || []).join(' '), c.track].join(' | ')) }];
     }));
   };
   const tokScore = (t, x) => {
@@ -203,7 +203,7 @@ ${q.trim() ? `<button class="ghost" data-clearq="1">清除「${E(q)}」</button>
     const rate = `<span class="dm-rate" title="给这家打分（再点一次取消），之后可按星级筛选">${[1, 2, 3, 4, 5].map((i) => `<button data-rate="${i}" data-k="${E(k)}" aria-label="${i} 星" class="${i <= v ? 'on' : ''}">${starSvg}</button>`).join('')}</span>`;
     return `<div class="dm-co" id="dm-c-${E(k)}">${rate}<h4>${E(c.name)}${nw ? '<b class="dm-dot">新</b>' : ''}</h4><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}${c.date ? ' · 出现于 ' + E(c.date) : ''}</div>
 <dl><dt>目标用户</dt><dd>${E(c.user)}</dd><dt>场景</dt><dd>「${E(c.scene)}」</dd><dt>痛点</dt><dd>${E(c.pain)}</dd><dt>产品</dt><dd>${E(c.product)}</dd>
-${c.arr ? `<dt>收入规模</dt><dd>${E(c.arr)}<div class="dm-tg"><span class="b">${c.arr_grade === 'verified' ? '支付渠道验证' : '自述 / 报道，未验证'}</span></div></dd>` : ''}<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span class="b">${E(c.bm_type)}</span></div>` : ''}</dd>
+${c.arr ? `<dt>收入规模</dt><dd>${E(c.arr)}<div class="dm-tg"><span class="b">${c.arr_grade === 'verified' ? '支付渠道验证' : '自述 / 报道，未验证'}</span></div></dd>` : ''}${c.funding ? `<dt>融资</dt><dd>${E(c.funding)}</dd>` : ''}<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span class="b">${E(c.bm_type)}</span></div>` : ''}</dd>
 <dt>增长核心手段</dt><dd>${c.growth ? E(c.growth) : '<span class="dm-m">材料里没讲增长</span>'}${c.tactics.length ? `<div class="dm-tg">${c.tactics.map((t) => `<span>${E(t)}</span>`).join('')}</div>` : ''}</dd>
 ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}" target="_blank" rel="noopener">${E(l[0])}</a>`).join(' · ')}</dd>` : ''}</dl></div>`;
   };
