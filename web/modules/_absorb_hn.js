@@ -187,7 +187,7 @@ ${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<di
       if (d.v && !d.g) { view = d.v; return draw(); }
       if (d.g) {
         if (d.g === 'todo') F.todo = !F.todo;
-        else { if (d.g === 'res') F.exp = ''; if (d.g === 'exp') F.res = ''; F[d.g] = F[d.g] === d.v ? '' : d.v; F.open.clear(); }
+        else { F[d.g] = F[d.g] === d.v ? '' : d.v; F.open.clear(); }
         return draw();
       }
       if (d.all) { F.open.add(+d.all); return draw(); }
