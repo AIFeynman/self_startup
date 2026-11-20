@@ -69,7 +69,7 @@ DEFAULTS: dict = {
     "absorb": {"embed_python": "/Users/libiao/project/test_feynman/learn_evolve-work-agent-design/.venv/bin/python",
                "embed_model": "Qwen/Qwen3-Embedding-0.6B", "strong_model": "claude-opus-5-5",
                # HN 吸收：每天定时跑一次最近 hn_days 天（到昨天为止，UTC），只留最近 hn_keep 次的结果目录
-               "hn_daily": True, "hn_days": 7, "hn_keep": 14},
+               "hn_daily": True, "hn_days": 7, "hn_keep": 40},
     "paper": {"llm_engine": "haiku", "feed_ingest": True, "maintain_days": 7},
     # 理财：信号变化 / 每日汇总提醒（行情只在页面上手动刷新，刷新后才检查）；target = 一年收益目标；
     # proxy = 实时报价 WebSocket 走的代理（如 "http://127.0.0.1:12000"），空 = 按进程环境变量
