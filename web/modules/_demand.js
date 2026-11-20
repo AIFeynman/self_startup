@@ -23,10 +23,14 @@ const CSS = `
 .dm-n.l { font-size: 12.5px; padding: 0 9px; background: var(--bg); }
 .dm-n i { font-style: normal; font-size: 10.5px; color: var(--muted); }
 .dm-n em { font-style: normal; font-size: 10.5px; color: hsl(var(--h) 55% 38%); }
+.dm-dot { flex: none; margin-left: auto; background: #e5484d; color: #fff; font: 700 10.5px/16px var(--font); min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; text-align: center; font-style: normal; }
+.dm-n.r .dm-dot { margin: 0; }
+.dm-note { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid #e5484d; border-radius: 8px; padding: 6px 12px; font-size: 13px; margin: 8px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .dm-zoom { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 4px; }
 .dm-zoom button { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); font-size: 16px; cursor: pointer; color: var(--text); }
 .dm-hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .dm-side { position: fixed; right: 0; top: 0; bottom: 0; width: min(440px, 100vw); background: var(--panel); border-left: 1px solid var(--line); box-shadow: -6px 0 24px rgba(0,0,0,.12); padding: 16px 18px; overflow-y: auto; z-index: 30; }
+@media (max-width: 900px) { .dm-side { top: auto; left: 0; width: 100vw; height: 46vh; border-left: 0; border-top: 1px solid var(--line); box-shadow: 0 -6px 24px rgba(0,0,0,.12); } }
 .dm-side h3 { font: 700 18px/1.4 var(--serif); margin: 0 0 4px; }
 .dm-side dt { font-size: 12px; color: var(--muted); margin-top: 10px; } .dm-side dd { margin: 2px 0 0; font-size: 14px; line-height: 1.6; }
 .dm-side .x { float: right; cursor: pointer; font-size: 18px; color: var(--muted); }
@@ -51,7 +55,13 @@ const BM_COLOR = {};
 
 export async function renderDemand(el, ctx, tabs) {
   const { api, h, ui } = ctx;
-  let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', side = null, timer, tf = null, moved = false;
+  let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', side = null, timer, tf = null, moved = false, rot = 0, LAY = null, anim = 0;
+  const SEEN = 'dm-seen';
+  const seen = new Set((() => { try { return JSON.parse(localStorage.getItem(SEEN) || '[]'); } catch { return []; } })());
+  const saveSeen = () => { try { localStorage.setItem(SEEN, JSON.stringify([...seen])); } catch { /* 无痕模式 */ } };
+  const isNew = (k) => !!D.cards[k]?.added && !seen.has(k);
+  const newN = (keys) => keys.filter(isNew).length;
+  const dot = (n) => (n ? `<b class="dm-dot" title="${n} 个新项目">${n}</b>` : '');
   const open = new Set();
   const body = h('div');
   el.append(h('style', {}, CSS), ui.pageHead('产品雷达 · 需求图谱', '用户场景 → 痛点 → 公司：看大家在打什么痛点、怎么做增长；叶子是公司知识卡', []), tabs, body);
@@ -70,6 +80,11 @@ export async function renderDemand(el, ctx, tabs) {
     return Object.entries(n).sort((a, b) => b[1] - a[1]);
   };
 
+  const notice = () => {
+    const nn = newN(Object.keys(D.cards)), run = D.status.running;
+    if (!nn && !D.pending && !run) return '';
+    return `<div class="dm-note">${run ? `<span>同步中：${E(STAGE[D.status.stage] || D.status.stage)} ${D.status.done || 0} / ${D.status.total || 0}</span>` : ''}${D.pending && !run ? `<span>雷达里有 <b>${D.pending}</b> 个新产品还没收录</span><button data-run="sync">同步新项目</button>` : ''}${nn ? `<span><b class="dm-dot" style="margin:0">${nn}</b> 个新收录的项目未读</span><button data-seen="all">全部标为已读</button>` : ''}</div>`;
+  };
   const bar = () => {
     const n = (f) => Object.values(D.cards).filter(f).length;
     return `<div class="dm-bar"><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button><span class="dm-m">&nbsp;来源</span>
@@ -115,29 +130,28 @@ ${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''
     const pol = (a, r) => [Math.cos(a) * r, Math.sin(a) * r];
     const nodes = [], links = [];
     const link = (a1, r1, a2, r2, h, hl) => {
-      const rm = (r1 + r2) / 2, [x1, y1] = pol(a1, r1), [x2, y2] = pol(a2, r2), [c1x, c1y] = pol(a1, rm), [c2x, c2y] = pol(a2, rm);
-      links.push({ d: `M${x1.toFixed(1)},${y1.toFixed(1)} C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, h, hl });
+      links.push({ a1, r1, a2, r2, h, hl });
     };
-    const put = (cls, a, r, h, html, attrs, w, hh, dim, cur) => nodes.push({ cls, a, r, h, html, attrs, w, hh, dim, cur });
+    const put = (cls, a, r, h, html, attrs, w, hh, dim, cur, key) => nodes.push({ cls, a, r, h, html, attrs, w, hh, dim, cur, key });
     let a0 = -Math.PI / 2;
     for (const d of T) {
       const da = d.w * per, dMid = a0 + da / 2;
-      put('d', dMid, dS, d.h, E(d.dm.name), `data-dom="${d.dm.id}"`, PW.d, PH.d, false, side?.dom === d.dm.id);
+      put('d', dMid, dS, d.h, E(d.dm.name) + dot(newN(d.dm.scenes.flatMap((id) => (D.graph.scenes.find((x) => x.id === id)?.subs || []).flatMap((sb) => sb.products)))), `data-dom="${d.dm.id}"`, PW.d, PH.d, false, side?.dom === d.dm.id, d.dm.id);
       link(0, 62, dMid, dS, d.h, side?.dom === d.dm.id);
       let a1 = a0 + 0.7 * per;
       for (const sn of d.scenes) {
         const sa = sn.w * per, sMid = a1 + sa / 2;
-        put('s', sMid, sS, d.h, `${E(sn.sc.name)}`, `data-sc="${sn.sc.id}" title="${E(sn.sc.desc)}"`, PW.s, PH.s, false, side?.sc === sn.sc.id);
+        put('s', sMid, sS, d.h, `${E(sn.sc.name)}${dot(newN(sn.sc.subs.flatMap((sb) => sb.products)))}`, `data-sc="${sn.sc.id}" title="${E(sn.sc.desc)}"`, PW.s, PH.s, false, side?.sc === sn.sc.id, sn.sc.id);
         link(dMid, dS + PW.d, sMid, sS, d.h, side?.sc === sn.sc.id);
         let a2 = a1 + 0.25 * per;
         for (const pn of sn.pains) {
           const pa = pn.w * per, pMid = a2 + pa / 2;
           const tg = tacCount(pn.sb.products)[0];
-          put('p', pMid, pS, d.h, `${pn.isOpen ? '▾' : '▸'} ${E(pn.sb.name)} <small>${pn.n}</small>`, `data-sb="${pn.sb.id}" title="${E(pn.sb.pain)}${tg ? '｜主要增长：' + E(tg[0]) : ''}"`, PW.p, PH.p, false, side?.sb === pn.sb.id);
+          put('p', pMid, pS, d.h, `${pn.isOpen ? '▾' : '▸'} ${E(pn.sb.name)} <small>${pn.n}</small>${dot(newN(pn.sb.products))}`, `data-sb="${pn.sb.id}" title="${E(pn.sb.pain)}${tg ? '｜主要增长：' + E(tg[0]) : ''}"`, PW.p, PH.p, false, side?.sb === pn.sb.id, pn.sb.id);
           link(sMid, sS + PW.s, pMid, pS, d.h, side?.sb === pn.sb.id);
           pn.ks.forEach((k, i) => {
             const la = a2 + ((i + 0.5) / pn.ks.length) * pa, c = D.cards[k];
-            put('l', la, lS, d.h, `<i>${c.sources.map((x) => SRC[x]).join('')}</i>${E(c.name)}${c.bm_type ? ` <em>${E(c.bm_type)}</em>` : ''}`, `data-k="${E(k)}" title="${E(c.scene)}"`, PW.l + 40, PH.l, !fit(c), side?.k === k);
+            put('l', la, lS, d.h, `<i>${c.sources.map((x) => SRC[x]).join('')}</i>${E(c.name)}${c.bm_type ? ` <em>${E(c.bm_type)}</em>` : ''}${isNew(k) ? '<b class="dm-dot">新</b>' : ''}`, `data-k="${E(k)}" title="${E(c.scene)}"`, PW.l + 40, PH.l, !fit(c), side?.k === k, k);
             link(pMid, pS + PW.p, la, lS, d.h, side?.k === k);
           });
           a2 += pa;
@@ -151,17 +165,57 @@ ${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''
 
   const view0 = (R, cv) => { const k = Math.min(cv.clientWidth, cv.clientHeight) / (2 * R + 40); return { k, x: cv.clientWidth / 2, y: cv.clientHeight / 2 }; };
   const applyTf = () => { const vp = body.querySelector('.dm-vp'); if (vp && tf) vp.style.transform = `translate(${tf.x}px,${tf.y}px) scale(${tf.k})`; };
+  const geom = (n, r0) => {
+    const a = n.a + r0, flip = Math.cos(a) < 0;
+    return { x: Math.cos(a) * n.r, y: Math.sin(a) * n.r, flip, deg: (a * 180) / Math.PI + (flip ? 180 : 0) };
+  };
+  const nodeCss = (n, r0) => {
+    const g = geom(n, r0);
+    return `width:${n.w}px;height:${n.hh}px;margin:${-n.hh / 2}px 0 0 ${g.flip ? -n.w : 0}px;transform-origin:${g.flip ? '100%' : '0'} 50%;transform:translate(${g.x.toFixed(1)}px,${g.y.toFixed(1)}px) rotate(${g.deg.toFixed(2)}deg)`;
+  };
+  const linkD = (l, r0) => {
+    const pol = (a, r) => [Math.cos(a + r0) * r, Math.sin(a + r0) * r], rm = (l.r1 + l.r2) / 2;
+    const [x1, y1] = pol(l.a1, l.r1), [x2, y2] = pol(l.a2, l.r2), [c1x, c1y] = pol(l.a1, rm), [c2x, c2y] = pol(l.a2, rm);
+    return `M${x1.toFixed(1)},${y1.toFixed(1)} C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+  };
+  const place = (r0) => {
+    const cv = body.querySelector('.dm-cv');
+    if (!cv || !LAY) return;
+    cv.querySelectorAll('[data-i]').forEach((e) => { e.style.cssText = `--h:${LAY.nodes[+e.dataset.i].h};` + nodeCss(LAY.nodes[+e.dataset.i], r0); });
+    cv.querySelectorAll('path[data-li]').forEach((e) => e.setAttribute('d', linkD(LAY.links[+e.dataset.li], r0)));
+  };
   const graph = () => {
     const L = layout();
-    L.nodes.sort((a, b) => (a.cur ? 1 : 0) - (b.cur ? 1 : 0));
-    const pn = (n) => {
-      const [x, y] = [Math.cos(n.a) * n.r, Math.sin(n.a) * n.r], flip = Math.cos(n.a) < 0, deg = (n.a * 180) / Math.PI + (flip ? 180 : 0);
-      return `<div class="dm-n ${n.cls} ${n.dim ? 'dim' : ''} ${n.cur ? 'cur' : ''}" ${n.attrs} style="--h:${n.h};width:${n.w}px;height:${n.hh}px;margin:${-n.hh / 2}px 0 0 ${flip ? -n.w : 0}px;transform-origin:${flip ? '100%' : '0'} 50%;transform:translate(${x.toFixed(1)}px,${y.toFixed(1)}px) rotate(${deg.toFixed(2)}deg)">${n.html}</div>`;
+    LAY = L;
+    const order = L.nodes.map((n, i) => i).sort((x, y) => (L.nodes[x].cur ? 1 : 0) - (L.nodes[y].cur ? 1 : 0));
+    const pn = (i) => { const n = L.nodes[i]; return `<div class="dm-n ${n.cls} ${n.dim ? 'dim' : ''} ${n.cur ? 'cur' : ''}" data-i="${i}" ${n.attrs} style="--h:${n.h};${nodeCss(n, rot)}">${n.html}</div>`; };
+    return `<div class="dm-cv" data-rad="${L.R}"><div class="dm-vp"><svg width="1" height="1">${L.links.map((l, i) => `<path class="${l.hl ? 'hl' : ''}" data-li="${i}" stroke="hsl(${l.h} 60% 45%)" d="${linkD(l, rot)}"/>`).join('')}</svg>
+<div class="dm-n r" style="width:124px;height:124px;margin:-62px 0 0 -62px">用户需求<br>图谱</div>${order.map(pn).join('')}</div>
+<div class="dm-hint">拖动平移 · 滚轮缩放 · 点节点转到正面</div><div class="dm-zoom"><button data-z="in">＋</button><button data-z="out">－</button><button data-z="fit" title="适应窗口">⤢</button></div></div>`;
+  };
+
+  const ease = (t) => 1 - (1 - t) ** 3;
+  const animateTo = (r1, t1, ms = 450) => {
+    cancelAnimationFrame(anim);
+    const r0 = rot, t0 = { ...tf }, t = performance.now();
+    const step = (now) => {
+      const p = Math.min(1, (now - t) / ms), e = ease(p);
+      rot = r0 + (r1 - r0) * e;
+      tf = { k: t0.k + (t1.k - t0.k) * e, x: t0.x + (t1.x - t0.x) * e, y: t0.y + (t1.y - t0.y) * e };
+      place(rot);
+      applyTf();
+      if (p < 1) anim = requestAnimationFrame(step);
     };
-    const R = L.R;
-    return `<div class="dm-cv" data-rad="${R}"><div class="dm-vp"><svg width="1" height="1">${L.links.map((l) => `<path class="${l.hl ? 'hl' : ''}" stroke="hsl(${l.h} 60% 45%)" d="${l.d}"/>`).join('')}</svg>
-<div class="dm-n r" style="width:124px;height:124px;margin:-62px 0 0 -62px">用户需求<br>图谱</div>${L.nodes.map(pn).join('')}</div>
-<div class="dm-hint">拖动平移 · 滚轮缩放 · 点痛点展开公司</div><div class="dm-zoom"><button data-z="in">＋</button><button data-z="out">－</button><button data-z="fit" title="适应窗口">⤢</button></div></div>`;
+    anim = requestAnimationFrame(step);
+  };
+  const KMIN = { d: 0.6, s: 0.7, p: 0.9, l: 1 };
+  const focus = (key) => {
+    const cv = body.querySelector('.dm-cv'), n = LAY?.nodes.find((x) => x.key === key);
+    if (!cv || !n) return;
+    const d = ((((-n.a - rot + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI, k = Math.min(2.5, Math.max(tf.k, KMIN[n.cls]));
+    const rc = cv.getBoundingClientRect(), wide = innerWidth > 900;
+    const visW = wide && side ? Math.max(280, Math.min(rc.right, innerWidth - 440) - rc.left) : cv.clientWidth;
+    animateTo(rot + d, { k, x: visW * 0.3 - n.r * k, y: !wide && side ? cv.clientHeight * 0.3 : cv.clientHeight / 2 });
   };
 
   const matrix = () => {
@@ -190,7 +244,7 @@ ${rows.map((r) => `<tr><td>${E(r.sc.name)}</td><td>${r.ks.length}</td>${r.cnt.ma
       const c = D.cards[side.k];
       inner = `<h3>${E(c.name)}</h3><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}</div>
 <dl><dt>目标用户</dt><dd>${E(c.user)}</dd><dt>场景</dt><dd>「${E(c.scene)}」</dd><dt>痛点</dt><dd>${E(c.pain)}</dd><dt>产品</dt><dd>${E(c.product)}</dd>
-<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span>${E(c.bm_type)}</span></div>` : ''}</dd>
+${c.arr ? `<dt>收入规模</dt><dd>${E(c.arr)}<div class="dm-tg"><span>${c.arr_grade === 'verified' ? '支付渠道验证' : '自述 / 报道，未验证'}</span></div></dd>` : ''}<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span>${E(c.bm_type)}</span></div>` : ''}</dd>
 <dt>增长核心手段</dt><dd>${c.growth ? E(c.growth) : '<span class="dm-m">材料里没讲增长</span>'}${c.tactics.length ? `<div class="dm-tg">${c.tactics.map((t) => `<span>${E(t)}</span>`).join('')}</div>` : ''}</dd>
 ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}" target="_blank" rel="noopener">${E(l[0])}</a>`).join(' · ')}</dd>` : ''}</dl>`;
     } else if (side.sb) {
@@ -217,7 +271,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       return;
     }
     const wy = window.scrollY;
-    body.innerHTML = bar() + (view === 'graph' ? graph() : matrix()) + sidebar();
+    body.innerHTML = notice() + bar() + (view === 'graph' ? graph() : matrix()) + sidebar();
     const cv = body.querySelector('.dm-cv');
     if (cv) { if (!tf) tf = view0(+cv.dataset.rad, cv); applyTf(); }
     window.scrollTo(0, wy);
@@ -226,11 +280,12 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     if (!el.isConnected) return;
     D = await api.get('/api/demand/graph');
     paint();
+    if (D.graph && D.status.running) timer = setTimeout(load, 4000);
   };
 
   body.onclick = async (e) => {
     if (moved) { moved = false; return; }
-    const d = e.target.closest('[data-v],[data-s],[data-t],[data-b],[data-mat],[data-dom],[data-z],[data-k],[data-x],[data-cell],[data-run],[data-sc],[data-sb],[data-open]');
+    const d = e.target.closest('[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-dom],[data-z],[data-k],[data-x],[data-cell],[data-run],[data-sc],[data-sb],[data-open]');
     if (!d) return;
     const ds = d.dataset;
     if (ds.v) view = ds.v;
@@ -239,13 +294,15 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     else if (ds.b !== undefined) bm = bm === ds.b ? '' : ds.b;
     else if (ds.mat) mat = ds.mat;
     else if (ds.dom) side = { dom: ds.dom };
+    else if (ds.run === 'sync') { await api.post('/api/demand/run', {}); return load(); }
     else if (ds.z) {
       const cv = body.querySelector('.dm-cv'), k0 = tf.k;
-      if (ds.z === 'fit') tf = view0(+cv.dataset.rad, cv);
-      else { const k = Math.min(2.5, Math.max(0.12, k0 * (ds.z === 'in' ? 1.3 : 1 / 1.3))), cx = cv.clientWidth / 2, cy = cv.clientHeight / 2; tf = { ...tf, k, x: cx - (cx - tf.x) * (k / k0), y: cy - (cy - tf.y) * (k / k0) }; }
+      if (ds.z === 'fit') return animateTo(0, view0(+cv.dataset.rad, cv));
+      { const k = Math.min(2.5, Math.max(0.12, k0 * (ds.z === 'in' ? 1.3 : 1 / 1.3))), cx = cv.clientWidth / 2, cy = cv.clientHeight / 2; tf = { ...tf, k, x: cx - (cx - tf.x) * (k / k0), y: cy - (cy - tf.y) * (k / k0) }; }
       return applyTf();
     }
-    else if (ds.k) side = { k: ds.k };
+    else if (ds.seen) { Object.keys(D.cards).forEach((k) => seen.add(k)); saveSeen(); }
+    else if (ds.k) { side = { k: ds.k }; seen.add(ds.k); saveSeen(); }
     else if (ds.x !== undefined) side = null;
     else if (ds.cell) { if (mat === 'tac') tac = ds.cell; else bm = ds.cell; view = 'graph'; }
     else if (ds.open) { open.clear(); if (ds.open === 'all') D.graph.scenes.forEach((sc) => sc.subs.forEach((sb) => open.add(sb.id))); }
@@ -253,6 +310,8 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     else if (ds.sc) side = { sc: ds.sc };
     else if (ds.run) { await api.post('/api/demand/run' + (ds.run === 'graph' ? '?graph_only=true' : ''), {}); return load(); }
     paint();
+    const key = ds.k || ds.sb || ds.sc || ds.dom;
+    if (key && view === 'graph') focus(key);
   };
   let drag = null;
   body.addEventListener('pointerdown', (e) => {

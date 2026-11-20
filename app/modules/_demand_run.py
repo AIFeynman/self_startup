@@ -106,7 +106,11 @@ def collect() -> dict[str, dict]:
         p = get(it["name"])
         add(p, "PH 日榜", f"【PH {it['day']} 第 {it.get('rank')} 名，{it.get('votes')} 票】\n{it.get('title', '')}\n解读：{it.get('why', '')}\n话题：{'、'.join(it.get('topics') or [])}",
             ("Product Hunt", it.get("url", "")) if it.get("url") else None, it.get("track", ""))
+    rev: dict[str, dict] = {}
+    for r in c.execute("SELECT c.name, m.metric, m.value, m.grade, m.date FROM intel_metric m JOIN intel_company c ON c.id=m.company_id WHERE m.metric IN ('arr','mrr') ORDER BY m.date"):
+        rev.setdefault(norm(r["name"]), {})[r["metric"]] = (r["value"], r["grade"], r["date"])
     for k, p in P.items():
+        p["rev"] = rev.get(k, {})
         p["text"] = "\n\n".join(p.pop("parts"))[:MAT_CHARS]
         p["rich"] = any(s != "PH 日榜" for s in p["sources"])
     return P
@@ -184,6 +188,8 @@ def extract(ctx: Ctx, P: dict, only: list[str]) -> dict:
             for k in b:
                 card = _clean(got.get(k), P[k]) if k in got else None
                 cards[k] = card or {"name": P[k]["name"], "sources": P[k]["sources"], "skip": True}
+                if card and (BASE / "graph.json").exists():
+                    card["added"] = time.time()
             done[0] += len(b)
             _save("cards.json", cards)
             status(ctx, "extract", done[0], len(todo))
@@ -220,6 +226,71 @@ def fill_model(ctx: Ctx, P: dict, cards: dict) -> None:
     status(ctx, "model", 0, len(todo))
     with ThreadPoolExecutor(6) as ex:
         list(ex.map(run, batches))
+
+
+def usd(v: float) -> str:
+    return f"${v / 1e9:.1f}B" if v >= 1e9 else f"${v / 1e6:.1f}M" if v >= 1e6 else f"${v / 1e3:.1f}k" if v >= 1e3 else f"${v:.0f}"
+
+
+P_ARR = """从每个产品的材料里找它自己的收入规模（ARR、MRR 或年收入）。arr：数字加口径，≤30 字，如“ARR 约 $50M（创始人自述）”“MRR 约 $20k（Stripe 验证）”；只写产品自己的数字，不要写融资额、估值、行业数据；材料里没有明确数字就写空串，不许推算或编。
+输入是 JSON 数组 {"id","name","text"}。只输出 JSON：{"r":{"id":"arr 文字或空串"}}，每个 id 都要有。"""
+
+
+def fill_arr(ctx: Ctx, P: dict, cards: dict) -> None:
+    need = []
+    for k, v in cards.items():
+        if k not in P or v.get("skip"):
+            continue
+        r = P[k].get("rev", {})
+        if "arr" in r:
+            v["arr"], v["arr_grade"] = f"ARR 约 {usd(r['arr'][0])}（公开报道 / 自述，{r['arr'][2]}）", "reported"
+        elif "mrr" in r and r["mrr"][0] > 0:
+            m = r["mrr"][0]
+            v["arr"], v["arr_grade"] = f"MRR {usd(m)}，折合 ARR 约 {usd(m * 12)}（TrustMRR 支付渠道验证，{r['mrr'][2]}）", "verified"
+        elif "arr" not in v and re.search(r"ARR|MRR|年化|annual recurring|\$\s?\d", P[k]["text"], re.I) and "arr_done" not in v:
+            need.append(k)
+    batches = [need[i:i + 6] for i in range(0, len(need), 6)]
+
+    def run(b: list[str]) -> None:
+        o = ctx.call(ctx.light, P_ARR, json.dumps([{"id": k, "name": P[k]["name"], "text": P[k]["text"]} for k in b], ensure_ascii=False))
+        r = (o or {}).get("r") or {}
+        with ctx.lock:
+            for k in b:
+                t = str(r.get(k) or "").strip()[:60]
+                cards[k]["arr_done"] = True
+                if t:
+                    cards[k]["arr"], cards[k]["arr_grade"] = t, "reported"
+
+    status(ctx, "arr", 0, len(need))
+    with ThreadPoolExecutor(6) as ex:
+        list(ex.map(run, batches))
+    _save("cards.json", cards)
+
+
+def add_new(ctx: Ctx, graph: dict, cards: dict) -> int:
+    """新卡按已有的场景 / 痛点分类归位，不动已有结构。"""
+    placed = {k for sc in graph["scenes"] for sb in sc["subs"] for k in sb["products"]} | set(graph.get("unplaced", []))
+    new = [k for k, v in cards.items() if not v.get("skip") and k not in placed]
+    if not new:
+        return 0
+    subs = [sb for sc in graph["scenes"] for sb in sc["subs"]]
+    txt = []
+    for sc in graph["scenes"]:
+        txt.append(sc["name"])
+        txt.extend(f"  {sb['id']} {sb['name']}：{sb['pain']}" for sb in sc["subs"])
+    by = {sb["id"]: sb for sb in subs}
+    line = lambda k: f"{k}|{cards[k]['scene']}|{cards[k]['pain'][:40]}"
+    status(ctx, "assign", 0, len(new))
+    for i in range(0, len(new), 60):
+        b = new[i:i + 60]
+        o = ctx.call(ctx.light, P_ASSIGN.format(tax="\n".join(txt)), "\n".join(line(k) for k in b))
+        for k in b:
+            v = ((o or {}).get("r") or {}).get(k)
+            (by[v]["products"].append(k) if v in by else graph.setdefault("unplaced", []).append(k))
+    graph["n"] = sum(len(sb["products"]) for sb in subs)
+    graph["updated"] = time.time()
+    _save("graph.json", graph)
+    return len(new)
 
 
 def build_graph(ctx: Ctx, cards: dict) -> dict:
@@ -316,8 +387,13 @@ def main() -> None:
         cards = _load("cards.json", {}) if a.graph_only else extract(ctx, P, only)
         if not a.graph_only:
             fill_model(ctx, P, cards)
+            fill_arr(ctx, P, cards)
         if not only and not a.limit:
-            build_graph(ctx, cards)
+            g = _load("graph.json", None)
+            if a.graph_only or not g:
+                build_graph(ctx, cards)
+            else:
+                add_new(ctx, g, cards)
         status(ctx, "done", finished=True)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
