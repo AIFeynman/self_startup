@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HN 吸收设计</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--ink:#1d1d1b;--mut:#6b6a66;--line:#e7e4dc;--ok:#1f7a4d;--okbg:#e4f3ea;--mid:#9a6a00;--midbg:#fbf0d4;--hot:#b4381f;--hotbg:#fbe4de;--b:#2457a6;--bbg:#e3ecf9}
+@media(prefers-color-scheme:dark){:root{--bg:#161614;--card:#1f1f1c;--ink:#ecebe6;--mut:#a09f98;--line:#33322d;--ok:#6fd0a0;--okbg:#17342a;--mid:#e8b84a;--midbg:#3a2f12;--hot:#f08a72;--hotbg:#3d1c14;--b:#8fb4f0;--bbg:#1b2a44}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+.w{max-width:900px;margin:0 auto;padding:26px 16px 90px}h1{font-size:25px;margin:0 0 6px}h2{font-size:19px;margin:36px 0 10px;padding-top:10px;border-top:1px solid var(--line)}h3{font-size:15px;margin:18px 0 6px}
+.m{color:var(--mut);font-size:13px}p{margin:8px 0}ul,ol{margin:6px 0;padding-left:20px}li{margin:3px 0}code{font:12.5px ui-monospace,Menlo,monospace;background:var(--bbg);color:var(--b);border-radius:4px;padding:0 4px}
+.lead{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--b);border-radius:10px;padding:10px 16px;margin:12px 0}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--card);border:1px solid var(--line);border-radius:8px}th,td{border-top:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}th{border-top:0;color:var(--mut);font-size:12.5px;font-weight:600;white-space:nowrap}td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gap{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}.gap>div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}.gap b.big{display:block;font-size:24px}
+.flow{display:flex;flex-direction:column;gap:6px;margin:12px 0}.st{display:grid;grid-template-columns:34px 1fr;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px}.st>b{font-size:20px;color:var(--b);line-height:1.4}.st .t{font-weight:700}.st .d{font-size:13.5px;color:var(--mut)}.st .d b{color:var(--ink)}
+.mock{background:var(--card);border:2px dashed var(--line);border-radius:12px;padding:12px 14px;margin:10px 0}.mock .hd{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:12.5px;color:var(--mut);margin-bottom:8px}
+.tp{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}.tp h4{margin:0 0 3px;font-size:15.5px}.tp .ln{font-size:14px;margin:4px 0}
+.tg{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:0 6px;height:19px;line-height:19px;margin-right:4px;vertical-align:1px}.tn{background:var(--bbg);color:var(--b)}.ts{background:var(--okbg);color:var(--ok)}.tc{background:var(--hotbg);color:var(--hot)}.tm{background:var(--midbg);color:var(--mid)}
+.camp{display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px;margin:6px 0 3px}.camp i{display:block}.c1{background:var(--ok)}.c2{background:var(--hot)}.c3{background:var(--mid)}.c4{background:var(--line)}
+.camps{font-size:12.5px;color:var(--mut)}.camps b{color:var(--ink)}
+.qt{border-left:3px solid var(--line);padding:1px 0 1px 9px;margin:4px 0;font-size:13px;color:var(--mut)}.qt b{color:var(--ink);font-weight:600}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin:5px 0}.chips span{font-size:12px;border:1px solid var(--line);border-radius:99px;padding:0 9px;color:var(--mut)}.chips .v{border-color:transparent;background:var(--bbg);color:var(--b)}.chips .g{border-color:transparent;background:var(--okbg);color:var(--ok)}
+.btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.btns span{font-size:12px;border:1px solid var(--line);border-radius:99px;padding:1px 11px}.btns .on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.opt{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}.opt>div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 13px}.opt .rec{border-color:var(--ok);border-width:2px}
+@media(max-width:640px){.gap,.opt{grid-template-columns:1fr}h1{font-size:21px}.st{grid-template-columns:26px 1fr}}
+</style></head><body><div class="w">
+<h1>HN 吸收设计</h1>
+<p class="m">2026-11-20 · 方案稿，未动代码 · 数字来自 data/app.db 里 source=hn 的只读盘点；页面示意用的是库里已提炼的真实评论观点，话题归并和占比是手工示意</p>
+
+<div class="lead"><b>结论：</b>把阅读单位从“一个帖子”换成“一个话题”（一个值得判断的问题 + 社区各阵营怎么说），再把评论区里散落的<b>推荐资源</b>和<b>亲身经验</b>各抽成独立清单。你每周花 10 分钟过 8–12 个话题卡，做三种判断：这件事社区站哪边、有没有我该试的东西、我同不同意。库里已有“HN 精读”做单帖提炼，直接复用，这次新增的是<b>跨帖聚合、引文核验、与你已有判断对照</b>三层。</div>
+
+<p><b>完成标准（设计稿）：</b>① 说清怎么提炼（输入、输出、怎么保证不编造）；② 说清怎么聚合成话题、话题怎么排；③ 给出页面示意和交互，说明为什么判断最快；④ 列出落地改动、验收指标和需要你定的几件事。</p>
+
+<h2>1. 现状：能复用多少，缺什么</h2>
+<div class="gap">
+<div><span class="m">过去 7 天（11-13 起）库里的 HN</span><b class="big">84 帖 · 9,246 条评论</b>
+<ul class="m"><li>58 帖已做“HN 精读”（评论 ≥30 条的全部）</li><li>已提炼出 333 条观点、317 条亲身经验、591 个提到的技术 / 产品、296 条评论里的推荐链接</li><li>链接类型：文档 66、仓库 46、产品 39、视频 36、论文 17、博客 26</li></ul></div>
+<div><span class="m">问题</span><b class="big">范围窄、单位小</b>
+<ul class="m"><li>采集靠 GPT / LLM / Claude 等 9 个关键词，每词最多 30 帖，只收 ≥30 分；看热度前 24 帖，约 15 帖是 AI 主题，另外是 jQuery、地图瓦片、Dewey 分类法</li><li>每帖一个折叠块，同一件事（如 Claude 宕机）散在 2 帖里，跨帖看不到整体</li><li>观点只有评论编号，没有原话，没法核对“真有人这么说”</li><li>没有和你的知识库、判断对照；也没有表态反馈</li></ul></div>
+</div>
+<p>真实例子，同一件事被拆开：Claude 宕机在 <code>50481187</code>（396 评论）和 <code>50481220</code>（179 评论）两帖里，都在争“要不要多供应商冗余”；Nvidia 循环融资在 <code>50493251</code>（651）和 <code>50501631</code>（241）两帖里。看单帖要读 4 个折叠块，看话题只要 2 张卡。</p>
+
+<h2>2. 你要做的判断，决定了提炼什么</h2>
+<div class="tw"><table>
+<tr><th>你要判断的事</th><th>需要拿到的东西</th><th>对应的产出</th></tr>
+<tr><td><b>这周 AI 圈有什么事，值不值得我关心</b></td><td>话题标题、一句话是什么事、多热、是新的还是延续</td><td>话题卡首行 + 热度条</td></tr>
+<tr><td><b>社区怎么看，我站哪边</b></td><td>几个阵营、各占多少、各自最硬的理由、有没有人用原话说</td><td>阵营条 + 每阵营 1 条逐字原话</td></tr>
+<tr><td><b>有没有人真做过，结果如何</b></td><td>亲身经验：谁、做了什么、结果或教训（区别于观点）</td><td>经验清单，按话题挂，也能单独看</td></tr>
+<tr><td><b>有没有东西我该试</b></td><td>产品 / 工具 / 仓库 / 数据 / 视频，为什么被推荐、评价好坏、几个人提</td><td>资源清单，跨话题去重排序</td></tr>
+<tr><td><b>这和我已经相信的是否冲突</b></td><td>对照知识库“我的判断”和主题</td><td>卡上“与你的判断相反 / 印证”标记</td></tr>
+</table></div>
+<p class="m">设计取舍：观点和亲身经验分开。观点是“我认为”，经验是“我做过”，后者对你的取舍更有用；现有提炼已经把两者分开，聚合时不能混。</p>
+
+<h2>3. 怎么提炼：六步，每步都能回到原评论</h2>
+<div class="flow">
+<div class="st"><b>1</b><div><div class="t">采集：过去 7 天、AI 相关、有讨论的帖子</div><div class="d"><b>输入：</b>HN Algolia 按时间窗拉帖（<code>search_by_date</code>，限定 <code>created_at_i</code> 在 7 天内、点数 ≥50 或评论 ≥40），不再依赖 9 个关键词。Show HN / Launch HN 评论 ≥10 也收，因为产品发现靠它们。<b>过滤：</b>标题 + 摘要先过关键词粗筛，再由便宜模型判“是否主要在讨论 AI（模型、Agent、AI 产品、AI 对行业 / 社会 / 基建的影响）”，只输出是 / 否 / 边缘。边缘的单独标出，页面可展开。<b>预计：</b>每周 150–300 帖（待试采集确认）。</div></div></div>
+<div class="st"><b>2</b><div><div class="t">单帖提炼：沿用 HN 精读，加两处</div><div class="d"><b>复用：</b><code>_feed_hn.py</code> 已经产出 tldr、观点（主流 / 反对 / 少数 / 补充 + 大约几条评论）、亲身经验、提到的技术产品及评价倾向、评论里的链接，并校验链接必须在评论原文出现。<b>新增 ①：</b>每条观点和经验必须带一句<b>逐字摘录</b>（原文片段），程序在评论文本里核对，找不到的丢弃，沿用吸收板块“引文 100% 可核对”的做法。<b>新增 ②：</b>资源类型细分，链接分类里加“数据 / 基准”，评价倾向从“提到的实体”并入资源，区分<b>评论者推荐</b>和<b>帖子作者自荐</b>（可信度不同）。<b>模型：</b>DeepSeek flash，已有。旧的 58 帖缺引文，按“先减后加”直接用新提示词重跑，不做兼容。</div></div></div>
+<div class="st"><b>3</b><div><div class="t">聚合成话题：先算相似，再让模型命名和裁定</div><div class="d"><b>特征：</b>每帖取“标题 + tldr + 提到的实体名 + 观点原句”做向量（本机 Embedding，同吸收板块）。<b>粗聚：</b>层次聚类，阈值偏松；同一实体（如 Nvidia、Claude Code）共现也加分。<b>裁定：</b>把每个候选簇的帖子摘要交给模型，输出话题：<b>问题式标题</b>（如“AI 写码之后，瓶颈是不是转到代码审查”，不是“Harvard 研究…”）、话题类型、成员帖、拆分 / 合并建议。<b>三种话题：</b><span class="tg tn">事件</span>发布 / 事故 / 新闻（GPT-6.2 发布、Claude 宕机）<span class="tg tm">议题</span>跨帖的争论（“AI 宣称的成果为什么不可信”：黑洞物理、KPMG 审计、OpenAI 芯片设计三帖）<span class="tg ts">实践</span>怎么做（编码 Agent 怎么验证）。热度够高的单帖自成话题，其余进“长尾”只留一行。</div></div></div>
+<div class="st"><b>4</b><div><div class="t">话题内综合：阵营、经验、结论，句句带引用</div><div class="d"><b>阵营：</b>把成员帖的观点按“同一立场”归并，人数 = 各帖 n 求和（HN 评论没有公开得分，用持这个观点的评论数代替，这是近似，页面标注）。<b>每个阵营：</b>一句主张 + 1 条逐字原话 + 评论链接。<b>共识度：</b>最大阵营占比 ≥60% 为“基本共识”，两个阵营都 ≥30% 为“有分歧”，评论数少于 80 为“讨论少”。<b>一句话结论：</b>模型写，每个断言必须挂 <code>[观点编号]</code>，程序检查，没引用的句子丢弃。<b>经验：</b>去掉重复，按“成功 / 失败 / 有条件”分，带原话。</div></div></div>
+<div class="st"><b>5</b><div><div class="t">资源清单：跨帖去重、按独立评论者排序</div><div class="d">按规范化 URL（去协议、www、尾斜杠、追踪参数）和实体名合并；一个资源的“热度” = 提到它的<b>独立评论者数</b>，评论者推荐权重 1，作者自荐 0.5；评价倾向取正面占比。分类：产品 / 工具与仓库 / 数据与基准 / 视频 / 论文 / 文档与博客。视频单独成栏，因为你想快速挑着看。每条只写“它是什么 + 为什么被推荐”，不自己补充评论里没有的信息；链接是否可达只在用户点开时再查，不批量探测。</div></div></div>
+<div class="st"><b>6</b><div><div class="t">对照你的判断，再和上周对照</div><div class="d"><b>对照：</b>话题阵营的主张和知识库“我的判断”、主题、概念做向量匹配，命中后由模型判“印证 / 相反 / 无关”，只展示前两种。<b>对照上周：</b>话题和上周话题匹配，标“新 / 延续 / 升温（评论数涨 ≥50%）/ 降温”。<b>写出：</b>结果落到 <code>data/absorb/hn_&lt;起&gt;_&lt;止&gt;/</code>（和现有选题吸收同一目录规则），每步一个 JSON，已有结果的步骤不重跑。</div></div></div>
+</div>
+
+<h3>输出数据结构（话题）</h3>
+<div class="tw"><table>
+<tr><th>字段</th><th>内容</th><th>怎么保证不编造</th></tr>
+<tr><td><code>title</code></td><td>问题式标题</td><td>模型写，限 30 字</td></tr>
+<tr><td><code>kind</code></td><td>事件 / 议题 / 实践</td><td>枚举，非法值归“议题”</td></tr>
+<tr><td><code>stats</code></td><td>帖数、评论数、独立评论者数、峰值点数、较上周变化</td><td>全部程序计算</td></tr>
+<tr><td><code>verdict</code></td><td>一句话结论 + 共识度标签</td><td>必须挂观点编号，程序检查</td></tr>
+<tr><td><code>camps[]</code></td><td>主张、人数、逐字原话、评论链接</td><td>原话在评论文本里逐字出现，否则丢弃</td></tr>
+<tr><td><code>experiences[]</code></td><td>谁 / 做了什么 / 结果 / 成败标签 / 原话</td><td>同上</td></tr>
+<tr><td><code>resources[]</code></td><td>资源 id 列表</td><td>链接必须来自评论原文</td></tr>
+<tr><td><code>mine</code></td><td>与你的哪条判断印证 / 相反</td><td>只给判断页链接，原文由你自己点开</td></tr>
+</table></div>
+
+<h2>4. 怎么组织：话题为主，资源和经验是两条横切线</h2>
+<div class="tw"><table>
+<tr><th>视图</th><th>单位</th><th>回答什么</th><th>怎么排</th></tr>
+<tr><td><b>话题</b>（默认）</td><td>话题卡</td><td>这周发生了什么，社区站哪边</td><td>得分 = 热度（评论数取对数）× 分歧度 × 新颖度；与你知识库主题相关的上浮；“基本共识且你已知”的下沉</td></tr>
+<tr><td><b>资源</b></td><td>产品 / 工具 / 数据 / 视频</td><td>有什么值得试、值得看</td><td>独立评论者数 × 正面占比；按类型分栏</td></tr>
+<tr><td><b>经验</b></td><td>一次亲身实践</td><td>别人做了什么、结果如何</td><td>按话题聚，成功 / 失败各列，可筛“编码 Agent”“成本”等</td></tr>
+<tr><td><b>口径</b></td><td>—</td><td>这页怎么算的、花了多少</td><td>同选题吸收的“口径”页</td></tr>
+</table></div>
+<p>话题数控制：每周正文 8–12 个话题，其余折叠在“长尾”。依据是吸收板块的认知约束：一屏不超过 5–7 项，靠分层展开而不是长列表。</p>
+
+<h2>5. 怎么呈现：一张卡 30 秒能做完判断</h2>
+<p class="m">下面是示意。观点、数字、原话来自库里已提炼的 <code>50538303</code>（Harvard 研究 / 459 评论）和 <code>50529612</code>（Claude Code 团队谈验证 / 234 评论）；只有帖数、评论数、观点原句和经验是真数据；两帖合成一个话题是手工示意，顶部的帖数 / 话题数、评论者数、阵营人数占比、较上周变化、“与你的判断相反”都是示意，未计算。</p>
+
+<div class="mock">
+<div class="hd"><span><b>HN 吸收</b> · 11-13 至 11-19 · 进来 247 帖 → AI 相关 163 → 话题 10 个 + 长尾</span><span>j/k 逐张 · 1–4 表态 · o 展开</span></div>
+<div class="tp">
+<h4><span class="tg tm">实践</span><span class="tg tc">有分歧</span><span class="tg tn">升温</span> AI 写码之后，瓶颈是不是转到了代码审查和验证？</h4>
+<div class="m">2 帖 · 693 评论 · 约 120 位评论者 · 对照上周：评论 +80%</div>
+<div class="ln"><b>一句话：</b>多数人认为审查成了新瓶颈且人在审查疲劳；怎么解分两派——让 Agent 互审，还是坚持确定性工具（静态分析、集成测试），后者人数更多。[1][4]</div>
+<div class="camp"><i class="c1" style="flex:22"></i><i class="c2" style="flex:17"></i><i class="c3" style="flex:12"></i><i class="c4" style="flex:8"></i></div>
+<div class="camps"><b style="color:var(--ok)">审查成瓶颈、疲劳严重 22</b> · <b style="color:var(--hot)">确定性工具优先，别烧 token 17</b> · <b style="color:var(--mid)">审查改看架构 / 接口 12</b> · 少数：Agent 互审已够用 8</div>
+<div class="qt"><b>@主流</b> “AI写码后审查成为新瓶颈，且审查疲劳严重，浅审或跳过越来越普遍” <span class="m">· 4 条评论</span></div>
+<div class="qt"><b>@反对</b> 文章假设无限 token，确定性工具（Playwright、静态分析）更便宜且结果可复现 <span class="m">· 4 条评论</span></div>
+<div class="ln"><b>做过的人：</b><span class="tg ts">成功</span>用 AI 做交易系统、双端 App，约 10 倍速度，几乎不用配置 · <span class="tg tc">失败</span>接手他人让 AI 自由发挥的 10 万行代码，无法恢复，整批丢弃 · <span class="tg tm">有条件</span>用验证技能后对 AI 编码信任度大变，但更耗时耗钱，简单改动仍直接让 AI 做</div>
+<div class="chips"><span class="v">与你的判断相反</span><span>人工审查应从读 diff 转向看录屏、截图、状态图（你的判断 #…）</span></div>
+<div class="chips"><span class="g">资源 4</span><span>视频：Lauren Tan 谈 AI 验证</span><span>仓库：验证技能 SKILL.md</span><span>仓库：crt 本地审查工具</span><span>视频：LGTM is the new YOLO</span></div>
+<div class="btns"><span>没增量</span><span>有收获</span><span class="on">很受用</span><span>会用上</span><span>｜</span><span>我站主流</span><span>我站反对</span><span>先不站</span></div>
+</div>
+<div class="tp">
+<h4><span class="tg tc">议题</span><span class="tg ts">基本共识</span> “AI 做出了 X”的说法，为什么社区默认不信？</h4>
+<div class="m">3 帖 · 652 评论 · 黑洞物理 / KPMG 审计 / OpenAI 芯片设计</div>
+<div class="ln"><b>一句话：</b>不信的理由是同一类：缺 prompt 和人类贡献说明、自评没有数据、指标没有人类基线；信的人集中在“有人用过且结论可验证”的场景。[2][3]</div>
+<div class="btns"><span>没增量</span><span>有收获</span><span>很受用</span><span>会用上</span></div>
+</div>
+<div class="m">… 另 8 个话题 · 长尾 77 帖（每帖一行）</div>
+</div>
+
+<h3>为什么判断最快：七个具体手段</h3>
+<ol>
+<li><b>结论先行，且是可争论的问题。</b>标题是问句，一句话先给“社区倾向”，不需要先读帖。</li>
+<li><b>阵营条代替长文。</b>10 个像素高的条，一眼看出一边倒还是分裂；占比旁有人数，避免被百分比误导。</li>
+<li><b>原话在卡上，不在展开里。</b>每个阵营只放 1 条逐字原话，英文原话附中文，点进去直达那条 HN 评论；你不信模型总结时可以马上自己核。</li>
+<li><b>经验与观点分开，且带成败标签。</b>“我做过，结果是…”比“我认为…”更能改变取舍，三类（成功 / 失败 / 有条件）并排最容易看出规律。</li>
+<li><b>对照你的判断。</b>只在与你已有判断冲突或印证时亮出，其余不提醒；“相反”的优先排前面（意外才驱动学习）。</li>
+<li><b>一键表态，沿用吸收板块的四档。</b>没增量 / 有收获 / 很受用 / 会用上，键盘 1–4；加三个立场键“我站主流 / 我站反对 / 先不站”，立场落成你的判断草稿，不要求你写字。表态存同一个 <code>_feedback.jsonl</code>，带来源 <code>hn</code>，反馈页自动按话题类型统计哪类对你有用。</li>
+<li><b>每周封顶。</b>话题 8–12 个，顶部写“进来 N 帖 → 话题 M 个”，让你确信没漏；超过 15 分钟的读法被视为设计失败（见验收）。</li>
+</ol>
+
+<h3>资源视图示意</h3>
+<div class="mock">
+<div class="hd"><span>产品 · 工具 · 数据 · <b>视频</b> · 论文 · 文档</span><span>按独立评论者数排序</span></div>
+<div class="tp" style="padding:7px 10px"><b>Lauren Tan：AI 验证的演讲</b> <span class="tg tn">视频</span> <span class="m">2 人推荐 · 正面 100%</span><div class="m">被推荐为更清晰阐述“先用廉价确定性检查”的演讲 · 话题：编码 Agent 验证</div></div>
+<div class="tp" style="padding:7px 10px"><b>Gavel</b> <span class="tg tn">仓库</span> <span class="m">1 人推荐 · 作者自荐 0</span><div class="m">评论者称带来清新的代码审查体验 · 话题：编码 Agent 验证</div></div>
+</div>
+
+<h2>6. 与现有板块的关系，落地改动</h2>
+<div class="opt">
+<div class="rec"><b>推荐：</b>“吸收”页顶部加二级切换 <b>选题吸收 | HN 吸收</b>，路由 <code>#absorb/hn</code>；后端沿用吸收的目录和反馈机制。<div class="m">理由：用户说的“在吸收下新增”；两边共用表态和反馈页，不新增侧栏项。改回代价低。</div></div>
+<div><b>备选：</b>在“信息推荐”的 HN 精读页里加“按话题看”。<div class="m">问题：信息推荐是浏览流，没有表态和对照判断的位置，话题聚合会被稀释。</div></div>
+</div>
+<div class="tw"><table>
+<tr><th>改动</th><th>位置</th><th>说明</th></tr>
+<tr><td>采集 + 过滤 + 聚类 + 综合流水线</td><td>新增 <code>app/modules/_absorb_hn.py</code></td><td>6 步，每步一个 JSON；复用 <code>_feed_hn</code> 的评论抓取、清洗、链接校验；向量沿用吸收的本机模型</td></tr>
+<tr><td>单帖提炼提示词</td><td><code>_feed_hn.py</code></td><td>观点 / 经验加逐字摘录并校验；链接类型加“数据 / 基准”，加评论者推荐 / 作者自荐；旧结果重跑</td></tr>
+<tr><td>接口</td><td><code>app/modules/absorb.py</code></td><td><code>/api/absorb/hn/runs</code>、<code>/runs/{id}</code>、<code>/react</code>；表态写 <code>_feedback.jsonl</code> 加 <code>src: hn</code></td></tr>
+<tr><td>页面</td><td><code>web/modules/absorb.js</code> + 新增 <code>_absorb_hn.js</code></td><td>二级切换；话题 / 资源 / 经验 / 口径四个视图；样式沿用 <code>ab-</code> 前缀类</td></tr>
+<tr><td>调度</td><td>已有定时任务机制</td><td>每天增量采集 + 提炼（有缓存，只处理新帖和评论涨幅大的帖）；聚类和综合每天重算一次；页面永远显示“滚动最近 7 天”</td></tr>
+<tr><td>测试</td><td><code>tests/</code></td><td>引文核对、URL 规范化去重、共识度分级、话题与上周匹配，用固定 JSON 夹具测行为</td></tr>
+</table></div>
+
+<h2>7. 怎么判断这套设计有没有用</h2>
+<div class="tw"><table>
+<tr><th>指标</th><th>目标</th><th>说明</th></tr>
+<tr><td>压缩比（AI 帖 → 话题）</td><td>≥ 15 : 1</td><td>试点实测，不预设；低于 8 : 1 说明聚类太碎</td></tr>
+<tr><td>过完一周的用时</td><td>≤ 10 分钟</td><td>你自己计；超过 15 分钟就砍话题数</td></tr>
+<tr><td>引文可核对率</td><td>100%</td><td>程序检查，找不到原话的条目不显示</td></tr>
+<tr><td>聚类正确率</td><td>≥ 85%</td><td>抽 30 帖人工看是否分对话题；先用已有 58 帖</td></tr>
+<tr><td>漏掉的重要话题</td><td>0–1 个</td><td>你说“这周还有 X 没出现”的次数</td></tr>
+<tr><td>“会用上 / 很受用”占比</td><td>≥ 25%</td><td>表态数据自然得到；样本少只看趋势</td></tr>
+<tr><td>资源点开率</td><td>≥ 20%</td><td>资源视图里点开链接的比例，用来判断推荐是否有用</td></tr>
+</table></div>
+
+<h2>8. 风险和没验证的地方</h2>
+<ul>
+<li><b>AI 相关判定会漏会误。</b>“边缘”类单独收起，每周抽 20 条看；先用关键词 + 便宜模型，不够再加强。</li>
+<li><b>聚类粒度难一次调对。</b>太碎等于没聚，太粗会把不同争论混在一起；试点先用 58 帖调阈值，调完再放全量。</li>
+<li><b>阵营人数是近似。</b>HN 评论不公开得分，用“持该观点的评论数”代替，只能说谁说得多，不能说谁说得对；页面口径里写明。</li>
+<li><b>评论者不代表用户。</b>HN 偏工程师、偏怀疑。对“市场上用户怎么想”不能外推，页面标“HN 评论者观点”。</li>
+<li><b>推荐资源可能是广告或作者自荐。</b>区分来源并降权；不核实链接内容，用户点开再判断。</li>
+<li><b>模型综合可能说过头。</b>靠“每句带引用、程序检查、逐字原话”约束；结论比原话更强的句子是主要风险，试点里专门抽查。</li>
+<li><b>成本没测。</b>单帖提炼现在读 ≤8 万字符评论，约 2 万 token；每周 200 帖按 flash 档估计在几美元量级，试跑 10 帖后用实际花费校准，再给总价。</li>
+</ul>
+
+<h2>9. 试点</h2>
+<p><b>范围：</b>用库里已有的 58 帖（11-13 至 11-19，已提炼）加补采的 AI 帖，跑一次完整 6 步。<b>产出：</b>一页真实的 HN 吸收静态页（话题 / 资源 / 经验 / 口径），放进吸收页的 HN 标签，不接定时。<b>要回答的：</b>压缩比、聚类对不对、你过一遍用时、有没有你觉得重要但没出现的话题。<b>不做：</b>不改信息推荐页面，不接自动调度，不写“我的判断”正式库（立场只记草稿）。</p>
+
+<h2>10. 自主决策与需要你定</h2>
+<p class="m">本次只出设计，未改代码；下面是我定了的和建议你确认的，按“改回代价”排序。</p>
+<div class="tw"><table>
+<tr><th>选择</th><th>选了</th><th>备选</th><th>理由</th><th>改回代价</th></tr>
+<tr><td>放哪儿</td><td>吸收页二级切换</td><td>信息推荐里加视图</td><td>你说“吸收下新增”，且共用表态反馈</td><td>低，只改路由和入口</td></tr>
+<tr><td>时间窗</td><td>滚动最近 7 天</td><td>自然周（周一到周日）</td><td>随时打开都有完整一周，增量跑更简单</td><td>低</td></tr>
+<tr><td>采集门槛</td><td>点数 ≥50 或评论 ≥40；Show / Launch HN 评论 ≥10</td><td>只看点数 ≥100</td><td>评论多比点数高更能出观点；产品发现要小帖</td><td>低，改一个常量</td></tr>
+<tr><td>旧提炼结果</td><td>用新提示词整体重跑</td><td>兼容旧格式，新帖才有引文</td><td>先减后加；58 帖成本很小</td><td>中，要重跑一遍</td></tr>
+<tr><td>立场表态</td><td>只存草稿，不写正式判断库</td><td>点“我站某边”直接生成判断</td><td>判断库只有 1 条数据，不能被点击污染</td><td>低</td></tr>
+<tr><td>聚类模型</td><td>本机向量 + 模型裁定</td><td>全部交给大模型一次排</td><td>200 帖放不进一次上下文，向量先粗聚更便宜</td><td>中</td></tr>
+</table></div>
+<p><b>需要你拍板的（开跑前，一次问完）：</b></p>
+<ol>
+<li><b>范围是否只要 AI？</b>推荐只要 AI；HN 上和 AI 相邻的“Agent 基础设施、GPU 供应、AI 与法律”算 AI，纯编程语言、安全事件不算。你若想把“AI 如何改变开发工作”也算进来，写一句话就行。</li>
+<li><b>能否接受先出静态试点页再接调度？</b>推荐接受；试点验证压缩比和聚类，再决定是否值得每天跑。</li>
+<li><b>模型花费上限。</b>试点预计几美元；若要全量每天跑，月成本我试点后给数，由你定要不要开。</li>
+</ol>
+<p class="m">没有这三条的答复我就按推荐项开工（只做试点，不接调度，不花超过 10 美元）。</p>
+
+</div></body></html>
