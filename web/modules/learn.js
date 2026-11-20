@@ -869,10 +869,9 @@ async function renderItem(el, ctx, iid) {
   const annots = rd?.annots || [];
   const records = [...(rd?.lines || []), ...annots.map((x) => ({ ...x, kind: 'annot' }))].sort((a, b) => a.at.localeCompare(b.at));
   const RECORD_TAG = { thought: ['.ok', '感想'], ask: ['.gray', '追问'], annot: ['.gray', '划线'] };
-  let rating = it.rating || 0;
   const notes = h('textarea', { rows: 4, value: it.my_notes || '', placeholder: '写点认识或疑问（⌘+Enter 保存）。选中正文可以直接划线记录，在对话里说的感想和追问也会记到这里。' });
   const saved = h('span.ln-saved');
-  const saveNotes = async () => { await api.patch(`/api/learn/items/${it.id}`, { my_notes: notes.value, rating }); saved.textContent = '已保存 ✓'; setTimeout(() => { saved.textContent = ''; }, 2000); };
+  const saveNotes = async () => { await api.patch(`/api/learn/items/${it.id}`, { my_notes: notes.value }); saved.textContent = '已保存 ✓'; setTimeout(() => { saved.textContent = ''; }, 2000); };
   notes.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveNotes(); } });
   reader.append(ui.section('我的笔记', [[annots.length && `划线 ${annots.length}`, thought && `感想 ${thought}`, asked && `追问 ${asked}`].filter(Boolean).join(' · '),
     rd?.task ? h('a.muted', { href: `#plan`, style: { marginLeft: '10px' } }, `${rd.task.date} 深读事项 · ${rd.task.status === 'done' ? '已完成' : '进行中'}`) : null]),
@@ -881,7 +880,7 @@ async function renderItem(el, ctx, iid) {
       h('span.tag' + RECORD_TAG[x.kind][0], {}, RECORD_TAG[x.kind][1]),
       h('span', {}, [x.quote ? h('span.muted', {}, `「${x.quote.length > 60 ? x.quote.slice(0, 60) + '…' : x.quote}」`) : null, x.text])])),
     h('div', { style: { marginTop: records.length ? '10px' : '0' } }, notes),
-    h('div.row', { style: { marginTop: '10px' } }, [h('span.muted', {}, '评分'), stars(h, ui, rating, (v) => { rating = v; saveNotes(); }), h('span.grow'), saved,
+    h('div.row', { style: { marginTop: '10px' } }, [h('span.grow'), saved,
       h('button', { onclick: chat }, [ui.icon('chat'), records.length ? '接着聊' : '去对话里聊']),
       h('button.primary', { onclick: saveNotes }, [ui.icon('check'), '保存'])])]));
 }

@@ -3,15 +3,17 @@
 doc 是材料的稳定标识：research:<id>:synth / research:<id>:r<结果id> / research_doc:<id> / learn:item:<id> /
 learn:plan:<id> / learn:step:<id> / kb:<相对路径> /
 intel:event:<id> / intel:company:<slug> / intel:growth:<id> / review:<日期>:improve|check|reflection。一条批注 = 一段划线（quote 为空表示针对全文）+ 一串讨论；
+每份材料可以打 1–5 星（doc_ratings，按 doc 一条），深读条目的星级同步回 learn_items.rating。
 问 Claude 时在后台线程里跑 claude -p，第一问带上全文和划线，追问续接同一个会话。讨论同步进知识库 annotations/。
 """
 from __future__ import annotations
 
 import logging
+import re
 import threading
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import agent, db, kb, settings
 
@@ -45,6 +47,15 @@ CREATE TABLE IF NOT EXISTS annotation_msgs (
     created_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_annotation_msgs ON annotation_msgs(annotation_id);
+CREATE TABLE IF NOT EXISTS doc_ratings (
+    doc        TEXT PRIMARY KEY,
+    stars      INTEGER NOT NULL,              -- 1-5
+    title      TEXT DEFAULT '',
+    link       TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doc_ratings_stars ON doc_ratings(stars);
 """
 
 SYSTEM = agent.PLATFORM_GUIDE + """
@@ -85,6 +96,63 @@ def recent(limit: int = 30):
     """最近有讨论的批注（不分材料），给知识库 / 对话 Agent 用。"""
     rows = db.rows("SELECT id FROM annotations ORDER BY updated_at DESC LIMIT ?", [limit])
     return [_thread(a["id"]) for a in rows]
+
+
+class RatingIn(BaseModel):
+    doc: str
+    title: str = ""
+    link: str = ""
+    stars: int = Field(ge=0, le=5)
+
+
+_LEARN_ITEM = re.compile(r"^learn:item:(\d+)$")
+_seeded = False
+
+
+def _seed_learn_items() -> None:
+    """深读条目以前的评分记在 learn_items.rating，第一次用评分时并进来。"""
+    global _seeded
+    if _seeded:
+        return
+    _seeded = True
+    if db.row("SELECT name FROM sqlite_master WHERE type='table' AND name='learn_items'"):
+        db.execute("INSERT OR IGNORE INTO doc_ratings (doc, stars, title, link, created_at, updated_at) "
+                   "SELECT 'learn:item:'||id, rating, COALESCE(title,''), '#learn/item/'||id, updated_at, updated_at "
+                   "FROM learn_items WHERE rating>0")
+
+
+@router.get("/rating")
+def get_rating(doc: str):
+    _seed_learn_items()
+    return db.row("SELECT * FROM doc_ratings WHERE doc=?", [doc]) or {"doc": doc, "stars": 0}
+
+
+@router.put("/rating")
+def put_rating(body: RatingIn):
+    if not body.doc.strip():
+        raise HTTPException(400, "缺少 doc")
+    _seed_learn_items()
+    now = db.now()
+    if body.stars:
+        db.execute("INSERT INTO doc_ratings (doc, stars, title, link, created_at, updated_at) VALUES (?,?,?,?,?,?) "
+                   "ON CONFLICT(doc) DO UPDATE SET stars=excluded.stars, title=excluded.title, link=excluded.link, updated_at=excluded.updated_at",
+                   [body.doc, body.stars, body.title[:200], body.link, now, now])
+    else:
+        db.execute("DELETE FROM doc_ratings WHERE doc=?", [body.doc])
+    m = _LEARN_ITEM.match(body.doc)
+    if m and db.row("SELECT id FROM learn_items WHERE id=?", [int(m[1])]):
+        from .modules import _reads
+        db.update("learn_items", int(m[1]), {"rating": body.stars, "updated_at": now})
+        _reads.sync_task(int(m[1]))
+    return get_rating(body.doc)
+
+
+@router.get("/ratings")
+def list_ratings(min: int = 1, prefix: str = "", limit: int = 500):
+    """打过分的材料，分高的、新的在前；prefix 按 doc 前缀筛（intel:growth: / research / learn:item: …）。"""
+    _seed_learn_items()
+    return db.rows("SELECT * FROM doc_ratings WHERE stars>=? AND doc LIKE ? ORDER BY stars DESC, updated_at DESC LIMIT ?",
+                   [min, prefix.replace("%", "") + "%", limit])
 
 
 class NewIn(BaseModel):

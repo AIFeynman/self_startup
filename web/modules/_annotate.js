@@ -9,7 +9,8 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   injectStyle();
   if (!doc.startsWith('review:')) window.__markReading?.(title || doc);
   const rail = h('div.an-rail');
-  const wrap = h('div.an-wrap' + (compact ? '.compact' : ''), {}, [h('div.an-body', {}, body), rail]);
+  const rated = !compact && !doc.startsWith('review:');
+  const wrap = h('div.an-wrap' + (compact ? '.compact' : ''), {}, [h('div.an-body', {}, [rated ? rateStars(ctx, { doc, title, link }) : null, body]), rail]);
   wrap._src = { doc, title, link }; // ⌘K 快记时带上出处
   let threads = [];
   let showResolved = false;
@@ -259,6 +260,23 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
 }
 
 // 正文所有文字节点拼起来，去掉空白后匹配（划线时 toString 带的换行和 DOM 里的不一样），再映射回节点位置
+function rateStars({ api, h, ui, toast }, { doc, title, link }) {
+  const box = h('div.an-rate', { title: '给这篇打分（再点一次取消），之后可按星级检索' });
+  let v = 0;
+  const draw = () => box.replaceChildren(...[1, 2, 3, 4, 5].map((i) => h('button' + (i <= v ? '.on' : ''), {
+    'aria-label': `${i} 星`,
+    onclick: async (e) => {
+      e.stopPropagation();
+      const prev = v;
+      v = i === v ? 0 : i;
+      draw();
+      try { await api.put('/api/annotations/rating', { doc, title, link, stars: v }); } catch (err) { v = prev; draw(); toast('评分没存上：' + err.message, true); }
+    } }, ui.icon('star'))));
+  draw();
+  api.get(`/api/annotations/rating?doc=${encodeURIComponent(doc)}`).then((r) => { v = r.stars || 0; draw(); }).catch(() => {});
+  return box;
+}
+
 function textIndex(root) {
   const nodes = [];
   // 公式的 TeX 源码（<annotation>）不显示也选不中，不算进正文
@@ -386,6 +404,11 @@ function injectStyle() {
   .an-reopen { writing-mode: vertical-rl; display: flex; gap: 6px; align-items: center; padding: 10px 3px; font-size: 12px; letter-spacing: .15em; color: var(--muted); }
   .an-reopen svg { width: 14px; height: 14px; } .an-reopen:hover { color: var(--accent); border-color: var(--accent); }
   @media (max-width: 1100px) { .an-wrap.rail-off { grid-template-columns: minmax(0, 1fr); } .an-reopen { writing-mode: horizontal-tb; } }
+  .an-rate { float: right; display: inline-flex; margin: 0 0 6px 12px; position: relative; z-index: 1; }
+  .an-rate button { border: none; background: none; padding: 2px; color: var(--line-2); border-radius: 4px; cursor: pointer; }
+  .an-rate button svg { width: 18px; height: 18px; }
+  .an-rate button.on { color: var(--accent); } .an-rate button.on svg { fill: var(--accent); }
+  .an-rate:hover button { color: var(--accent); } .an-rate button:hover ~ button:not(.on) { color: var(--line-2); }
   .an-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
   .an-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 6px;
     transition: box-shadow .2s; }
