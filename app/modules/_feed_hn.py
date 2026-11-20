@@ -34,6 +34,7 @@ MAX_DEPTH = 4            # 讨论串最多读几层
 WORKERS = 4
 LINK_KINDS = ("博客", "视频", "仓库", "产品", "论文", "文档", "数据", "讨论", "其他")
 ENTITY_KINDS = ("技术", "产品", "公司", "工具", "其他")
+INTENTS = ("推荐", "佐证", "批评")
 SENTIMENTS = ("pos", "neg", "mixed", "neutral")
 STANCES = ("主流", "反对", "少数", "补充")
 SKIP_HOSTS = ("news.ycombinator.com",)   # 指回 HN 自己的链接不算推荐
@@ -44,7 +45,7 @@ SYSTEM = (
     "{\n"
     '  "tldr": "讨论一句话：大家主要怎么看、分歧在哪（≤80 字）",\n'
     '  "links": [{"url": "评论原文里出现的完整 URL", "kind": "博客|视频|仓库|产品|论文|文档|数据|讨论|其他（数据 = 数据集、基准、统计数字来源）", '
-    '"title": "它是什么（≤20 字）", "why": "评论为什么提到 / 推荐它（≤40 字）", "cids": [评论 id]}],\n'
+    '"intent": "推荐|佐证|批评", "title": "它是什么（≤20 字）", "why": "评论为什么提到 / 推荐它（≤40 字）", "cids": [评论 id]}],\n'
     '  "entities": [{"name": "技术 / 产品名，保留原文", "kind": "技术|产品|公司|工具|其他", '
     '"sentiment": "pos|neg|mixed|neutral", "note": "评论对它的评价要点（≤40 字）", "cids": [评论 id]}],\n'
     '  "opinions": [{"stance": "主流|反对|少数|补充", "claim": "观点或判断（≤60 字）", '
@@ -53,6 +54,7 @@ SYSTEM = (
     '"result": "结果或教训（≤60 字）", "cids": [评论 id], "quote": "该评论里逐字摘录的一句（≤200 字符）"}]\n'
     "}\n"
     "要求：\n"
+    "- intent：推荐 = 评论者明确说它好用、有价值、值得看 / 试 / 用，或直接推荐给别人；佐证 = 只是当论据、数据来源或背景引用，没有推荐之意；批评 = 当反面例子、营销、不可信的东西提。拿不准写佐证。\n"
     "- 只根据给出的评论写，不补充评论里没有的事实；links 的 url 必须是评论原文里出现过的，不要自己拼。\n"
     "- links 只收有参考价值的（推荐的文章、视频、工具、仓库、论文、产品官网等），最多 12 条；entities 最多 15 个，只收被实际讨论或评价过的；"
     "opinions 3–6 条，按支持人数从多到少；experiences 只收亲身做过的事（「我们 / 我在 X 用了 Y」），最多 8 条，没有就给空数组。\n"
@@ -213,6 +215,7 @@ def clean_digest(raw: dict, comments: list[dict], text: str, op: str = "") -> di
         used.add(k)
         url, cnt = seen_urls[k]
         links.append({"url": url, "kind": l.get("kind") if l.get("kind") in LINK_KINDS else "其他",
+                      "intent": l.get("intent") if l.get("intent") in INTENTS else "佐证",
                       "title": fit(str(l.get("title") or ""), 40), "why": fit(str(l.get("why") or ""), 80),
                       "mentions": cnt, "cids": _ids(l.get("cids"), valid),
                       "self": bool(op) and any(x["author"] == op and k in {_norm_url(u) for u in urls_in(x["text"])} for x in comments),

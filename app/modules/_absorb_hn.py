@@ -8,6 +8,7 @@ collect 采帖 → relevance 判是否 AI → digest 单帖提炼（复用 _feed
 from __future__ import annotations
 
 import argparse
+import collections
 import datetime as dt
 import json
 import math
@@ -295,17 +296,22 @@ def s_page(r: HRun) -> dict:
     resources: dict[str, dict] = {}
     for i, d in dg.items():
         for l in d["links"]:
-            g = resources.setdefault(res_key(l["url"]), {"url": l["url"], "title": l["title"], "kind": l["kind"], "why": l["why"], "people": set(),
-                                                         "self": 0, "posts": [], "topics": set()})
+            g = resources.setdefault(res_key(l["url"]), {"url": l["url"], "title": l["title"], "kind": l["kind"], "why": l["why"], "people": set(), "rec": set(),
+                                                         "self": 0, "posts": [], "topics": set(), "intents": collections.Counter()})
             g["people"].update(l.get("by") or [])
+            if l.get("intent") == "推荐":
+                g["rec"].update(a for a in l.get("by") or [] if a != posts[i]["author"])
+            g["intents"][l.get("intent") or "佐证"] += 1
             g["self"] += 1 if l.get("self") else 0
             g["posts"].append(i)
             if i in where:
                 g["topics"].add(where[i])
     rs = []
     for g in resources.values():
+        intent = "推荐" if g["intents"]["推荐"] else "批评" if g["intents"]["批评"] > g["intents"]["佐证"] else "佐证"
         n = len(g["people"])
-        rs.append({"url": g["url"], "title": g["title"], "kind": g["kind"], "why": g["why"], "people": n, "self": g["self"] > 0, "score": n - 0.5 * (g["self"] > 0),
+        rs.append({"url": g["url"], "title": g["title"], "kind": g["kind"], "why": g["why"], "people": n, "rec": len(g["rec"]), "intent": intent, "self": g["self"] > 0,
+                   "score": (3 if intent == "推荐" else 0) + len(g["rec"]) + n - 0.5 * (g["self"] > 0),
                    "post": g["posts"][0], "post_title": posts[g["posts"][0]]["title"], "topics": sorted(g["topics"])})
     rs.sort(key=lambda x: -x["score"])
     topics = []
@@ -317,7 +323,7 @@ def s_page(r: HRun) -> dict:
                        "stats": {"posts": len(ps), "comments": comments, "people": people, "points": sum(p["points"] for p in ps)},
                        "posts": [{"id": p["id"], "title": p["title"], "url": p["url"], "hn_url": p["hn_url"], "points": p["points"], "comments": p["comments"]} for p in ps],
                        "verdict": t["verdict"], "verdict_unchecked": t["verdict_unchecked"], "camps": t["camps"], "exps": t["exps"], "mine": t["mine"],
-                       "res": [k for k, x in enumerate(rs) if n in x["topics"]][:6]})
+                       "res": []})
     topics.sort(key=lambda t: -(t["stats"]["comments"]))
     remap = {t["id"]: k for k, t in enumerate(topics)}
     for t in topics:
@@ -325,7 +331,7 @@ def s_page(r: HRun) -> dict:
     for x in rs:
         x["topics"] = [remap[k] for k in x["topics"]]
     for t in topics:
-        t["res"] = [k for k, x in enumerate(rs) if t["id"] in x["topics"]][:6]
+        t["res"] = [k for k, x in enumerate(rs) if t["id"] in x["topics"] and x["kind"] not in ("讨论", "其他")]
     tail = [{"title": posts[i]["title"], "hn_url": posts[i]["hn_url"], "url": posts[i]["url"], "comments": posts[i]["comments"], "points": posts[i]["points"],
              "tldr": dg[i]["tldr"] if i in dg else ""} for i in tp["tail"]]
     tail += [{"title": p["title"], "hn_url": p["hn_url"], "url": p["url"], "comments": p["comments"], "points": p["points"], "tldr": ""}
@@ -339,7 +345,7 @@ def s_page(r: HRun) -> dict:
             "comments": sum(d["total"] for d in dg.values()), "people": sum(d.get("people", 0) for d in dg.values()),
             "topics": len(topics), "tail": len(tail), "in_topics": sum(len(t["posts"]) for t in topics),
             "quotes_kept": kept, "quotes_raw": raw, "unchecked": sum(t["verdict_unchecked"] for t in topics),
-            "resources": len(rs), "exps": sum(len(t["exps"]) for t in topics), "minutes": round(secs / 60), "cost": round(sum((st.get("cost") or {}).values()), 2),
+            "resources": len(rs), "recommended": sum(x["intent"] == "推荐" for x in rs), "exps": sum(len(t["exps"]) for t in topics), "minutes": round(secs / 60), "cost": round(sum((st.get("cost") or {}).values()), 2),
             "fails": st.get("fails") or {}, "weights": {"min_points": MIN_POINTS, "min_comments": MIN_COMMENTS, "digest_min": DIGEST_MIN}}
     return {"meta": meta, "topics": topics, "resources": rs, "tail": tail}
 

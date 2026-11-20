@@ -83,3 +83,26 @@ def test_api_hn_runs_page_and_react(client, tmp_path, monkeypatch):
     ev = [json.loads(x) for x in (tmp_path / "fb.jsonl").read_text().splitlines()]
     assert ev[0]["src"] == "hn" and ev[0]["claim"] == "话题" and ev[0]["stance"] == "站反对"
     assert client.get("/api/absorb/feedback").json()["n"] == 0        # HN 表态不混进选题吸收的反馈统计
+
+
+def test_page_resource_intent_and_ranking():
+    posts = [{"id": "a", "title": "A", "url": "", "hn_url": "", "points": 1, "comments": 100, "author": "op"}]
+    lk = lambda u, intent, by, **k: {"url": u, "title": u, "kind": "仓库", "why": "w", "intent": intent, "by": by, "self": False, **k}  # noqa: E731
+    dg = {"a": {"tldr": "", "total": 3, "people": 3, "raw_ops": 0, "raw_exps": 0, "opinions": [], "experiences": [],
+                "links": [lk("https://x.com/doc", "佐证", ["u1", "u2", "u3"]), lk("https://x.com/tool", "推荐", ["u1"]),
+                          lk("https://x.com/bad", "批评", ["u2"]), lk("https://x.com/self", "推荐", ["op"], **{"self": True})]}}
+    files = {"posts.json": posts, "relevance.json": {"a": "ai"}, "digests.json": dg, "topics.json": {"topics": [], "tail": []},
+             "synth.json": [{"title": "t", "kind": "议题", "posts": ["a"], "verdict": "v", "verdict_unchecked": False, "camps": [], "exps": [], "mine": []}],
+             "collected_all.json": {"queried": 1}, "status.json": {}}
+
+    class R:
+        start, end = "2026-11-13", "2026-11-19"
+        load = staticmethod(lambda n: files[n])
+
+    page = hn.s_page(R())
+    by = {x["url"]: x for x in page["resources"]}
+    assert by["https://x.com/tool"]["intent"] == "推荐" and by["https://x.com/tool"]["rec"] == 1
+    assert by["https://x.com/self"]["rec"] == 0                      # 作者自己推荐不算推荐者
+    assert by["https://x.com/bad"]["intent"] == "批评" and by["https://x.com/doc"]["intent"] == "佐证"
+    assert page["resources"][0]["url"] == "https://x.com/tool"       # 推荐排在只被引用的前面，哪怕引用的人更多
+    assert page["topics"][0]["res"] == [page["resources"].index(by[u]) for u in by]

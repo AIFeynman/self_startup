@@ -33,6 +33,7 @@ def test_clean_digest_validates():
            "experiences": [{"who": "b", "did": "用了", "result": "好", "quote": "+1 to https://github.com/x/tool"}, {"who": "z", "did": "没引文"}]}
     d = hnd.clean_digest(raw, comments, text)
     assert [l["url"] for l in d["links"]] == ["https://github.com/x/tool"]    # 编造的链接丢掉
+    assert d["links"][0]["intent"] == "佐证"                                  # 没标或乱标的意图归到佐证
     assert d["links"][0]["mentions"] == 2 and d["links"][0]["cids"] == [20]   # 提及按原文数，假 cid 去掉
     assert d["entities"] == [{"name": "tool", "kind": "其他", "sentiment": "pos", "note": "", "cids": [21]}]
     assert [o["claim"] for o in d["opinions"]] == ["好用"] and d["opinions"][0]["cids"][0] == 20   # 找不到原话的观点丢弃，cid 指向原话所在评论
