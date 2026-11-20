@@ -255,21 +255,22 @@ class HnReactIn(BaseModel):
     topic: int
     act: str = ""
     stance: str = ""
+    stars: int = 0
 
 
 @router.post("/hn/runs/{rid}/react")
 def hn_react(rid: str, body: HnReactIn):
     d = _hn_dir(rid)
-    if (body.act and body.act not in ACTS) or (body.stance and body.stance not in STANCES):
+    if (body.act and body.act not in ACTS) or (body.stance and body.stance not in STANCES) or not 0 <= body.stars <= 5:
         raise HTTPException(400, "表态不合法")
     t = next((x for x in _read(d / "page.json", {}).get("topics", []) if x["id"] == body.topic), None)
     if not t:
         raise HTTPException(404, "没有这个话题")
     r = _read(d / "reactions.json", {})
-    cur = {**r.get(str(body.topic), {}), "act": body.act, "stance": body.stance, "at": time.time()}
+    cur = {**r.get(str(body.topic), {}), "act": body.act, "stance": body.stance, "stars": body.stars, "at": time.time()}
     _log({"src": "hn", "run": "hn:" + rid, "card": body.topic, "claim": t["title"], "type": t["kind"], "tag": t["consensus"], "topic": "HN",
-          "act": body.act, "stance": body.stance, "at": cur["at"]})
-    if cur["act"] or cur["stance"]:
+          "act": body.act, "stance": body.stance, "stars": body.stars, "at": cur["at"]})
+    if cur["act"] or cur["stance"] or cur["stars"]:
         r[str(body.topic)] = cur
     else:
         r.pop(str(body.topic), None)

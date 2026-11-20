@@ -74,14 +74,16 @@ def test_api_hn_runs_page_and_react(client, tmp_path, monkeypatch):
     assert client.get("/api/absorb/hn/runs").json()[0]["done"] is True
     rid = "2026-11-13_2026-11-19"
     assert client.get(f"/api/absorb/hn/runs/{rid}").json()["data"]["topics"][0]["title"] == "话题"
-    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0, "act": "很受用", "stance": "站反对"}).status_code == 200
-    assert client.get(f"/api/absorb/hn/runs/{rid}").json()["reactions"]["0"]["act"] == "很受用"
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0, "act": "很受用", "stance": "站反对", "stars": 4}).status_code == 200
+    assert client.get(f"/api/absorb/hn/runs/{rid}").json()["reactions"]["0"]["act"] == "很受用" and client.get(f"/api/absorb/hn/runs/{rid}").json()["reactions"]["0"]["stars"] == 4
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0, "stars": 6}).status_code == 400
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0, "stars": 3}).status_code == 200      # 只打星也算一条表态
     assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0, "act": "乱写"}).status_code == 400
     assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 9, "act": "很受用"}).status_code == 404
     assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0}).status_code == 200
     assert client.get(f"/api/absorb/hn/runs/{rid}").json()["reactions"] == {}
     ev = [json.loads(x) for x in (tmp_path / "fb.jsonl").read_text().splitlines()]
-    assert ev[0]["src"] == "hn" and ev[0]["claim"] == "话题" and ev[0]["stance"] == "站反对"
+    assert ev[0]["src"] == "hn" and ev[0]["claim"] == "话题" and ev[0]["stance"] == "站反对" and ev[0]["stars"] == 4
     assert client.get("/api/absorb/feedback").json()["n"] == 0        # HN 表态不混进选题吸收的反馈统计
 
 
@@ -96,7 +98,7 @@ def test_page_resource_intent_and_ranking():
              "collected_all.json": {"queried": 1}, "status.json": {}}
 
     class R:
-        start, end = "2026-11-13", "2026-11-19"
+        start, end, light, strong = "2026-11-13", "2026-11-19", "haiku", "sonnet"
         load = staticmethod(lambda n: files[n])
 
     page = hn.s_page(R())
@@ -106,3 +108,25 @@ def test_page_resource_intent_and_ranking():
     assert by["https://x.com/bad"]["intent"] == "批评" and by["https://x.com/doc"]["intent"] == "佐证"
     assert page["resources"][0]["url"] == "https://x.com/tool"       # 推荐排在只被引用的前面，哪怕引用的人更多
     assert page["topics"][0]["res"] == [page["resources"].index(by[u]) for u in by]
+
+
+def test_rel_label_thresholds():
+    assert [hn.rel_label(p) for p in (0.29, 0.3, 0.59, 0.6, 0.95)] == ["no", "edge", "edge", "ai", "ai"]
+
+
+def test_digest_post_uses_light_model_and_checks_quotes(monkeypatch):
+    comments = [{"id": 5, "depth": 0, "author": "u", "text": "I tried it and it saved us a lot of time", "replies": 0}]
+    monkeypatch.setattr(hn.hnd, "fetch_thread", lambda pid, c: ("op", comments))
+    seen = {}
+
+    class R:
+        light = "haiku"
+
+        def call(self, model, system, user):
+            seen["model"] = model
+            return {"tldr": "t", "opinions": [{"stance": "主流", "claim": "好用", "n": 1, "quote": "it saved us a lot of time"},
+                                              {"stance": "少数", "claim": "编的", "n": 1, "quote": "nothing like this was said here"}]}
+
+    d = hn.digest_post(R(), {"id": "1", "title": "T", "url": "", "points": 9}, None)
+    assert seen["model"] == "haiku" and [o["claim"] for o in d["opinions"]] == ["好用"]
+    assert hn.digest_post(type("R", (), {"light": "h", "call": lambda *a: None})(), {"id": "1", "title": "T", "url": "", "points": 9}, None) is None

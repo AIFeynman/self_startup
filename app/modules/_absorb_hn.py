@@ -40,10 +40,6 @@ KINDS = ("事件", "议题", "实践")
 OUTCOMES = ("成功", "失败", "有条件")
 JOBS = 4
 
-P_REL = """你判断 Hacker News 帖子是否主要在讨论 AI。AI 包括：大模型 / 模型发布 / 基准、AI Agent 和编码 Agent、AI 产品与工具、AI 基础设施与算力（GPU、芯片、数据中心）、AI 对行业 / 工作 / 法律 / 社会的影响与争议、AI 公司的商业动态。
-纯编程语言、普通安全事件、与 AI 无关的硬件和产品不算；只是顺带提到 AI 的算 edge。
-输入每行：序号|标题|域名。只输出 JSON：{"ai":[序号...],"edge":[序号...]}，其余视为无关。"""
-
 P_TOPICS = """你把一周内 Hacker News 上 AI 相关的帖子聚成“话题”，供读者快速判断这周 AI 圈有什么事、社区站哪边。
 输入每行：序号|评论数|标题|讨论一句话|被提到的主要对象。
 规则：
@@ -133,50 +129,72 @@ def s_collect(r: HRun) -> list:
 
 # ---------- 2 相关性 ----------
 
+JEV_API = "https://api.typesafe.ai/v1/systemone"
+JEV_MIN, JEV_SURE = 0.3, 0.6      # Jev 给的概率偏低：≥0.3 算 AI 相关（与 Haiku 判断吻合 97%），≥0.6 为明确，其间标“边缘”
+Q_AI = ("state.items.{k} 是 Hacker News 上的一个帖子。它是否主要在讨论 AI：大模型 / 模型发布与基准、AI Agent 和编码 Agent、AI 产品与工具、"
+        "AI 基础设施与算力（GPU、芯片、数据中心）、AI 对行业 / 工作 / 法律 / 社会的影响、AI 公司的商业动态？"
+        "纯编程语言、普通安全事件、与 AI 无关的硬件和产品、只是顺带提到 AI 的回答否。")
+
+
+def rel_label(p: float) -> str:
+    return "ai" if p >= JEV_SURE else "edge" if p >= JEV_MIN else "no"
+
+
 def s_relevance(r: HRun) -> dict:
     posts = r.load("posts.json")
-    batches = [list(range(i, min(i + 60, len(posts)))) for i in range(0, len(posts), 60)]
-
-    def one(ix):
-        user = "\n".join(f"{i}|{posts[i]['title']}|{urlsplit(posts[i]['url']).netloc}" for i in ix)
-        j = r.call(r.light, P_REL, user) or {}
-        return {i: ("ai" if i in (j.get("ai") or []) else "edge" if i in (j.get("edge") or []) else "no") for i in ix}
-
-    res: dict[int, str] = {}
-    for d in ar._pmap(one, batches, 4):
-        res.update(d)
-    return {posts[i]["id"]: res.get(i, "no") for i in range(len(posts))}
+    key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("未配置 JEV_API_KEY（项目根目录 .env）")
+    probs: dict[str, float] = {}
+    with httpx.Client(timeout=60) as c:
+        for i in range(0, len(posts), 20):
+            refs = {f"i{n}": p for n, p in enumerate(posts[i:i + 20])}
+            res = c.post(JEV_API, headers={"Authorization": f"Bearer {key}"}, json={
+                "model": "jev-latest",
+                "state": {"items": {k: {"title": p["title"], "domain": urlsplit(p["url"]).netloc, "points": p["points"], "comments": p["comments"]} for k, p in refs.items()}},
+                "questions": {k: {"type": "noul", "instructions": Q_AI.format(k=k)} for k in refs}})
+            res.raise_for_status()
+            for k, p in refs.items():
+                v = (res.json().get("answers", {}).get(k) or {}).get("noul")
+                if not isinstance(v, (int, float)) or not 0 <= v <= 1:
+                    raise RuntimeError(f"Jev 没返回 {p['id']} 的概率")
+                probs[p["id"]] = round(float(v), 3)
+    r.save("relevance_p.json", probs)
+    return {i: rel_label(v) for i, v in probs.items()}
 
 
 # ---------- 3 单帖提炼 ----------
+
+def digest_post(r: HRun, p: dict, c: httpx.Client) -> dict | None:
+    it = {"id": f"hn:{p['id']}", "title": p["title"], "url": p["url"], "summary": "", "popularity": p["points"]}
+    op, comments = hnd.fetch_thread(p["id"], c)
+    if not comments:
+        return None
+    text = hnd.render(comments)
+    raw = r.call(r.light, hnd.SYSTEM, hnd._payload(it, text))
+    return hnd.clean_digest(raw, comments, text, op) if isinstance(raw, dict) else None
+
 
 def s_digest(r: HRun) -> dict:
     posts, rel = r.load("posts.json"), r.load("relevance.json")
     todo = [p for p in posts if rel.get(p["id"]) in ("ai", "edge") and (p["comments"] >= DIGEST_MIN or (is_show(p["title"]) and p["comments"] >= SHOW_MIN_COMMENTS))]
     done = r.load("digests.json") if r.has("digests.json") else {}
     todo = [p for p in todo if p["id"] not in done]
-    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if todo and not key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY（项目根目录 .env）")
-    base = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
     errs = []
     with httpx.Client(timeout=hnd.TIMEOUT, follow_redirects=True) as c:
         def one(p):
-            it = {"id": f"hn:{p['id']}", "title": p["title"], "url": p["url"], "summary": "", "popularity": p["points"]}
-            for _ in range(2):
-                try:
-                    return p["id"], hnd.digest_one(it, model="deepseek-v4-flash", key=key, base=base, c=c), ""
-                except Exception as e:  # noqa: BLE001
-                    err = f"{p['id']}：{type(e).__name__}: {str(e)[:100]}"
-            return p["id"], None, err
+            try:
+                return p["id"], digest_post(r, p, c)
+            except Exception as e:  # noqa: BLE001
+                return p["id"], f"{type(e).__name__}: {str(e)[:100]}"
 
-        with ThreadPoolExecutor(hnd.WORKERS) as ex:
-            for pid, d, err in ex.map(one, todo):
-                if d:
+        with ThreadPoolExecutor(JOBS) as ex:
+            for pid, d in ex.map(one, todo):
+                if isinstance(d, dict):
                     done[pid] = d
                     r.save("digests.json", done)
                 else:
-                    errs.append(err)
+                    errs.append(f"{pid}：{d or '提炼失败'}")
     r.fails["digest"] = len(errs)
     r.save("digest_errors.json", errs)
     return done
@@ -346,7 +364,8 @@ def s_page(r: HRun) -> dict:
             "topics": len(topics), "tail": len(tail), "in_topics": sum(len(t["posts"]) for t in topics),
             "quotes_kept": kept, "quotes_raw": raw, "unchecked": sum(t["verdict_unchecked"] for t in topics),
             "resources": len(rs), "recommended": sum(x["intent"] == "推荐" for x in rs), "exps": sum(len(t["exps"]) for t in topics), "minutes": round(secs / 60), "cost": round(sum((st.get("cost") or {}).values()), 2),
-            "fails": st.get("fails") or {}, "weights": {"min_points": MIN_POINTS, "min_comments": MIN_COMMENTS, "digest_min": DIGEST_MIN}}
+            "fails": st.get("fails") or {}, "weights": {"min_points": MIN_POINTS, "min_comments": MIN_COMMENTS, "digest_min": DIGEST_MIN, "jev_min": JEV_MIN},
+            "models": {"relevance": "Jev", "digest": r.light, "topics": r.strong}}
     return {"meta": meta, "topics": topics, "resources": rs, "tail": tail}
 
 

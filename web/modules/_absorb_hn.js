@@ -22,6 +22,7 @@ const CSS = `
 .hn-act { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 7px; align-items: center; }
 .hn-act button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 1px 10px; font-size: 12px; cursor: pointer; }
 .hn-act button.on { background: var(--accent); border-color: var(--accent); color: #fff; } .hn-act .sp { color: var(--line-2); }
+.hn-st { display: inline-flex; gap: 1px; margin-left: 8px; } .hn-st button { border: 0; background: none; font-size: 18px; line-height: 1; padding: 0 1px; color: var(--line-2); cursor: pointer; } .hn-st button.on { color: var(--warn); }
 .hn-d { display: none; margin-top: 8px; font-size: 13px; } .hn-t.open .hn-d { display: block; } .hn-d h5 { margin: 9px 0 3px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .hn-d .p { padding: 1px 0; overflow-wrap: anywhere; }
 .hn-r { border-top: 1px solid var(--line); padding: 8px 0; } .hn-r .t { font-weight: 600; font-size: 14.5px; overflow-wrap: anywhere; } .hn-r .w { font-size: 13px; color: var(--muted); }
@@ -64,7 +65,7 @@ ${t.camps.slice(0, 2).map((c) => quote(c)).join('')}
 ${t.exps.length ? `<div class="hn-chips ab-m">做过的人 ${t.exps.length}：${['成功', '失败', '有条件'].map((o) => `${o} ${t.exps.filter((x) => x.outcome === o).length}`).join(' · ')}</div>${exps(t.exps, 2)}` : ''}
 ${t.mine.length ? `<div class="hn-chips">${t.mine.map((m) => `<span class="c mine ${m.rel === '印证' ? 'ok' : ''}" title="${E(m.why)}">与你的判断${m.rel}：${E(m.judgment)}</span>`).join('')}</div>` : ''}
 ${res.length ? `<div class="hn-chips"><span class="ab-m">资源 ${t.res.length}</span>${res.map((x) => `<a href="${E(x.url)}" target="_blank" rel="noopener" title="${E(x.why)}">${E(KIND[x.kind] || x.kind)} · ${E(x.title)}</a>`).join('')}</div>` : ''}
-<div class="hn-act">${ACT.map((a, i) => `<button data-a="${a}" title="键盘 ${i + 1}" class="${r.act === a ? 'on' : ''}">${a}</button>`).join('')}<span class="sp">｜</span>${STANCE.map((a) => `<button data-s="${a}" class="${r.stance === a ? 'on' : ''}">${a}</button>`).join('')}</div>
+<div class="hn-act">${ACT.map((a, i) => `<button data-a="${a}" title="键盘 ${i + 1}" class="${r.act === a ? 'on' : ''}">${a}</button>`).join('')}<span class="sp">｜</span>${STANCE.map((a) => `<button data-s="${a}" class="${r.stance === a ? 'on' : ''}">${a}</button>`).join('')}<span class="hn-st" title="这个话题整理得好不好用：1 星很差，5 星很好">${[1, 2, 3, 4, 5].map((n) => `<button data-n="${n}" class="${(r.stars || 0) >= n ? 'on' : ''}">★</button>`).join('')}</span></div>
 <div class="hn-d"></div></div>`;
 }
 
@@ -79,12 +80,12 @@ function how(D) {
   return `<div class="ab-fun">${[[M.queried, '搜到的 AI 相关帖'], [M.collected, `达到门槛（≥${M.weights.min_points} 分或≥${M.weights.min_comments} 评论）`], [M.ai + M.edge, '判为 AI 相关'], [M.digested, `评论≥${M.weights.digest_min}，已提炼`], [N(M.comments), '条评论已读']].map((x) => `<div><b>${typeof x[0] === 'number' ? N(x[0]) : x[0]}</b><span>${x[1]}</span></div>`).join('')}
 <div class="hl"><b>${M.topics}</b><span>个话题（覆盖 ${M.in_topics} 帖）</span></div><div><b>${M.tail}</b><span>帖在长尾</span></div><div><b>${M.resources}</b><span>个被推荐的资源</span></div><div><b>${M.exps}</b><span>条做过的经验</span></div><div><b>${M.quotes_kept}/${M.quotes_raw}</b><span>观点和经验的原话通过核对</span></div></div>
 <div class="ab-q"><h2>这页是怎么算出来的</h2>
-<p><b>采集：</b>${E(M.start)} 至 ${E(M.end)}（UTC），HN 搜索接口按 18 个 AI 相关词取帖，保留 ≥${M.weights.min_points} 分或 ≥${M.weights.min_comments} 条评论的，Show / Launch HN 评论 ≥10 也收；模型按标题判是否主要在讨论 AI，“边缘”也保留（${M.edge} 帖）。</p>
-<p><b>提炼：</b>评论 ≥${M.weights.digest_min} 条的帖子逐帖读评论区（最多 8 万字符，按 HN 自己的排序取靠前的讨论串），抽观点、亲身经验、推荐链接。每条观点和经验必须带一句评论原文，程序在评论里逐字核对，找不到的丢弃（${M.quotes_raw - M.quotes_kept} 条被丢）；链接必须在评论里真出现过。</p>
-<p><b>话题：</b>模型看每帖的标题、讨论一句话和主要对象，聚成 ${M.topics} 个话题，不适合并入的放长尾。再对每个话题逐个综合：观点按立场并成阵营，阵营人数是持该观点的评论数相加（HN 不公开评论得分，这是近似，只说明谁说得多，不说明谁说得对）。一句话结论每句要带阵营序号，没带的隐藏（${M.unchecked} 个话题被隐藏）。</p>
+<p><b>采集：</b>${E(M.start)} 至 ${E(M.end)}（UTC），HN 搜索接口按 18 个 AI 相关词取帖，保留 ≥${M.weights.min_points} 分或 ≥${M.weights.min_comments} 条评论的，Show / Launch HN 评论 ≥10 也收；Jev 按标题判是否主要在讨论 AI（概率 ≥${M.weights.jev_min} 算相关；它给的概率偏低，这个阈值与 Claude 判断吻合 97%），明确的标“AI”，在边缘的也保留（${M.edge} 帖）。</p>
+<p><b>提炼：</b>评论 ≥${M.weights.digest_min} 条的帖子由 ${E(M.models.digest)} 逐帖读评论区（最多 8 万字符，按 HN 自己的排序取靠前的讨论串），抽观点、亲身经验、推荐链接。每条观点和经验必须带一句评论原文，程序在评论里逐字核对，找不到的丢弃（${M.quotes_raw - M.quotes_kept} 条被丢）；链接必须在评论里真出现过。</p>
+<p><b>话题：</b>${E(M.models.topics)} 看每帖的标题、讨论一句话和主要对象，聚成 ${M.topics} 个话题，不适合并入的放长尾。再对每个话题逐个综合：观点按立场并成阵营，阵营人数是持该观点的评论数相加（HN 不公开评论得分，这是近似，只说明谁说得多，不说明谁说得对）。一句话结论每句要带阵营序号，没带的隐藏（${M.unchecked} 个话题被隐藏）。</p>
 <p><b>共识度：</b>评论总数 &lt;80 为“讨论少”；最大阵营占比 ≥60% 为“基本共识”；其余且第二大阵营 ≥25% 为“有分歧”。</p>
 <p><b>资源：</b>按网址去重，“被几位评论者提到”是不同评论者数；帖子作者自己贴的链接降权。这页没有计算好评占比，也没有核实链接内容。</p>
-<p class="ab-m">没做的：与上周话题对照（需要上一周的数据）；原话没有翻译；表态“站某边”只记草稿，不写进你的判断库。HN 评论者偏工程师、偏怀疑，不代表市场上的用户。${F.digest ? `有 ${F.digest} 帖提炼失败已跳过；` : ''}${M.minutes ? `耗时 ${M.minutes} 分钟，` : ''}模型费用（Claude 部分）$${M.cost}，单帖提炼走 DeepSeek 未计入。</p></div>`;
+<p class="ab-m">星级：每个话题可打 1–5 星，表示这个话题整理得好不好用，存在表态日志里，用来评估聚类和综合质量。没做的：与上周话题对照（需要上一周的数据）；原话没有翻译；表态“站某边”只记草稿，不写进你的判断库。HN 评论者偏工程师、偏怀疑，不代表市场上的用户。${F.digest ? `有 ${F.digest} 帖提炼失败已跳过；` : ''}${M.minutes ? `耗时 ${M.minutes} 分钟，` : ''}Claude 模型费用 $${M.cost}，Jev 调用费用没有统计。</p></div>`;
 }
 
 function res(D, flt) {
@@ -153,11 +154,12 @@ ${view === 'topic' ? [['all', '全部'], ['有分歧', '有分歧'], ['基本共
     const focus = (x) => { if (!x) return; body.querySelectorAll('.hn-t.cur').forEach((y) => y.classList.remove('cur')); x.classList.add('cur'); x.scrollIntoView({ block: 'nearest' }); };
     const react = async (c, patch) => {
       const id = c.dataset.t, old = R[id] || {}, nx = { act: old.act || '', stance: old.stance || '', ...patch };
-      for (const k of Object.keys(patch)) if (old[k] === patch[k]) nx[k] = '';
-      try { await api.post(`/api/absorb/hn/runs/${encodeURIComponent(cur)}/react`, { topic: +id, act: nx.act, stance: nx.stance }); } catch (err) { toast(err.message || '没存上'); return false; }
-      if (nx.act || nx.stance) R[id] = nx; else delete R[id];
+      for (const k of Object.keys(patch)) if (old[k] === patch[k]) nx[k] = k === 'stars' ? 0 : '';
+      try { await api.post(`/api/absorb/hn/runs/${encodeURIComponent(cur)}/react`, { topic: +id, act: nx.act, stance: nx.stance, stars: nx.stars }); } catch (err) { toast(err.message || '没存上'); return false; }
+      if (nx.act || nx.stance || nx.stars) R[id] = nx; else delete R[id];
       c.querySelectorAll('[data-a]').forEach((b) => b.classList.toggle('on', nx.act === b.dataset.a));
       c.querySelectorAll('[data-s]').forEach((b) => b.classList.toggle('on', nx.stance === b.dataset.s));
+      c.querySelectorAll('[data-n]').forEach((b) => b.classList.toggle('on', nx.stars >= +b.dataset.n));
       const d = body.querySelector('.ab-done'); if (d) d.textContent = done();
       return true;
     };
@@ -181,6 +183,7 @@ ${view === 'topic' ? [['all', '全部'], ['有分歧', '有分歧'], ['基本共
       if (d.ef) { eflt = d.ef; return draw(); }
       if (d.a) return react(t.closest('.hn-t'), { act: d.a });
       if (d.s) return react(t.closest('.hn-t'), { stance: d.s });
+      if (d.n) return react(t.closest('.hn-t'), { stars: +d.n });
       if (d.tj) { view = 'topic'; flt = 'all'; draw(); const c = body.querySelector(`[data-t="${d.tj}"]`); focus(c); return c.scrollIntoView(); }
       if (d.c) { open(t.closest('.hn-t').dataset.t, true); return; }
       const hd = t.closest('h3');
