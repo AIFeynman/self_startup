@@ -3,7 +3,7 @@
 //       #intel/overview（总览：赛道格局 / 本周异动 / 头部与黑马 / 打法汇总）
 //       #intel/growth（每日增长 Case + 候选池）· #intel/g/<id>（增长 Case 卡）
 //       #intel/startups · #intel/tracks · #intel/t/<赛道> · #intel/ph · #intel/companies · #intel/sources
-import { annotate } from './_annotate.js';
+import { annotate, loadRatings, starFilter, starMark } from './_annotate.js';
 const LV = { S: ['S', 'err'], A: ['A', 'warn'], B: ['B', 'ok'], C: ['C', 'gray'] };
 const CARD = { queued: ['解读中', 'line'], done: ['解读卡', 'ok'], incomplete: ['解读卡不完整', 'warn'], failed: ['解读失败', 'err'] };
 const DAYS = [['7', '7 天'], ['30', '30 天'], ['90', '90 天'], ['0', '全部']];
@@ -179,7 +179,7 @@ function startupTable(h, rows, { showTrack = true } = {}) {
   const head = ['公司', showTrack ? '赛道' : null, 'MRR', '30 天', '走势', '在售', '拆解卡'].filter((x) => x !== null);
   return h('table.it-tbl', {}, [h('tr', {}, head.map((t) => h('th' + (['MRR', '30 天'].includes(t) ? '.it-n' : ''), {}, t))),
     ...rows.map((c) => h('tr.click', { onclick: () => { location.hash = `#intel/c/${c.slug}`; } }, [
-      h('td', {}, [h('b', {}, c.name), c.watch ? ' ★' : '', c.intro || c.description ? h('div.muted.it-hide-sm', { style: { fontSize: '12px' }, title: c.description || '' }, c.intro || c.description.slice(0, 80)) : null,
+      h('td', {}, [h('b', {}, c.name), c.watch ? ' ★' : '', c.stars ? ' ' : '', starMark(h, c.stars), c.intro || c.description ? h('div.muted.it-hide-sm', { style: { fontSize: '12px' }, title: c.description || '' }, c.intro || c.description.slice(0, 80)) : null,
         !c.mrr && c.reported ? h('div.muted', { style: { fontSize: '12px' } }, `reported ${c.reported.metric.toUpperCase()} ${usd(c.reported.value)}`) : null]),
       showTrack ? h('td.muted', {}, c.track_name || '待归类') : null,
       h('td.it-n', {}, c.mrr ? usd(c.mrr) : c.revenue_30d ? h('span', { title: '近 30 天收入' }, usd(c.revenue_30d)) : '-'),
@@ -314,7 +314,7 @@ function eventRow(h, e, { showCompany = true } = {}) {
       h('div.it-t', {}, e.title),
       h('div.it-meta', {}, [showCompany ? h('b', {}, e.company_name) : null, e.product ? h('span', {}, e.product) : null,
         h('span', {}, e.type_name || e.type), h('span', {}, `${e.sources.length} 个来源`),
-        e.sources.some((s) => s.official) ? null : tag(h, ['无官方源', 'warn']), card ? tag(h, card) : null, e.read ? tag(h, ['已读', 'gray']) : null]),
+        e.sources.some((s) => s.official) ? null : tag(h, ['无官方源', 'warn']), card ? tag(h, card) : null, e.read ? tag(h, ['已读', 'gray']) : null, starMark(h, e.stars)]),
       e.summary ? h('div.it-sum', {}, e.summary) : null,
     ]),
     h('div.muted', { style: { fontSize: '12px' } }, e.date),
@@ -335,8 +335,8 @@ function groupByDay(h, events, opts) {
 async function renderStream(el, ctx) {
   const { api, h, ui, toast } = ctx;
   const qs = new URLSearchParams({ level: st.level, days: st.days, company: st.company, q: st.q, type: st.type, limit: 300 });
-  const [d, status, cos] = await Promise.all([api.get('/api/intel/events?' + qs), api.get('/api/intel/status'), api.get('/api/intel/companies')]);
-  d.events.forEach((e) => { e.type_name = d.types[e.type]; });
+  const [d, status, cos, rt] = await Promise.all([api.get('/api/intel/events?' + qs), api.get('/api/intel/status'), api.get('/api/intel/companies'), loadRatings(api, 'intel:event:')]);
+  d.events.forEach((e) => { e.type_name = d.types[e.type]; e.stars = rt.get(`intel:event:${e.id}`) || 0; });
   const lr = status.last_run || {};
   const runBtn = h('button.ghost', { onclick: async () => {
     const r = await api.post('/api/intel/run', { force_fetch: true });
@@ -360,13 +360,15 @@ async function renderStream(el, ctx) {
   const tySel = h('select', { onchange: (e) => { st.type = e.target.value; ctx.refresh(); } },
     [['', '全部类型'], ['revenue', '收入 / 挂牌'], ...Object.entries(d.types).filter(([k]) => !['revenue', 'listing'].includes(k))]
       .map(([v, t]) => h('option', { value: v, selected: st.type === v }, t)));
-  el.append(tabs(h, '#intel'), h('div.it-filters', {}, [lvSel, daySel, tySel, coSel, q]), LIST_KEYS(h));
-  if (!d.events.length) {
-    el.append(ui.empty('这段时间还没有事件', status.events ? '换个级别或时间范围看看' : '后台每 10 分钟跑一轮；也可以点「立即抓取」'));
+  const sf = starFilter(ctx, 'intel:event', d.events, (e) => e.stars, () => ctx.refresh());
+  el.append(tabs(h, '#intel'), h('div.it-filters', {}, [lvSel, daySel, tySel, coSel, q]), sf.bar || '', LIST_KEYS(h));
+  if (!sf.shown.length) {
+    el.append(d.events.length ? ui.empty('没有这个星级的事件', '换个星级看看')
+      : ui.empty('这段时间还没有事件', status.events ? '换个级别或时间范围看看' : '后台每 10 分钟跑一轮；也可以点「立即抓取」'));
     return;
   }
-  el.append(...groupByDay(h, d.events));
-  browseList(el, ctx, 'e', d.events.map((e) => eventNav(api, e)), '变化流');
+  el.append(...groupByDay(h, sf.shown));
+  browseList(el, ctx, 'e', sf.shown.map((e) => eventNav(api, e)), '变化流');
 }
 
 async function renderEvent(el, ctx, id) {
@@ -496,7 +498,9 @@ async function renderStartup(el, ctx, c) {
 async function renderStartups(el, ctx) {
   const { api, h, ui, toast } = ctx;
   const qs = new URLSearchParams({ track: ss.track, sort: ss.sort, q: ss.q, watch: ss.watch ? 1 : 0, all: ss.all ? 1 : 0 });
-  const d = await api.get('/api/intel/startups?' + qs);
+  const [d, rt] = await Promise.all([api.get('/api/intel/startups?' + qs), loadRatings(api, 'intel:company:')]);
+  d.startups.forEach((c) => { c.stars = rt.get(`intel:company:${c.slug}`) || 0; });
+  const sf = starFilter(ctx, 'intel:company', d.startups, (c) => c.stars, () => ctx.refresh());
   const last = d.last || {};
   const runBtn = h('button.ghost', { onclick: async () => {
     const r = await api.post('/api/intel/startups/run', { force_fetch: true });
@@ -517,12 +521,12 @@ async function renderStartups(el, ctx) {
     [['rev', '按 MRR'], ['growth', '按 30 天增长'], ['reported', '按公开 ARR']].map(([v, t]) => h('option', { value: v, selected: ss.sort === v }, t)));
   const q = h('input', { placeholder: '搜名称 / 描述', value: ss.q, onkeydown: (e) => { if (e.key === 'Enter') { ss.q = e.target.value; ctx.refresh(); } } });
   const allBox = h('label.muted', { style: { fontSize: '13px' } }, [h('input', { type: 'checkbox', checked: ss.all, onchange: (e) => { ss.all = e.target.checked; ctx.refresh(); } }), ' 含非 AI / 待定']);
-  el.append(tabs(h, '#intel/startups'), h('div.it-filters', {}, [trSel, sortSel, q, allBox]));
-  if (!d.startups.length) {
-    el.append(ui.empty('还没有创业公司数据', '后台每天跑一次 TrustMRR 快照；也可以点「立即抓取」'));
+  el.append(tabs(h, '#intel/startups'), h('div.it-filters', {}, [trSel, sortSel, q, allBox]), sf.bar || '');
+  if (!sf.shown.length) {
+    el.append(d.startups.length ? ui.empty('没有这个星级的公司', '换个星级看看') : ui.empty('还没有创业公司数据', '后台每天跑一次 TrustMRR 快照；也可以点「立即抓取」'));
     return;
   }
-  el.append(h('div.card', { style: { overflowX: 'auto' } }, startupTable(h, d.startups)));
+  el.append(h('div.card', { style: { overflowX: 'auto' } }, startupTable(h, sf.shown)));
 }
 
 // 横向条形：单色、圆角数据端；每行可点，悬停看完整数字
@@ -675,7 +679,9 @@ const gScores = (s) => GSCORE.map(([k, t]) => `${t}${s?.[k] ?? 0}`).join(' ');
 
 async function renderGrowth(el, ctx) {
   const { api, h, ui, toast } = ctx;
-  const d = await api.get('/api/intel/growth');
+  const [d, rt] = await Promise.all([api.get('/api/intel/growth'), loadRatings(api, 'intel:growth:')]);
+  d.cases.forEach((g) => { g.stars = rt.get(`intel:growth:${g.id}`) || 0; });
+  const sf = starFilter(ctx, 'intel:growth', d.cases, (g) => g.stars, () => ctx.refresh());
   const run = h('button.ghost', { onclick: async () => {
     const r = await api.post('/api/intel/growth/run', { force_collect: true });
     toast(r.started ? '已在后台采集 + 打分，今天还没有 Case 的话会选一条写卡' : '已经在跑了'); run.disabled = true;
@@ -685,16 +691,16 @@ async function renderGrowth(el, ctx) {
     [run]), tabs(h, '#intel/growth'));
   el.append(ui.stats([{ k: 'Case 卡', v: d.cases.length }, { k: '已打分', v: c.scored || 0 }, { k: '合格候选', v: d.pool.length }, { k: '待打分', v: c.new || 0 }]));
   if (d.last?.picked_reason) el.append(h('div.card', { style: { borderColor: 'var(--warn)', marginTop: '8px' } }, `上一轮（${(d.last.at || '').slice(0, 16)}）没选出：${d.last.picked_reason}`));
-  el.append(ui.section('每日 Case', '同一素材重写过只显示最新一版'), LIST_KEYS(h));
-  el.append(d.cases.length ? h('div.card', {}, d.cases.map((g) => {
+  el.append(ui.section('每日 Case', '同一素材重写过只显示最新一版'), sf.bar || '', LIST_KEYS(h));
+  el.append(sf.shown.length ? h('div.card', {}, sf.shown.map((g) => {
     const s = GCASE[g.status] || [g.status, 'gray'];
     return h('div.it-row' + (g.read ? '.read' : ''), { 'data-nav': g.id, onclick: () => { location.hash = `#intel/g/${g.id}`; } }, [
       h('div.it-lv', {}, g.auto ? '日' : '选'),
       h('div', {}, [h('div.it-t', {}, `${g.company || '?'} · ${g.item?.title || ''}`),
-        h('div.it-meta', {}, [tag(h, s), h('span', {}, g.day), h('span', {}, g.item?.source || ''), h('span', {}, `素材 ${g.item?.date || '-'}`), g.read ? tag(h, ['已读', 'gray']) : null]),
+        h('div.it-meta', {}, [tag(h, s), h('span', {}, g.day), h('span', {}, g.item?.source || ''), h('span', {}, `素材 ${g.item?.date || '-'}`), g.read ? tag(h, ['已读', 'gray']) : null, starMark(h, g.stars)]),
         g.item?.one_line ? h('div.it-sum', {}, g.item.one_line) : null]),
       h('div.muted', { style: { fontSize: '12px' } }, `${g.item?.total ?? '-'} 分`)]);
-  })) : ui.empty('还没有增长 Case', '后台每 10 分钟一轮；素材 12 小时采一次，打完分后每天自动选 1 条写卡'));
+  })) : d.cases.length ? ui.empty('没有这个星级的 Case', '换个星级看看') : ui.empty('还没有增长 Case', '后台每 10 分钟一轮；素材 12 小时采一次，打完分后每天自动选 1 条写卡'));
   el.append(ui.section('候选池', '合格且没出过卡的前 10 条，可手动加写'));
   el.append(d.pool.length ? h('div.card', {}, d.pool.map((it) => {
     const btn = h('button.ghost', { onclick: async (ev) => {
@@ -716,7 +722,7 @@ async function renderGrowth(el, ctx) {
   el.append(ui.section('素材来源', 'A 档一手带数字，B 档补充；X 只当线索'), h('div.card', {}, [
     ...d.sources.map((s) => h('div.it-src', {}, [tag(h, [`${s.tier} 档`, s.tier === 'A' ? 'ok' : 'gray']), ' ', h('a', { href: s.url, target: '_blank' }, s.name)])),
     h('div.it-src', {}, [tag(h, ['B 档', 'gray']), ` X 名单账号（近 3 天 ≥100 赞原创）：${d.x_accounts.map((a) => '@' + a).join(' ')}`])]));
-  browseList(el, ctx, 'g', d.cases.map((g) => caseNav(api, g)), '增长 Case');
+  browseList(el, ctx, 'g', sf.shown.map((g) => caseNav(api, g)), '增长 Case');
 }
 
 async function renderGrowthCase(el, ctx, id) {

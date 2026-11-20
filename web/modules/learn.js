@@ -3,7 +3,7 @@
 //       #learn/plan/<id>/step/<sid>（跟着学：一章教程 + 章末测试）、#learn/item/<id>（笔记阅读）、
 //       #learn/book/<id>（深度读书：全书导读 + 目录）、#learn/book/<id>/ch/<n>（逐篇读：导读 / 原文 / PDF，见 _book.js）
 // 按需加一节：读某一章时说「X 没懂 / 对 X 感兴趣」（或划线后点），在这一章后插一节针对性讲解 + 小测试
-import { annotate } from './_annotate.js';
+import { annotate, loadRatings, starFilter, starMark } from './_annotate.js';
 import { BOOK_CSS, bookCards, renderBook, renderBookChapter } from './_book.js';
 import { whyNotPanel } from './_whynot.js';
 const CSS = `
@@ -47,9 +47,6 @@ const CSS = `
 .ln-badge.github { background: var(--dark); color: var(--bg); }
 .ln-badge.article { background: var(--ok-soft); color: var(--ok); }
 .ln-badge.video { background: var(--warn-soft, var(--accent-soft)); color: var(--warn, var(--accent)); }
-.ln-starf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
-.ln-starf button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; color: var(--muted); }
-.ln-starf button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .ln-kcount { margin-left: 6px; font-size: 11.5px; opacity: .6; font-variant-numeric: tabular-nums; }
 .ln-reads .ln-rd { display: grid; grid-template-columns: 7.5em 3em 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
 .ln-reads .ln-rd:first-of-type { border-top: 0; }
@@ -483,7 +480,9 @@ function detectIntent(text) {
 // ---------- 总览：智能输入框 + 计划 + 条目 ----------
 async function renderHome(el, ctx, scrollToPlans) {
   const { api, h, toast, ui, ask } = ctx;
-  const [items, plans, books] = await Promise.all([api.get('/api/learn/items'), api.get('/api/learn/plans'), api.get('/api/learn/books').catch(() => [])]);
+  const [items, plans, books, planRt] = await Promise.all([api.get('/api/learn/items'), api.get('/api/learn/plans'), api.get('/api/learn/books').catch(() => []),
+    loadRatings(api, 'learn:plan:')]);
+  plans.forEach((p) => { p.stars = planRt.get(`learn:plan:${p.id}`) || 0; });
   items.forEach((it) => watchJob(ctx, it.job_id, it.status));
   plans.forEach((p) => watchJob(ctx, p.job_id, p.status));
   plans.sort((a, b) => (a.status === 'archived') - (b.status === 'archived'));
@@ -629,8 +628,12 @@ async function renderHome(el, ctx, scrollToPlans) {
   );
   update();
 
-  plansSec.append(ui.section('学习计划', plans.length ? `${plans.length} 个` : ''),
-    plans.length ? h('div.grid', {}, plans.map((p) => planCard(p, ctx))) : ui.empty('还没有学习计划', '在上面输入一个主题，Enter 即可生成'));
+  const drawPlans = () => {
+    const sf = starFilter(ctx, 'learn:plan', plans, (p) => p.stars, drawPlans);
+    plansSec.replaceChildren(ui.section('学习计划', plans.length ? `${plans.length} 个` : ''), sf.bar || '',
+      sf.shown.length ? h('div.grid', {}, sf.shown.map((p) => planCard(p, ctx))) : ui.empty(plans.length ? '没有这个星级的计划' : '还没有学习计划', plans.length ? '换个星级看看' : '在上面输入一个主题，Enter 即可生成'));
+  };
+  drawPlans();
   if (books.length) el.append(ui.section('深度读书', `${books.length} 本`), bookCards(books, ctx));
   const reading = items.filter(isReading);
   if (reading.length) el.append(ui.section(`在读 ${reading.length}`, '点开回到上次读到的位置，读到底或点「读完」后移出'), h('div.grid', {}, reading.map((it) => itemCard(it, ctx))));
@@ -649,7 +652,7 @@ function planCard(p, ctx) {
   };
   const card = h('div.card.ln-pcard.ln-card-click', { onclick: () => { location.hash = `#learn/plan/${p.id}`; } }, [
     h('div.row.between', {}, [h('span.card-label', {}, `每周 ${p.hours_per_week}h · 约 ${p.progress.hours}h`),
-      h('span.row', {}, [p.progress.unread && p.status !== 'archived' ? unreadTag(h, `${p.progress.unread} 章未看`) : null, tag(h, p.status),
+      h('span.row', {}, [starMark(h, p.stars), p.progress.unread && p.status !== 'archived' ? unreadTag(h, `${p.progress.unread} 章未看`) : null, tag(h, p.status),
         h('button.ghost.sm.ln-pdel', { title: '删除这个学习计划', 'aria-label': '删除学习计划', onclick: del }, ui.icon('trash'))])]),
     h('h3', {}, p.topic),
     h('div.row', {}, [h('div.grow', {}, ui.progress(p.progress.pct)), h('span.muted', {}, `${p.progress.done}/${p.progress.total} · ${p.progress.pct}%`)]),
@@ -663,20 +666,15 @@ function planCard(p, ctx) {
 // 最后一个「阅读过的」不是深读条目，是推荐里打开过的文章（含只点外链的）
 const KINDS = [['', '全部'], ['paper', '论文'], ['github', '项目'], ['article', '文章'], ['video', '视频']];
 const kindOf = (it) => (BADGE[it.kind] ? it.kind : 'paper');
-// 按自己打的星筛：找回喜欢的文章；筛星时高分在前
-const STARS = [[0, '全部评分'], [1, '★ 已评分'], [4, '★4 以上'], [5, '★5']];
 let itemKind = '';
-let itemStar = 0;
 function itemList(items, ctx) {
   const { h } = ctx;
   const ofKind = (k) => (k ? items.filter((it) => kindOf(it) === k) : items);
   const count = (k) => ofKind(k).length;
   const kinds = KINDS.filter(([k]) => count(k));
   if (itemKind !== 'reads' && !kinds.some(([k]) => k === itemKind)) itemKind = '';
-  const rated = items.some((it) => it.rating > 0);
-  if (!rated) itemStar = 0;
   const tabs = h('div.tabs');
-  const stars = h('div.ln-starf');
+  const stars = h('div');
   const grid = h('div.grid');
   const body = h('div');
   let readTotal = null;
@@ -690,14 +688,13 @@ function itemList(items, ctx) {
     stars.style.display = '';
     body.replaceChildren(grid);
     const pool = ofKind(itemKind);
-    const atLeast = (n) => pool.filter((it) => (it.rating || 0) >= n);
-    stars.replaceChildren(...STARS.map(([n, name]) => h('button' + (itemStar === n ? '.on' : ''), { onclick: () => { itemStar = n; render(); } },
-      [name, h('span.ln-kcount', {}, String(n ? atLeast(n).length : pool.length))])));
-    const shown = itemStar ? atLeast(itemStar).sort((a, b) => b.rating - a.rating) : pool;
+    const sf = starFilter(ctx, 'learn:item', pool, (it) => it.rating || 0, render);
+    stars.replaceChildren(sf.bar || '');
+    const shown = sf.shown;
     grid.replaceChildren(...(shown.length ? shown.map((it) => itemCard(it, ctx)) : [h('div.muted', {}, '这个分类下还没有这个星级的文章')]));
   };
   render();
-  return h('div', {}, [tabs, rated ? stars : null, body].filter(Boolean));
+  return h('div', {}, [tabs, stars, body]);
 }
 
 // 阅读过的：信息推荐 / 产品雷达 / 增长 Case 里打开过的条目（只点外链也算），最后打开的在前
