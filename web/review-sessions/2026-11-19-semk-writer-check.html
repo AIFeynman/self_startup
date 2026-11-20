@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>semk 写稿侧验证</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#66707a;--line:#e3e0d8;--card:#fff;--acc:#2f6fd0;--bad:#b4442c;--ok:#2e7d4f}
+@media (prefers-color-scheme:dark){:root{--bg:#16181b;--fg:#e6e6e3;--mute:#9aa3ab;--line:#2c3036;--card:#1d2024;--acc:#7aa7ef;--bad:#e5806a;--ok:#6cc495}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+main{max-width:980px;margin:0 auto;padding:28px 16px 80px}h1{font-size:24px;margin:0 0 4px}h2{font-size:19px;margin:32px 0 10px;padding-top:8px;border-top:1px solid var(--line)}
+.sub{color:var(--mute);font-size:13px}.lead{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);padding:14px 16px;border-radius:6px;margin:18px 0}
+code{font:12.5px/1.4 ui-monospace,Menlo,monospace;background:color-mix(in srgb,var(--line) 55%,transparent);padding:1px 5px;border-radius:4px}
+.wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:14px}th,td{border:1px solid var(--line);padding:6px 8px;vertical-align:top;text-align:left}th{background:color-mix(in srgb,var(--line) 40%,transparent)}
+td.n{text-align:right;font-variant-numeric:tabular-nums}.bad{color:var(--bad);font-weight:600}.ok{color:var(--ok);font-weight:600}
+</style></head><body><main>
+<h1>semk 写稿侧验证：新组件为什么用不上</h1>
+<div class="sub">2026-11-19 · 不渲染，只写稿 + 静态检查 · 17 题（5 个闭环老题 + 12 个闭环没碰过的题）× 每组 2 份 · 接 <a href="2026-11-19-self-iteration-fixes.html">改进意见</a> · 花费：DeepSeek 约 $0.23，Claude Sonnet 标注 17 次约 $1.2</div>
+
+<div class="lead"><b>结论：</b>11-18 新加的 8 个组件用不上，不是“DeepSeek 没发现”。实验里排除了这种解释：<b>由 Claude 点名、只给它这几个组件的说明，DeepSeek 还是 12 次里只写了 3 次，3 次又全被内核规则删掉，最后用上 0 次</b>。三个原因叠在一起：
+① 这 17 个题里大多数本来就用不到（8 个新组件里只有 3 个被 Claude 认为“该用”）；
+② DeepSeek 对新组件的跳过率是 75%，老组件是 25%，新组件对便宜模型更难写；
+③ check 会静默删组件，删了仍判“通过”，一次通过率看不出来。
+另外，“先规划、只给选中组件的说明”能把写稿输入 token 降约 70%（18.9k → 5.7k），一次通过率略降（33/34 → 31–32/34）。</div>
+
+<h2>一、四组对照</h2>
+<p class="sub">“该用”参照 = Claude Sonnet 只看题目和组件目录，为每题挑 3–6 个组件（贯穿件 + 配角）。注意：“Claude 先规划”组用的就是这份清单，所以它在两项“该用”指标上天然占优，这两项只能横向参考。</p>
+<div class="wrap"><table>
+<tr><th>指标</th><th>起点内核<br>全量说明</th><th>当前内核<br>全量说明</th><th>当前内核<br>DeepSeek 先规划</th><th>当前内核<br>Claude 先规划</th></tr>
+<tr><td>一次通过</td><td class="n">34/34</td><td class="n">33/34</td><td class="n">31/34</td><td class="n">32/34</td></tr>
+<tr><td>写稿输入 token 中位</td><td class="n">11.7k</td><td class="n bad">18.9k</td><td class="n ok">5.6k</td><td class="n ok">5.8k</td></tr>
+<tr><td>每片组件种类</td><td class="n">3.7</td><td class="n">4.2</td><td class="n">3.1</td><td class="n">3.1</td></tr>
+<tr><td>用到的组件里“该用”的占比</td><td class="n">0.53</td><td class="n">0.48</td><td class="n">0.63</td><td class="n">0.95*</td></tr>
+<tr><td>“该用”的组件被用上的比例</td><td class="n">0.41</td><td class="n">0.43</td><td class="n">0.42</td><td class="n">0.64*</td></tr>
+<tr><td>该用新组件时用上（12 个机会）</td><td class="n">0</td><td class="n">9%</td><td class="n">0</td><td class="n bad">0</td></tr>
+<tr><td>不该用却用了新组件</td><td class="n">0</td><td class="n">3</td><td class="n">2</td><td class="n">0</td></tr>
+<tr><td>贯穿件在场拍占比</td><td class="n">0.85</td><td class="n">0.72</td><td class="n">0.94</td><td class="n">0.97</td></tr>
+<tr><td>画面有变化的拍占比</td><td class="n">0.59</td><td class="n">0.61</td><td class="n">0.60</td><td class="n">0.61</td></tr>
+<tr><td>有组件被 check 静默删掉的片</td><td class="n">8</td><td class="n">7</td><td class="n">4</td><td class="n">9</td></tr>
+</table></div>
+<p class="sub">* 和参照同源，偏高。</p>
+
+<h2>二、新组件：该用的题少，点名了也不写，写了也被删</h2>
+<div class="wrap"><table>
+<tr><th>题</th><th>Claude 认为该用</th><th>DeepSeek 自己规划时选了吗</th><th>Claude 点名后 DeepSeek 写了吗（2 份）</th><th>最后留在片里</th></tr>
+<tr><td>chem59 配平方程式</td><td>problem</td><td>没选</td><td>0/2</td><td>0</td></tr>
+<tr><td>newton97 牛顿定律</td><td>problem</td><td>没选</td><td>0/2</td><td>0</td></tr>
+<tr><td>compute1 算力史</td><td>spans</td><td>没选</td><td>0/2</td><td>0</td></tr>
+<tr><td>goldfish1 金鱼记忆</td><td>spans</td><td>没选</td><td>1/2</td><td>0（被 echo 规则删）</td></tr>
+<tr><td>sushi51 苏轼</td><td>spans</td><td>没选</td><td>2/2</td><td>0（被 echo 规则删 / 剧本含两段 JSON）</td></tr>
+<tr><td>traffic1 幽灵堵车</td><td>scatter</td><td>没选</td><td>0/2</td><td>0</td></tr>
+</table></div>
+<ul>
+<li><b>该用的题少：</b>meter、density、geo、array、matrix 在这 17 题里 Claude 一次都没选。对“新题”而言，它们大多不是缺的能力，而是为闭环里那几部片长出来的。DeepSeek 自己规划时只在 kahneman67 选过一次 meter。</li>
+<li><b>点名了也跳过：</b>在“Claude 先规划”组里，规划里的老组件 DeepSeek 跳过 35/142（25%），新组件跳过 9/12（75%）。说明里加了也不等于便宜模型会写。</li>
+<li><b>写了也被删：</b>spans 写出来 3 次全没留下。check 的 <code>echo</code> 规则判定 spans 的时间段和贯穿件（地图站点）同名，就把它的动作并到贯穿件上、组件删掉。这条规则本身合理，但它让“新组件使用率”在内核层面就被压成 0，闭环从来没发现。</li>
+</ul>
+
+<h2>三、新发现：check 静默删组件，“一次通过率”高估了</h2>
+<p>每组约 1/4 的“通过”剧本里，DeepSeek 写的组件被 check 删掉了一个或几个（<code>dropped</code>：use 里引用不存在的 id、动作落不到部件、和贯穿件重复），片子照样判“通过”。被删最多的是 sketch、compare、flow。这些剧本出成片，画面会比剧本作者想的少一块，可能有一幕只剩文字卡（<code>no_graphic</code>）。</p>
+<p>所以“一次通过率 ≥85%”这条底线要改成两个数：<b>一次通过率</b>和<b>剧本保真率</b>（通过且没有组件、动作被删）。现在这两个数被混成一个。</p>
+
+<h2>四、对改法的影响</h2>
+<ul>
+<li><b>停加组件，先收说明。</b>当前说明比起点长 60%，但用上的组件没变多，贯穿件在场占比还从 0.85 降到 0.72。复盘里“新组件说明越长、便宜模型越用熟的”的推论，在这里得到支持。</li>
+<li><b>规划步值得做，但目前只省 token、不提质量。</b>DeepSeek 自己规划后，“该用”覆盖率没涨（0.42）；Claude 规划能涨（0.64），但每次约 $0.07，是写稿成本的 20 倍以上。值得试的折中：用一张“题型 → 推荐组件”的固定表来规划（零成本），或者把规划并进写稿提示词，作为第一步输出。</li>
+<li><b>新组件准入要加“DeepSeek 写得出来”的测试。</b>点名、只给它的说明，DeepSeek 都写不出、或写出来被内核删掉的组件，不该进词表。problem、scatter 在这次就是这种情况。</li>
+<li><b>check 的删除要计入指标。</b>闭环的底线和人评都只看成片，静默删除从来没被统计。</li>
+</ul>
+
+<h2>五、没验证的</h2>
+<ul>
+<li>没有渲染，所以不知道规划组的成片是否更好看、更讲得清；这里只有写稿侧和静态检查的数。</li>
+<li>“该用”参照只来自一个模型（Claude Sonnet）的一次标注，没有人工核对；题少（新组件只有 12 个机会），比例的误差大。</li>
+<li>新旧内核的写稿提示词也不一样（起点 PROMPT 更短），“起点 vs 当前”的差别是整条写稿路径的差别，不全是组件说明的差别。</li>
+</ul>
+<p class="sub">数据：<code>/private/tmp/claude-501/-Users-libiao-project-test-feynman-feynman-claw/119e773e-6d8a-4158-a0f9-afff98c840ba/scratchpad/eval1/</code> 下的 <code>exp2/</code>（规划和剧本）、<code>exp2_stats.json</code>、<code>drop_stats.json</code>、<code>stats.json</code>。</p>
+</main></body></html>

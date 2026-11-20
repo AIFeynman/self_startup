@@ -59,3 +59,27 @@ def test_synth_checks_citations_and_counts():
 def test_synth_hides_uncited_verdict():
     s = hn.synth_one(_R({"verdict": "没有引用的结论", "camps": [{"claim": "a", "refs": ["p0o0"]}]}), {"title": "t", "posts": ["a"]}, {"a": {"title": "T", "comments": 9}}, _dg(), [])
     assert s["verdict"] == "" and s["verdict_unchecked"]
+
+
+def test_api_hn_runs_page_and_react(client, tmp_path, monkeypatch):
+    import json
+    from app.modules import absorb
+    monkeypatch.setattr(hn, "BASE", tmp_path / "hn")
+    monkeypatch.setattr(absorb, "FB", tmp_path / "fb.jsonl")
+    d = tmp_path / "hn" / "2026-11-13_2026-11-19"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(json.dumps({"start": "2026-11-13", "end": "2026-11-19"}))
+    (d / "status.json").write_text(json.dumps({"done": True, "pid": 0}))
+    (d / "page.json").write_text(json.dumps({"meta": {}, "topics": [{"id": 0, "title": "话题", "kind": "议题", "consensus": "有分歧"}], "resources": [], "tail": []}))
+    assert client.get("/api/absorb/hn/runs").json()[0]["done"] is True
+    rid = "2026-11-13_2026-11-19"
+    assert client.get(f"/api/absorb/hn/runs/{rid}").json()["data"]["topics"][0]["title"] == "话题"
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0, "act": "很受用", "stance": "站反对"}).status_code == 200
+    assert client.get(f"/api/absorb/hn/runs/{rid}").json()["reactions"]["0"]["act"] == "很受用"
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0, "act": "乱写"}).status_code == 400
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 9, "act": "很受用"}).status_code == 404
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react", json={"topic": 0}).status_code == 200
+    assert client.get(f"/api/absorb/hn/runs/{rid}").json()["reactions"] == {}
+    ev = [json.loads(x) for x in (tmp_path / "fb.jsonl").read_text().splitlines()]
+    assert ev[0]["src"] == "hn" and ev[0]["claim"] == "话题" and ev[0]["stance"] == "站反对"
+    assert client.get("/api/absorb/feedback").json()["n"] == 0        # HN 表态不混进选题吸收的反馈统计

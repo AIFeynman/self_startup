@@ -36,7 +36,7 @@ const STANCE = ['站主流', '站反对', '先不站'];
 const CS = { 基本共识: 'hn-cs0', 有分歧: 'hn-cs1', 讨论少: 'hn-cs2' };
 const OC = { 成功: 'hn-o0', 失败: 'hn-o1', 有条件: 'hn-o2' };
 const KIND = { 产品: '产品', 仓库: '仓库', 数据: '数据', 视频: '视频', 论文: '论文', 文档: '文档', 博客: '博客', 讨论: '讨论', 其他: '其他' };
-const RK = [['all', '全部'], ['产品', '产品'], ['仓库', '仓库'], ['数据', '数据'], ['视频', '视频'], ['论文', '论文'], ['文档', '文档 / 博客']];
+const RK = [['all', '全部'], ['产品', '产品'], ['仓库', '仓库'], ['数据', '数据'], ['视频', '视频'], ['论文', '论文'], ['文档', '文档 / 博客'], ['其他', '讨论 / 其他']];
 const hnc = (id) => `https://news.ycombinator.com/item?id=${id}`;
 const link = (u, t) => (/^https?:/.test(u) ? `<a href="${E(u)}" target="_blank" rel="noopener">${E(t)}</a>` : E(t));
 
@@ -88,7 +88,7 @@ function how(D) {
 }
 
 function res(D, flt) {
-  const L = D.resources.filter((x) => flt === 'all' || x.kind === flt || (flt === '文档' && ['文档', '博客'].includes(x.kind))).filter((x) => x.kind !== '讨论' && x.kind !== '其他' || flt === 'all');
+  const L = D.resources.filter((x) => (flt === 'all' ? !['讨论', '其他'].includes(x.kind) : flt === '文档' ? ['文档', '博客'].includes(x.kind) : flt === '其他' ? ['讨论', '其他'].includes(x.kind) : x.kind === flt));
   if (!L.length) return '<div class="ab-m">这个类型下没有资源</div>';
   return L.slice(0, 80).map((x) => `<div class="hn-r"><div class="t"><span class="k">${E(KIND[x.kind] || x.kind)}</span>${link(x.url, x.title)}</div><div class="w">${E(x.why)}</div>
 <div class="ab-m">${x.people} 位评论者提到${x.self ? ' · 含作者自荐' : ''} · 来自 <a href="${hnc(x.post)}" target="_blank" rel="noopener">${E(x.post_title)}</a>${x.topics.length ? ' · 话题 ' + x.topics.map((k) => `<a data-tj="${k}">${k + 1}</a>`).join(' ') : ''}</div></div>`).join('') + (L.length > 80 ? `<div class="ab-m">只列前 80 个，共 ${L.length} 个</div>` : '');
@@ -106,10 +106,8 @@ export async function hnView(el, ctx, rid) {
   const cur = rid ? decodeURIComponent(rid) : (runs.find((r) => r.done) || runs[0] || {}).id;
   const body = h('div');
   let timer = null;
-  const head = h('div.tabs', {}, [
-    h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button.active', {}, 'HN 吸收'),
-    ...runs.map((r) => h('button', { class: r.id === cur ? 'active' : '', style: 'margin-left:8px', onclick: () => { location.hash = '#absorb/hn/' + encodeURIComponent(r.id); } }, r.id.replace('_', ' 至 ') + (r.done ? '' : r.running ? ' · 进行中' : ' · 中断'))),
-  ]);
+  const head = h('div', {}, [h('div.tabs', {}, [h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button.active', {}, 'HN 吸收')]),
+    h('div.tabs.ab-sub', {}, runs.map((r) => h('button', { class: r.id === cur ? 'active' : '', onclick: () => { location.hash = '#absorb/hn/' + encodeURIComponent(r.id); } }, r.id.replace('_', ' 至 ') + (r.done ? '' : r.running ? ' · 进行中' : ' · 中断'))))]);
   el.append(h('style', {}, CSS), ui.pageHead('吸收', '过去一周 HN 上 AI 相关的讨论：按话题看社区站哪边、谁做过什么、推荐了什么', []), head, body);
   if (!cur) { body.append(ui.empty('还没有跑过。命令行：python -m app.modules._absorb_hn --start 起 --end 止')); return; }
   const show = async () => {

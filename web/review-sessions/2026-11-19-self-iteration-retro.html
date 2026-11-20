@@ -1,0 +1,258 @@
+<title>semk 自迭代复盘</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{--bg:#f6f4ee;--card:#fffdf8;--fg:#211f1b;--mute:#6b6559;--line:#dcd5c6;--acc:#a8402c;--warn:#a36d12;--ok:#2c7a4c;--chip:#eee8db}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171613;--card:#201e1a;--fg:#ebe6da;--mute:#a49d8f;--line:#38342e;--acc:#e07a63;--warn:#deae5c;--ok:#6cbf8c;--chip:#2b2823;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171613;--card:#201e1a;--fg:#ebe6da;--mute:#a49d8f;--line:#38342e;--acc:#e07a63;--warn:#deae5c;--ok:#6cbf8c;--chip:#2b2823;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.75 -apple-system,"PingFang SC","Noto Sans SC",sans-serif;padding-block:32px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+main{max-width:1060px;margin:0 auto;display:flex;flex-direction:column;gap:26px}
+h1{font-size:27px;margin:0;text-wrap:balance}h2{font-size:20px;margin:0 0 12px;text-wrap:balance}h3{font-size:16px;margin:0}
+p{margin:0;max-width:72ch}.mute{color:var(--mute)}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px 22px;min-width:0;display:flex;flex-direction:column;gap:12px}
+.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}th{color:var(--mute);font-weight:600;white-space:nowrap}
+code{font:13px ui-monospace,Menlo,monospace;background:var(--chip);padding:1px 5px;border-radius:4px}
+ul,ol{margin:0;padding-left:20px}li+li{margin-top:5px}
+.big{font-size:17px;max-width:none}
+.loop{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}.loop span{border:1px solid var(--line);border-radius:6px;padding:4px 10px;background:var(--bg)}.loop i{color:var(--mute);font-style:normal}
+.part{border-top:1px dashed var(--line);padding-top:14px;display:flex;flex-direction:column;gap:8px}
+.lbl{font-size:12px;letter-spacing:.06em;color:var(--mute);font-weight:600}
+.root{border-left:3px solid var(--acc);padding-left:12px}
+.ev{border-left:3px solid var(--warn);padding-left:12px}
+.fix{border-left:3px solid var(--ok);padding-left:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.kpi{border:1px solid var(--line);border-radius:8px;padding:10px 12px}.kpi b{display:block;font-size:21px}.kpi span{color:var(--mute);font-size:13px}
+</style>
+<main>
+<header>
+<h1>semk 自迭代两天复盘：为什么越迭代越过拟合</h1>
+<p class="mute">2026-11-17 → 11-19 · 184 个提交、内核 +3942 行、41 个组件文件 · 依据：代码（<code>semk_run.py</code> 各提示词与闭环脚本）、<code>STATE.md</code> 逐轮记录、人评 <code>human-notes.json</code>、DeepSeek 15 次写稿结果</p>
+</header>
+
+<section>
+<h2>结论</h2>
+<p class="big">闭环优化的对象和产品要的东西不是同一个：环里是“<b>Opus 5.5 看着 Opus 参考片的代码改写</b>，再由 <b>codex 判断像不像 Opus</b>”，产品里是“<b>DeepSeek 只看题目写剧本</b>”。两天里新增的组件和规则大多只在环里被用上；同一批 5–8 部片既用来挖缺口、又用来验收、又给人评，所以每一轮的“进步”很大一部分是记住了这几部片。</p>
+<div class="kpis">
+<div class="kpi"><b>0 / 14</b><span>DeepSeek 写的剧本里用到 scatter、geo、density、array、matrix、problem 的次数</span></div>
+<div class="kpi"><b>3–6 件 vs 最多 36 件</b><span>DeepSeek 每部用的组件数 vs 转写稿（kahneman 36 件、15 张卡）</span></div>
+<div class="kpi"><b>≈ 0</b><span>只换内核不换剧本的增益（c4k 2.26 vs c3 2.20）——提升来自转写和专为这几部加的组件</span></div>
+<div class="kpi"><b>3 / 5</b><span>c5r 人选与指标一致；r4 时四轮指标改进后人选 7/9 回到 base</span></div>
+</div>
+<p>根源可以收成三条：<b>①生成器错位</b>（优化的是上限而不是产品路径）；<b>②没有留出集</b>（训练、验收、人评同一批片，Opus 单样本当标准答案）；<b>③尺子跟着结果变</b>（底线口径、评审模型、收敛判据在过程中多次改，人评页默认选“这一轮”）。下面逐环节展开，最后给改法。</p>
+</section>
+
+<section>
+<h2>当前闭环长什么样</h2>
+<div class="loop"><span>Opus 参考片（scene.js + notes）</span><i>→</i><span>Opus 5.5 转写成 semk 剧本（口播不改）</span><i>→</i><span>内核排版渲染</span><i>→</i><span>codex 逐拍 4 帧对比 Opus</span><i>→</i><span>聚类缺口</span><i>→</i><span>架构师/反方提案（后期由我直接改）</span><i>→</i><span>改内核、加组件</span><i>→</i><span>同一批片重新转写</span><i>→</i><span>人评 2–5 部</span></div>
+<p class="mute">产品路径——DeepSeek 从题目一次写出剧本——不在这个环里；<code>TARGETS</code> 里写了一次通过率 ≥85%，但 c1–c5 每轮的 <code>cround.sh</code> 只跑 transcribe → render → dims → contrast。</p>
+</section>
+
+<section>
+<h2>逐环节：问题、根源、证据</h2>
+
+<div class="part">
+<h3>1. 生成器：在优化“转写上限”，不是产品</h3>
+<p><span class="lbl">现在</span> 转写者是 Opus 5.5，提示词里给了原片口播、手法清单、逐拍标注、notes.md 和完整 scene.js，要求“照原片转写”。</p>
+<p class="root"><span class="lbl">根源</span> 这本来是测“词表能表达到什么程度”的上限实验，后来被当成了主迭代路径。转写者能看到答案，所以内核加什么它都能精确用上——新组件、新字段、复杂的 become/send 链；而产品里的 DeepSeek 只看题目，不会想到这些。上限在涨，产品下限没人看。</p>
+<p class="ev"><span class="lbl">证据</span> DeepSeek 对 5 个题目各写 3 次：14/15 一次通过，每次输出约 1.5k token、≈18.9k 输入、5–16 秒、≈$0.003。用到的组件集中在 flow、card、bars、compare（各 5–8 次）；两天新增的 scatter、geo、density、array/matrix、problem 一次都没出现，meter 2 次、spans 1 次。转写稿 kahneman 用了 36 件、125 个动作，DeepSeek 同题 3–6 件、20–40 个动作。通过率高恰恰是因为它只用简单词。</p>
+<p class="ev">词表说明 <code>describe</code> 里组件部分已 25.5k 字符，提示词整体 69k 字符；每加一个组件，DeepSeek 的提示词就更长，而收益只在转写路径兑现。</p>
+</div>
+
+<div class="part">
+<h3>2. 样本集：训练、验收、人评是同一批片</h3>
+<p><span class="lbl">现在</span> c1–c5 在 4→8→5 部片上循环：从这几部挖缺口，在这几部上改，在这几部上重转写打分，再拿这几部给人看。</p>
+<p class="root"><span class="lbl">根源</span> 没有留出集，也没有“新题目”测试。每个缺口都能追溯到具体某部片，于是组件按片生长：pop120 → 多序列 curve；substr30 → array/matrix；fraud56 → flow 回环和 case；geom17 → geo、solve、problem；sushi51/zhenghe → map 航迹、spans；kahneman → meter、density；pdca → scatter。按 critic 的规则“≥3 部、≥2 题材”，缺口库 58 部也是同一机制挖出来的，门槛形同虚设；而架构师提示里还写着“新组件只要两种以上题材用得上就收，不因为当前只有一两部片用到就否掉”“每轮至少一项是骨架或组件级的能力”。</p>
+<p class="ev"><span class="lbl">证据</span> c3→c4 八部均值 2.20→1.88，但只换内核、用 c3 剧本重渲（c4k）是 2.26——收益全部来自重新转写 + 为这几部新加的组件（substr30 组件类差距 16→5）。早期分批 B1–B4 曾想做对照，但 B3 变差（0.39→0.57）时被解释为“逐部均值持平，非过拟合”继续推进；B4“只测”批在最终只录片、没回到决策里。</p>
+</div>
+
+<div class="part">
+<h3>3. 评审尺子：以“像 Opus”为目标，单参考、噪声大、中途换</h3>
+<p><span class="lbl">现在</span> codex 每拍看 Opus 和 semk 各 4–5 帧，列 gaps，每条要求写一个 generic 通用能力名。指标是“每拍高严重度差距数”。</p>
+<p class="root"><span class="lbl">根源</span></p>
+<ul>
+<li><b>参考即答案</b>：Opus 每个题目只有一份实现，它的版式、组件选择被当成唯一正确；和 Opus 不同就是 gap，哪怕 semk 的讲法也清楚。这把“提炼通用能力”变成了“逐拍复刻”。</li>
+<li><b>单拍命名通用能力</b>：提示词要求 codex 从一拍里把差距“说成一类通用能力”，任何 Opus 的具体画面都会被包装成“通用组件”，聚类后又成了下一轮的需求。</li>
+<li><b>静帧看动效</b>：4 帧看不出节奏、生长和音效，但 c5 把动效和音效纳入评审；人觉得变好的（kahneman、pop 有了生长和音效）codex 反而判差。</li>
+<li><b>噪声没有进入决策</b>：同片重打噪声 0.17–0.3/拍，多数轮次的改进幅度在这个范围内，仍按“降了”记功。</li>
+<li><b>中途换尺子</b>：评审模型 astra → sol；两步 contrast 试过又撤回；为了可比只好让旧 worktree 继续跑旧尺子，流程更复杂。</li>
+</ul>
+<p class="ev"><span class="lbl">证据</span> c5r：kahneman 1.46→1.61、pop 2.62→3.00 指标变差，人都选新版；r1–r4 指标连续改进，人选 7/9 回到 base。</p>
+</div>
+
+<div class="part">
+<h3>4. 挖缺与提案：原则越堆越多，后期绕过了反方</h3>
+<p><span class="lbl">现在</span> 架构师/反方提示词各有 8 条“总原则”（通用、好写对、先大面、提炼、压榨 Opus、锚点稳定、承接、动效丰富、同步），每条都来自某一轮的人评意见。</p>
+<p class="root"><span class="lbl">根源</span></p>
+<ul>
+<li><b>人评意见当天就升级成全局原则</b>：一部片上的观感（如 zhenghe“地图全屏”、pdca“左侧不缩放”）立即写进所有提示词，后面每部片都按它评、按它改；原则之间也会冲突（“锚点稳定” vs “承接：锚点进入新场景”）。</li>
+<li><b>“压榨 Opus 直到提炼完”</b>直接把目标设成复刻参考片的全部手法。</li>
+<li><b>配额驱动增量</b>：“每轮至少一项骨架或组件级能力”保证了每轮一定加东西，而不是先证明缺。</li>
+<li><b>好写对只是一条文字原则</b>，没有任何一轮真的拿 DeepSeek 去测新词。</li>
+<li><b>B2 以后架构师/反方被跳过</b>，改动由我看图后直接写进内核，反方那道“是否只为某部片写死”的闸也就没了。</li>
+</ul>
+</div>
+
+<div class="part">
+<h3>5. 内核实现：按个例打补丁，修一处坏一处</h3>
+<p><span class="lbl">现在</span> 每条人评问题对应一次内核修复 + 一个测试；测试常常用该片的真实剧本做夹具（如 pop120 整部 film.json）、用该片的地名和数据造例子。</p>
+<p class="root"><span class="lbl">根源</span> 规则是“条件分支”式累积：tour 组件的 link 改成点亮、tall 组件进右栏、become 后重排、贯穿件可长不可缩、HUD 按幕标题唯一匹配……每条都对一部片正确，但规则之间没有统一模型（座位、焦点、层级），相互影响只能靠回归发现。<code>film.js</code> 589 行里堆了大量单行复合条件，越来越难推理。</p>
+<p class="ev"><span class="lbl">证据</span> r7 短标签常驻让 geom17 0.95→1.78；case 卡修复后 fraud56 便签重叠测试失败，调权重失败后改成“便签横滑”；sushi51 顶栏改成时间线后暴露高亮错位；b2r1 地图推镜修复后底线 15→25。“修了 A 冒出 B”在两天里反复出现。</p>
+</div>
+
+<div class="part">
+<h3>6. 底线指标：事后定义、改口径重算</h3>
+<p class="root"><span class="lbl">根源</span> 每次看到新问题就加一条 floor（off、lead、overlap、dead、progress、churn、camera、crowd、small、brief、unread、swap、clash、busy、sfx_*）；看到误报就改口径并 <code>refloor</code> 重算历史轮次（churn“压暗仍算在场”让 fraud56 churn 归零；dead 忽略 &lt;4% 角标；hud 不算死拍；镜头底线从 trace 改为成片 ORB）。口径改动本身合理，但它和内核改动同时发生，轮间比较就不再干净，而且底线永远在追上一轮已经出现的问题。</p>
+<p class="ev"><span class="lbl">证据</span> r3 训练片底线 31→2，主要来自新口径；r2 底线 36 拍、r5 又新增三类，数字可比性很弱。</p>
+</div>
+
+<div class="part">
+<h3>7. 人评闸门：默认选中、相对比较、意见立即成规则</h3>
+<p class="root"><span class="lbl">根源</span> 评审页 <code>gate.py</code> 里“这一轮更好”默认选中，页面写着“什么都不改直接点，等于‘这一轮更好’”；比较只在上一版和这一轮之间、顺序固定、不盲；只有一个人看 2–5 部。人评是最有价值的信号，但现在的形式会系统性偏向新版，也很难区分“比上一版好”和“绝对够好”。</p>
+<p class="ev"><span class="lbl">证据</span> c5r 五部全选新版且多数没写理由；r4 那次用了 base 对照，结果 7/9 选 base——对照对象一变，结论就反过来。</p>
+</div>
+
+<div class="part">
+<h3>8. 变量控制：一轮里同时变了太多东西</h3>
+<p class="root"><span class="lbl">根源</span> 一轮同时变：转写剧本（Opus 每次转写差异很大，kahneman 卡片 15 张又回来）、内核、组件、评审模型、底线口径、样本集。转写方差本身就接近改进幅度，归因几乎做不出来。只有 c4k 这一次做了“剧本冻结只换内核”的消融。</p>
+<p class="ev"><span class="lbl">证据</span> c5r 跑到一半内核改了导致 fraud56 渲染失败，整轮作废重跑；为了隔离，前后建了 r0–r5、b2、c1–c5、c5r、c5h 十几个冻结 worktree。</p>
+</div>
+
+<div class="part">
+<h3>9. 收敛与预算：判据和上限都在过程中被移动</h3>
+<p class="root"><span class="lbl">根源</span> 收敛判据从“逐拍讲清分差”→“分差改善 &lt;0.05 且底线不升”→“contrast 高差距/拍下降 + 人选闸门”；预算 50→100→1000 美元。没有预先登记的停止规则时，环会一直找到下一个“缺口”，因为对着单参考逐拍比，缺口永远存在。</p>
+</div>
+
+<div class="part">
+<h3>10. 我（执行 Agent）自身的方法问题</h3>
+<ul>
+<li>看到具体帧的问题就倾向于直接修，跳过“这是不是通用问题、留出集上有没有”的判断。</li>
+<li>迭代节奏追求“每轮都有东西交付”，偏向加组件而不是删和合并。</li>
+<li>多处后台并发 + 改动中的 worktree，导致整轮作废和一次意外 <code>git stash</code>。</li>
+<li>汇报时用的“每拍高差距”下降，没有同时报噪声区间和产品路径指标，让人以为在稳步变好。</li>
+</ul>
+</div>
+</section>
+
+<section>
+<h2>这些问题怎么互相放大</h2>
+<p>Opus 单样本当答案 → codex 把每处不同都命名成“通用能力” → 聚类在 5–8 部片上排出“最缺的” → 原则和配额要求每轮加组件 → 转写者看得到答案，必然用上新组件 → 同一批片上分数下降 → 当作进步、写进原则 → 下一轮对着更多原则找更多缺口。整个环里没有一个环节会因为“DeepSeek 用不上”或“新题目没变好”而说不。</p>
+</section>
+
+<section>
+<h2>框架和方法上值得改的</h2>
+<div class="wrap"><table>
+<tr><th>#</th><th>改什么</th><th>怎么改</th><th>解决哪条根源</th></tr>
+<tr><td>1</td><td>把产品路径放进环里</td><td>每轮主指标改为：留出题目上 DeepSeek 端到端（题目→剧本→成片）的质量 + 一次通过率 + 新能力使用率。转写只作上限诊断，不作验收。新组件若 DeepSeek 在 15 次里用不到，就要么改说明让它用得上，要么不收。</td><td>①</td></tr>
+<tr><td>2</td><td>三分样本</td><td>挖缺集（可看 Opus）、验证集（决定收不收改动）、留出集（只在阶段末看一次）。每个改动必须在挖缺集以外至少 2 部上有可见收益，且留出集不退步。</td><td>②</td></tr>
+<tr><td>3</td><td>评审从“像 Opus”改成“讲得好”</td><td>绝对量表（讲清楚、跟得上口播、无硬错、观感）+ 参考片只作对照提示；codex 先用历史人选校准，一致率 ≥80% 才拿来决策；每次报告带噪声区间，改进小于噪声不算。动效和音效用短视频片段或人评，不用静帧。</td><td>③</td></tr>
+<tr><td>4</td><td>冻结尺子</td><td>一个阶段内评审模型、底线口径、判据不改；要改就单独一轮“只换尺子”重打全部历史版本，并写变更记录。</td><td>③</td></tr>
+<tr><td>5</td><td>一轮只变一类东西</td><td>内核改动用冻结剧本消融（c4k 式）测；转写/写稿改动用冻结内核测；两者不同轮混测。</td><td>归因</td></tr>
+<tr><td>6</td><td>人评盲测、无默认</td><td>A/B 随机左右、不标轮次、无默认选项；加一档“都不够好”；每轮至少 1 部固定基线对照，防止只比相邻两版。</td><td>③ 人评偏差</td></tr>
+<tr><td>7</td><td>意见分级入库</td><td>人评意见先记为“个例”，在 ≥2 部、≥2 题材的留出片上复现才升级为原则；提示词原则设上限，新增一条要删一条或合并。</td><td>原则堆积</td></tr>
+<tr><td>8</td><td>去掉增量配额</td><td>删掉“每轮至少一项组件级能力”和“压榨到提炼完”；改成“每轮可以只删、只合并”。组件数和词表长度设预算（如说明 ≤20k 字符），超了先合并。</td><td>组件膨胀</td></tr>
+<tr><td>9</td><td>内核统一模型再加规则</td><td>先把座位/让位/焦点/层级写成一份显式状态模型，新规则只能改模型参数；测试用合成数据和性质测试（任何剧本都不重叠、不出画），少用真实片做夹具。</td><td>补丁式规则</td></tr>
+<tr><td>10</td><td>预先登记停止规则和预算</td><td>阶段开始写明：主指标、噪声、留出集、最多几轮、预算上限；达到就停并人评，不在过程中移动。</td><td>收敛漂移</td></tr>
+</table></div>
+</section>
+
+<section>
+<h2>按目标重排闭环：从 Opus 吸收，让 DeepSeek 生成更好</h2>
+<p>“吸收”有两半：<b>内核画得出</b>（表达力），以及<b>便宜模型在对的时候会用</b>（可发现性）。两天只做了前一半，转写者替我们完成了后一半，所以看起来一直在进步。</p>
+<ol>
+<li><b>Opus 当手法来源，不当逐拍答案。</b>从参考片提炼“手法卡”：解决什么讲解问题、适用什么题材信号、通用形态是什么；≥3 部、≥2 题材出现才入库。</li>
+<li><b>先吸收不需要剧本写的。</b>运镜、焦点转移、承接、让位、生长节奏、音效这类由内核自动做，DeepSeek 不用学，词表零成本——收益最稳，优先做。</li>
+<li><b>要剧本选的，连“什么时候用”一起交付。</b>新组件必须带适用信号和一个短例子写进 describe；词表说明设长度预算，加一个就合并或删一个。</li>
+<li><b>把转写稿变成 DeepSeek 的范例库。</b>Opus 转写成的 semk 剧本，正好是“好讲法写成 semk 是什么样”的示范：按题材检索 1–2 个最相近的放进 DeepSeek 提示词，比堆规则更容易让它用上新能力。</li>
+<li><b>验收只看产品路径。</b>留出题目上 DeepSeek 从题目写到成片，新旧内核盲比（人 + 校准过的评审），同时看一次通过率和新能力使用率；在留出题上没变好就不算吸收成功。</li>
+</ol>
+<p class="mute">第一步建议：用 5 个老题 + 5 个新题，让 DeepSeek 分别在自迭代起点的内核（04f0385e9，11-18 00:00，base 轮所用；早先写的 12fa362e8 那时还没有 semk，已更正）和当前内核上出片做盲比——先回答“这两天对产品到底有没有帮助”，再决定哪些能力留、哪些合并。DeepSeek 每次约 $0.003，主要成本是渲染时间。</p>
+</section>
+
+<section>
+<h2>怎么不变慢、分得清、上限更高</h2>
+<p>只按“DeepSeek 端到端出片 → 看效果”迭代确实更慢，而且分不清是框架不行、还是 DeepSeek 写不好或用不好。端到端只该作外圈验收；每轮要先把损失归到具体一层。</p>
+
+<h3>一、归因：同一题目四份剧本对照</h3>
+<div class="wrap"><table>
+<tr><th>剧本</th><th>谁写、看什么</th><th>代表什么</th></tr>
+<tr><td>A</td><td>Opus 看原片转写（已有，c5r）</td><td>框架上限：给满分剧本，框架能做多好</td></tr>
+<tr><td>B</td><td>强模型只看题目写，和 DeepSeek 同一份提示词</td><td>会讲的写手靠词表能做多好</td></tr>
+<tr><td>C</td><td>DeepSeek 只看题目写（已有 14 份）</td><td>产品现状</td></tr>
+<tr><td>D</td><td>DeepSeek + 1–2 份相近题材的转写范例</td><td>给示范后 DeepSeek 能到哪</td></tr>
+</table></div>
+<ul>
+<li><b>Opus 原片 vs A</b>：框架画不出 → 改组件、内核。</li>
+<li><b>A vs B</b>：词表难发现、说明不好、缺讲法规划 → 改 describe 或加“先规划后填写”。</li>
+<li><b>B vs C</b>：模型能力差距 → 看 D 能补回多少；补不回就让强模型只做规划、DeepSeek 填写。</li>
+<li><b>C vs D</b>：范例的价值。</li>
+</ul>
+<p class="mute">四份都渲成片，每轮就能看到损失主要卡在哪一层。A、C 已有，B、D 合计不到 1 美元，主要成本是渲染时间。</p>
+
+<h3>二、效率：快慢两圈</h3>
+<ul>
+<li><b>内圈（分钟级，改框架）</b>：冻结一个剧本库（A、B、C 三类，约 20 部）。改内核后只重渲这个库，不重新写稿；先跑底线检查，再只让 codex 评被改动影响的拍。没有写稿方差，噪声小、收敛快。现在每轮都让 Opus 重新转写，贵、慢、方差大；c4k 那次就是内圈的雏形，也是最能说明问题的一次实验。</li>
+<li><b>外圈（天级，改写稿）</b>：DeepSeek 在留出题目上重新写稿，看新能力有没有被用上，再决定调说明、加范例，还是交给内核自动做。</li>
+</ul>
+
+<h3>三、上限：改结构，不靠调参</h3>
+<p>调参式迭代收敛慢、上限低，是因为它在“规则补丁”空间里搜索，目标又带噪声。提上限靠结构：</p>
+<ol>
+<li><b>能交给内核的都交给内核</b>：运镜、焦点、承接、让位、节奏、音效，写稿方完全不用管；这部分上限由框架决定，与 DeepSeek 无关。</li>
+<li><b>转写稿做范例检索</b>：把 Opus 的讲法直接搬给 DeepSeek，最便宜也最直接，比堆规则有效。</li>
+<li><b>规划和填写分开</b>：先按题目选骨架和主要组件（输出很短，用强模型也便宜），再让 DeepSeek 照规划写完整剧本。</li>
+<li><b>只为 A、B 都做不出的东西加组件</b>，不再为转写方方便加组件。</li>
+</ol>
+<p class="mute">建议第一步只做归因：5 个题目的 A/B/C/D 四份剧本全部渲成片，做一页对照，看损失卡在哪一层，再决定下一轮先改框架、改说明还是加规划步。</p>
+</section>
+
+<section>
+<h2>补充证据：新组件在环外用不上</h2>
+<p>只用已有数据（git 历史、各轮剧本、上次 DeepSeek 写的 14 份有效剧本），没有新花费、没有渲染。</p>
+<h3>框架两天涨了多少</h3>
+<div class="wrap"><table>
+<tr><th>版本</th><th>时间</th><th>组件数</th><th>内核代码</th><th>写稿说明里的组件段</th></tr>
+<tr><td>7c83ddb78 首版</td><td>11-17 10:28</td><td>24</td><td>155 KB</td><td>6.1k 字</td></tr>
+<tr><td>04f0385e9 自迭代起点</td><td>11-18 00:00</td><td>32</td><td>277 KB</td><td>13.8k 字</td></tr>
+<tr><td>当前 HEAD</td><td>11-19 04:54</td><td>40</td><td>436 KB</td><td>25.5k 字</td></tr>
+</table></div>
+<p class="mute">起点之后 99 个提交里 56 个动了内核。写稿提示词整体约 69k 字符（约 18.9k 输入 token），组件说明占大头。</p>
+<h3>11-18 新增的 8 个组件，谁在用</h3>
+<div class="wrap"><table>
+<tr><th>组件</th><th>转写剧本（c5b，8 部）</th><th>DeepSeek（5 题 14 份）</th></tr>
+<tr><td>spans 时间段</td><td>3</td><td>1</td></tr>
+<tr><td>meter 读数条</td><td>1</td><td>2</td></tr>
+<tr><td>geo 几何</td><td>2</td><td>0</td></tr>
+<tr><td>scatter 散点</td><td>2</td><td>0</td></tr>
+<tr><td>density 分布</td><td>1</td><td>0</td></tr>
+<tr><td>problem 题目卡</td><td>1</td><td>0</td></tr>
+<tr><td>array 数组</td><td>0</td><td>0</td></tr>
+<tr><td>matrix 矩阵</td><td>0</td><td>0</td></tr>
+</table></div>
+<p>同题对照更直接：kahneman67 转写用了 density、meter、problem，DeepSeek 三份里两份用了 meter；pdca126 转写用了 scatter，DeepSeek 三份都没用；sushi51 转写用了 spans，DeepSeek 三份里一份用了；fraud56、pop120 两边都没用新组件。DeepSeek 14 份剧本最常用的是 flow、card、bars（各 8 份），三个都是首版就有的。</p>
+<p>不是“没告诉它”：这些组件在提示词里都有说明，scatter 一条就有用法、例子、适合和不适合。转写会用，是因为 Opus 原片里有那个画面；DeepSeek 从 40 个里挑 3–6 个时，挑的还是熟的几个。</p>
+<h3>这说明什么</h3>
+<ul>
+<li>两天新增 16 个组件、说明长了约 4 倍，DeepSeek 实际用的仍集中在首版组件；11-18 新增的 8 个里，6 个在 14 份剧本里一次都没出现。框架增长主要服务了转写，印证了第 1 条（生成器错位）。</li>
+<li>新组件没用上，不全是坏事：pop120、fraud56 本来就不需要。问题在于没有机制去分：这个题<b>该</b>用而没用，还是本来就不该用。现在的环里没有这个判断。</li>
+<li>推论（未验证）：说明越长，便宜模型越倾向用熟的几个。要让新能力用上，比再加一个类型更有效的是：规划步按题目点名组件，或者把新能力并进已有组件的选项。</li>
+</ul>
+<p class="mute">最便宜的下一步检查（未做）：同 5 题，提示词里只放规划选中的约 8 个组件说明，看 DeepSeek 用不用得上、一次通过率变不变。每份约 $0.003，不需要渲染。</p>
+</section>
+
+<section>
+<h2>值得保留的</h2>
+<ul>
+<li>codex 逐拍看图能认出版式、组件、焦点差距（探测已验证），适合作诊断工具。</li>
+<li>转写残差 + 台账 + 提案/反方的结构本身是对的，问题在输入和闸门，不在形式。</li>
+<li>c4k 这种“冻结剧本只换内核”的消融，是两天里最能说明问题的一次实验，应该常规化。</li>
+<li>人评意见里关于运镜、锚点稳定、地图全屏的判断，多数在留出片上大概率也成立，可以作为第一批“待复现原则”去验证。</li>
+</ul>
+</section>
+
+<section>
+<h2>没做的</h2>
+<ul>
+<li>DeepSeek 只写了剧本，没渲成片，所以“DeepSeek 端到端质量”还没有数；上面只用了它的组件和动作统计。</li>
+<li>没有在留出题目上量过这两天新增能力的收益。“新组件在环外用不上”现在有了使用率证据（见补充证据一节），但还没有成片质量对比。</li>
+<li>本复盘没有改代码。</li>
+</ul>
+</section>
+</main>

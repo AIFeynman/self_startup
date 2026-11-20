@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>semk 自迭代改法</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mute:#66707a;--line:#e3e0d8;--card:#fff;--acc:#2f6fd0;--bad:#b4442c;--ok:#2e7d4f;--warn:#9a6a00}
+@media (prefers-color-scheme:dark){:root{--bg:#16181b;--fg:#e6e6e3;--mute:#9aa3ab;--line:#2c3036;--card:#1d2024;--acc:#7aa7ef;--bad:#e5806a;--ok:#6cc495;--warn:#e0b450}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+main{max-width:980px;margin:0 auto;padding:28px 16px 80px}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:19px;margin:36px 0 10px;padding-top:8px;border-top:1px solid var(--line)}h3{font-size:16px;margin:20px 0 6px}
+.sub{color:var(--mute);font-size:13px}.lead{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);padding:14px 16px;border-radius:6px;margin:18px 0}
+code{font:12.5px/1.4 ui-monospace,Menlo,monospace;background:color-mix(in srgb,var(--line) 55%,transparent);padding:1px 5px;border-radius:4px}
+table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:14px}th,td{border:1px solid var(--line);padding:7px 9px;vertical-align:top;text-align:left}th{background:color-mix(in srgb,var(--line) 40%,transparent);font-weight:600}
+.wrap{overflow-x:auto}.tag{display:inline-block;font-size:12px;padding:0 7px;border-radius:10px;border:1px solid currentColor;margin-right:4px}
+.bad{color:var(--bad)}.ok{color:var(--ok)}.warn{color:var(--warn)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin:10px 0}
+.card b.t{font-size:15px}.card .k{color:var(--mute);font-size:13px;margin-right:4px}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13.5px}.flow span{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:4px 8px}.flow i{color:var(--mute);font-style:normal}
+ol li,ul li{margin:3px 0}
+</style></head><body><main>
+<h1>semk 自迭代：评测和运行机制怎么改</h1>
+<div class="sub">2026-11-19 · 接 <a href="2026-11-19-self-iteration-retro.html">两天复盘</a> · 依据 <code>scripts/explainer_eval/semk_run.py</code>（ARCHITECT / CRITIC / MINE 提示词、<code>TARGETS</code>、<code>ledger_settle</code>）、<code>docs/design/semk/lessons.json</code>、<code>human-picks.json</code> · 只给方案，没改代码</div>
+
+<div class="lead"><b>结论：</b>过拟合不是哪一步做错，而是闭环里<b>没有一个会说“不”的环节是靠程序强制的</b>。目标函数（像 Opus）、训练/验收样本（同一批片）、确认条件（训练片上涨分）、合入路径（Agent 直接改内核）都允许“记住这几部片”通过。改法分两层：<b>评测</b>——换目标、分样本、校准尺子、按噪声判；<b>运行</b>——把闸门从提示词搬进脚本，一轮只变一类东西，预先登记停止规则。复盘里的方向基本对，但有 4 处要补，第一步可以直接照复盘的“新旧内核 DeepSeek 盲比”做，只是题量要放大。</div>
+
+<h2>一、复盘之外，代码里直接造成过拟合的 6 处</h2>
+<p>复盘讲了现象和根源，下面是落到代码上的“开关”，改法要从这里下手：</p>
+<div class="wrap"><table>
+<tr><th>#</th><th>位置</th><th>现在写的</th><th>为什么必然过拟合</th></tr>
+<tr><td>1</td><td><code>ARCHITECT</code> 规则 4</td><td>predict “只写训练片”</td><td>提案的预期收益只在训练片上登记，验收也只看这些拍——<b>确认条件本身就是“训练集上涨分”</b>。</td></tr>
+<tr><td>2</td><td><code>ledger_settle</code></td><td><code>uses</code> 在转写稿里找，转写没用上记 <code>doubt</code>（“不能算试过”）</td><td>转写者看得到 Opus 原片，必然会用新能力；DeepSeek 用不上的情况从来不会进入判定。产品路径上“没被用上”应当直接是否决信号。</td></tr>
+<tr><td>3</td><td><code>lessons.json</code> 状态</td><td>30 条：trial 22、rejected 3、doubt 2、deferred 2、vetoed 1、<b>confirmed 0</b></td><td>trial 就已经合进内核，确认这一步实际不存在。内核里 22 项能力没有一项走完验证。</td></tr>
+<tr><td>4</td><td><code>ARCHITECT</code> 规则 0 vs <code>CRITIC</code> 第 1 条</td><td>“两种以上题材就收”“每轮至少一项组件级” vs “≥3 部、≥2 题材才算通用”</td><td>架构师和反方门槛不一致，且缺口库 58 部是同一套 codex-对比-Opus 挖出来的，≥3 部很容易凑够；配额保证每轮必加东西。</td></tr>
+<tr><td>5</td><td><code>TARGETS</code> 生成组</td><td><code>gen.first_pass_rate ≥ .85</code> 写成底线</td><td>每轮 <code>cround.sh</code> 不跑 <code>write</code>，这条底线永远不被检查；词表说明从 6.1k 涨到 25.5k 字没有任何指标拦。</td></tr>
+<tr><td>6</td><td>人评闸门 vs <code>blind_sides</code></td><td>台账对比页已有随机 A/B；轮次评审页却默认“这一轮更好”、不盲</td><td>机制里已经有盲测的写法，最关键的那道人评没用上，偏向新版是结构性的。</td></tr>
+</table></div>
+
+<h3>复盘建议里要修正的 4 点</h3>
+<ul>
+<li><b>留出题太少。</b>复盘第一步写“5 老题 + 5 新题”。同片重打噪声 0.17–0.3/拍，加上 DeepSeek 写稿方差，10 题单次很难分出差别。建议每题写 2 次、至少 12 题（24 对），按“胜率 + 置信区间”判，不按均值。</li>
+<li><b>范例检索（方案 D）有泄漏。</b>拿转写稿当 DeepSeek 范例时，评测题必须排除同题、同参考片的转写稿，否则 D 只是在抄答案，和现在的过拟合是同一回事。</li>
+<li><b>“该用没用”需要标注，不然没法判。</b>复盘说没机制区分“该用而没用”和“本来不该用”。最便宜的做法：每个验证题由人或强模型一次性标“这题适合的 2–4 个组件”（冻结，不随轮次改），新组件的使用率只在标了它的题上算。</li>
+<li><b>评审校准集现在不够。</b><code>human-picks.json</code> 只有 3 轮的记录，算一致率样本太少。第一批人评盲比要同时作为评审的校准集，至少 20 对。</li>
+</ul>
+
+<h2>二、评测机制改法</h2>
+
+<div class="card"><b class="t">E1 主目标换成产品路径的盲比胜率</b><br>
+<span class="k">现在</span>每拍高严重度差距数（codex 对比 Opus）。<br>
+<span class="k">改成</span>主指标 = 验证题上“DeepSeek 只看题目 → 剧本 → 成片”，候选版对当前冠军版的<b>盲比胜率</b>（左右随机，可选“都不行”）；附带三条硬门：一次通过率 ≥85%、底线违规不增加、词表说明字符不超预算。codex 对比 Opus 降为<b>诊断</b>，只用来找“哪里可能缺”，不进合入判定。<br>
+<span class="k">验收线</span>胜率 ≥60% 且 95% 区间下界 &gt;50%（24 对时约需 17 胜）。</div>
+
+<div class="card"><b class="t">E2 三分题库，按角色锁死</b><br>
+<div class="wrap"><table>
+<tr><th>集</th><th>来源</th><th>谁能看</th><th>用途</th></tr>
+<tr><td>挖缺集</td><td>~15 部有 Opus 参考的片</td><td>Agent 可看 scene.js / notes</td><td>找缺口、提手法卡、转写上限诊断</td></tr>
+<tr><td>验证集</td><td>~12 题（可有 Opus 参考，但<b>闭环不可读</b>参考代码）</td><td>只看题目和成片</td><td>每个改动收不收</td></tr>
+<tr><td>留出集</td><td>~10 个新题，无 Opus 参考</td><td>阶段末才跑一次</td><td>判断这一阶段是否真的变好</td></tr>
+</table></div>
+清单写进一个文件（如 <code>evalbench/semk_splits.json</code>），脚本读取时按集校验路径：验证集和留出集的 <code>opus_reference/&lt;片&gt;/a/</code> 不给 transcribe / mine / propose 读。复盘列出的 pop120、substr30、fraud56、geom17、sushi51、zhenghe、kahneman、pdca 都已被“挖过”，只能放挖缺集。</div>
+
+<div class="card"><b class="t">E3 先测噪声，再谈改进</b><br>
+每阶段开头跑一次 <b>A/A</b>：同一内核、DeepSeek 对验证题各写两次并出片，让评审互比。A/A 的“胜率”偏离 50% 的幅度就是这把尺子的噪声。之后任何改动的胜率要超出 A/A 区间才算数；报告里每个数字带区间。底线类指标同样先测 A/A 波动（同剧本重渲、同题重写）。</div>
+
+<div class="card"><b class="t">E4 评审先校准，校准过才拿来决策</b><br>
+第一批人评盲比（≥20 对）同时作为校准集；codex 用同一份绝对量表（讲清楚 / 跟得上口播 / 无硬错 / 观感，1–5）+ 两两偏好打分，和人选比一致率。<b>≥75% 才允许评审替人做轮内决策</b>，否则轮内只用底线 + 人评。动效、音效只用短视频片段（或人），不用 4 张静帧判。参考片只作为“可以这样做”的提示，不作答案——提示词里明确“和参考不同但讲得清不算缺陷”。</div>
+
+<div class="card"><b class="t">E5 冻结尺子：评审、底线、量表一阶段不改</b><br>
+建 <code>rulers.lock</code>：评审模型（现在 <code>CODEX_MODEL = gpt-6.2-sol</code>）、评审提示词、<code>TARGETS</code>、各条 floor 口径、量表的哈希。每次评测产物写入当时的 lock 哈希；比较两轮时哈希不同直接报错。要改尺子只能单开一轮“只换尺子”，把冠军版和基线版用新尺子重打，再写变更记录。<code>refloor</code> 重算历史这种做法保留，但必须和内核改动分开。</div>
+
+<div class="card"><b class="t">E6 新能力的准入看“DeepSeek 用得上 + 用上就变好”</b><br>
+每题一次性标“适合的组件”（冻结）。新组件 / 新字段合入条件：在标了它的验证题上，DeepSeek 自发使用率 ≥50%，且这些题的盲比胜率过 E1 的线。用不上就三选一：改 describe（写清适用信号 + 短例子）、并进已有组件做选项、或交给内核自动做；都不行就不收。把 <code>ledger_settle</code> 的 <code>uses</code> 改成在 DeepSeek 剧本里找，“没被用上”记 rejected 而不是 doubt。</div>
+
+<div class="card"><b class="t">E7 复杂度预算是硬门</b><br>
+describe 组件段设上限（建议先回到 ≤15k 字，当前 25.5k）、组件数上限（如 32，即自迭代起点水平）。超了必须先合并或删除才能加。<code>gen.first_pass_rate</code>、<code>gen.in_tokens</code> 每轮真的跑 <code>write</code> 去算，而不是只写在 TARGETS 里。</div>
+
+<h2>三、运行机制改法</h2>
+
+<div class="card"><b class="t">R1 闸门从提示词搬进脚本：内核只能经 <code>promote</code> 合入</b><br>
+复盘第 4 条：B2 以后架构师 / 反方被跳过，改动由执行 Agent 看图后直接写进内核。提示词约束对执行者无效。改法：迭代 worktree 装 pre-commit hook，凡改 <code>skills/video-styles/engine/lib/semk/</code> 的提交，必须附 <code>.promote/&lt;id&gt;.json</code>，里面有 E1 验证集胜率、A/A 区间、底线前后、DeepSeek 使用率、rulers.lock 哈希，脚本校验通过才放行。Agent 可以在实验分支随便改，但进冠军线只有这一条路。</div>
+
+<div class="card"><b class="t">R2 一轮只变一类东西，manifest 声明</b><br>
+每轮开跑先写 <code>round.json</code>：<code>change_type</code> ∈ kernel / describe / writer-prompt / ruler 之一，加冻结的内核 commit、剧本库版本、rulers 哈希。脚本检查：kernel 轮用冻结剧本库重渲（复盘的“内圈”，c4k 式）；describe / prompt 轮用冻结内核让 DeepSeek 重写；混了就拒绝出报告。这也顺带解决“跑一半内核被改、整轮作废”——渲染只认 manifest 里的 commit。</div>
+
+<div class="card"><b class="t">R3 先登记假设，再动手</b><br>
+每个改动在动代码前写进台账：要解决的讲解问题、预计哪些<b>验证题</b>变好（不是训练片的拍）、DeepSeek 会怎么用到、否决条件。结果出来后对照登记判，不允许事后换解释（复盘里 B3 变差被解释成“逐部均值持平”就是这种情况）。把 ARCHITECT 规则 4 的“predict 只写训练片”改成“只写验证题”。</div>
+
+<div class="card"><b class="t">R4 删掉配额，原则设上限</b><br>
+删 ARCHITECT 的“每轮至少一项骨架或组件级能力”“新组件两种题材就收”、两份提示词里的“压榨 Opus 直到提炼完”。允许一轮只删、只合并。ARCHITECT / CRITIC / MINE 的总原则抽成一个共享文件，≤5 条，三处引用同一份（现在是复制粘贴的两份 8 条）。人评意见进 <code>human-notes.json</code> 时标 <code>scope: 个例</code>，在 ≥2 部、≥2 题材的验证片上复现后才升级为原则；加一条原则要删或合并一条。</div>
+
+<div class="card"><b class="t">R5 人评闸门：盲、无默认、带固定基线、只点不写</b><br>
+左右随机、不标轮次、没有默认选项；四档：左更好 / 右更好 / 差不多 / 都不够好；每批至少 1 部对比固定基线（自迭代起点 <code>04f0385e9</code>），不只比相邻两版；每批 ≥6 部，从验证集抽。理由用勾选标签（讲不清、跟不上口播、太乱、太静、动效多余…），不要求打字。直接复用 <code>blind_sides</code> 的随机写法。</div>
+
+<div class="card"><b class="t">R6 预先登记停止规则和预算</b><br>
+阶段开头写死：主指标、A/A 噪声、验证集和留出集清单、最多 4 轮、预算上限。连续 2 轮没有改动通过 E1，或预算到，就停下跑留出集 + 人评，交给人决定下一阶段方向。过程中不改判据、不加预算。</div>
+
+<div class="card"><b class="t">R7 执行 Agent 的汇报格式固定</b><br>
+每轮汇报第一段固定四个数：验证集胜率（带区间）、一次通过率、词表说明字符数、底线违规数；然后才是诊断指标（对比 Opus 的差距）。不再用“每拍高差距下降”当头条。并发只在不同冻结 worktree 之间，同一 worktree 不并发写；禁止 <code>git stash</code> 等全局操作（复盘里出现过一次意外 stash）。</div>
+
+<h2>四、改完后的闭环</h2>
+<div class="flow">
+<span>挖缺集：Opus 参考 → 手法卡（≥3 部 ≥2 题材）</span><i>→</i>
+<span>登记假设（预计哪些验证题变好）</span><i>→</i>
+<span>实验分支改（一轮一类）</span><i>→</i>
+<span>内圈：冻结剧本库重渲 + 底线</span><i>→</i>
+<span>外圈：DeepSeek 写验证题 → 成片</span><i>→</i>
+<span>盲比（校准评审 / 人）vs 冠军，过 A/A 区间</span><i>→</i>
+<span><code>promote</code> 校验 → 合入冠军线</span><i>→</i>
+<span>阶段末：留出集 + 人评 → 人定下一阶段</span>
+</div>
+<p class="sub">和现在的差别：Opus 只出现在第一格；合入判定全在产品路径上；“像不像 Opus”只回到第一格当诊断。</p>
+
+<h2>五、落地顺序</h2>
+<ol>
+<li><b>测现状</b>（不改代码，约半天）：定题库三分 → 验证集 12 题、每题 2 次，用起点内核 <code>04f0385e9</code> 和当前 HEAD 让 DeepSeek 出片，同时跑 A/A。得出“两天对产品有没有帮助”和噪声区间。写稿约 $0.15，主要是渲染时间。</li>
+<li><b>人评盲比 + 校准</b>：上面 ≥20 对给人盲选（只点），同时让 codex 打，算一致率，决定评审能不能替人。</li>
+<li><b>改脚本</b>：splits 文件和读路径校验、rulers.lock、round.json、<code>ledger_settle</code> 改用 DeepSeek 剧本、<code>write</code> 进每轮、promote hook、人评页去默认。提示词删配额、合并原则。</li>
+<li><b>清台账</b>：22 条 trial 逐条按 E6 在验证集上过一遍（内圈消融：关掉该能力重渲冻结剧本），用不上的合并或回退，词表回到预算内。</li>
+<li>之后才按复盘的 A/B/C/D 归因决定下一阶段先改框架、改说明还是加规划步。</li>
+</ol>
+
+<h2>六、要你定的</h2>
+<ul>
+<li><b>验证 / 留出的新题</b>：留出集需要约 10 个没有 Opus 参考的新题。可以由我从 evalbench 现有题目外按题材分布挑，你只确认清单；或你指定。</li>
+<li><b>人评量</b>：第 2 步需要你盲选约 20–24 对（每对一部片的左右两版，只点不写），这是评审校准的基础，省不掉。</li>
+<li><b>清台账的力度</b>：第 4 步可能回退一批已在内核里的能力（预计 meter、spans 留，scatter、array、matrix 等若验证集用不上会合并或回退）。</li>
+</ul>
+</main></body></html>

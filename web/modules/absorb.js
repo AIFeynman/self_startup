@@ -56,6 +56,7 @@ const CSS = `
 .ab-prog { height: 6px; border-radius: 3px; background: var(--bg-2); overflow: hidden; margin: 10px 0 6px; }
 .ab-prog i { display: block; height: 100%; background: var(--accent); }
 .ab-hide { display: none; }
+.ab-sub { margin: -6px 0 14px; padding-left: 10px; border-left: 3px solid var(--line-2); } .ab-sub button { font-size: 13px; padding: 3px 12px; }
 .ab-fb table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 4px 0 14px; }
 .ab-fb th, .ab-fb td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .ab-fb th { color: var(--muted); font-weight: 600; font-size: 12px; }
@@ -154,8 +155,7 @@ export default {
     ]);
     const label = (r) => `${r.topic} · ${r.start.slice(5)}–${r.end.slice(5)}${r.done ? '' : r.running ? ' · 进行中' : ' · 中断'}`;
     const chips = {};
-    head.append(h('div.tabs', {}, [
-      h('button.active', {}, '选题吸收'), h('button', { onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收'),
+    head.append(h('div.tabs', {}, [h('button.active', {}, '选题吸收'), h('button', { onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收')]), h('div.tabs.ab-sub', {}, [
       ...runs.map((r) => chips[r.id] = h('button', { class: r.id === cur ? 'active' : '', onclick: () => go(r.id) }, label(r))),
       h('button', { onclick: () => { form.classList.toggle('ab-hide'); check(); } }, '＋ 新选题'),
     ]), form);
