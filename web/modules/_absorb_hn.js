@@ -34,6 +34,7 @@ const CSS = `
 .hn-fb { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
 .hn-fg { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; } .hn-fl { font-size: 13px; color: var(--muted); width: 84px; }
 .hn-fg button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 2px 13px; font-size: 14px; cursor: pointer; } .hn-fg button.on { background: var(--dark); color: var(--bg); border-color: var(--dark); }
+.hn-fg select { width: auto; font: inherit; font-size: 14px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); max-width: 100%; } .hn-fg select.on { border-color: var(--dark); font-weight: 600; }
 .hn-fg label { font-size: 13px; color: var(--muted); cursor: pointer; margin-left: 6px; }
 .hn-tail li { margin: 2px 0; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .hn-fb { position: static; } .hn-t { padding: 14px; } .hn-t h3 { font-size: 17px; } .hn-camps li { grid-template-columns: 26px 1fr; } .hn-cn { grid-column: 2; text-align: left; } .hn-fl { width: 100%; } }
@@ -142,15 +143,17 @@ export async function hnView(el, ctx) {
     const months = [...new Set(D.topics.map((t) => day(t.ts).slice(0, 7)))].sort().reverse();
     let view = 'topic';
     const done = () => `已表态 ${D.topics.filter((t) => R[t.key] && (R[t.key].act || R[t.key].stars)).length}/${D.topics.length}`;
-    const btn = (g, v, label) => `<button data-g="${g}" data-v="${v}" class="${(g === 'todo' ? F.todo : F[g]) === (g === 'todo' ? true : v) && (v !== '' || !F[g]) ? 'on' : ''}">${label}</button>`;
     const nm = (mo) => D.topics.filter((t) => day(t.ts).slice(0, 7) === mo).length;
     const draw = () => {
       const L = D.topics.filter((t) => match(t, D, F, R));
       const cs = D.topics.reduce((a, t) => ({ ...a, [t.consensus]: (a[t.consensus] || 0) + 1 }), {});
-      const filters = `<div class="hn-fb"><div class="hn-fg"><span class="hn-fl">时间</span>${btn('time', '', '全部')}${btn('time', '7', '近 7 天')}${btn('time', '30', '近 30 天')}${months.map((mo) => btn('time', mo, `${mo} · ${nm(mo)}`)).join('')}</div>
-<div class="hn-fg"><span class="hn-fl">共识度</span>${btn('cons', '', '全部')}${btn('cons', '有分歧', '有分歧')}${btn('cons', '基本共识', '基本共识')}${btn('cons', '讨论少', '讨论少')}${btn('todo', '1', '未表态')}</div>
-<div class="hn-fg"><span class="hn-fl">含推荐资源</span>${KO.map((k) => btn('res', k, k)).join('')}<label><input type="checkbox" data-incl ${F.incl ? 'checked' : ''}> 也算只被引用的</label></div>
-<div class="hn-fg"><span class="hn-fl">含经验</span>${OUT.map((k) => btn('exp', k, k)).join('')}<span class="ab-m">显示 ${L.length} / ${D.topics.length} 个话题 · ${done()}</span></div></div>`;
+      const sel = (g, all, opts) => `<select data-sel="${g}" class="${F[g] ? 'on' : ''}"><option value="">${all}</option>${opts.map(([v, l]) => `<option value="${E(v)}"${F[g] === v ? ' selected' : ''}>${E(l)}</option>`).join('')}</select>`;
+      const filters = `<div class="hn-fb"><div class="hn-fg">${sel('time', '时间：全部', [['7', '近 7 天'], ['30', '近 30 天'], ...months.map((mo) => [mo, `${mo} · ${nm(mo)} 个`])])}
+${sel('cons', '共识度：全部', ['有分歧', '基本共识', '讨论少'].map((k) => [k, `${k} · ${cs[k] || 0}`]))}
+${sel('res', '含推荐资源：不限', KO.map((k) => [k, k]))}${F.res ? `<label><input type="checkbox" data-incl ${F.incl ? 'checked' : ''}> 也算只被引用的</label>` : ''}
+${sel('exp', '含经验：不限', OUT.map((k) => [k, k]))}
+<label><input type="checkbox" data-todo ${F.todo ? 'checked' : ''}> 只看未表态</label>
+<span class="ab-m">显示 ${L.length} / ${D.topics.length} 个话题 · ${done()}</span></div></div>`;
       body.innerHTML = `<div class="ab-m">${E(M.start)} 至 ${E(M.end)} · ${M.weeks} 周合并 · 观点和经验的原话已逐字核对，归并和结论由模型完成，未经人工校对${undone.length ? ` · 另有 ${undone.length} 周没跑完：${undone.map((u) => E(u.id.replace('_', ' 至 ') + (u.running ? '（进行中）' : '（中断）'))).join('、')}` : ''}</div>
 <div class="ab-note">${N(M.collected)} 帖里 ${N(M.ai + M.edge)} 帖与 AI 相关，压成 <b>${M.topics} 个话题</b>（覆盖 ${M.in_topics} 帖），另有 ${M.tail} 帖在长尾。先看<b>有分歧 ${cs['有分歧'] || 0}</b>：社区没谈拢；<b>基本共识 ${cs['基本共识'] || 0}</b> 看一句话结论即可。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张 <kbd>1</kbd>–<kbd>4</kbd> 表态</span></div>
 <div class="ab-bar">${[['topic', '话题'], ['how', '口径']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span><span class="ab-m">推荐资源 ${M.recommended} · 经验 ${M.exps}</span></div>
@@ -179,15 +182,17 @@ ${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<di
       e.preventDefault();
     };
     document.addEventListener('keydown', key);
-    body.onchange = (e) => { if (e.target.dataset.incl !== undefined) { F.incl = e.target.checked; draw(); } };
+    body.onchange = (e) => {
+      const d = e.target.dataset;
+      if (d.incl !== undefined) F.incl = e.target.checked;
+      else if (d.todo !== undefined) F.todo = e.target.checked;
+      else if (d.sel) { F[d.sel] = e.target.value; F.open.clear(); }
+      else return;
+      draw();
+    };
     body.onclick = async (e) => {
       const t = e.target, d = t.dataset;
-      if (d.v && !d.g) { view = d.v; return draw(); }
-      if (d.g) {
-        if (d.g === 'todo') F.todo = !F.todo;
-        else { F[d.g] = F[d.g] === d.v ? '' : d.v; F.open.clear(); }
-        return draw();
-      }
+      if (d.v) { view = d.v; return draw(); }
       if (d.all) { F.open.add(d.all); return draw(); }
       const c = t.closest('.hn-t');
       if (d.a) return react(c, { act: d.a });
