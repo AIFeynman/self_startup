@@ -23,6 +23,7 @@ from ..db import DATA_DIR, DB_PATH
 BASE = DATA_DIR / "demand"
 TACTICS = ["内容 / SEO", "付费投放", "创作者 / 达人", "社区 / UGC", "病毒 / 分享机制", "免费增值 / PLG", "嵌入现有产品 / 集成", "渠道 / 联盟合作", "发布平台 / 媒体", "线下 / 活动", "定价 / 订阅机制"]
 MODELS = ["订阅制", "按量付费", "一次性买断", "交易抽佣", "广告变现", "免费增值", "企业销售", "联盟分成", "开源+托管", "未披露"]
+HIGH_MRR = 10000
 SOURCES = ("创业公司", "PH 日榜", "增长 Case", "大公司 / AI native")
 ANON = re.compile(r"confidential|anonymous|stealth|unnamed|undisclosed", re.I)
 MAT_CHARS = 2600
@@ -101,7 +102,7 @@ def collect() -> dict[str, dict]:
         slug = ext.get("trustmrr") or r["slug"]
         add(get(r["name"]), "创业公司", "【生意拆解】\n" + r["content"], ("TrustMRR", f"https://trustmrr.com/startup/{slug}"), r["track"], ext.get("listed_at") or r["created_at"] or "")
     had = {norm(r["name"]) for r in c.execute("SELECT c.name FROM intel_profile p JOIN intel_company c ON c.id=p.company_id WHERE p.content!=''")}
-    for r in c.execute("SELECT name, slug, track, ext, created_at FROM intel_company WHERE kind='startup' AND enabled=1 AND ai!=0"):
+    for r in c.execute("SELECT name, slug, track, ext, created_at FROM intel_company c WHERE kind='startup' AND enabled=1 AND (ai!=0 OR (SELECT value FROM intel_metric WHERE company_id=c.id AND metric='mrr' ORDER BY id DESC LIMIT 1)>=?)", [HIGH_MRR]):
         ext = json.loads(r["ext"] or "{}")
         if norm(r["name"]) in had or ANON.search(r["name"]) or not (ext.get("description") or ext.get("intro_zh")):
             continue
