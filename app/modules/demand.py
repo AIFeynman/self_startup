@@ -1,4 +1,4 @@
-"""需求图谱：把产品雷达里的创业公司 / PH 日榜 / 增长 Case 逐产品抽成需求卡（目标用户、场景、痛点、产品、增长手段），按场景大小聚成知识图谱。
+"""产品需求（原需求图谱）：把产品雷达里的创业公司 / PH 日榜 / 增长 Case 逐产品抽成需求卡（目标用户、场景、痛点、产品、增长手段），按场景大小聚成知识图谱。
 流水线在 _demand_run.py，作为独立进程跑；这里只负责发起、报进度、读结果。结果在 data/demand/。"""
 import json
 import os
@@ -11,8 +11,8 @@ from .. import agent
 from ..db import ROOT
 from . import _demand_run as dr
 
-TITLE = "需求图谱"
-PAGE = "intel/demand"
+TITLE = "产品需求"
+PAGE = "kb/demand"  # 没有自己的侧边栏入口，是知识库里的一个标签页
 router = APIRouter()
 PROC: list[subprocess.Popen] = []
 
@@ -61,7 +61,7 @@ def run(graph_only: bool = False):
 def agent_context(ref: str) -> str:
     g = dr._load("graph.json", None)
     if not g:
-        return "需求图谱还没生成。"
+        return "产品需求还没生成。"
     cards = dr._load("cards.json", {})
     return json.dumps([{"大场景": sc["name"], "总结": sc["summary"], "子场景": [{"name": sb["name"], "痛点": sb["pain"], "产品": [
         {k: cards[p].get(k) for k in ("name", "user", "scene", "pain", "growth", "tactics")} for p in sb["products"]]} for sb in sc["subs"]]} for sc in g["scenes"]], ensure_ascii=False)[:60000]

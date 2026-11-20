@@ -1146,7 +1146,7 @@ def scan_reported_arr(limit: int = 80) -> dict:
 
 
 def demand_sync() -> dict:
-    """每天一次，TrustMRR 快照和 PH 日榜都更新后，起独立进程把新产品抽成需求卡并增量归位（页面「需求图谱」）。"""
+    """每天一次，TrustMRR 快照和 PH 日榜都更新后，起独立进程把新产品抽成需求卡并增量归位（页面「知识库 · 产品需求」）。"""
     day = db.today()
     if not cfg("demand") or _state("demand_day") == day or _state("startup_day") != day:
         return {"skipped": True}

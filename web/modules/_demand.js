@@ -1,5 +1,6 @@
 import { loadRatings } from './_annotate.js';
-// 需求图谱：产品雷达里的创业公司 / PH 日榜 / 增长 Case，逐产品拆成「目标用户 · 场景 · 痛点 · 产品 · 商业模式 · 增长手段」。
+// 产品需求（原需求图谱）：知识库的子标签，由 kb.js 在 #kb/demand 路由下调用 demandTab(body, ctx, 查询)；顶部主搜索框的输入走返回的 search。
+// 数据是产品雷达里的创业公司 / PH 日榜 / 增长 Case，逐产品拆成「目标用户 · 场景 · 痛点 · 产品 · 商业模式 · 增长手段」。
 // 三栏下钻：领域 / 场景 → 痛点 → 公司知识卡（字号固定，不用缩放拖动）；另有「打法矩阵」：场景 × 增长手段 / 商业模式。
 const CSS = `
 .dm-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
@@ -52,12 +53,12 @@ const CSS = `
 .dm-days i { flex: 1 0 14px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; cursor: pointer; font-style: normal; }
 .dm-days i span { font-size: 10px; color: var(--muted); line-height: 12px; } .dm-days i u { display: block; width: 100%; max-width: 18px; background: var(--accent); opacity: .55; border-radius: 3px 3px 0 0; text-decoration: none; }
 .dm-days i:hover u, .dm-days i.on u { opacity: 1; } .dm-days i.on span { color: var(--accent); font-weight: 700; } .dm-days i small { font-size: 9px; color: var(--muted); line-height: 11px; }
-.dm-q { flex: 1 1 260px; min-width: 200px; max-width: 520px; }
-.dm-q input { width: 100%; box-sizing: border-box; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
-.dm-q input:focus { outline: none; border-color: var(--accent); }
-.dm-fl { margin: 0 0 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 6px 12px; }
-.dm-fl summary { cursor: pointer; font-size: 13px; color: var(--muted); }
-.dm-fl .dm-bar { margin: 8px 0 2px; }
+.dm-flt { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 4px 0 12px; }
+.dm-flt select { width: auto; font-size: 12.5px; padding: 3px 6px; border-radius: 8px; max-width: 150px; }
+.dm-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
+.dm-seg button { border: none; border-radius: 0; padding: 3px 10px; font-size: 12.5px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.dm-seg button.on { background: var(--accent-soft); color: var(--accent); }
+.dm-flt .ghost { border: none; background: none; color: var(--accent); font-size: 12.5px; cursor: pointer; padding: 3px 6px; }
 @container (max-width: 900px) { .dm-3 { grid-template-columns: 210px minmax(0, 1fr); } .dm-3 > div:nth-child(3) { grid-column: 1 / -1; max-height: none; } }
 @container (max-width: 560px) { .dm-3 { grid-template-columns: 1fr; } .dm-3 > div { max-height: none; } }
 `;
@@ -68,14 +69,14 @@ const STAGE = { start: '正在启动', extract: '逐个产品抽取需求卡', m
 
 const STARS = [[0, '全部'], [1, '★ 已评分'], [4, '★4 以上'], [5, '★5']];
 
-export async function renderDemand(el, ctx, tabs) {
+export async function demandTab(host, ctx, q0 = '') {
   const { api, h, ui, toast } = ctx;
   const R = new Map();
   const star = (k) => R.get('demand:' + k) || 0;
   const starSvg = ui.icon('star').outerHTML;
   let minStar = (window.__starPick ||= {}).demand || 0;
   let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', S = '', P = '', sortBy = 'def', timer;
-  let q = '', day = '', qs = null, flOpen = false, idx = new Map(), composing = false, qTimer;
+  let q = q0, day = '', added = '', qs = null, idx = new Map();
   const low = (s) => String(s || '').toLowerCase();
   const bigrams = (s) => { const a = low(s).replace(/[\s\-_.·/]/g, ''), r = new Set(); for (let i = 0; i < a.length - 1; i++) r.add(a.slice(i, i + 2)); return r; };
   const subseq = (t, s) => { let i = 0; for (const ch of s) if (ch === t[i] && ++i === t.length) return true; return false; };
@@ -123,11 +124,15 @@ export async function renderDemand(el, ctx, tabs) {
   const newN = (keys) => keys.filter(isNew).length;
   const dot = (n) => (n ? `<b class="dm-dot" title="${n} 个新项目">${n}</b>` : '');
   const body = h('div.dm-cq');
-  el.append(h('style', {}, CSS), ui.pageHead('产品雷达 · 需求图谱', '领域 / 场景 → 痛点 → 公司：看大家在打什么痛点、怎么做增长、怎么赚钱', []), tabs, body);
+  host.append(h('style', {}, CSS), body);
+  const el = host;
 
-  const fit = (k) => { const c = D.cards[k]; return (!qs || qs.has(k)) && (!day || (c.date || '').slice(0, 10) === day) && (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm) && star(k) >= minStar; };
-  const filtering = () => !!(q.trim() || day || tac || src || bm || minStar);
-  const nAct = () => [src, tac, bm, day].filter(Boolean).length + (minStar ? 1 : 0);
+  const ADDED = [['', '全部时间'], ['1', '今天新增'], ['3', '近 3 天新增'], ['7', '近 7 天新增'], ['30', '近 30 天新增']];
+  const cutoff = () => { const d = new Date(); d.setDate(d.getDate() - (+added - 1)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const dateOk = (c) => { const d = (c.date || '').slice(0, 10); return (!day || d === day) && (!added || d >= cutoff()); };
+  const fit = (k) => { const c = D.cards[k]; return (!qs || qs.has(k)) && dateOk(c) && (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm) && star(k) >= minStar; };
+  const filtering = () => !!(q.trim() || day || added || tac || src || bm || minStar);
+  const nAct = () => [src, tac, bm, day, added].filter(Boolean).length + (minStar ? 1 : 0);
   const hits = (sb) => (filtering() ? sb.products.filter(fit) : sb.products);
   const sceneKeys = (sc) => sc.subs.flatMap(hits);
   const count = (keys, f) => {
@@ -170,15 +175,15 @@ export async function renderDemand(el, ctx, tabs) {
     const n = (f) => Object.values(D.cards).filter(f).length;
     const nStar = (m) => Object.keys(D.cards).filter((k) => (m ? star(k) >= m : true)).length;
     const total = filtering() ? Object.keys(D.cards).filter(fit).length : 0;
-    return `<div class="dm-bar"><div class="dm-q"><input id="dm-q" type="search" value="${E(q)}" autocomplete="off" placeholder="搜公司、商业模式、用户痛点、场景、增长手段…（支持模糊匹配）"></div><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button><span class="dm-sp"></span><span class="dm-m">${D.graph.n} 个公司 · ${new Date(D.graph.updated * 1000).toLocaleDateString()}</span><button data-run="graph">重新聚类</button></div>
-<details class="dm-fl" ${flOpen ? 'open' : ''}><summary>筛选${nAct() ? ` · 已选 ${nAct()} 项` : ''}${filtering() ? ` · 当前匹配 ${total} 家` : ''}</summary><div class="dm-bar"><span class="dm-m">来源</span>
-${Object.keys(SRC).map((s) => `<span class="dm-chip ${src === s ? 'on' : ''}" data-s="${s}">${s} ${n((c) => c.sources.includes(s))}</span>`).join('')}<span class="dm-m">&nbsp;增长手段</span>
-${D.graph.tactics.map((t) => `<span class="dm-chip ${tac === t ? 'on' : ''}" data-t="${E(t)}">${E(t)} ${n((c) => c.tactics.includes(t))}</span>`).join('')}
-<span class="dm-m">&nbsp;商业模式</span>
-${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''}" data-b="${E(t)}">${E(t)} ${n((c) => c.bm_type === t)}</span>`).join('')}
-<span class="dm-m">&nbsp;我的评分</span>
-${STARS.map(([m, t]) => `<span class="dm-chip ${minStar === m ? 'on' : ''}" data-star="${m}">${t} ${nStar(m)}</span>`).join('')}
-${filtering() ? '<span class="dm-sp"></span><button data-clear="1">清除搜索和筛选</button>' : ''}</div></details>`;
+    const sel = (f, opts, cur) => `<select data-f="${f}">${opts.map(([v, t]) => `<option value="${E(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${E(t)}</option>`).join('')}</select>`;
+    return `<div class="dm-flt"><span class="dm-seg"><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button></span>
+${sel('added', ADDED, added)}
+${sel('src', [['', '全部来源'], ...Object.keys(SRC).map((x) => [x, `${x} (${n((c) => c.sources.includes(x))})`])], src)}
+${sel('tac', [['', '全部增长手段'], ...D.graph.tactics.map((t) => [t, `${t} (${n((c) => c.tactics.includes(t))})`])], tac)}
+${sel('bm', [['', '全部商业模式'], ...(D.graph.models || []).map((t) => [t, `${t} (${n((c) => c.bm_type === t)})`])], bm)}
+${sel('star', STARS.map(([m, t]) => [m, `${t} (${nStar(m)})`]), minStar)}
+${q.trim() ? `<button class="ghost" data-clearq="1">清除「${E(q)}」</button>` : ''}${day || nAct() ? '<button class="ghost" data-clear="1">清除筛选</button>' : ''}
+<span class="dm-sp"></span><span class="dm-m">${filtering() ? `匹配 ${total} 家 · ` : ''}${D.graph.n} 个公司 · ${new Date(D.graph.updated * 1000).toLocaleDateString()}</span><button data-run="graph">重新聚类</button></div>`;
   };
 
   const hue = (i, n) => Math.round((i * 360) / Math.max(n, 1) + 205) % 360;
@@ -230,7 +235,7 @@ ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}
   const matrix = () => {
     const T = mat === 'tac' ? D.graph.tactics : D.graph.models || [], key = (c, t) => (mat === 'tac' ? c.tactics.includes(t) : c.bm_type === t);
     const rows = D.graph.scenes.map((sc) => {
-      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => (!qs || qs.has(k)) && (!day || (D.cards[k].date || '').slice(0, 10) === day) && (!src || D.cards[k].sources.includes(src)) && star(k) >= minStar);
+      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => (!qs || qs.has(k)) && dateOk(D.cards[k]) && (!src || D.cards[k].sources.includes(src)) && star(k) >= minStar);
       return { sc, ks, cnt: T.map((t) => ks.filter((k) => key(D.cards[k], t))) };
     });
     const mx = Math.max(1, ...rows.flatMap((r) => r.cnt.map((x) => x.length)));
@@ -249,9 +254,8 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       if (s.running) timer = setTimeout(load, 4000);
       return;
     }
-    const wy = window.scrollY, qi = body.querySelector('#dm-q'), had = qi && document.activeElement === qi, pos = had ? qi.selectionStart : 0;
+    const wy = window.scrollY;
     body.innerHTML = notice() + bar() + days() + (view === 'graph' ? graph() : matrix());
-    if (had) { const n = body.querySelector('#dm-q'); n.focus(); n.setSelectionRange(pos, pos); }
     window.scrollTo(0, wy);
   };
   const load = async () => {
@@ -272,13 +276,15 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     saveSeen();
   };
 
-  const search = () => { q = body.querySelector('#dm-q').value; computeQ(); if (view === 'graph') { S = ''; P = ''; } paint(); };
-  body.addEventListener('compositionstart', () => { composing = true; });
-  body.addEventListener('compositionend', () => { composing = false; search(); });
-  body.addEventListener('input', (e) => { if (e.target.id !== 'dm-q' || composing) return; clearTimeout(qTimer); qTimer = setTimeout(search, 120); });
-  body.addEventListener('toggle', (e) => { if (e.target.classList?.contains('dm-fl')) flOpen = e.target.open; }, true);
+  body.addEventListener('change', (e) => {
+    const f = e.target.dataset?.f;
+    if (!f) return;
+    const v = e.target.value;
+    if (f === 'star') { minStar = +v; window.__starPick.demand = minStar; } else if (f === 'src') src = v; else if (f === 'tac') tac = v; else if (f === 'bm') bm = v; else if (f === 'added') added = v;
+    paint();
+  });
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
     if (ds.rate) {
@@ -286,7 +292,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       const set = (x) => (x ? R.set(doc, x) : R.delete(doc));
       set(v);
       paint();
-      try { await api.put('/api/annotations/rating', { doc, title: D.cards[k].name, link: '#intel/demand', stars: v }); } catch (err) { set(prev); paint(); toast('评分没存上：' + err.message, true); }
+      try { await api.put('/api/annotations/rating', { doc, title: D.cards[k].name, link: '#kb/demand', stars: v }); } catch (err) { set(prev); paint(); toast('评分没存上：' + err.message, true); }
       return;
     }
     if (ds.go) {
@@ -295,7 +301,8 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       document.getElementById('dm-c-' + ds.go)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       return;
     }
-    if (ds.clear) { q = ''; qs = null; tac = src = bm = day = ''; minStar = 0; window.__starPick.demand = 0; paint(); return; }
+    if (ds.clearq) { q = ''; qs = null; paint(); return; }
+    if (ds.clear) { tac = src = bm = day = added = ''; minStar = 0; window.__starPick.demand = 0; paint(); return; }
     if (ds.star !== undefined) { minStar = +ds.star; window.__starPick.demand = minStar; paint(); return; }
     if (ds.jump) { document.getElementById('dm-c-' + ds.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     if (ds.day !== undefined) day = day === ds.day ? '' : ds.day;
@@ -314,4 +321,5 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     paint();
   };
   await load();
+  return { search: (t) => { q = t; computeQ(); S = ''; P = ''; if (D?.graph) paint(); } };
 }
