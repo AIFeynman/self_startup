@@ -45,6 +45,14 @@ const CSS = `
 .dm-rate button svg { width: 17px; height: 17px; }
 .dm-rate button.on { color: var(--accent); } .dm-rate button.on svg { fill: var(--accent); }
 .dm-names .st { color: var(--accent); font-weight: 600; }
+.dm-res { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; margin: 0 0 10px; }
+.dm-res .dm-names { flex-wrap: wrap; overflow: visible; margin-top: 6px; }
+.dm-q { flex: 1 1 260px; min-width: 200px; max-width: 520px; }
+.dm-q input { width: 100%; box-sizing: border-box; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
+.dm-q input:focus { outline: none; border-color: var(--accent); }
+.dm-fl { margin: 0 0 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 6px 12px; }
+.dm-fl summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.dm-fl .dm-bar { margin: 8px 0 2px; }
 @container (max-width: 900px) { .dm-3 { grid-template-columns: 210px minmax(0, 1fr); } .dm-3 > div:nth-child(3) { grid-column: 1 / -1; max-height: none; } }
 @container (max-width: 560px) { .dm-3 { grid-template-columns: 1fr; } .dm-3 > div { max-height: none; } }
 `;
@@ -62,6 +70,46 @@ export async function renderDemand(el, ctx, tabs) {
   const starSvg = ui.icon('star').outerHTML;
   let minStar = (window.__starPick ||= {}).demand || 0;
   let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', S = '', P = '', sortBy = 'def', timer;
+  let q = '', qs = null, flOpen = false, idx = new Map(), composing = false, qTimer;
+  const low = (s) => String(s || '').toLowerCase();
+  const bigrams = (s) => { const a = low(s).replace(/[\s\-_.·/]/g, ''), r = new Set(); for (let i = 0; i < a.length - 1; i++) r.add(a.slice(i, i + 2)); return r; };
+  const subseq = (t, s) => { let i = 0; for (const ch of s) if (ch === t[i] && ++i === t.length) return true; return false; };
+  const dist = (a, b) => {
+    const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+    return d[a.length][b.length];
+  };
+  const buildIdx = () => {
+    idx = new Map(Object.entries(D.cards).map(([k, c]) => {
+      const name = low(c.name);
+      return [k, { name, words: name.split(/[^a-z0-9\u4e00-\u9fff]+/).filter((w) => w.length > 1), big: bigrams(name), all: low([c.name, c.user, c.scene, c.pain, c.product, c.bm, c.bm_type, c.growth, c.arr, (c.tactics || []).join(' '), (c.sources || []).join(' '), c.track].join(' | ')) }];
+    }));
+  };
+  const tokScore = (t, x) => {
+    if (x.name.startsWith(t)) return 5;
+    if (x.name.includes(t)) return 4;
+    if (x.all.includes(t)) return 2;
+    if (t.length < 3) return 0;
+    const k = t.length >= 7 ? 2 : 1;
+    if (x.words.some((w) => Math.abs(w.length - t.length) <= k && dist(t, w) <= k || w.length > t.length && dist(t, w.slice(0, t.length)) <= k)) return 1.5;
+    const bt = [...bigrams(t)];
+    if (t.length >= 4 && bt.length && bt.filter((b) => x.big.has(b)).length / bt.length >= 0.8) return 1.2;
+    return /^[a-z0-9]+$/.test(t) && t.length >= 3 && subseq(t, x.name) ? 1 : 0;
+  };
+  const computeQ = () => {
+    const toks = low(q).split(/\s+/).filter(Boolean);
+    if (!toks.length) { qs = null; return; }
+    qs = new Map();
+    idx.forEach((x, k) => {
+      let s = 0;
+      for (const t of toks) { const v = tokScore(t, x); if (!v) { s = 0; break; } s += v; }
+      if (s) qs.set(k, s);
+    });
+  };
   const fresh = new Set();
   const SEEN = 'dm-seen';
   const seen = new Set((() => { try { return JSON.parse(localStorage.getItem(SEEN) || '[]'); } catch { return []; } })());
@@ -72,8 +120,9 @@ export async function renderDemand(el, ctx, tabs) {
   const body = h('div.dm-cq');
   el.append(h('style', {}, CSS), ui.pageHead('产品雷达 · 需求图谱', '领域 / 场景 → 痛点 → 公司：看大家在打什么痛点、怎么做增长、怎么赚钱', []), tabs, body);
 
-  const fit = (k) => { const c = D.cards[k]; return (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm) && star(k) >= minStar; };
-  const filtering = () => !!(tac || src || bm || minStar);
+  const fit = (k) => { const c = D.cards[k]; return (!qs || qs.has(k)) && (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm) && star(k) >= minStar; };
+  const filtering = () => !!(q.trim() || tac || src || bm || minStar);
+  const nAct = () => [src, tac, bm].filter(Boolean).length + (minStar ? 1 : 0);
   const hits = (sb) => (filtering() ? sb.products.filter(fit) : sb.products);
   const sceneKeys = (sc) => sc.subs.flatMap(hits);
   const count = (keys, f) => {
@@ -92,6 +141,7 @@ export async function renderDemand(el, ctx, tabs) {
   const ordered = (keys) => {
     const a = [...keys];
     if (minStar) a.sort((x, y) => star(y) - star(x));
+    if (qs && sortBy === 'def') a.sort((x, y) => (qs.get(y) || 0) - (qs.get(x) || 0));
     if (sortBy === 'arr') a.sort((x, y) => (D.cards[y].arr_v || 0) - (D.cards[x].arr_v || 0));
     else if (sortBy === 'new') a.sort((x, y) => (D.cards[y].date || '').localeCompare(D.cards[x].date || ''));
     return a;
@@ -107,14 +157,16 @@ export async function renderDemand(el, ctx, tabs) {
   const bar = () => {
     const n = (f) => Object.values(D.cards).filter(f).length;
     const nStar = (m) => Object.keys(D.cards).filter((k) => (m ? star(k) >= m : true)).length;
-    return `<div class="dm-bar"><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button><span class="dm-m">&nbsp;来源</span>
+    const total = filtering() ? Object.keys(D.cards).filter(fit).length : 0;
+    return `<div class="dm-bar"><div class="dm-q"><input id="dm-q" type="search" value="${E(q)}" autocomplete="off" placeholder="搜公司、商业模式、用户痛点、场景、增长手段…（支持模糊匹配）"></div><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button><span class="dm-sp"></span><span class="dm-m">${D.graph.n} 个公司 · ${new Date(D.graph.updated * 1000).toLocaleDateString()}</span><button data-run="graph">重新聚类</button></div>
+<details class="dm-fl" ${flOpen ? 'open' : ''}><summary>筛选${nAct() ? ` · 已选 ${nAct()} 项` : ''}${filtering() ? ` · 当前匹配 ${total} 家` : ''}</summary><div class="dm-bar"><span class="dm-m">来源</span>
 ${Object.keys(SRC).map((s) => `<span class="dm-chip ${src === s ? 'on' : ''}" data-s="${s}">${s} ${n((c) => c.sources.includes(s))}</span>`).join('')}<span class="dm-m">&nbsp;增长手段</span>
 ${D.graph.tactics.map((t) => `<span class="dm-chip ${tac === t ? 'on' : ''}" data-t="${E(t)}">${E(t)} ${n((c) => c.tactics.includes(t))}</span>`).join('')}
 <span class="dm-m">&nbsp;商业模式</span>
 ${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''}" data-b="${E(t)}">${E(t)} ${n((c) => c.bm_type === t)}</span>`).join('')}
 <span class="dm-m">&nbsp;我的评分</span>
 ${STARS.map(([m, t]) => `<span class="dm-chip ${minStar === m ? 'on' : ''}" data-star="${m}">${t} ${nStar(m)}</span>`).join('')}
-<span class="dm-sp"></span><span class="dm-m">${D.graph.n} 个公司 · ${new Date(D.graph.updated * 1000).toLocaleDateString()}</span><button data-run="graph">重新聚类</button></div>`;
+${filtering() ? '<span class="dm-sp"></span><button data-clear="1">清除搜索和筛选</button>' : ''}</div></details>`;
   };
 
   const hue = (i, n) => Math.round((i * 360) / Math.max(n, 1) + 205) % 360;
@@ -158,13 +210,15 @@ ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}
         ? `${strip(ordered(hits(sb)))}<div class="dm-box"><b>大家怎么增长：</b>${sb.growth ? E(sb.growth) : '<span class="dm-m">增长材料较少</span>'}<div class="dm-m" style="margin-top:4px">${tacCount(hits(sb)).map((t) => `<span class="dm-chp">${E(t[0])} ×${t[1]}</span>`).join('')}${bmCount(hits(sb)).map((t) => `<span class="dm-chp b">${E(t[0])} ×${t[1]}</span>`).join('')}</div></div>${ordered(hits(sb)).map(company).join('')}`
         : `<div class="dm-box">${E(sc.summary)}</div><div class="dm-m">增长手段分布（${ks.length} 家）</div>${bars(ks)}<div class="dm-m" style="margin-top:8px">商业模式分布</div>${bars(ks, 'bm')}`;
     }
-    return `<div class="dm-3"><div>${c1}</div><div>${c2}</div><div>${c3}</div></div>`;
+    const rk = qs ? [...qs.keys()].filter(fit).sort((a, b) => qs.get(b) - qs.get(a)) : [];
+    const res = qs ? `<div class="dm-res"><span class="dm-m">搜到 ${rk.length} 家，点名称直达${rk.length > 60 ? '（只列前 60 家）' : ''}</span><div class="dm-names">${rk.slice(0, 60).map((k) => `<a data-go="${E(k)}" title="${E(D.cards[k].scene)}">${E(D.cards[k].name)}<small>${D.cards[k].arr_v ? money(D.cards[k].arr_v) : ''}</small></a>`).join('') || '<span class="dm-m">没有匹配的公司</span>'}</div></div>` : '';
+    return `${res}<div class="dm-3"><div>${c1}</div><div>${c2}</div><div>${c3}</div></div>`;
   };
 
   const matrix = () => {
     const T = mat === 'tac' ? D.graph.tactics : D.graph.models || [], key = (c, t) => (mat === 'tac' ? c.tactics.includes(t) : c.bm_type === t);
     const rows = D.graph.scenes.map((sc) => {
-      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => (!src || D.cards[k].sources.includes(src)) && star(k) >= minStar);
+      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => (!qs || qs.has(k)) && (!src || D.cards[k].sources.includes(src)) && star(k) >= minStar);
       return { sc, ks, cnt: T.map((t) => ks.filter((k) => key(D.cards[k], t))) };
     });
     const mx = Math.max(1, ...rows.flatMap((r) => r.cnt.map((x) => x.length)));
@@ -183,14 +237,17 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       if (s.running) timer = setTimeout(load, 4000);
       return;
     }
-    const wy = window.scrollY;
+    const wy = window.scrollY, qi = body.querySelector('#dm-q'), had = qi && document.activeElement === qi, pos = had ? qi.selectionStart : 0;
     body.innerHTML = notice() + bar() + (view === 'graph' ? graph() : matrix());
+    if (had) { const n = body.querySelector('#dm-q'); n.focus(); n.setSelectionRange(pos, pos); }
     window.scrollTo(0, wy);
   };
   const load = async () => {
     if (!el.isConnected) return;
     const [d, rt] = await Promise.all([api.get('/api/demand/graph'), loadRatings(api, 'demand:')]);
     D = d;
+    buildIdx();
+    computeQ();
     R.clear();
     rt.forEach((v, k) => R.set(k, v));
     paint();
@@ -203,8 +260,13 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     saveSeen();
   };
 
+  const search = () => { q = body.querySelector('#dm-q').value; computeQ(); if (view === 'graph') { S = ''; P = ''; } paint(); };
+  body.addEventListener('compositionstart', () => { composing = true; });
+  body.addEventListener('compositionend', () => { composing = false; search(); });
+  body.addEventListener('input', (e) => { if (e.target.id !== 'dm-q' || composing) return; clearTimeout(qTimer); qTimer = setTimeout(search, 120); });
+  body.addEventListener('toggle', (e) => { if (e.target.classList?.contains('dm-fl')) flOpen = e.target.open; }, true);
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
     if (ds.rate) {
@@ -215,6 +277,13 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       try { await api.put('/api/annotations/rating', { doc, title: D.cards[k].name, link: '#intel/demand', stars: v }); } catch (err) { set(prev); paint(); toast('评分没存上：' + err.message, true); }
       return;
     }
+    if (ds.go) {
+      for (const sc of D.graph.scenes) for (const sb of sc.subs) if (sb.products.includes(ds.go)) { S = sc.id; pick(sb); }
+      paint();
+      document.getElementById('dm-c-' + ds.go)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return;
+    }
+    if (ds.clear) { q = ''; qs = null; tac = src = bm = ''; minStar = 0; window.__starPick.demand = 0; paint(); return; }
     if (ds.star !== undefined) { minStar = +ds.star; window.__starPick.demand = minStar; paint(); return; }
     if (ds.jump) { document.getElementById('dm-c-' + ds.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     if (ds.sort) sortBy = ds.sort;
