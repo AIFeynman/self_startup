@@ -1,3 +1,4 @@
+import { loadRatings } from './_annotate.js';
 // 需求图谱：产品雷达里的创业公司 / PH 日榜 / 增长 Case，逐产品拆成「目标用户 · 场景 · 痛点 · 产品 · 商业模式 · 增长手段」。
 // 三栏下钻：领域 / 场景 → 痛点 → 公司知识卡（字号固定，不用缩放拖动）；另有「打法矩阵」：场景 × 增长手段 / 商业模式。
 const CSS = `
@@ -39,6 +40,11 @@ const CSS = `
 .dm-tbl td.c { cursor: pointer; }
 .dm-run { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; margin: 12px 0; }
 .dm-cq { container-type: inline-size; }
+.dm-rate { float: right; display: inline-flex; margin: 0 0 4px 8px; }
+.dm-rate button { border: none; background: none; padding: 1px; color: var(--line-2); cursor: pointer; border-radius: 4px; }
+.dm-rate button svg { width: 17px; height: 17px; }
+.dm-rate button.on { color: var(--accent); } .dm-rate button.on svg { fill: var(--accent); }
+.dm-names .st { color: var(--accent); font-weight: 600; }
 @container (max-width: 900px) { .dm-3 { grid-template-columns: 210px minmax(0, 1fr); } .dm-3 > div:nth-child(3) { grid-column: 1 / -1; max-height: none; } }
 @container (max-width: 560px) { .dm-3 { grid-template-columns: 1fr; } .dm-3 > div { max-height: none; } }
 `;
@@ -47,8 +53,14 @@ const E = (s) => (s == null ? '' : String(s)).replace(/[&<>"]/g, (c) => ({ '&': 
 const SRC = { '创业公司': '创', 'PH 日榜': 'PH', '增长 Case': '案', '大公司 / AI native': '大' };
 const STAGE = { start: '正在启动', extract: '逐个产品抽取需求卡', model: '补商业模式', arr: '补收入规模', taxonomy: '建场景和痛点分类', assign: '把产品归到痛点', summary: '写场景和痛点的增长总结', done: '完成' };
 
+const STARS = [[0, '全部'], [1, '★ 已评分'], [4, '★4 以上'], [5, '★5']];
+
 export async function renderDemand(el, ctx, tabs) {
-  const { api, h, ui } = ctx;
+  const { api, h, ui, toast } = ctx;
+  const R = new Map();
+  const star = (k) => R.get('demand:' + k) || 0;
+  const starSvg = ui.icon('star').outerHTML;
+  let minStar = (window.__starPick ||= {}).demand || 0;
   let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', S = '', P = '', sortBy = 'def', timer;
   const fresh = new Set();
   const SEEN = 'dm-seen';
@@ -60,9 +72,9 @@ export async function renderDemand(el, ctx, tabs) {
   const body = h('div.dm-cq');
   el.append(h('style', {}, CSS), ui.pageHead('产品雷达 · 需求图谱', '领域 / 场景 → 痛点 → 公司：看大家在打什么痛点、怎么做增长、怎么赚钱', []), tabs, body);
 
-  const fit = (c) => (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm);
-  const filtering = () => !!(tac || src || bm);
-  const hits = (sb) => (filtering() ? sb.products.filter((k) => fit(D.cards[k])) : sb.products);
+  const fit = (k) => { const c = D.cards[k]; return (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm) && star(k) >= minStar; };
+  const filtering = () => !!(tac || src || bm || minStar);
+  const hits = (sb) => (filtering() ? sb.products.filter(fit) : sb.products);
   const sceneKeys = (sc) => sc.subs.flatMap(hits);
   const count = (keys, f) => {
     const n = {};
@@ -79,12 +91,13 @@ export async function renderDemand(el, ctx, tabs) {
   const money = (v) => (v >= 1e9 ? `$${(v / 1e9).toFixed(1)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${Math.round(v / 1e3)}k` : `$${Math.round(v)}`);
   const ordered = (keys) => {
     const a = [...keys];
+    if (minStar) a.sort((x, y) => star(y) - star(x));
     if (sortBy === 'arr') a.sort((x, y) => (D.cards[y].arr_v || 0) - (D.cards[x].arr_v || 0));
     else if (sortBy === 'new') a.sort((x, y) => (D.cards[y].date || '').localeCompare(D.cards[x].date || ''));
     return a;
   };
   const strip = (keys) => `<div class="dm-strip"><div class="dm-sort"><span class="dm-m">${keys.length} 家 · 排序</span>${[['def', '默认'], ['arr', 'ARR 高→低'], ['new', '出现时间 新→旧']].map(([k, t]) => `<button data-sort="${k}" class="${sortBy === k ? 'on' : ''}">${t}</button>`).join('')}</div>
-<div class="dm-names">${keys.map((k) => { const c = D.cards[k]; return `<a data-jump="${E(k)}" title="${E(c.scene)}">${E(c.name)}<small>${sortBy === 'new' ? E((c.date || '').slice(5)) : c.arr_v ? money(c.arr_v) : ''}</small></a>`; }).join('')}</div></div>`;
+<div class="dm-names">${keys.map((k) => { const c = D.cards[k]; return `<a data-jump="${E(k)}" title="${E(c.scene)}">${E(c.name)}${star(k) ? `<small class="st">★${star(k)}</small>` : ''}<small>${sortBy === 'new' ? E((c.date || '').slice(5)) : c.arr_v ? money(c.arr_v) : ''}</small></a>`; }).join('')}</div></div>`;
 
   const notice = () => {
     const nn = newN(Object.keys(D.cards)), run = D.status.running;
@@ -93,11 +106,14 @@ export async function renderDemand(el, ctx, tabs) {
   };
   const bar = () => {
     const n = (f) => Object.values(D.cards).filter(f).length;
+    const nStar = (m) => Object.keys(D.cards).filter((k) => (m ? star(k) >= m : true)).length;
     return `<div class="dm-bar"><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button><span class="dm-m">&nbsp;来源</span>
 ${Object.keys(SRC).map((s) => `<span class="dm-chip ${src === s ? 'on' : ''}" data-s="${s}">${s} ${n((c) => c.sources.includes(s))}</span>`).join('')}<span class="dm-m">&nbsp;增长手段</span>
 ${D.graph.tactics.map((t) => `<span class="dm-chip ${tac === t ? 'on' : ''}" data-t="${E(t)}">${E(t)} ${n((c) => c.tactics.includes(t))}</span>`).join('')}
 <span class="dm-m">&nbsp;商业模式</span>
 ${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''}" data-b="${E(t)}">${E(t)} ${n((c) => c.bm_type === t)}</span>`).join('')}
+<span class="dm-m">&nbsp;我的评分</span>
+${STARS.map(([m, t]) => `<span class="dm-chip ${minStar === m ? 'on' : ''}" data-star="${m}">${t} ${nStar(m)}</span>`).join('')}
 <span class="dm-sp"></span><span class="dm-m">${D.graph.n} 个公司 · ${new Date(D.graph.updated * 1000).toLocaleDateString()}</span><button data-run="graph">重新聚类</button></div>`;
   };
 
@@ -114,7 +130,9 @@ ${(D.graph.models || []).map((t) => `<span class="dm-chip ${bm === t ? 'on' : ''
 
   const company = (k) => {
     const c = D.cards[k], nw = fresh.has(k) || isNew(k);
-    return `<div class="dm-co" id="dm-c-${E(k)}"><h4>${E(c.name)}${nw ? '<b class="dm-dot">新</b>' : ''}</h4><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}${c.date ? ' · 出现于 ' + E(c.date) : ''}</div>
+    const v = star(k);
+    const rate = `<span class="dm-rate" title="给这家打分（再点一次取消），之后可按星级筛选">${[1, 2, 3, 4, 5].map((i) => `<button data-rate="${i}" data-k="${E(k)}" aria-label="${i} 星" class="${i <= v ? 'on' : ''}">${starSvg}</button>`).join('')}</span>`;
+    return `<div class="dm-co" id="dm-c-${E(k)}">${rate}<h4>${E(c.name)}${nw ? '<b class="dm-dot">新</b>' : ''}</h4><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}${c.date ? ' · 出现于 ' + E(c.date) : ''}</div>
 <dl><dt>目标用户</dt><dd>${E(c.user)}</dd><dt>场景</dt><dd>「${E(c.scene)}」</dd><dt>痛点</dt><dd>${E(c.pain)}</dd><dt>产品</dt><dd>${E(c.product)}</dd>
 ${c.arr ? `<dt>收入规模</dt><dd>${E(c.arr)}<div class="dm-tg"><span class="b">${c.arr_grade === 'verified' ? '支付渠道验证' : '自述 / 报道，未验证'}</span></div></dd>` : ''}<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span class="b">${E(c.bm_type)}</span></div>` : ''}</dd>
 <dt>增长核心手段</dt><dd>${c.growth ? E(c.growth) : '<span class="dm-m">材料里没讲增长</span>'}${c.tactics.length ? `<div class="dm-tg">${c.tactics.map((t) => `<span>${E(t)}</span>`).join('')}</div>` : ''}</dd>
@@ -146,7 +164,7 @@ ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}
   const matrix = () => {
     const T = mat === 'tac' ? D.graph.tactics : D.graph.models || [], key = (c, t) => (mat === 'tac' ? c.tactics.includes(t) : c.bm_type === t);
     const rows = D.graph.scenes.map((sc) => {
-      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => !src || D.cards[k].sources.includes(src));
+      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => (!src || D.cards[k].sources.includes(src)) && star(k) >= minStar);
       return { sc, ks, cnt: T.map((t) => ks.filter((k) => key(D.cards[k], t))) };
     });
     const mx = Math.max(1, ...rows.flatMap((r) => r.cnt.map((x) => x.length)));
@@ -171,7 +189,10 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
   };
   const load = async () => {
     if (!el.isConnected) return;
-    D = await api.get('/api/demand/graph');
+    const [d, rt] = await Promise.all([api.get('/api/demand/graph'), loadRatings(api, 'demand:')]);
+    D = d;
+    R.clear();
+    rt.forEach((v, k) => R.set(k, v));
     paint();
     if (D.graph && D.status.running) timer = setTimeout(load, 4000);
   };
@@ -183,9 +204,18 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
   };
 
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
+    if (ds.rate) {
+      const k = ds.k, doc = 'demand:' + k, prev = star(k), v = +ds.rate === prev ? 0 : +ds.rate;
+      const set = (x) => (x ? R.set(doc, x) : R.delete(doc));
+      set(v);
+      paint();
+      try { await api.put('/api/annotations/rating', { doc, title: D.cards[k].name, link: '#intel/demand', stars: v }); } catch (err) { set(prev); paint(); toast('评分没存上：' + err.message, true); }
+      return;
+    }
+    if (ds.star !== undefined) { minStar = +ds.star; window.__starPick.demand = minStar; paint(); return; }
     if (ds.jump) { document.getElementById('dm-c-' + ds.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     if (ds.sort) sortBy = ds.sort;
     else if (ds.v) view = ds.v;
