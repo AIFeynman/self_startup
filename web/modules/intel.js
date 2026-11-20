@@ -3,7 +3,6 @@
 //       #intel/overview（总览：赛道格局 / 本周异动 / 头部与黑马 / 打法汇总）
 //       #intel/growth（每日增长 Case + 候选池）· #intel/g/<id>（增长 Case 卡）
 //       #intel/startups · #intel/tracks · #intel/t/<赛道> · #intel/ph · #intel/companies · #intel/sources
-import { renderDemand } from './_demand.js';
 import { annotate, loadRatings, starFilter, starMark } from './_annotate.js';
 const LV = { S: ['S', 'err'], A: ['A', 'warn'], B: ['B', 'ok'], C: ['C', 'gray'] };
 const CARD = { queued: ['解读中', 'line'], done: ['解读卡', 'ok'], incomplete: ['解读卡不完整', 'warn'], failed: ['解读失败', 'err'] };
@@ -15,7 +14,7 @@ const GCASE = { queued: ['写卡中', 'line'], done: ['Case 卡', 'ok'], incompl
 const GSCORE = [['case', '案例'], ['numbers', '数字'], ['actions', '动作'], ['fit', '相关'], ['firsthand', '一手']];
 const os = { sort: 'rev' };  // 总览里赛道格局的排序
 const TABS = [['变化流', '#intel'], ['总览', '#intel/overview'], ['创业公司', '#intel/startups'], ['赛道', '#intel/tracks'], ['PH 日榜', '#intel/ph'],
-  ['增长 Case', '#intel/growth'], ['需求图谱', '#intel/demand'], ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
+  ['增长 Case', '#intel/growth'], ['公司', '#intel/companies'], ['信息源', '#intel/sources']];
 const tabs = (h, active) => h('div.tabs', {}, TABS.map(([t, href]) =>
   h('button' + (href === active ? '.active' : ''), { onclick: () => { location.hash = href; } }, t)));
 const LIST_KEYS = (h) => h('div.it-keys', {}, [h('kbd', {}, '↑'), h('kbd', {}, '↓'), ' 选择 · ', h('kbd', {}, '→'), ' 详情 · ', h('kbd', {}, '←'), ' 原文 · ', h('kbd', {}, 'j'), h('kbd', {}, 'k'), ' 切类型']);
@@ -822,7 +821,6 @@ export default {
     if (view === 't' && arg) return renderTrack(el, ctx, arg);
     if (view === 'ph') return renderPh(el, ctx);
     if (view === 'growth') return renderGrowth(el, ctx);
-    if (view === 'demand') return renderDemand(el, ctx, tabs(ctx.h, '#intel/demand'));
     if (view === 'g' && arg) return browseDetail(el, ctx, 'g', +arg, renderGrowthCase);
     return renderStream(el, ctx);
   },
