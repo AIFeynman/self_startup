@@ -47,6 +47,11 @@ const CSS = `
 .dm-names .st { color: var(--accent); font-weight: 600; }
 .dm-res { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; margin: 0 0 10px; }
 .dm-res .dm-names { flex-wrap: wrap; overflow: visible; margin-top: 6px; }
+.dm-days { display: flex; align-items: flex-end; gap: 3px; height: 62px; margin: 0 0 8px; padding: 4px 8px 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow-x: auto; }
+.dm-days > b { flex: none; font-weight: 400; font-size: 12px; color: var(--muted); align-self: center; margin-right: 6px; white-space: nowrap; }
+.dm-days i { flex: 1 0 14px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; cursor: pointer; font-style: normal; }
+.dm-days i span { font-size: 10px; color: var(--muted); line-height: 12px; } .dm-days i u { display: block; width: 100%; max-width: 18px; background: var(--accent); opacity: .55; border-radius: 3px 3px 0 0; text-decoration: none; }
+.dm-days i:hover u, .dm-days i.on u { opacity: 1; } .dm-days i.on span { color: var(--accent); font-weight: 700; } .dm-days i small { font-size: 9px; color: var(--muted); line-height: 11px; }
 .dm-q { flex: 1 1 260px; min-width: 200px; max-width: 520px; }
 .dm-q input { width: 100%; box-sizing: border-box; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
 .dm-q input:focus { outline: none; border-color: var(--accent); }
@@ -70,7 +75,7 @@ export async function renderDemand(el, ctx, tabs) {
   const starSvg = ui.icon('star').outerHTML;
   let minStar = (window.__starPick ||= {}).demand || 0;
   let D, view = 'graph', tac = '', src = '', bm = '', mat = 'tac', S = '', P = '', sortBy = 'def', timer;
-  let q = '', qs = null, flOpen = false, idx = new Map(), composing = false, qTimer;
+  let q = '', day = '', qs = null, flOpen = false, idx = new Map(), composing = false, qTimer;
   const low = (s) => String(s || '').toLowerCase();
   const bigrams = (s) => { const a = low(s).replace(/[\s\-_.·/]/g, ''), r = new Set(); for (let i = 0; i < a.length - 1; i++) r.add(a.slice(i, i + 2)); return r; };
   const subseq = (t, s) => { let i = 0; for (const ch of s) if (ch === t[i] && ++i === t.length) return true; return false; };
@@ -120,9 +125,9 @@ export async function renderDemand(el, ctx, tabs) {
   const body = h('div.dm-cq');
   el.append(h('style', {}, CSS), ui.pageHead('产品雷达 · 需求图谱', '领域 / 场景 → 痛点 → 公司：看大家在打什么痛点、怎么做增长、怎么赚钱', []), tabs, body);
 
-  const fit = (k) => { const c = D.cards[k]; return (!qs || qs.has(k)) && (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm) && star(k) >= minStar; };
-  const filtering = () => !!(q.trim() || tac || src || bm || minStar);
-  const nAct = () => [src, tac, bm].filter(Boolean).length + (minStar ? 1 : 0);
+  const fit = (k) => { const c = D.cards[k]; return (!qs || qs.has(k)) && (!day || (c.date || '').slice(0, 10) === day) && (!tac || c.tactics.includes(tac)) && (!src || c.sources.includes(src)) && (!bm || c.bm_type === bm) && star(k) >= minStar; };
+  const filtering = () => !!(q.trim() || day || tac || src || bm || minStar);
+  const nAct = () => [src, tac, bm, day].filter(Boolean).length + (minStar ? 1 : 0);
   const hits = (sb) => (filtering() ? sb.products.filter(fit) : sb.products);
   const sceneKeys = (sc) => sc.subs.flatMap(hits);
   const count = (keys, f) => {
@@ -149,6 +154,13 @@ export async function renderDemand(el, ctx, tabs) {
   const strip = (keys) => `<div class="dm-strip"><div class="dm-sort"><span class="dm-m">${keys.length} 家 · 排序</span>${[['def', '默认'], ['arr', 'ARR 高→低'], ['new', '出现时间 新→旧']].map(([k, t]) => `<button data-sort="${k}" class="${sortBy === k ? 'on' : ''}">${t}</button>`).join('')}</div>
 <div class="dm-names">${keys.map((k) => { const c = D.cards[k]; return `<a data-jump="${E(k)}" title="${E(c.scene)}">${E(c.name)}${star(k) ? `<small class="st">★${star(k)}</small>` : ''}<small>${sortBy === 'new' ? E((c.date || '').slice(5)) : c.arr_v ? money(c.arr_v) : ''}</small></a>`; }).join('')}</div></div>`;
 
+  const days = () => {
+    const n = {}, f = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    Object.values(D.cards).forEach((c) => { const k = (c.date || '').slice(0, 10); if (k) n[k] = (n[k] || 0) + 1; });
+    const ds = Array.from({ length: 30 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - 29 + i); return f(d); });
+    const mx = Math.max(1, ...ds.map((k) => Math.sqrt(n[k] || 0))), w7 = ds.slice(-7).reduce((a, k) => a + (n[k] || 0), 0);
+    return `<div class="dm-days" title="按「出现日期」统计；点某一天只看这天新增的公司"><b>每日新增<br>今日 ${n[ds[29]] || 0} · 近 7 天 ${w7}</b>${ds.map((k) => `<i data-day="${k}" class="${day === k ? 'on' : ''}" title="${k}：${n[k] || 0} 家"><span>${n[k] || ''}</span><u style="height:${n[k] ? Math.max(3, Math.round(Math.sqrt(n[k]) / mx * 34)) : 0}px"></u><small>${k.slice(8)}</small></i>`).join('')}</div>`;
+  };
   const notice = () => {
     const nn = newN(Object.keys(D.cards)), run = D.status.running;
     if (!nn && !D.pending && !run) return '';
@@ -218,7 +230,7 @@ ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}
   const matrix = () => {
     const T = mat === 'tac' ? D.graph.tactics : D.graph.models || [], key = (c, t) => (mat === 'tac' ? c.tactics.includes(t) : c.bm_type === t);
     const rows = D.graph.scenes.map((sc) => {
-      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => (!qs || qs.has(k)) && (!src || D.cards[k].sources.includes(src)) && star(k) >= minStar);
+      const ks = sc.subs.flatMap((sb) => sb.products).filter((k) => (!qs || qs.has(k)) && (!day || (D.cards[k].date || '').slice(0, 10) === day) && (!src || D.cards[k].sources.includes(src)) && star(k) >= minStar);
       return { sc, ks, cnt: T.map((t) => ks.filter((k) => key(D.cards[k], t))) };
     });
     const mx = Math.max(1, ...rows.flatMap((r) => r.cnt.map((x) => x.length)));
@@ -238,7 +250,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       return;
     }
     const wy = window.scrollY, qi = body.querySelector('#dm-q'), had = qi && document.activeElement === qi, pos = had ? qi.selectionStart : 0;
-    body.innerHTML = notice() + bar() + (view === 'graph' ? graph() : matrix());
+    body.innerHTML = notice() + bar() + days() + (view === 'graph' ? graph() : matrix());
     if (had) { const n = body.querySelector('#dm-q'); n.focus(); n.setSelectionRange(pos, pos); }
     window.scrollTo(0, wy);
   };
@@ -266,7 +278,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
   body.addEventListener('input', (e) => { if (e.target.id !== 'dm-q' || composing) return; clearTimeout(qTimer); qTimer = setTimeout(search, 120); });
   body.addEventListener('toggle', (e) => { if (e.target.classList?.contains('dm-fl')) flOpen = e.target.open; }, true);
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
     if (ds.rate) {
@@ -283,10 +295,11 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       document.getElementById('dm-c-' + ds.go)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       return;
     }
-    if (ds.clear) { q = ''; qs = null; tac = src = bm = ''; minStar = 0; window.__starPick.demand = 0; paint(); return; }
+    if (ds.clear) { q = ''; qs = null; tac = src = bm = day = ''; minStar = 0; window.__starPick.demand = 0; paint(); return; }
     if (ds.star !== undefined) { minStar = +ds.star; window.__starPick.demand = minStar; paint(); return; }
     if (ds.jump) { document.getElementById('dm-c-' + ds.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
-    if (ds.sort) sortBy = ds.sort;
+    if (ds.day !== undefined) day = day === ds.day ? '' : ds.day;
+    else if (ds.sort) sortBy = ds.sort;
     else if (ds.v) view = ds.v;
     else if (ds.s !== undefined) src = src === ds.s ? '' : ds.s;
     else if (ds.t !== undefined) tac = tac === ds.t ? '' : ds.t;
