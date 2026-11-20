@@ -22,6 +22,7 @@ from ..db import DATA_DIR, DB_PATH
 
 BASE = DATA_DIR / "demand"
 TACTICS = ["内容 / SEO", "付费投放", "创作者 / 达人", "社区 / UGC", "病毒 / 分享机制", "免费增值 / PLG", "嵌入现有产品 / 集成", "渠道 / 联盟合作", "发布平台 / 媒体", "线下 / 活动", "定价 / 订阅机制"]
+MODELS = ["订阅制", "按量付费", "一次性买断", "交易抽佣", "广告变现", "免费增值", "企业销售", "联盟分成", "开源+托管", "未披露"]
 SOURCES = ("创业公司", "PH 日榜", "增长 Case")
 MAT_CHARS = 2600
 STATUS = BASE / "status.json"
@@ -49,6 +50,17 @@ P_ASSIGN = """把每个产品归入下面分类里最贴的一个痛点。分类
 P_SUM = """你在为一个用户场景写总结。输入是这个场景下各痛点（编号、名称）及其产品（产品名、增长手段）。
 输出两部分：summary：两句话（≤110 字），先说这个场景里大家共同在打什么痛点，再说主要靠什么手段增长；subs：对每个痛点写一句增长方式聚合（≤60 字），概括这个痛点下的产品主要怎么拉到用户，只谈材料里有的，没有增长材料就写空串。不写具体数字。
 只输出 JSON：{"summary":"…","subs":{"痛点编号":"…"}}"""
+
+
+P_DOM = """把下面这些「用户场景」归并成 4–7 个「领域」（更大的一层，如“个人成长与生活”“内容与创作”“获客与增长”“软件与 Agent 开发”“企业运营”），每个场景恰好属于一个领域。
+输入每行“编号|场景名|说明”。领域名 ≤10 字，desc 一句话（≤30 字）。
+只输出 JSON：{"domains":[{"name":"","desc":"","scenes":["G1","G2"]}]}"""
+
+
+P_MODEL = """你读一个产品的材料和已抽好的需求卡，写清它怎么赚钱。
+model：商业模式一句话（≤40 字）：谁付钱、为什么付、怎么收（订阅 / 按量 / 抽佣 / 买断等），数字只留量级；材料没讲怎么收钱就写“材料未披露收费方式”，不许编。
+type：商业模式分类，从固定列表选 1 个，必须逐字一致：{models}。材料没讲收费方式选“未披露”；同时有免费版和付费版选“免费增值”，只有订阅收费选“订阅制”。
+输入是 JSON 数组，每个元素 {{"id","name","card","text"}}。只输出 JSON：{{"r":{{"id":{{"model":"","type":""}}}}}}，每个 id 都要有。"""
 
 
 def _ro() -> sqlite3.Connection:
@@ -186,6 +198,30 @@ def extract(ctx: Ctx, P: dict, only: list[str]) -> dict:
     return cards
 
 
+def fill_model(ctx: Ctx, P: dict, cards: dict) -> None:
+    todo = [k for k, v in cards.items() if k in P and not v.get("skip") and not v.get("bm")]
+    batches = [[k] for k in todo if P[k]["rich"]] + [t[i:i + 8] for t in [[k for k in todo if not P[k]["rich"]]] for i in range(0, len(t), 8)]
+    done = [0]
+
+    def run(b: list[str]) -> None:
+        inp = [{"id": k, "name": P[k]["name"], "card": {x: cards[k].get(x) for x in ("user", "scene", "pain", "product", "growth")}, "text": P[k]["text"][:1800]} for k in b]
+        o = ctx.call(ctx.light, P_MODEL.format(models="、".join(MODELS)), json.dumps(inp, ensure_ascii=False))
+        r = (o or {}).get("r") or {}
+        with ctx.lock:
+            for k in b:
+                x = r.get(k) if isinstance(r.get(k), dict) else None
+                if x and x.get("model"):
+                    cards[k]["bm"] = str(x["model"]).strip()[:90]
+                    cards[k]["bm_type"] = x.get("type") if x.get("type") in MODELS else "未披露"
+            done[0] += len(b)
+            _save("cards.json", cards)
+            status(ctx, "model", done[0], len(todo))
+
+    status(ctx, "model", 0, len(todo))
+    with ThreadPoolExecutor(6) as ex:
+        list(ex.map(run, batches))
+
+
 def build_graph(ctx: Ctx, cards: dict) -> dict:
     ok = {k: v for k, v in cards.items() if not v.get("skip")}
     keys = list(ok)
@@ -237,9 +273,25 @@ def build_graph(ctx: Ctx, cards: dict) -> dict:
     status(ctx, "summary", 0, len(scenes))
     with ThreadPoolExecutor(6) as ex:
         list(ex.map(summ, scenes))
-    graph = {"updated": time.time(), "n": len(keys), "unplaced": unplaced, "scenes": scenes, "tactics": TACTICS}
+    graph = {"updated": time.time(), "n": len(keys), "unplaced": unplaced, "scenes": scenes, "tactics": TACTICS, "models": MODELS}
+    group_domains(ctx, graph)
     _save("graph.json", graph)
     return graph
+
+
+def group_domains(ctx: Ctx, graph: dict) -> None:
+    o = ctx.call(ctx.strong, P_DOM, "\n".join(f"{sc['id']}|{sc['name']}|{sc['desc']}" for sc in graph["scenes"]))
+    ids = {sc["id"] for sc in graph["scenes"]}
+    doms, seen = [], set()
+    for i, d in enumerate((o or {}).get("domains") or []):
+        mine = [x for x in d.get("scenes", []) if x in ids and x not in seen]
+        seen.update(mine)
+        if mine:
+            doms.append({"id": f"D{i + 1}", "name": str(d.get("name") or "")[:20], "desc": str(d.get("desc") or ""), "scenes": mine})
+    rest = [x for x in ids if x not in seen]
+    if rest:
+        doms.append({"id": "D0", "name": "其他", "desc": "", "scenes": rest})
+    graph["domains"] = doms
 
 
 def main() -> None:
@@ -247,15 +299,23 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--only", action="append", default=[])
     ap.add_argument("--graph-only", action="store_true")
+    ap.add_argument("--domains-only", action="store_true")
     a = ap.parse_args()
     ctx = Ctx()
     status(ctx, "start", pid=os.getpid(), error="", finished=False)
     try:
+        if a.domains_only:
+            g = _load("graph.json", {})
+            group_domains(ctx, g)
+            _save("graph.json", g)
+            return status(ctx, "done", finished=True)
         P = collect()
         only = [norm(x) for x in a.only]
         if a.limit:
             only = (only or sorted(P, key=lambda k: not P[k]["rich"]))[: a.limit]
         cards = _load("cards.json", {}) if a.graph_only else extract(ctx, P, only)
+        if not a.graph_only:
+            fill_model(ctx, P, cards)
         if not only and not a.limit:
             build_graph(ctx, cards)
         status(ctx, "done", finished=True)
