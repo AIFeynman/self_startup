@@ -1,4 +1,6 @@
 // 吸收：按选题看一段时间的认知卡。每个问题先看现状，再看有争议的和高置信的；每张卡给出判断的来源构成（几位作者、几篇论文 / 项目 / 产品 / 讨论佐证、几处反对）和置信度，点开看各作者原话和挂上的证据；键盘 j/k 逐张、1–4 表态。
+import { hnView } from './_absorb_hn.js';
+
 const CSS = `
 .ab-fun { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 12px 0; }
 .ab-fun div { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; }
@@ -120,6 +122,7 @@ function fb(F) {
 export default {
   async render(el, ctx) {
     const { api, h, ui, toast, sub } = ctx;
+    if (sub[0] === 'hn') { el.append(h('style', {}, CSS)); return hnView(el, ctx, sub[1]); }
     const head = h('div'), body = h('div');
     let timer = null;
     const stop = () => clearTimeout(timer);
@@ -152,6 +155,7 @@ export default {
     const label = (r) => `${r.topic} · ${r.start.slice(5)}–${r.end.slice(5)}${r.done ? '' : r.running ? ' · 进行中' : ' · 中断'}`;
     const chips = {};
     head.append(h('div.tabs', {}, [
+      h('button.active', {}, '选题吸收'), h('button', { onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收'),
       ...runs.map((r) => chips[r.id] = h('button', { class: r.id === cur ? 'active' : '', onclick: () => go(r.id) }, label(r))),
       h('button', { onclick: () => { form.classList.toggle('ab-hide'); check(); } }, '＋ 新选题'),
     ]), form);

@@ -32,7 +32,7 @@ MAX_INPUT = 80_000       # 喂给模型的评论总字符数（约 2 万 token�
 MAX_COMMENT = 1_200      # 单条评论截断
 MAX_DEPTH = 4            # 讨论串最多读几层
 WORKERS = 4
-LINK_KINDS = ("博客", "视频", "仓库", "产品", "论文", "文档", "讨论", "其他")
+LINK_KINDS = ("博客", "视频", "仓库", "产品", "论文", "文档", "数据", "讨论", "其他")
 ENTITY_KINDS = ("技术", "产品", "公司", "工具", "其他")
 SENTIMENTS = ("pos", "neg", "mixed", "neutral")
 STANCES = ("主流", "反对", "少数", "补充")
@@ -43,19 +43,20 @@ SYSTEM = (
     "用中文输出 JSON：\n"
     "{\n"
     '  "tldr": "讨论一句话：大家主要怎么看、分歧在哪（≤80 字）",\n'
-    '  "links": [{"url": "评论原文里出现的完整 URL", "kind": "博客|视频|仓库|产品|论文|文档|讨论|其他", '
+    '  "links": [{"url": "评论原文里出现的完整 URL", "kind": "博客|视频|仓库|产品|论文|文档|数据|讨论|其他（数据 = 数据集、基准、统计数字来源）", '
     '"title": "它是什么（≤20 字）", "why": "评论为什么提到 / 推荐它（≤40 字）", "cids": [评论 id]}],\n'
     '  "entities": [{"name": "技术 / 产品名，保留原文", "kind": "技术|产品|公司|工具|其他", '
     '"sentiment": "pos|neg|mixed|neutral", "note": "评论对它的评价要点（≤40 字）", "cids": [评论 id]}],\n'
     '  "opinions": [{"stance": "主流|反对|少数|补充", "claim": "观点或判断（≤60 字）", '
-    '"n": 大约几条评论持这个观点（整数）, "cids": [代表性评论 id]}],\n'
+    '"n": 大约几条评论持这个观点（整数）, "cids": [代表性评论 id], "quote": "代表性评论里逐字摘录的一句（≤200 字符）"}],\n'
     '  "experiences": [{"who": "评论者身份或背景，看不出写「评论者」", "did": "做了什么（≤50 字）", '
-    '"result": "结果或教训（≤60 字）", "cids": [评论 id]}]\n'
+    '"result": "结果或教训（≤60 字）", "cids": [评论 id], "quote": "该评论里逐字摘录的一句（≤200 字符）"}]\n'
     "}\n"
     "要求：\n"
     "- 只根据给出的评论写，不补充评论里没有的事实；links 的 url 必须是评论原文里出现过的，不要自己拼。\n"
     "- links 只收有参考价值的（推荐的文章、视频、工具、仓库、论文、产品官网等），最多 12 条；entities 最多 15 个，只收被实际讨论或评价过的；"
     "opinions 3–6 条，按支持人数从多到少；experiences 只收亲身做过的事（「我们 / 我在 X 用了 Y」），最多 8 条，没有就给空数组。\n"
+    "- quote 必须是评论原文里连续出现的一段，保持原语言，不改写、不翻译、不用省略号拼接；摘不出来的观点不要写。\n"
     "- 专有名词保留原文，不写空话套话，不评价帖子本身好坏。"
 )
 
@@ -110,6 +111,11 @@ def flatten(tree: dict, top_order: list[int] | None = None) -> list[dict]:
 
 
 def fetch_comments(oid: str, c: httpx.Client) -> list[dict]:
+    return fetch_thread(oid, c)[1]
+
+
+def fetch_thread(oid: str, c: httpx.Client) -> tuple[str, list[dict]]:
+    """(帖子作者, 展开后的评论)。"""
     r = c.get(ALGOLIA.format(oid))
     r.raise_for_status()
     tree = r.json()
@@ -117,7 +123,7 @@ def fetch_comments(oid: str, c: httpx.Client) -> list[dict]:
         order = (c.get(FIREBASE.format(oid), timeout=10).json() or {}).get("kids") or []
     except Exception:  # noqa: BLE001  拿不到 HN 排序就按回复数
         order = []
-    return flatten(tree, order)
+    return tree.get("author") or "", flatten(tree, order)
 
 
 def render(comments: list[dict], limit: int = MAX_INPUT) -> str:
@@ -177,7 +183,20 @@ def _norm_url(u: str) -> str:
     return re.sub(r"/+$", "", re.sub(r"^https?://(www\.)?", "", (u or "").strip())).lower()
 
 
-def clean_digest(raw: dict, comments: list[dict], text: str) -> dict:
+def _squash(t: str) -> str:
+    t = (t or "").replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def find_quote(quote: str, comments: list[dict]) -> dict | None:
+    """quote 在评论原文里逐字出现（忽略空白、大小写、弯引号）才算；返回那条评论。"""
+    q = _squash(quote)
+    if len(q) < 12:
+        return None
+    return next((x for x in comments if q in _squash(x["text"])), None)
+
+
+def clean_digest(raw: dict, comments: list[dict], text: str, op: str = "") -> dict:
     """校验模型输出：URL 必须在评论原文里出现过（提及次数按原文数），cids 必须是真评论，枚举值不合法归到「其他」。"""
     valid = {x["id"] for x in comments}
     seen_urls: dict[str, tuple[str, int]] = {}
@@ -195,7 +214,9 @@ def clean_digest(raw: dict, comments: list[dict], text: str) -> dict:
         url, cnt = seen_urls[k]
         links.append({"url": url, "kind": l.get("kind") if l.get("kind") in LINK_KINDS else "其他",
                       "title": fit(str(l.get("title") or ""), 40), "why": fit(str(l.get("why") or ""), 80),
-                      "mentions": cnt, "cids": _ids(l.get("cids"), valid)})
+                      "mentions": cnt, "cids": _ids(l.get("cids"), valid),
+                      "self": bool(op) and any(x["author"] == op and k in {_norm_url(u) for u in urls_in(x["text"])} for x in comments),
+                      "by": sorted({x["author"] for x in comments if k in {_norm_url(u) for u in urls_in(x["text"])}})[:8]})
     ents = []
     for e in raw.get("entities") or []:
         name = str((e or {}).get("name") or "").strip()[:60]
@@ -213,17 +234,24 @@ def clean_digest(raw: dict, comments: list[dict], text: str) -> dict:
             n = max(0, int(o.get("n") or 0))
         except (TypeError, ValueError):
             n = 0
+        src = find_quote(str(o.get("quote") or ""), comments)
+        if not src:
+            continue
         ops.append({"stance": o.get("stance") if o.get("stance") in STANCES else "补充", "claim": claim, "n": n,
-                    "cids": _ids(o.get("cids"), valid)})
+                    "cids": _ids([src["id"], *(o.get("cids") or [])], valid), "quote": fit(str(o["quote"]).strip(), 220), "by": src["author"]})
     exps = []
     for x in raw.get("experiences") or []:
         did = fit(str((x or {}).get("did") or ""), 100)
         if not did:
             continue
-        exps.append({"who": fit(str(x.get("who") or "评论者"), 40), "did": did,
-                     "result": fit(str(x.get("result") or ""), 120), "cids": _ids(x.get("cids"), valid)})
+        src = find_quote(str(x.get("quote") or ""), comments)
+        if not src:
+            continue
+        exps.append({"who": fit(str(x.get("who") or "评论者"), 40), "did": did, "result": fit(str(x.get("result") or ""), 120),
+                     "cids": _ids([src["id"], *(x.get("cids") or [])], valid), "quote": fit(str(x["quote"]).strip(), 220), "by": src["author"]})
     return {"tldr": fit(str(raw.get("tldr") or ""), 160), "links": links[:12], "entities": ents[:15],
-            "opinions": ops[:6], "experiences": exps[:8], "read": len(text.splitlines()), "total": len(comments)}
+            "opinions": ops[:6], "experiences": exps[:8], "read": len(text.splitlines()), "total": len(comments),
+            "people": len({x["author"] for x in comments}), "raw_ops": len(raw.get("opinions") or []), "raw_exps": len(raw.get("experiences") or [])}
 
 
 def _payload(it: dict, text: str) -> str:
@@ -232,7 +260,7 @@ def _payload(it: dict, text: str) -> str:
 
 
 def digest_one(it: dict, *, model: str, key: str, base: str, c: httpx.Client) -> dict:
-    comments = fetch_comments(oid_of(it), c)
+    op, comments = fetch_thread(oid_of(it), c)
     if not comments:
         raise ValueError("没有可读的评论")
     text = render(comments)
@@ -242,7 +270,7 @@ def digest_one(it: dict, *, model: str, key: str, base: str, c: httpx.Client) ->
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": _payload(it, text)}]})
     r.raise_for_status()
     raw = json.loads(r.json()["choices"][0]["message"]["content"])
-    return clean_digest(raw if isinstance(raw, dict) else {}, comments, text)
+    return clean_digest(raw if isinstance(raw, dict) else {}, comments, text, op)
 
 
 def generate(items: list[dict], *, model: str = "deepseek-v4-flash",

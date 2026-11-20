@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .. import agent
 from ..db import ROOT
+from . import _absorb_hn as hn
 from . import _absorb_run as ar
 
 TITLE = "吸收"
@@ -168,7 +169,7 @@ def _latest() -> list[dict]:
             except json.JSONDecodeError:
                 continue
             last[(e.get("run"), e.get("claim"))] = e
-    return [e for e in last.values() if e.get("act") in ACTS]
+    return [e for e in last.values() if e.get("act") in ACTS and e.get("src") != "hn"]
 
 
 DIMS = [("type", "认知类型", lambda e: e.get("type") or "未知"),
@@ -196,3 +197,83 @@ def feedback():
         dims.append({"key": key, "name": name, "rows": sorted(rows, key=lambda r: -r["n"])})
     pick = lambda act: [{"claim": e["claim"], "type": e.get("type", ""), "topic": e.get("topic", "")} for e in sorted(ev, key=lambda e: -e["at"]) if e["act"] == act][:8]
     return {"n": len(ev), "acts": {a: sum(e["act"] == a for e in ev) for a in ACTS}, "dims": dims, "try": pick("会用上"), "none": pick("没增量")}
+
+
+STANCES = ("站主流", "站反对", "先不站")
+
+
+def _hn_dir(rid: str):
+    d = hn.BASE / rid
+    if "/" in rid or rid.startswith(".") or not (d / "run.json").exists():
+        raise HTTPException(404, "没有这次运行")
+    return d
+
+
+def _hn_state(d) -> dict:
+    st = _read(d / "status.json", {})
+    done = bool(st.get("done")) and (d / "page.json").exists()
+    running = not done and _alive(st.get("pid"))
+    return {"done": done, "running": running, "stage_name": st.get("stage_name", ""), "step": st.get("step", 0), "steps": len(hn.STAGES),
+            "error": "" if done or running else st.get("error") or "进程中断了，重新发起会从断点接着跑", "cost": round(sum((st.get("cost") or {}).values()), 2)}
+
+
+@router.get("/hn/runs")
+def hn_runs():
+    out = [{"id": f.parent.name, **_read(f, {}), **_hn_state(f.parent)} for f in hn.BASE.glob("*/run.json")]
+    return sorted(out, key=lambda x: x["id"], reverse=True)
+
+
+class HnRunIn(BaseModel):
+    start: str
+    end: str
+
+
+@router.post("/hn/runs")
+def hn_start(body: HnRunIn):
+    if not all(re.fullmatch(r"\d{4}-\d\d-\d\d", x) for x in (body.start, body.end)) or body.start > body.end:
+        raise HTTPException(400, "起止日期要填全，开始不能晚于结束")
+    d = hn.BASE / f"{body.start}_{body.end}"
+    if d.exists() and _hn_state(d)["running"]:
+        raise HTTPException(409, "这个时间窗正在跑")
+    r = hn.HRun(body.start, body.end)
+    with open(d / "run.log", "a") as log:
+        p = subprocess.Popen([sys.executable, "-m", "app.modules._absorb_hn", "--start", body.start, "--end", body.end],
+                             cwd=str(ROOT), env=agent.clean_env(), stdout=log, stderr=log, start_new_session=True)
+    PROCS[p.pid] = p
+    r.save("status.json", {**_read(d / "status.json", {}), "pid": p.pid, "done": False, "error": ""})
+    return {"id": d.name}
+
+
+@router.get("/hn/runs/{rid}")
+def hn_get(rid: str):
+    d = _hn_dir(rid)
+    st = _hn_state(d)
+    return {"id": rid, **_read(d / "run.json", {}), **st, "data": _read(d / "page.json", None) if st["done"] else None, "reactions": _read(d / "reactions.json", {})}
+
+
+class HnReactIn(BaseModel):
+    topic: int
+    act: str = ""
+    stance: str = ""
+
+
+@router.post("/hn/runs/{rid}/react")
+def hn_react(rid: str, body: HnReactIn):
+    d = _hn_dir(rid)
+    if (body.act and body.act not in ACTS) or (body.stance and body.stance not in STANCES):
+        raise HTTPException(400, "表态不合法")
+    t = next((x for x in _read(d / "page.json", {}).get("topics", []) if x["id"] == body.topic), None)
+    if not t:
+        raise HTTPException(404, "没有这个话题")
+    r = _read(d / "reactions.json", {})
+    cur = {**r.get(str(body.topic), {}), "act": body.act, "stance": body.stance, "at": time.time()}
+    _log({"src": "hn", "run": "hn:" + rid, "card": body.topic, "claim": t["title"], "type": t["kind"], "tag": t["consensus"], "topic": "HN",
+          "act": body.act, "stance": body.stance, "at": cur["at"]})
+    if cur["act"] or cur["stance"]:
+        r[str(body.topic)] = cur
+    else:
+        r.pop(str(body.topic), None)
+    tmp = d / "reactions.json.tmp"
+    tmp.write_text(json.dumps(r, ensure_ascii=False), "utf-8")
+    tmp.replace(d / "reactions.json")
+    return {"ok": True}
