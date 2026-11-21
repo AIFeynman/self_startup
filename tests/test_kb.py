@@ -244,3 +244,27 @@ def test_sync_from_concurrent_processes_keeps_manifest_readable():
         p.join(120)
     assert [p.exitcode for p in procs] == [0] * len(procs)
     assert isinstance(json.loads((kb.KB_DIR / kb.MANIFEST).read_text("utf-8")), list)
+
+
+def test_sync_updates_fulltext_index_incrementally(client):
+    db.insert("review_notes", {"date": "2026-01-04", "kind": "idea", "title": "不变的笔记", "content": "稳定内容", "tags": ""})
+    edit = db.insert("review_notes", {"date": "2026-01-05", "kind": "idea", "title": "会改的笔记", "content": "旧的正文", "tags": ""})
+    gone = db.insert("review_notes", {"date": "2026-01-06", "kind": "idea", "title": "会删的笔记", "content": "要删掉", "tags": ""})
+    kb.sync()
+    writes = []
+    db.conn().set_trace_callback(lambda sql: writes.append(sql) if "kb_fts" in sql and not sql.lstrip().upper().startswith(("SELECT", "CREATE", "--")) else None)
+    try:
+        kb.sync()
+        assert writes == []
+
+        db.execute("UPDATE review_notes SET content=? WHERE id=?", ["新写的正文内容", edit])
+        db.execute("DELETE FROM review_notes WHERE id=?", [gone])
+        kb.sync()
+    finally:
+        db.conn().set_trace_callback(None)
+    assert 0 < len(writes) <= 8
+    assert not any(w.replace(" ", "").upper().startswith("DELETEFROMKB_FTS") and "WHERE" not in w.upper() for w in writes)
+    titles = {r["title"] for r in db.rows("SELECT title FROM kb_fts")}
+    assert "不变的笔记" in titles and "会删的笔记" not in titles
+    assert [h["title"] for h in kb.search("新写的正文", "note")] == ["会改的笔记"]
+    assert not kb.search("旧的正文", "note")

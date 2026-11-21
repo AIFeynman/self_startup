@@ -677,18 +677,30 @@ def sync(refresh_graph: bool = True) -> dict:
         tmp = mpath.with_suffix(".tmp")
         tmp.write_text(json.dumps(sorted(files), ensure_ascii=False), "utf-8")
         os.replace(tmp, mpath)
-        db.init([FTS_SCHEMA])
-        with db._lock:
-            c = db.conn()
-            c.execute("DELETE FROM kb_fts")
-            c.executemany("INSERT INTO kb_fts(path,type,title,tags,summary,body,date) VALUES (?,?,?,?,?,?,?)",
-                          [(d["path"], d["type"], d["title"], " ".join(d["tags"]), d["summary"], d["body"], d["date"]) for d in docs + gfts])
-            c.commit()
+        _sync_fts(docs + gfts)
     if refresh_graph and stale:
         from . import kb_graph
         kb_graph.schedule_refresh()
     return {"docs": len(docs), "concepts": len(gfts), "stale": stale, "written": written,
             "removed": len(old - set(files)), "dir": str(KB_DIR)}
+
+
+FTS_COLS = ("path", "type", "title", "tags", "summary", "body", "date")
+
+
+def _sync_fts(entries: list[dict]) -> None:
+    db.init([FTS_SCHEMA])
+    want = {e["path"]: (e["path"], e["type"], e["title"], " ".join(e["tags"]), e["summary"], e["body"], e["date"]) for e in entries}
+    with db._lock:
+        c = db.conn()
+        have = {r[1]: (r[0], tuple(r[1:])) for r in c.execute(f"SELECT rowid, {','.join(FTS_COLS)} FROM kb_fts")}
+        stale = [(rid,) for path, (rid, row) in have.items() if want.get(path) != row]
+        fresh = [row for path, row in want.items() if path not in have or have[path][1] != row]
+        if not stale and not fresh:
+            return
+        c.executemany("DELETE FROM kb_fts WHERE rowid=?", stale)
+        c.executemany(f"INSERT INTO kb_fts({','.join(FTS_COLS)}) VALUES ({','.join('?' * len(FTS_COLS))})", fresh)
+        c.commit()
 
 
 def schedule_sync(delay: float = 3.0) -> None:
