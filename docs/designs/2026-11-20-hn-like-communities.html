@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>类似 HN 的 AI 讨论社区调研</title>
+<style>
+:root{--bg:#faf8f4;--fg:#26231f;--mut:#7a746a;--line:#e5e0d6;--ok:#3f7f4f;--mid:#b9781d;--bad:#b8432f;--card:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#1c1a17;--fg:#ece8e0;--mut:#9b958a;--line:#38342e;--card:#26231f}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 -apple-system,"PingFang SC",sans-serif}
+main{max-width:980px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:26px;margin:0 0 6px}h2{font-size:19px;margin:34px 0 10px}
+.m{color:var(--mut);font-size:14px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:15px}
+th,td{padding:10px 12px;border-top:1px solid var(--line);text-align:left;vertical-align:top}th{background:transparent;color:var(--mut);font-weight:600;border-top:0;font-size:13px}
+.t{display:inline-block;border-radius:999px;padding:0 9px;font-size:13px;color:#fff}.g{background:var(--ok)}.y{background:var(--mid)}.r{background:var(--bad)}
+.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:10px 0}
+.wrap{overflow-x:auto}
+</style></head><body><main>
+<h1>类似 HN 的 AI 讨论社区：哪些值得接进「吸收」</h1>
+<div class="m">2026-11-20 · 结论来自 13 个接口的实际请求（本机直连，未登录）加网上检索；检索里的博客、盘点文章质量参差，只用来列候选，不当证据。</div>
+
+<h2>结论</h2>
+<div class="box">
+<p><b>先接 Lobsters，再接各家产品的官方论坛（OpenAI 开发者社区、Hugging Face、Cursor），然后补 Reddit 和 V2EX；LessWrong / Alignment Forum 单独走“长文观点”一路。</b></p>
+<p>现在的流水线（采集 → 相关性 → 逐帖提炼 → 话题聚合 → 综合）只要每个来源能给出“帖子 + 评论树”，就能原样复用。同一话题在 HN 和别处的阵营一起看，比单看 HN 更有判断价值。</p>
+</div>
+
+<h2>候选逐个看</h2>
+<div class="wrap"><table>
+<tr><th>社区</th><th>适合提什么</th><th>接入情况（我实测）</th><th>建议</th></tr>
+<tr><td><b>Lobsters</b><br><span class="m">技术向，邀请制</span></td><td>和 HN 结构最像：有链接帖、嵌套评论、专业读者；观点和推荐质量高，偏工程师</td><td>公开 JSON，不用登录：<code>/t/ai.json</code> 200（第一页 25 帖，评论最多 16 条），单帖 <code>/s/&lt;id&gt;.json</code> 200 带评论。<span class="t g">已验证</span></td><td><span class="t g">先接</span> 量小，成本几乎为零，可直接并进 HN 的话题里</td></tr>
+<tr><td><b>官方产品论坛</b><br><span class="m">OpenAI 开发者社区 / Hugging Face / Cursor</span></td><td>用户实际踩坑、真实使用体验、对产品改动的反应；“做过的人”这一块比 HN 更密。观点性弱，偏问题和 bug</td><td>都是 Discourse，公开 <code>latest.json</code> 均 200；OpenAI 社区一周热帖单帖最高 174 条回复。<span class="t g">已验证</span></td><td><span class="t g">第二批</span> 当“经验 / 问题”一路，不参与阵营比例，只看经验和风险</td></tr>
+<tr><td><b>Reddit</b><br><span class="m">r/LocalLLaMA、r/MachineLearning、r/ClaudeAI 等</span></td><td>体量最大，本地模型、编码 Agent 的使用经验和横评最多；也最容易吵成团</td><td>匿名 JSON 403；我试的 RSS 地址 404、评论 RSS 429。官方 API 现在新应用要审批，商业用途要合同，价格没有官方公开。<span class="t y">入口不稳</span></td><td><span class="t y">值得接，先确认入口</span> 你之前决定走公开 RSS，需要先确认现在平台里的 Reddit 抓取还通不通</td></tr>
+<tr><td><b>V2EX</b><br><span class="m">中文开发者</span></td><td>中文开发者的使用体验、工具选择、对 AI 影响工作的看法，比英文社区更贴近国内场景</td><td><code>/api/topics/hot.json</code> 200，只给热帖；完整回复要走带令牌的新接口。<span class="t y">部分验证</span></td><td><span class="t y">第三批</span> 中文综合的时候再接</td></tr>
+<tr><td><b>Linux.do</b><br><span class="m">中文，增长很快</span></td><td>中文 AI 工具、模型使用的讨论很多</td><td>被 Cloudflare 挡了（403，需要浏览器验证），公开接口走不通。<span class="t r">接不进</span></td><td>先不接；要接得用浏览器通道，成本和稳定性都差</td></tr>
+<tr><td><b>LessWrong / Alignment Forum</b></td><td>AI 安全、对齐、预测的深度观点；长文加高质量评论，和 HN 的“链接 + 评论”不是一种结构</td><td>Alignment Forum 的 RSS 200；LessWrong 的 GraphQL 可用（我只确认服务在，没跑具体查询）。<span class="t y">部分验证</span></td><td><span class="t y">单独一路</span> 按“长文观点”提炼，不并进 HN 话题</td></tr>
+<tr><td><b>X / Bluesky</b></td><td>研究者和创始人的第一手判断</td><td>X 信息推荐里已经有；Bluesky 匿名搜索接口 403。</td><td>X 不动；Bluesky 先不接</td></tr>
+<tr><td><b>Discord、Stack Overflow、知乎、即刻</b></td><td>Discord 实时讨论多；SO 以问答为主；知乎、即刻没测</td><td>Discord 没有可存档的公开接口；SO 接口开放但内容是问答，观点价值低。</td><td>Discord、SO 不接；知乎、即刻未验证，不下结论</td></tr>
+</table></div>
+
+<h2>接进来要注意的</h2>
+<div class="box">
+<p><b>1. 先补一层来源字段。</b>现在话题、资源、表态都默认是 HN；多来源后每个帖子、阵营、引用都要带“出自哪里”，原话核对和链接可点还是照旧。</p>
+<p><b>2. 阵营比例别跨社区硬加。</b>Lobsters 偏工程师、Reddit 偏爱好者、V2EX 偏国内开发者，人群不同；合并成一个话题时应该并排列出“各社区各怎么看”，不是加起来算一个比例。</p>
+<p><b>3. 成本。</b>HN 一周实测约 $1.7（模型费用）。Lobsters 一周量大约是它的 1/10 以内，官方论坛按活跃帖取，预计各自不到 HN 的一半；这是估算，接入后以实测为准。</p>
+<p><b>4. 没验证的：</b>各社区的反爬和条款（尤其 Reddit、Linux.do）、中文社区的评论完整度、Lobsters 的评论总量够不够单独成页。</p>
+</div>
+
+<h2>建议的顺序</h2>
+<div class="box">
+<p>① Lobsters 并进现有 HN 话题（半天；先试一周数据看合并后话题是否更完整）<br>
+② OpenAI / Hugging Face / Cursor 论坛做“经验 / 问题”一路<br>
+③ 确认 Reddit 入口后接 r/LocalLLaMA 和 r/ClaudeAI<br>
+④ V2EX 作中文补充；LessWrong / AF 单独做长文观点</p>
+</div>
+</main></body></html>
