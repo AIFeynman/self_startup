@@ -117,7 +117,7 @@ function match(t, D, F, R) {
 
 function how(D, src) {
   const M = D.meta, F = M.fails || {};
-  if (src === 'x') return `<div class="ab-q"><h2>这页是怎么算出来的（试点）</h2><p><b>采集：</b>${E(M.start)} 至 ${E(M.end)} 内信息推荐里回复数 ≥100 的推文，每个作者取 1 条（共 ${M.collected} 条），用 twitterapi.io 抓每条前 100 条回复。</p><p><b>筛选：</b>Jev 判断每条回复是否有信息量（有理由的观点、亲身经验、有出处的事实），≥0.7 才给模型；表情、玩笑、附和、广告被滤掉。</p><p><b>提炼和话题：</b>${E(M.models.digest)} 逐帖读回复区，原话逐字核对（${M.quotes_kept}/${M.quotes_raw} 通过）；${E(M.models.topics)} 聚成 ${M.topics} 个话题再综合，方法同 HN。</p><p class="ab-m">注意：“N 评论”是推文的回复总数，阵营人数只在抓到的前 100 条里数，不是全部回复的比例；这些多是用户对官方推文的反应，不是技术争论。Claude 模型费用 $${M.cost}，抓取和 Jev 费用没统计。</p></div>`;
+  if (src !== 'hn') return `<div class="ab-q"><h2>这页是怎么算出来的（试点）</h2><p><b>采集：</b>${src === 'xart' ? `X 长文库里已打分、回复 ≥20 的长文（共 ${M.collected} 篇，文章标题和摘要一并给模型）` : `信息推荐里回复数 ≥100 的推文，每个作者取 1 条（共 ${M.collected} 条）`}；每条用 GetXAPI 抓回复：先取高赞的（最多 60 条），再补最新的（最多 40 条），同一句话只留一条、同一个人最多 2 条。</p><p><b>筛选：</b>Jev 判断每条回复是否有信息量（有理由的观点、亲身经验、有出处的事实），≥0.7 才给模型，粉丝 ≥1 万的放宽到 0.4；表情、玩笑、附和、广告被滤掉。</p><p><b>提炼和话题：</b>${E(M.models.digest)} 逐帖读回复区，原话逐字核对（${M.quotes_kept}/${M.quotes_raw} 通过）；${E(M.models.topics)} 聚成 ${M.topics} 个话题再综合，方法同 HN。</p><p class="ab-m">注意：“N 评论”是推文的回复总数，阵营人数只在抓到的前 100 条里数，不是全部回复的比例；这些多是用户对官方推文的反应，不是技术争论。Claude 模型费用 $${M.cost}，抓取和 Jev 费用没统计。</p></div>`;
   return `<div class="ab-fun">${[[M.queried, '搜到的 AI 相关帖'], [M.collected, `达到门槛（≥${M.weights.min_points} 分或≥${M.weights.min_comments} 评论）`], [M.ai + M.edge, '判为 AI 相关'], [M.digested, `评论≥${M.weights.digest_min}，已提炼`], [N(M.comments), '条评论已读']].map((x) => `<div><b>${typeof x[0] === 'number' ? N(x[0]) : x[0]}</b><span>${x[1]}</span></div>`).join('')}
 <div class="hl"><b>${M.topics}</b><span>个话题（覆盖 ${M.in_topics} 帖）</span></div><div><b>${M.tail}</b><span>帖在长尾</span></div><div><b>${M.resources}</b><span>个被推荐的资源</span></div><div><b>${M.exps}</b><span>条做过的经验</span></div><div><b>${M.quotes_kept}/${M.quotes_raw}</b><span>观点和经验的原话通过核对</span></div></div>
 <div class="ab-q"><h2>这页是怎么算出来的</h2>
@@ -132,8 +132,8 @@ function how(D, src) {
 export async function hnView(el, ctx, src = 'hn') {
   const { api, h, ui, toast } = ctx;
   const body = h('div');
-  const head = h('div', {}, [h('div.tabs', {}, [h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button', { class: src === 'hn' ? 'active' : '', onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收'), h('button', { class: src === 'x' ? 'active' : '', onclick: () => { location.hash = '#absorb/x'; } }, 'X 反应')])]);
-  el.append(h('style', {}, CSS), ui.pageHead('吸收', src === 'x' ? 'X 上官方和名人推文下的用户反应（试点）：按话题看大家站哪边、谁做过什么' : 'HN 上 AI 相关的讨论：按话题看社区站哪边、谁做过什么、推荐了什么', []), head, body);
+  const head = h('div', {}, [h('div.tabs', {}, [h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button', { class: src === 'hn' ? 'active' : '', onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收'), h('button', { class: src === 'x' ? 'active' : '', onclick: () => { location.hash = '#absorb/x'; } }, 'X 反应'), h('button', { class: src === 'xart' ? 'active' : '', onclick: () => { location.hash = '#absorb/xart'; } }, 'X 长文')])]);
+  el.append(h('style', {}, CSS), ui.pageHead('吸收', src === 'x' ? 'X 上官方和名人推文下的用户反应（试点）：按话题看大家站哪边、谁做过什么' : src === 'xart' ? 'X 长文（Article）下读者的反应（试点）：按话题看大家站哪边、谁做过什么' : 'HN 上 AI 相关的讨论：按话题看社区站哪边、谁做过什么、推荐了什么', []), head, body);
   const m = await api.get('/api/absorb/hn/merged?src=' + src);
   if (!m.data) { body.append(ui.empty('还没有跑完的结果。每天会自动跑一次；也可以命令行：python -m app.modules._absorb_hn --start 起 --end 止')); return; }
   paint(m.data, m.reactions, m.undone);

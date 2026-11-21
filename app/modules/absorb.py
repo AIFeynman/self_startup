@@ -170,7 +170,7 @@ def _latest() -> list[dict]:
             except json.JSONDecodeError:
                 continue
             last[(e.get("run"), e.get("claim"))] = e
-    return [e for e in last.values() if e.get("act") in ACTS and e.get("src") not in ("hn", "x")]
+    return [e for e in last.values() if e.get("act") in ACTS and e.get("src") not in ("hn", "x", "xart")]
 
 
 DIMS = [("type", "认知类型", lambda e: e.get("type") or "未知"),
@@ -204,9 +204,9 @@ STANCES = ("站主流", "站反对", "先不站")
 
 
 def _hn_base(src: str):
-    if src not in ("hn", "x"):
+    if src not in ("hn", "x", "xart"):
         raise HTTPException(404, "没有这个来源")
-    return hn.BASE if src == "hn" else hn.BASE.parent / "x"
+    return hn.BASE if src == "hn" else hn.BASE.parent / src
 
 
 def _hn_dir(rid: str, src: str = "hn"):

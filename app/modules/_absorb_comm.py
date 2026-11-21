@@ -144,7 +144,11 @@ def x_posts(limit: int) -> list[dict]:
 
 
 def _gx(c: httpx.Client, path: str, params: dict) -> dict:
-    r = c.get("https://api.getxapi.com" + path, params=params, headers={"Authorization": f"Bearer {os.environ['GETXAPI_KEY'].strip()}"})
+    for n in range(3):
+        r = c.get("https://api.getxapi.com" + path, params=params, headers={"Authorization": f"Bearer {os.environ['GETXAPI_KEY'].strip()}"})
+        if r.status_code < 500 or n == 2:
+            break
+        time.sleep(2 * (n + 1))
     r.raise_for_status()
     return r.json() or {}
 
