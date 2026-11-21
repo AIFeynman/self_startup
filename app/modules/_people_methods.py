@@ -29,7 +29,7 @@ from functools import cache
 
 import httpx
 
-from .. import agent
+from .. import agent, settings
 from ..db import DATA_DIR, DB_PATH, ROOT
 from . import _absorb_run as ar
 from . import _feed_sources as src
@@ -45,12 +45,17 @@ JEV_CACHE = "jev.json"
 JEV_MIN = 0.8       # 两人试跑校准：留约四成材料、三分之一字符，最终卡片用到的材料保住 25/27
 JEV_TEXT = 1500
 SPARK_MIN = 3
+OWN_STATE = "own.json"   # 每人本人推文抓到哪天；之后只抓这之后的（往回多搭 3 天，晚到的高赞也能补上）
+OWN_OVERLAP = 3
+WEEK_DAYS = 7
+RETRY_S = 3 * 3600
 FAVES = (300, 3000, 20000)
 QUARTERS = 4
 PAGE_FULL = 18     # 一页约 20 条，接近满页说明窗口里还有更多
 SNIP_WIDTH = 700
 SNIP_MAX = 3000
 LINK_MAX = 20000    # 手动加的链接本来就是讲这个人的访谈 / 报道，整篇给模型
+LATIN = r"[A-Za-z\u00C0-\u024F]+"   # 拉丁字母含重音（Lütke、François），不吞中文
 SURNAME_MIN = 6     # 只写姓的提法（“Karpathy 说”）也算点名；Dean、Musk 这类短姓太常见，要全名
 BATCH = 6
 
@@ -194,6 +199,13 @@ def windows(today: str, n: int = QUARTERS) -> list[tuple[str, str]]:
     return [(edges[i + 1].isoformat(), edges[i].isoformat()) for i in range(n)]
 
 
+def own_windows(today: str, last: str) -> list[tuple[str, str]]:
+    if not last:
+        return windows(today)
+    lo = datetime.date.fromisoformat(last) - datetime.timedelta(days=OWN_OVERLAP)
+    return [(lo.isoformat(), (datetime.date.fromisoformat(today) + datetime.timedelta(days=1)).isoformat())]
+
+
 def own_queries(handle: str, wins: list[tuple[str, str]], search) -> list[dict]:
     """每个季度窗口先用低门槛搜；返回满一页（说明还有被挤掉的）就抬高门槛再搜，老的高赞帖也拿得到。"""
     out = []
@@ -206,11 +218,11 @@ def own_queries(handle: str, wins: list[tuple[str, str]], search) -> list[dict]:
     return out
 
 
-def own_x(pool: list[dict]) -> list[dict]:
+def own_x(pool: list[dict], last: dict[str, str]) -> list[dict]:
     provs = src._x_providers()
     if not provs:
         raise RuntimeError("未配置 GETXAPI_KEY / TWITTER_API_KEY")
-    wins = windows(datetime.date.today().isoformat())
+    today = datetime.date.today().isoformat()
     out: dict[str, dict] = {}
     with src._client() as c:
         def search(q):
@@ -222,7 +234,7 @@ def own_x(pool: list[dict]) -> list[dict]:
             return []
 
         def one(p):
-            return p, own_queries(p["x"], wins, search)
+            return p, own_queries(p["x"], own_windows(today, last.get(p["id"], "")), search)
         with ThreadPoolExecutor(4) as ex:
             for p, tweets in ex.map(one, [p for p in pool if p.get("x")]):
                 for t in tweets:
@@ -234,15 +246,23 @@ def own_x(pool: list[dict]) -> list[dict]:
     return list(out.values())
 
 
+def _cheap_keys(p: dict) -> tuple[set[str], list[str]]:
+    """粗筛用：英文名拆成小写单词（文章里出现了这些词才可能点名），中文名直接子串。"""
+    names = [n for n in [p["name"], p.get("zh", ""), *p.get("aliases", [])] if n]
+    words = {w.lower() for n in names if not P.is_zh(n) for w in re.findall(LATIN, n)}
+    return words, [n for n in names if P.is_zh(n)]
+
+
 def retell_x_art(pool: list[dict]) -> list[dict]:
-    pre = re.compile("|".join(r.pattern for p in pool for r in name_res(p["id"])), re.I)
+    """先用单词集合和子串粗筛出可能点名的人，再对这几个人跑精确正则（全员逐个跑正则要十几分钟）。"""
+    keys = {p["id"]: _cheap_keys(p) for p in pool}
     out = []
     c = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     for aid, user, title, day, text in c.execute("select id, user, title, day, text from x_art where text!='' and stage not in ('drop_dup')"):
-        if not pre.search(text):
-            continue
+        words = set(re.findall(LATIN, text.lower()))
         for p in pool:
-            if not named(p, text):
+            en, zh = keys[p["id"]]
+            if not (en & words or any(n in text for n in zh)):
                 continue
             parts = snippets(text, p["id"])
             if not parts:
@@ -276,8 +296,13 @@ def link_sources(pool: list[dict]) -> list[dict]:
 
 
 def s_collect(r: MRun) -> list:
+    """本人推文增量抓，和上次的合并；长文库和链接每次重扫（本地 / 量小）。"""
     pool = [P.by_id()[i] for i in r.pids]
-    return own_x(pool) + retell_x_art(pool) + link_sources(pool)
+    last = r.load(OWN_STATE) if r.has(OWN_STATE) else {}
+    prev = {s["id"]: s for s in (r.load("collect.json") if r.has("collect.json") else []) if s["kind"] == "own"}
+    own = {**prev, **{s["id"]: s for s in own_x(pool, last)}}
+    r.save(OWN_STATE, {**last, **{p["id"]: datetime.date.today().isoformat() for p in pool if p.get("x")}})
+    return list(own.values()) + retell_x_art(pool) + link_sources(pool)
 
 
 # ---------- 2 Jev 筛材料 ----------
@@ -358,16 +383,21 @@ def s_extract(r: MRun) -> dict:
         for k, s in enumerate(batch):
             (r.dir / EXTRACT_DIR / _cache_name(s["id"])).write_text(json.dumps(got.get(k, []), ensure_ascii=False), "utf-8")
     ar._pmap(run, [todo[i:i + BATCH] for i in range(0, len(todo), BATCH)], 8)
-    units, n = {}, 0
+    units = {}
     for s in sources:
         f = r.dir / EXTRACT_DIR / _cache_name(s["id"])
-        for u in (json.loads(f.read_text("utf-8")) if f.exists() else []):
-            n += 1
-            units[f"u{n}"] = {**u, "sid": s["id"], "person": s["person"]}
+        for i, u in enumerate(json.loads(f.read_text("utf-8")) if f.exists() else []):
+            units[f"{s['id']}#{i}"] = {**u, "sid": s["id"], "person": s["person"]}
     return {"sources": len(sources), "new": len(todo), "units": units}
 
 
 # ---------- 4 归并 ----------
+
+def plan_merge(by: dict[str, list[str]], prev: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
+    """材料没变的人沿用上次的归并（省钱，标题也不变）；有新条目的人重新归并。"""
+    keep = {pid: prev[pid] for pid, ks in by.items() if pid in prev and sorted(prev[pid]["refs"]) == sorted(ks)}
+    return keep, [pid for pid in by if pid not in keep]
+
 
 def s_merge(r: MRun) -> dict:
     units = r.load("extract.json")["units"]
@@ -375,23 +405,29 @@ def s_merge(r: MRun) -> dict:
     for k, u in units.items():
         if u["spark"] >= SPARK_MIN:
             by.setdefault(u["person"], []).append(k)
+    keep, todo = plan_merge(by, r.load("merge.json") if r.has("merge.json") else {})
     idx = P.by_id()
 
     def run(pid):
         ks = by[pid]
         if len(ks) == 1:
             u = units[ks[0]]
-            return pid, [{"name": u["name"], "how": u["how"], "why": u["why"], "try": u["try"], "refs": ks}]
-        o = r.call(r.strong, P_MERGE.format(who=idx[pid]["name"]), "\n".join(f"{k} | {units[k]['kind']} | {units[k]['name']} | {units[k]['how']}" for k in ks))
-        return pid, [g for g in (o or {}).get("g", []) if g.get("name") and g.get("refs")]
-    return dict(ar._pmap(run, list(by), 6))
+            return pid, {"refs": ks, "g": [{"name": u["name"], "how": u["how"], "why": u["why"], "try": u["try"], "refs": ks}]}
+        lines = "\n".join(f"u{n} | {units[k]['kind']} | {units[k]['name']} | {units[k]['how']}" for n, k in enumerate(ks))
+        o = r.call(r.strong, P_MERGE.format(who=idx[pid]["name"]), lines)
+        if o is None:
+            raise RuntimeError(f"{idx[pid]['name']} 归并失败")
+        gs = [{**g, "refs": [ks[int(u[1:])] for u in g["refs"] if re.fullmatch(r"u\d+", str(u)) and int(u[1:]) < len(ks)]}
+              for g in o.get("g", []) if g.get("name") and g.get("refs")]
+        return pid, {"refs": ks, "g": gs}
+    return {**keep, **dict(ar._pmap(run, todo, 6))}
 
 
 # ---------- 5 页面 ----------
 
 def s_page(r: MRun) -> dict:
     sources = {s["id"]: s for s in r.load("collect.json")}
-    cards = assemble(r.load("merge.json"), r.load("extract.json")["units"], sources)
+    cards = assemble({pid: m["g"] for pid, m in r.load("merge.json").items()}, r.load("extract.json")["units"], sources)
     idx = P.by_id()
     people = []
     for pid in dict.fromkeys(c["person"] for c in cards):
@@ -428,6 +464,22 @@ def state() -> dict:
 
 def view() -> dict:
     return {"data": _read("page.json", None), "links": links(), **state()}
+
+
+def due(st: dict, now: float, running: bool = False, days: float = WEEK_DAYS) -> bool:
+    if running:
+        return False
+    if not st:
+        return True
+    gap = now - float(st.get("updated") or 0)
+    return gap >= days * 86400 if st.get("done") else gap >= RETRY_S
+
+
+def maybe_run(now: float | None = None) -> bool:
+    """每周一次增量（信息推荐的定时循环里调）；失败或中断的 3 小时后从断点接着跑。"""
+    if not settings.get("people.methods_weekly", True):
+        return False
+    return due(_read("status.json", {}), now or time.time(), state()["running"]) and start()["started"]
 
 
 def start(pids: list[str] | None = None) -> dict:

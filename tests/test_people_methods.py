@@ -90,3 +90,38 @@ def test_assemble_keeps_only_high_spark_and_carries_kind():
     cards = M.assemble({"karpathy": [{"name": "强", "how": "h", "why": "w", "try": "", "refs": ["u1", "u2"]},
                                      {"name": "弱", "how": "h", "why": "w", "try": "t", "refs": ["u3"]}]}, units, sources)
     assert [(c["name"], c["spark"], c["kind"]) for c in cards] == [("强", 3, "观点")]
+
+
+def test_own_windows_incremental_after_first_fetch():
+    assert M.own_windows("2026-11-21", "2026-11-14") == [("2026-11-11", "2026-11-22")]
+    assert M.own_windows("2026-11-21", "") == M.windows("2026-11-21")
+
+
+def test_merge_reuses_people_whose_units_did_not_change():
+    prev = {"karpathy": {"refs": ["a#0", "b#0"], "g": [{"name": "旧标题"}]}, "dean": {"refs": ["c#0"], "g": [{"name": "x"}]}}
+    keep, todo = M.plan_merge({"karpathy": ["b#0", "a#0"], "dean": ["c#0", "d#0"], "ng": ["e#0"]}, prev)
+    assert keep == {"karpathy": prev["karpathy"]}
+    assert sorted(todo) == ["dean", "ng"]
+
+
+def test_weekly_due():
+    day, now = 86400, 1_000_000_000
+    assert M.due({}, now)
+    assert not M.due({"done": True, "updated": now - 3 * day}, now)
+    assert M.due({"done": True, "updated": now - 7 * day}, now)
+    assert not M.due({"error": "失败", "updated": now - 3600}, now)
+    assert M.due({"error": "失败", "updated": now - 4 * 3600}, now)
+    assert not M.due({"done": False, "updated": now - 60}, now, running=True)
+
+
+def test_retell_scan_finds_each_named_person_once(monkeypatch):
+    rows = [("1", "imryven", "t", "2026-10-27", "Karpathy 说把资料放 raw/，Andrej Karpathy 又说要 lint。Jeff Dean 建议写下十件事。"),
+            ("2", "karpathy", "t", "2026-10-28", "I (Karpathy) keep a wiki."),
+            ("3", "x", "t", "2026-10-29", "讲 RAG 的文章")]
+
+    class Conn:
+        def execute(self, *a):
+            return rows
+    monkeypatch.setattr(M.sqlite3, "connect", lambda *a, **k: Conn())
+    got = sorted((s["id"], s["kind"]) for s in M.retell_x_art([M.P.by_id()["karpathy"], M.P.by_id()["dean"]]))
+    assert got == [("xart:1:dean", "retell"), ("xart:1:karpathy", "retell"), ("xart:2:karpathy", "own")]

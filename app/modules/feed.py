@@ -1435,6 +1435,10 @@ def _auto_loop():
         except Exception as e:  # noqa: BLE001
             log.warning("people check failed: %s", e)
         try:
+            methods_mod.maybe_run()          # 名人 · 高人方法：每周增量提炼一次
+        except Exception as e:  # noqa: BLE001
+            log.warning("people methods weekly check failed: %s", e)
+        try:
             _xart.start()                    # X 长文库每日抓取：每天 RUN_HOUR 点后跑一次
         except Exception as e:  # noqa: BLE001
             log.warning("xart daily check failed: %s", e)
