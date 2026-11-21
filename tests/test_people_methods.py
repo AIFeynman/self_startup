@@ -31,8 +31,8 @@ def test_assemble_marks_own_words_and_counts_distinct_retellers():
         _src("a2", "retell", "imryven", "https://x.com/i/article/2", "2026-10-28"),
         _src("a3", "retell", "haoran", "https://x.com/i/article/3", "2026-09-19"),
     ]}
-    units = {"u1": {"sid": "x1", "quote": "q1"}, "u2": {"sid": "a1", "quote": "q2"}, "u3": {"sid": "a2", "quote": "q3"},
-             "u4": {"sid": "a3", "quote": "q4"}, "u5": {"sid": "a3", "quote": "q5"}}
+    units = {k: {"sid": sid, "quote": "q", "spark": 3, "kind": "做法"}
+             for k, sid in {"u1": "x1", "u2": "a1", "u3": "a2", "u4": "a3", "u5": "a3"}.items()}
     groups = {"karpathy": [
         {"name": "LLM Wiki", "how": "h", "why": "w", "try": "t", "refs": ["u1", "u2", "u3", "u4"]},
         {"name": "只有转述", "how": "h", "why": "w", "try": "t", "refs": ["u5"]},
@@ -72,6 +72,21 @@ def test_own_queries_raise_threshold_only_when_window_is_full():
 
 def test_interview_quote_counts_as_own_words():
     sources = {"l1": _src("l1", "link", "36kr.com", "https://www.36kr.com/p/1", "2026-11-21")}
-    units = {"u1": {"sid": "l1", "quote": "q", "said": "原话"}}
+    units = {"u1": {"sid": "l1", "quote": "q", "said": "原话", "spark": 3, "kind": "做法"}}
     card, = M.assemble({"dean": [{"name": "十二个月清单", "how": "h", "why": "", "try": "", "refs": ["u1"]}]}, units, sources)
     assert card["own"] is True and card["origin"]["kind"] == "link"
+
+
+def test_screen_keeps_links_and_unscored_drops_low_jev():
+    srcs = [{"id": "a", "kind": "own"}, {"id": "b", "kind": "retell"}, {"id": "c", "kind": "link"}, {"id": "d", "kind": "own"}]
+    kept = M.screened(srcs, {"a": 0.9, "b": 0.2, "c": 0.1})
+    assert [s["id"] for s in kept] == ["a", "c", "d"]
+
+
+def test_assemble_keeps_only_high_spark_and_carries_kind():
+    sources = {"x1": _src("x1", "own", "karpathy", "u1", "2026-04-02"), "x2": _src("x2", "own", "karpathy", "u2", "2026-05-01")}
+    units = {"u1": {"sid": "x1", "quote": "q", "spark": 3, "kind": "观点"}, "u2": {"sid": "x2", "quote": "q", "spark": 2, "kind": "做法"},
+             "u3": {"sid": "x2", "quote": "q", "spark": 2, "kind": "做法"}}
+    cards = M.assemble({"karpathy": [{"name": "强", "how": "h", "why": "w", "try": "", "refs": ["u1", "u2"]},
+                                     {"name": "弱", "how": "h", "why": "w", "try": "t", "refs": ["u3"]}]}, units, sources)
+    assert [(c["name"], c["spark"], c["kind"]) for c in cards] == [("强", 3, "观点")]

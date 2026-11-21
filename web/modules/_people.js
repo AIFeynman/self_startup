@@ -142,12 +142,12 @@ export function peopleTab(box, ctx, sub = []) {
   }
 
   const method = (m) => h('div.pm-m', {}, [
-    h('div.pm-name', {}, [h('b', {}, m.name),
+    h('div.pm-name', {}, [h('span.pm-tag.weak', {}, m.kind), h('b', {}, m.name),
       h('span.pm-tag' + (m.own ? '' : '.weak'), { title: m.own ? '有本人发的推文 / 文章' : '只找到别人的转述，可能失真' }, m.own ? '本人原话' : '仅转述'),
       m.retellers ? h('span.pm-tag.weak', {}, `${m.retellers} 人转述`) : null,
       h('a', { href: safeUrl(m.origin.url), target: '_blank', rel: 'noopener', style: { fontSize: '12.5px' } }, `出处 · ${KIND[m.origin.kind]} ${m.origin.date || ''}`)]),
     h('div.pm-how', {}, m.how),
-    m.why ? h('div.pm-why', {}, '为什么有效：' + m.why) : null,
+    m.why ? h('div.pm-why', {}, (m.kind === '观点' ? '理由：' : '为什么有效：') + m.why) : null,
     m.try ? h('div.pm-try', {}, [h('b', {}, '今天就能试：'), m.try]) : null,
     h('details.pm-ev', {}, [h('summary', {}, `原话与出处 ${m.evidence.length} 条`), h('ul', {}, m.evidence.map((e) => h('li', {}, [
       h('span.pm-tag.weak', {}, KIND[e.kind]), ' ', h('q', {}, e.quote), ' — ',
@@ -168,13 +168,13 @@ export function peopleTab(box, ctx, sub = []) {
       catch (e) { toast(e.message, true); }
     } }, [ui.icon('refresh'), r.running ? `提炼中 · ${r.stage_name} ${r.step}/${r.steps}` : '重新提炼']);
     const d = r.data;
-    const src = d ? `${d.n} 个方法 · 材料：本人高赞推文 ${d.sources.own} 条、点名转述 ${d.sources.retell} 篇、访谈链接 ${d.sources.link} 篇` : '还没提炼过';
-    box.replaceChildren(bar(ps), h('div.pm-head', {}, [h('span', {}, `名人自己提出、推荐或在用的做法，带原话和出处 · ${src}`), run,
+    const src = d ? `${d.n} 条 · 材料：本人高赞推文 ${d.sources.own} 条、点名转述 ${d.sources.retell} 篇、访谈链接 ${d.sources.link} 篇，Jev 筛后 ${d.screened} 份进模型，只留启发度最高的一档` : '还没提炼过';
+    box.replaceChildren(bar(ps), h('div.pm-head', {}, [h('span', {}, `名人很有启发的做法和观点，带原话和出处 · ${src}`), run,
       r.error ? h('span', { style: { color: 'var(--warn, #b7791f)' } }, r.error) : null]),
     h('div.pm-add', { style: { marginBottom: '12px' } }, [sel, url, add]),
     ...(d?.people.length ? d.people.map((g) => h('div.card.pp-grp', {}, [
-      h('div.pp-who', {}, [h('b', {}, who(idx[g.person.id] || g.person)), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 个方法`)]),
-      ...g.methods.map(method)])) : [ui.empty('还没有方法卡', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')]));
+      h('div.pp-who', {}, [h('b', {}, who(idx[g.person.id] || g.person)), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 条`)]),
+      ...g.methods.map(method)])) : [ui.empty('还没有卡片', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')]));
     if (r.running) mpoll();
   }
 
