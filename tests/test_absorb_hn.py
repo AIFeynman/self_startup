@@ -245,3 +245,23 @@ def test_api_hn_merged(client, tmp_path, monkeypatch):
     assert j["data"]["topics"][0]["ts"] == 1000
     assert j["reactions"] == {"2026-11-13_2026-11-19:0": {"act": "很受用"}}
     assert [u["id"] for u in j["undone"]] == ["2026-10-30_2026-11-05"]
+
+
+def test_api_x_source_is_separate_and_react_logs_src(client, tmp_path, monkeypatch):
+    import json
+    from app.modules import absorb
+    monkeypatch.setattr(hn, "BASE", tmp_path / "hn")
+    monkeypatch.setattr(absorb, "FB", tmp_path / "fb.jsonl")
+    d = tmp_path / "x" / "2026-11-07_2026-11-20"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text("{}")
+    (d / "status.json").write_text(json.dumps({"done": True, "pid": 0}))
+    (d / "page.json").write_text(json.dumps(_page("2026-11-07", "2026-11-20", 0, ["a"])))
+    (d / "posts.json").write_text(json.dumps([{"id": "a", "ts": 5}]))
+    assert client.get("/api/absorb/hn/merged").json()["data"] is None
+    assert client.get("/api/absorb/hn/merged?src=x").json()["data"]["topics"][0]["ts"] == 5
+    assert client.get("/api/absorb/hn/merged?src=zz").status_code == 404
+    rid = "2026-11-07_2026-11-20"
+    assert client.post(f"/api/absorb/hn/runs/{rid}/react?src=x", json={"topic": 0, "stars": 4}).status_code == 200
+    assert json.loads((tmp_path / "fb.jsonl").read_text().splitlines()[0])["src"] == "x"
+    assert client.get("/api/absorb/feedback").json()["n"] == 0

@@ -115,8 +115,9 @@ function match(t, D, F, R) {
   return true;
 }
 
-function how(D) {
+function how(D, src) {
   const M = D.meta, F = M.fails || {};
+  if (src === 'x') return `<div class="ab-q"><h2>这页是怎么算出来的（试点）</h2><p><b>采集：</b>${E(M.start)} 至 ${E(M.end)} 内信息推荐里回复数 ≥100 的推文，每个作者取 1 条（共 ${M.collected} 条），用 twitterapi.io 抓每条前 100 条回复。</p><p><b>筛选：</b>Jev 判断每条回复是否有信息量（有理由的观点、亲身经验、有出处的事实），≥0.7 才给模型；表情、玩笑、附和、广告被滤掉。</p><p><b>提炼和话题：</b>${E(M.models.digest)} 逐帖读回复区，原话逐字核对（${M.quotes_kept}/${M.quotes_raw} 通过）；${E(M.models.topics)} 聚成 ${M.topics} 个话题再综合，方法同 HN。</p><p class="ab-m">注意：“N 评论”是推文的回复总数，阵营人数只在抓到的前 100 条里数，不是全部回复的比例；这些多是用户对官方推文的反应，不是技术争论。Claude 模型费用 $${M.cost}，抓取和 Jev 费用没统计。</p></div>`;
   return `<div class="ab-fun">${[[M.queried, '搜到的 AI 相关帖'], [M.collected, `达到门槛（≥${M.weights.min_points} 分或≥${M.weights.min_comments} 评论）`], [M.ai + M.edge, '判为 AI 相关'], [M.digested, `评论≥${M.weights.digest_min}，已提炼`], [N(M.comments), '条评论已读']].map((x) => `<div><b>${typeof x[0] === 'number' ? N(x[0]) : x[0]}</b><span>${x[1]}</span></div>`).join('')}
 <div class="hl"><b>${M.topics}</b><span>个话题（覆盖 ${M.in_topics} 帖）</span></div><div><b>${M.tail}</b><span>帖在长尾</span></div><div><b>${M.resources}</b><span>个被推荐的资源</span></div><div><b>${M.exps}</b><span>条做过的经验</span></div><div><b>${M.quotes_kept}/${M.quotes_raw}</b><span>观点和经验的原话通过核对</span></div></div>
 <div class="ab-q"><h2>这页是怎么算出来的</h2>
@@ -128,12 +129,12 @@ function how(D) {
 <p class="ab-m">星级：每个话题可打 1–5 星，表示这个话题整理得好不好用，存在表态日志里，用来评估聚类和综合质量。没做的：与上周话题对照（需要上一周的数据）；原话没有翻译；表态“站某边”只记草稿，不写进你的判断库。HN 评论者偏工程师、偏怀疑，不代表市场上的用户。${F.digest ? `有 ${F.digest} 帖提炼失败已跳过；` : ''}${M.minutes ? `耗时 ${M.minutes} 分钟，` : ''}Claude 模型费用 $${M.cost}，Jev 调用费用没有统计。</p></div>`;
 }
 
-export async function hnView(el, ctx) {
+export async function hnView(el, ctx, src = 'hn') {
   const { api, h, ui, toast } = ctx;
   const body = h('div');
-  const head = h('div', {}, [h('div.tabs', {}, [h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button.active', {}, 'HN 吸收')])]);
-  el.append(h('style', {}, CSS), ui.pageHead('吸收', 'HN 上 AI 相关的讨论：按话题看社区站哪边、谁做过什么、推荐了什么', []), head, body);
-  const m = await api.get('/api/absorb/hn/merged');
+  const head = h('div', {}, [h('div.tabs', {}, [h('button', { onclick: () => { location.hash = '#absorb'; } }, '选题吸收'), h('button', { class: src === 'hn' ? 'active' : '', onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收'), h('button', { class: src === 'x' ? 'active' : '', onclick: () => { location.hash = '#absorb/x'; } }, 'X 反应')])]);
+  el.append(h('style', {}, CSS), ui.pageHead('吸收', src === 'x' ? 'X 上官方和名人推文下的用户反应（试点）：按话题看大家站哪边、谁做过什么' : 'HN 上 AI 相关的讨论：按话题看社区站哪边、谁做过什么、推荐了什么', []), head, body);
+  const m = await api.get('/api/absorb/hn/merged?src=' + src);
   if (!m.data) { body.append(ui.empty('还没有跑完的结果。每天会自动跑一次；也可以命令行：python -m app.modules._absorb_hn --start 起 --end 止')); return; }
   paint(m.data, m.reactions, m.undone);
 
@@ -157,14 +158,14 @@ ${sel('exp', '含经验：不限', OUT.map((k) => [k, k]))}
       body.innerHTML = `<div class="ab-m">${E(M.start)} 至 ${E(M.end)} · ${M.weeks} 周合并 · 观点和经验的原话已逐字核对，归并和结论由模型完成，未经人工校对${undone.length ? ` · 另有 ${undone.length} 周没跑完：${undone.map((u) => E(u.id.replace('_', ' 至 ') + (u.running ? '（进行中）' : '（中断）'))).join('、')}` : ''}</div>
 <div class="ab-note">${N(M.collected)} 帖里 ${N(M.ai + M.edge)} 帖与 AI 相关，压成 <b>${M.topics} 个话题</b>（覆盖 ${M.in_topics} 帖），另有 ${M.tail} 帖在长尾。先看<b>有分歧 ${cs['有分歧'] || 0}</b>：社区没谈拢；<b>基本共识 ${cs['基本共识'] || 0}</b> 看一句话结论即可。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张 <kbd>1</kbd>–<kbd>4</kbd> 表态</span></div>
 <div class="ab-bar">${[['topic', '话题'], ['how', '口径']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span><span class="ab-m">推荐资源 ${M.recommended} · 经验 ${M.exps}</span></div>
-${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<div class="ab-m">这个筛选下没有话题</div>') + (!F.res && !F.exp && !F.cons && !F.todo && !F.time ? `<details class="ab-fold hn-tail"><summary>长尾：另有 ${M.tail} 帖没并进话题</summary><ul>${D.tail.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a>${p.tldr ? ' · ' + E(p.tldr) : ''}</span></li>`).join('')}</ul></details>` : '') : how(D)}`;
+${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<div class="ab-m">这个筛选下没有话题</div>') + (!F.res && !F.exp && !F.cons && !F.todo && !F.time ? `<details class="ab-fold hn-tail"><summary>长尾：另有 ${M.tail} 帖没并进话题</summary><ul>${D.tail.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a>${p.tldr ? ' · ' + E(p.tldr) : ''}</span></li>`).join('')}</ul></details>` : '') : how(D, src)}`;
     };
     const vis = () => [...body.querySelectorAll('.hn-t')];
     const focus = (x) => { if (!x) return; body.querySelectorAll('.hn-t.cur').forEach((y) => y.classList.remove('cur')); x.classList.add('cur'); x.scrollIntoView({ block: 'nearest' }); };
     const react = async (c, patch) => {
       const id = c.dataset.t, tp = byKey[id], old = R[id] || {}, nx = { act: old.act || '', stance: old.stance || '', stars: old.stars || 0, ...patch };
       for (const k of Object.keys(patch)) if (old[k] === patch[k]) nx[k] = k === 'stars' ? 0 : '';
-      try { await api.post(`/api/absorb/hn/runs/${encodeURIComponent(tp.run)}/react`, { topic: tp.id, act: nx.act, stance: nx.stance, stars: nx.stars }); } catch (err) { toast(err.message || '没存上'); return false; }
+      try { await api.post(`/api/absorb/hn/runs/${encodeURIComponent(tp.run)}/react?src=${src}`, { topic: tp.id, act: nx.act, stance: nx.stance, stars: nx.stars }); } catch (err) { toast(err.message || '没存上'); return false; }
       if (nx.act || nx.stance || nx.stars) R[id] = nx; else delete R[id];
       c.querySelectorAll('[data-a]').forEach((b) => b.classList.toggle('on', nx.act === b.dataset.a));
       c.querySelectorAll('[data-s]').forEach((b) => b.classList.toggle('on', nx.stance === b.dataset.s));

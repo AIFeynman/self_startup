@@ -123,7 +123,7 @@ function fb(F) {
 export default {
   async render(el, ctx) {
     const { api, h, ui, toast, sub } = ctx;
-    if (sub[0] === 'hn') { el.append(h('style', {}, CSS)); return hnView(el, ctx, sub[1]); }
+    if (sub[0] === 'hn' || sub[0] === 'x') { el.append(h('style', {}, CSS)); return hnView(el, ctx, sub[0]); }
     const head = h('div'), body = h('div');
     let timer = null;
     const stop = () => clearTimeout(timer);
@@ -155,7 +155,7 @@ export default {
     ]);
     const label = (r) => `${r.topic} · ${r.start.slice(5)}–${r.end.slice(5)}${r.done ? '' : r.running ? ' · 进行中' : ' · 中断'}`;
     const chips = {};
-    head.append(h('div.tabs', {}, [h('button.active', {}, '选题吸收'), h('button', { onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收')]), h('div.tabs.ab-sub', {}, [
+    head.append(h('div.tabs', {}, [h('button.active', {}, '选题吸收'), h('button', { onclick: () => { location.hash = '#absorb/hn'; } }, 'HN 吸收'), h('button', { onclick: () => { location.hash = '#absorb/x'; } }, 'X 反应')]), h('div.tabs.ab-sub', {}, [
       ...runs.map((r) => chips[r.id] = h('button', { class: r.id === cur ? 'active' : '', onclick: () => go(r.id) }, label(r))),
       h('button', { onclick: () => { form.classList.toggle('ab-hide'); check(); } }, '＋ 新选题'),
     ]), form);

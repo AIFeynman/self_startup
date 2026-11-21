@@ -170,7 +170,7 @@ def _latest() -> list[dict]:
             except json.JSONDecodeError:
                 continue
             last[(e.get("run"), e.get("claim"))] = e
-    return [e for e in last.values() if e.get("act") in ACTS and e.get("src") != "hn"]
+    return [e for e in last.values() if e.get("act") in ACTS and e.get("src") not in ("hn", "x")]
 
 
 DIMS = [("type", "认知类型", lambda e: e.get("type") or "未知"),
@@ -203,8 +203,14 @@ def feedback():
 STANCES = ("站主流", "站反对", "先不站")
 
 
-def _hn_dir(rid: str):
-    d = hn.BASE / rid
+def _hn_base(src: str):
+    if src not in ("hn", "x"):
+        raise HTTPException(404, "没有这个来源")
+    return hn.BASE if src == "hn" else hn.BASE.parent / "x"
+
+
+def _hn_dir(rid: str, src: str = "hn"):
+    d = _hn_base(src) / rid
     if "/" in rid or rid.startswith(".") or not (d / "run.json").exists():
         raise HTTPException(404, "没有这次运行")
     return d
@@ -290,11 +296,12 @@ def on_startup() -> None:
 
 
 @router.get("/hn/merged")
-def hn_merged():
-    ds = sorted((f.parent for f in hn.BASE.glob("*/run.json") if _hn_state(f.parent)["done"]), key=lambda d: d.name, reverse=True)
+def hn_merged(src: str = "hn"):
+    base = _hn_base(src)
+    ds = sorted((f.parent for f in base.glob("*/run.json") if _hn_state(f.parent)["done"]), key=lambda d: d.name, reverse=True)
     runs = [(d.name, _read(d / "page.json", {}), {p["id"]: p["ts"] for p in _read(d / "posts.json", [])}) for d in ds]
     react = {f"{d.name}:{k}": v for d in ds for k, v in _read(d / "reactions.json", {}).items()}
-    undone = [{"id": f.parent.name, **_hn_state(f.parent)} for f in hn.BASE.glob("*/run.json") if not _hn_state(f.parent)["done"]]
+    undone = [{"id": f.parent.name, **_hn_state(f.parent)} for f in base.glob("*/run.json") if not _hn_state(f.parent)["done"]]
     return {"data": hn.merge_pages(runs) if runs else None, "reactions": react, "undone": sorted(undone, key=lambda x: x["id"], reverse=True)}
 
 
@@ -313,8 +320,8 @@ class HnReactIn(BaseModel):
 
 
 @router.post("/hn/runs/{rid}/react")
-def hn_react(rid: str, body: HnReactIn):
-    d = _hn_dir(rid)
+def hn_react(rid: str, body: HnReactIn, src: str = "hn"):
+    d = _hn_dir(rid, src)
     if (body.act and body.act not in ACTS) or (body.stance and body.stance not in STANCES) or not 0 <= body.stars <= 5:
         raise HTTPException(400, "表态不合法")
     t = next((x for x in _read(d / "page.json", {}).get("topics", []) if x["id"] == body.topic), None)
@@ -322,7 +329,7 @@ def hn_react(rid: str, body: HnReactIn):
         raise HTTPException(404, "没有这个话题")
     r = _read(d / "reactions.json", {})
     cur = {**r.get(str(body.topic), {}), "act": body.act, "stance": body.stance, "stars": body.stars, "at": time.time()}
-    _log({"src": "hn", "run": "hn:" + rid, "card": body.topic, "claim": t["title"], "type": t["kind"], "tag": t["consensus"], "topic": "HN",
+    _log({"src": src, "run": f"{src}:{rid}", "card": body.topic, "claim": t["title"], "type": t["kind"], "tag": t["consensus"], "topic": "HN",
           "act": body.act, "stance": body.stance, "stars": body.stars, "at": cur["at"]})
     if cur["act"] or cur["stance"] or cur["stars"]:
         r[str(body.topic)] = cur
