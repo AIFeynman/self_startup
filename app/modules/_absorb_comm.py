@@ -10,29 +10,36 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
+import re
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
 from .. import agent
-from ..db import DATA_DIR
+from ..db import DATA_DIR, ROOT
+from . import _absorb_hn as hn
 from . import _absorb_run as ar
 from . import _feed_hn as hnd
 
 BASE = DATA_DIR / "absorb" / "comm"
 UA = {"User-Agent": "Mozilla/5.0 (research pilot)"}
 FORUMS = {"openai": "https://community.openai.com", "huggingface": "https://discuss.huggingface.co", "cursor": "https://forum.cursor.com"}
-NAMES = {"lobsters": "Lobsters", "openai": "OpenAI 开发者社区", "huggingface": "Hugging Face 论坛", "cursor": "Cursor 论坛"}
+NAMES = {"x": "X（推特）回复区", "lobsters": "Lobsters", "openai": "OpenAI 开发者社区", "huggingface": "Hugging Face 论坛", "cursor": "Cursor 论坛"}
 MIN_COMMENTS = {"lobsters": 8}
 MIN_DEFAULT = 15
 MAX_POSTS_FETCH = 120
+X_PAGES = 5            # twitterapi.io 每页 20 条回复
+Q_REPLY = ("state.items.{k} 是 X 上一条推文下的回复。它是否包含有信息量的内容：具体的观点或判断并说明了理由、亲身使用或做过的经验、"
+           "带理由的推荐或质疑、有出处的事实或数据？只有表情、玩笑、顺口附和、@人寒暄、求关注、广告和刷屏、与原推无关的内容否。")
 
 
 class CRun(ar.Run):
-    def __init__(self, source: str):
-        self.source, self.topic, self.stage = source, NAMES[source], "digest"
-        self.dir = BASE / source
+    def __init__(self, source: str, jev_min: float = 0.0):
+        self.source, self.topic, self.stage, self.jev_min = source, NAMES[source], "digest", jev_min
+        self.dir = BASE / (source + (f"_jev{jev_min}" if jev_min else ""))
         self.dir.mkdir(parents=True, exist_ok=True)
         self.light = agent.tier_model("light") or "claude-haiku-5-5"
         self.cost, self.secs, self.fails = {}, {}, {}
@@ -98,11 +105,70 @@ def forum_thread(c: httpx.Client, source: str, p: dict) -> tuple[str, list[dict]
     return (out[0]["author"] if out else ""), out
 
 
+def jev_scores(texts: list[str]) -> list[float]:
+    """Jev 逐条给“有信息量”的概率；25 条一批。key 在 .env 里。"""
+    hn.load_env()
+    key = os.environ.get("JEV_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("未配置 JEV_API_KEY")
+    out: list[float] = []
+    with httpx.Client(timeout=60) as c:
+        for i in range(0, len(texts), 25):
+            refs = {f"i{n}": t for n, t in enumerate(texts[i:i + 25])}
+            res = c.post(hn.JEV_API, headers={"Authorization": f"Bearer {key}"}, json={
+                "model": "jev-latest", "state": {"items": {k: {"text": t[:600]} for k, t in refs.items()}},
+                "questions": {k: {"type": "noul", "instructions": Q_REPLY.format(k=k)} for k in refs}})
+            res.raise_for_status()
+            for k in refs:
+                v = (res.json().get("answers", {}).get(k) or {}).get("noul")
+                if not isinstance(v, (int, float)):
+                    raise RuntimeError("Jev 没返回概率")
+                out.append(round(float(v), 3))
+    return out
+
+
+def x_posts(limit: int) -> list[dict]:
+    db = sqlite3.connect(f"file:{DATA_DIR / 'app.db'}?mode=ro", uri=True)
+    rows = db.execute("select id, url, title, extra from feed_items where source='twitter' and fetched_at > strftime('%s','now')-86400*14 "
+                      "and json_extract(extra,'$.replies') >= 100 order by json_extract(extra,'$.replies') desc").fetchall()
+    out, seen = [], set()
+    for rid, url, title, ex in rows:
+        e = json.loads(ex)
+        if e["author"] in seen:
+            continue
+        seen.add(e["author"])
+        out.append({"id": rid.split(":")[-1], "title": title, "url": url, "points": e.get("followers", 0), "comments": e["replies"], "link": url, "ts": 0, "author": e["author"]})
+    return out[:limit]
+
+
+def x_thread(c: httpx.Client, p: dict) -> tuple[str, list[dict]]:
+    hn.load_env()
+    key, cur, out = os.environ["TWITTER_API_KEY"].strip(), "", []
+    for _ in range(X_PAGES):
+        d = c.get("https://api.twitterapi.io/twitter/tweet/replies", params={"tweetId": p["id"], "cursor": cur}, headers={"X-API-Key": key}).json()
+        for x in d.get("tweets") or []:
+            text = re.sub(r"^(@\w+\s+)+", "", hnd.comment_text(x.get("text") or ""))
+            if text:
+                out.append({"id": len(out) + 1, "depth": 0, "author": (x.get("author") or {}).get("userName") or "", "text": text[:hnd.MAX_COMMENT], "replies": 0, "likes": x.get("likeCount") or 0})
+        cur = d.get("next_cursor") or ""
+        if not d.get("has_next_page") or not cur:
+            break
+    return p["author"], out
+
+
 def digest(r: CRun, p: dict, c: httpx.Client) -> dict | None:
     f = r.dir / f"{p['id']}.json"
     if f.exists():
         return json.loads(f.read_text("utf-8"))
-    op, comments = lobsters_thread(c, p) if r.source == "lobsters" else forum_thread(c, r.source, p)
+    if r.source == "x":
+        op, comments = x_thread(c, p)
+        read = len(comments)
+        if r.jev_min:
+            sc = jev_scores([x["text"] for x in comments])
+            comments = [{**x, "id": n + 1} for n, x in enumerate(x for x, v in zip(comments, sc) if v >= r.jev_min)]
+    else:
+        op, comments = lobsters_thread(c, p) if r.source == "lobsters" else forum_thread(c, r.source, p)
+        read = len(comments)
     if len(comments) < 8:
         return None
     text = hnd.render(comments)
@@ -116,14 +182,15 @@ def digest(r: CRun, p: dict, c: httpx.Client) -> dict | None:
     d["cost"] = round(r.cost.get("digest", 0.0) - before, 4)
     d["secs"] = round(time.time() - t0)
     d["chars"] = len(text)
+    d["fetched"] = read
     f.write_text(json.dumps(d, ensure_ascii=False), "utf-8")
     return d
 
 
-def run(source: str, limit: int) -> list[dict]:
-    r = CRun(source)
+def run(source: str, limit: int, jev_min: float = 0.0) -> list[dict]:
+    r = CRun(source, jev_min)
     with httpx.Client(timeout=hnd.TIMEOUT, follow_redirects=True) as c:
-        posts = lobsters_posts(c, limit) if source == "lobsters" else forum_posts(c, source, limit)
+        posts = x_posts(limit) if source == "x" else lobsters_posts(c, limit) if source == "lobsters" else forum_posts(c, source, limit)
         with ThreadPoolExecutor(hnd.WORKERS) as ex:
             res = list(ex.map(lambda p: digest(r, p, c), posts))
     return [d for d in res if d]
@@ -133,6 +200,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", required=True, choices=list(NAMES))
     ap.add_argument("--limit", type=int, default=8)
+    ap.add_argument("--jev-min", type=float, default=0.0)
     a = ap.parse_args()
-    ds = run(a.source, a.limit)
+    ds = run(a.source, a.limit, a.jev_min)
     print(a.source, len(ds), "帖", "费用 $%.3f" % sum(d["cost"] for d in ds))
