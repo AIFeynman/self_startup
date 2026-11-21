@@ -49,6 +49,8 @@ const CSS = `
 .pm-ev q { color: var(--text); }
 .pm-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
 .pm-filter { flex: 0 1 260px; min-width: 0; }
+.pm-search { flex: 1 1 220px; min-width: 0; }
+.pm-found { font-size: 12.5px; color: var(--muted); }
 .pm-addbox { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); }
 .pm-addbox summary { cursor: pointer; }
 .pm-addbox .pm-add { margin-top: 8px; }
@@ -66,7 +68,7 @@ const saveSort = (v) => { try { localStorage.setItem('pm-sort', v); } catch { /*
 // 卡片日期：出处日期；出处没有日期（访谈链接）就用证据里最新的；都没有的排最后
 const cardDay = (m) => m.origin.date || m.evidence.map((e) => e.date).filter(Boolean).sort().pop() || '';
 const byTime = (a, b) => cardDay(b).localeCompare(cardDay(a));
-const state = { view: 'today', person: '', batch: '', focus: '', msort: loadSort(), mperson: '' };
+const state = { view: 'today', person: '', batch: '', focus: '', msort: loadSort(), mperson: '', mq: '' };
 const KIND = { own: '本人', retell: '转述', link: '访谈 / 报道' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
@@ -183,23 +185,43 @@ export function peopleTab(box, ctx, sub = []) {
     } }, [ui.icon('refresh'), r.running ? `提炼中 · ${r.stage_name} ${r.step}/${r.steps}` : '重新提炼']);
     const d = r.data;
     if (state.mperson && !d?.people.some((g) => g.person.id === state.mperson)) state.mperson = '';
-    const shown = (d?.people || []).filter((g) => !state.mperson || g.person.id === state.mperson);
     const src = d ? `${d.n} 条 · 材料：本人高赞推文 ${d.sources.tweet} 条、本人博客 ${d.sources.blog} 篇、点名转述 ${d.sources.retell} 篇、深读和手动链接 ${d.sources.picked} 篇，Jev 筛后 ${d.screened} 份进模型，只留启发度最高的一档` : '还没提炼过';
+    const list = h('div.pm-list');
+    const found = h('span.pm-found');
+    const personOf = (g) => idx[g.person.id] || g.person;
+    // 筛选、排序、搜索只重画列表，不重新请求
+    const draw = () => {
+      const q = state.mq.trim().toLowerCase();
+      const hit = (m, g) => !q || [m.name, m.how, m.why, m.try, m.kind, who(personOf(g)), ...m.evidence.map((e) => `${e.quote} ${e.author}`)]
+        .join(' ').toLowerCase().includes(q);
+      const groups = d.people.filter((g) => !state.mperson || g.person.id === state.mperson)
+        .map((g) => ({ ...g, methods: g.methods.filter((m) => hit(m, g)) })).filter((g) => g.methods.length);
+      const n = groups.reduce((k, g) => k + g.methods.length, 0);
+      found.textContent = q || state.mperson ? `找到 ${n} 条` : '';
+      list.replaceChildren(...(!n ? [ui.empty('没有匹配的卡片', '换个关键词，或把人物筛选改回「全部名人」')]
+        : state.msort === 'time' ? [h('div.card.pp-grp', {}, groups.flatMap((g) => g.methods.map((m) => [m, personOf(g)]))
+          .sort(([x], [y]) => byTime(x, y)).map(([m, p]) => method(m, p)))]
+        : groups.map((g) => h('div.card.pp-grp', {}, [
+          h('div.pp-who', {}, [h('b', {}, who(personOf(g))), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 条`)]),
+          ...(state.msort === 'person_time' ? [...g.methods].sort(byTime) : g.methods).map((m) => method(m))]))));
+    };
+    const sorts = h('div.fd-seg.pm-sort', {}, SORTS.map(([id, name]) => h('button' + (state.msort === id ? '.on' : ''), { 'data-id': id, onclick: () => {
+      state.msort = id; saveSort(id);
+      [...sorts.children].forEach((b) => b.classList.toggle('on', b.dataset.id === id));
+      draw();
+    } }, name)));
     box.replaceChildren(bar(ps), h('div.pm-head', {}, [h('span', {}, `名人很有启发的做法和观点，带原话和出处 · ${src}`), run,
       r.error ? h('span', { style: { color: 'var(--warn, #b7791f)' } }, r.error) : null]),
     h('details.pm-addbox', {}, [h('summary', {}, '补充访谈 / 文章链接'), h('div.pm-add', {}, [sel, url, add])]),
-    d?.people.length ? h('div.pm-tools', {}, [
-      h('select.pm-filter', { title: '只看某个人', onchange: (e) => { state.mperson = e.target.value; methods(); } },
-        [h('option', { value: '' }, `全部名人（${d.n} 条）`), ...d.people.map((g) => h('option', { value: g.person.id, selected: state.mperson === g.person.id },
-          `${who(idx[g.person.id] || g.person)}（${g.methods.length}）`))]),
-      h('div.fd-seg.pm-sort', {}, SORTS.map(([id, name]) => h('button' + (state.msort === id ? '.on' : ''),
-        { onclick: () => { state.msort = id; saveSort(id); methods(); } }, name)))]) : '',
-    ...(!d?.people.length ? [ui.empty('还没有卡片', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')]
-      : state.msort === 'time' ? [h('div.card.pp-grp', {}, shown.flatMap((g) => g.methods.map((m) => [m, idx[g.person.id] || g.person]))
-        .sort(([a], [b]) => byTime(a, b)).map(([m, p]) => method(m, p)))]
-      : shown.map((g) => h('div.card.pp-grp', {}, [
-        h('div.pp-who', {}, [h('b', {}, who(idx[g.person.id] || g.person)), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 条`)]),
-        ...(state.msort === 'person_time' ? [...g.methods].sort(byTime) : g.methods).map((m) => method(m))]))));
+    ...(!d?.people.length ? [ui.empty('还没有卡片', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')] : [
+      h('div.pm-tools', {}, [
+        h('input.pm-search', { type: 'search', value: state.mq, placeholder: '搜索标题、内容、原话、人名…', oninput: (e) => { state.mq = e.target.value; draw(); } }),
+        h('select.pm-filter', { title: '只看某个人', onchange: (e) => { state.mperson = e.target.value; draw(); } },
+          [h('option', { value: '' }, `全部名人（${d.n} 条）`), ...d.people.map((g) => h('option', { value: g.person.id, selected: state.mperson === g.person.id },
+            `${who(personOf(g))}（${g.methods.length}）`))]),
+        sorts, found]),
+      list]));
+    if (d?.people.length) draw();
     if (r.running) mpoll();
   }
 
