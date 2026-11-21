@@ -44,10 +44,27 @@ th,td{padding:10px 12px;border-top:1px solid var(--line);text-align:left;vertica
 <p><b>4. 没验证的：</b>各社区的反爬和条款（尤其 Reddit、Linux.do）、中文社区的评论完整度、Lobsters 的评论总量够不够单独成页。</p>
 </div>
 
+<h2>试点结果（2026-11-20，24 帖，Haiku 5.5 逐帖提炼）</h2>
+<div class="m">只跑到“单帖提炼”，没做话题聚合和综合；脚本独立（<code>app/modules/_absorb_comm.py</code>），没动 HN 的页面、定时和缓存。结果在 <code>data/absorb/comm/</code>。</div>
+<div class="wrap"><table>
+<tr><th>来源</th><th>帖数</th><th>评论中位</th><th>每帖观点 / 经验</th><th>原话核对通过</th><th>链接（推荐）</th><th>每帖模型费用</th></tr>
+<tr><td>Lobsters</td><td>3</td><td>9</td><td>4.3 / 0.3</td><td>13/13 · 1/1</td><td>6（0）</td><td>$0.008</td></tr>
+<tr><td>OpenAI 开发者社区</td><td>6</td><td>134</td><td>5.7 / 6.2</td><td>34/34 · 37/37</td><td>12（1）</td><td>$0.034</td></tr>
+<tr><td>Cursor 论坛</td><td>6</td><td>72</td><td>5.2 / 5.5</td><td>31/32 · 33/34</td><td>19（0）</td><td>$0.024</td></tr>
+<tr><td>Hugging Face 论坛</td><td>6</td><td>21</td><td>5.2 / 3.0</td><td>31/31 · 18/18</td><td>23（2）</td><td>$0.019</td></tr>
+<tr><td class="m">HN（参照，11-13～11-19）</td><td class="m">107</td><td class="m">78</td><td class="m">5.3 / 3.7</td><td class="m">566/566 · 393/399</td><td class="m">584（112）</td><td class="m">约 $0.01（缓存命中的帖不计费，偏低）</td></tr>
+</table></div>
+<div class="box">
+<p><b>Lobsters：量太小，不值得单独做。</b>AI 标签最近 30 天只有 6 帖评论 ≥8，实际提炼成功 3 帖；单帖质量不错、成本最低，但一周大约只有 1 帖，并进 HN 话题的增量很有限。建议降级成“HN 采集时顺手带上”，不单独建流程。</p>
+<p><b>OpenAI / Cursor 论坛：有价值，但性质是“用户反馈”。</b>评论多（中位 134 / 72）、经验密（每帖 5～6 条），读到的是额度改版、计量 bug、模型退化这类用户真实反应；缺点是推荐的资源几乎没有（1 条和 0 条），观点基本是同一个诉求的重复。适合做“产品动向 / 用户反应”一路，不适合做 HN 式的观点阵营。</p>
+<p><b>Hugging Face 论坛：质量不稳。</b>样本里有作者拿自己的仓库和日志当主要内容、少数人互相回复的帖子，经验多是自述；不建议接。</p>
+<p><b>成本：</b>论坛每帖 $0.02～0.03，比 HN 高（输入更长，OpenAI 单帖读入约 6 万字符）。按每个论坛每周约 6 个够格的帖估，三个论坛合计每周约 $0.5 的单帖提炼费，还没算话题聚合和综合；这是估算。</p>
+<p><b>质量对照：</b>原话逐字核对通过率和 HN 一样高（Cursor 各丢 1 条），模型没有编造原话。主观质量只看了每个来源评论最多的一帖，样本小，不能当结论。</p>
+</div>
 <h2>建议的顺序</h2>
 <div class="box">
-<p>① Lobsters 并进现有 HN 话题（半天；先试一周数据看合并后话题是否更完整）<br>
-② OpenAI / Hugging Face / Cursor 论坛做“经验 / 问题”一路<br>
+<p>① Lobsters：试点显示量太小，降级为 HN 采集时顺手带上，不单独做<br>
+② OpenAI、Cursor 论坛做“用户反应”一路；Hugging Face 论坛不接<br>
 ③ 确认 Reddit 入口后接 r/LocalLLaMA 和 r/ClaudeAI<br>
 ④ V2EX 作中文补充；LessWrong / AF 单独做长文观点</p>
 </div>
