@@ -223,7 +223,7 @@ def detect_kind(url: str) -> str:
     u = url.strip().lower()
     if _video.is_video_url(u):
         return "video"
-    if re.search(r"(arxiv\.org|doi\.org|openreview\.net|\.pdf$|^10\.\d{4,9}/)", u):
+    if re.search(r"(arxiv\.org|alphaxiv\.org|doi\.org|openreview\.net|\.pdf$|^10\.\d{4,9}/)", u):
         return "paper"
     if re.search(r"(^|//|\.)github\.com/[\w.-]+/[\w.-]+", u) and "gist.github.com" not in u or re.fullmatch(r"[a-z0-9][\w.-]*/[\w.-]+", u):
         return "github"
@@ -233,6 +233,11 @@ def detect_kind(url: str) -> str:
     if u.startswith("http"):
         return "article"  # 博客 / X 长文 / gist / 讨论帖 / 官方文章
     return "paper"
+
+
+def _pdf_hint(url: str) -> str:
+    m = re.search(r"alphaxiv\.org/(?:abs|overview)/(\d{4}\.(?!\d{4,5}\b)[\w-]+)", url)
+    return f"\n这篇只发在 AlphaXiv、不在 arXiv，原文 PDF：https://www.alphaxiv.org/abs/{m.group(1)}.pdf" if m else ""
 
 
 def slugify(url: str) -> str:
@@ -679,7 +684,7 @@ def item_prompt(it: dict, out: Path) -> str:
         "不要写入 paper-library config.json 里的 Obsidian 库，也不要修改任何 skill 的文件；只写输出目录。"
     what = "论文深度解读" if kind == "paper" else "GitHub 项目架构与代码解读"
     return f"""任务：{what}
-对象：{it['url']}
+对象：{it['url']}{_pdf_hint(it['url'])}
 {('用户关注点：' + it['focus']) if it['focus'] else ''}
 
 1. 先完整阅读并遵循 skill：{skill}（以及同目录 references/ 中相关文件{'，深度解读按 references/deep-reading.md' if kind == 'paper' else ''}）。

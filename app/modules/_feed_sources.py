@@ -144,10 +144,11 @@ def fetch_alphaxiv(days: int = 14, page_size: int = 60) -> list[dict]:
             continue
         m = p.get("metrics") or {}
         ps = p.get("paper_summary") or {}
+        on_arxiv = re.fullmatch(r"\d{4}\.\d{4,5}", pid)
         out.append({
             "id": f"arxiv:{pid}", "source": "arxiv", "type": "paper", "title": clean(p["title"], 200),
             "summary": clean(p.get("feed_description") or (ps.get("summary") if isinstance(ps, dict) else "") or p.get("abstract")),
-            "url": f"https://arxiv.org/abs/{pid}", "date": date,
+            "url": f"https://arxiv.org/abs/{pid}" if on_arxiv else f"https://www.alphaxiv.org/abs/{pid}", "date": date,
             "popularity": float(m.get("public_total_votes") or m.get("total_votes") or 0),
             "extra": {"alphaxiv_url": f"https://www.alphaxiv.org/overview/{pid}", "github_url": p.get("github_url") or "",
                       "orgs": ", ".join(o["name"] for o in p.get("organization_info") or [] if o.get("name")),

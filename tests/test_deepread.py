@@ -23,6 +23,13 @@ def test_detect_kind_article():
     assert learn.detect_kind("karpathy/nanoGPT") == "github"
     assert learn.detect_kind("https://arxiv.org/abs/2401.00001") == "paper"
     assert learn.detect_kind("https://example.com/a.pdf") == "paper"
+    assert learn.detect_kind("https://www.alphaxiv.org/abs/2611.composable-soft-prompt-distillation") == "paper"
+
+
+def test_alphaxiv_native_paper_task_points_to_its_pdf(client, fake_submit):
+    url = "https://www.alphaxiv.org/abs/2611.composable-soft-prompt-distillation"
+    it = client.post("/api/learn/items", json={"url": url, "reuse": True}).json()
+    assert it["kind"] == "paper" and f"{url}.pdf" in fake_submit[-1]["prompt"]
 
 
 def test_article_item_task_and_reads(client, fake_submit):

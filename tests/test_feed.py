@@ -1197,3 +1197,13 @@ def test_parse_arxiv_search():
             '<entry><id>http://arxiv.org/abs/2501.00001v1</id><title>Old</title><summary>s</summary><published>2025-01-01T00:00:00Z</published></entry></feed>')
     got = src.parse_arxiv_search(atom, "agentic", days=10, now=datetime(2026, 11, 10, tzinfo=timezone.utc))
     assert [g["id"] for g in got] == ["arxiv:2611.01234"] and got[0]["type"] == "paper" and got[0]["title"] == "Agentic Video"
+
+
+def test_alphaxiv_native_paper_links_to_alphaxiv_not_arxiv(monkeypatch):
+    papers = [{"universal_paper_id": "2611.00002", "title": "On arXiv"},
+              {"universal_paper_id": "2611.composable-soft-prompt-distillation", "title": "AlphaXiv only"}]
+    monkeypatch.setattr(src, "_client", lambda: httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"papers": papers}))))
+    arxiv, native = src.fetch_alphaxiv()
+    assert arxiv["url"] == "https://arxiv.org/abs/2611.00002"
+    assert native["url"] == "https://www.alphaxiv.org/abs/2611.composable-soft-prompt-distillation"
