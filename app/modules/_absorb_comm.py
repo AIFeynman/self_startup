@@ -27,11 +27,13 @@ from . import _feed_hn as hnd
 BASE = DATA_DIR / "absorb" / "comm"
 UA = {"User-Agent": "Mozilla/5.0 (research pilot)"}
 FORUMS = {"openai": "https://community.openai.com", "huggingface": "https://discuss.huggingface.co", "cursor": "https://forum.cursor.com"}
-NAMES = {"x": "X（推特）回复区", "lobsters": "Lobsters", "openai": "OpenAI 开发者社区", "huggingface": "Hugging Face 论坛", "cursor": "Cursor 论坛"}
+NAMES = {"x": "X（推特）回复区", "xart": "X 长文回复区", "lobsters": "Lobsters", "openai": "OpenAI 开发者社区", "huggingface": "Hugging Face 论坛", "cursor": "Cursor 论坛"}
 MIN_COMMENTS = {"lobsters": 8}
 MIN_DEFAULT = 15
 MAX_POSTS_FETCH = 120
-X_PAGES = 5            # twitterapi.io 每页 20 条回复
+X_TOP_PAGES, X_NEW_PAGES, X_MIN_FAVES, X_MAX_REPLIES = 3, 2, 3, 100   # GetXAPI 每页约 20 条：高赞最多 60 + 最新最多 40
+X_ART_MIN_REPLIES = 20
+X_BIG = 10_000         # 粉丝 ≥1 万的回复者：Jev 分数放宽到 0.4
 Q_REPLY = ("state.items.{k} 是 X 上一条推文下的回复。它是否包含有信息量的内容：具体的观点或判断并说明了理由、亲身使用或做过的经验、"
            "带理由的推荐或质疑、有出处的事实或数据？只有表情、玩笑、顺口附和、@人寒暄、求关注、广告和刷屏、与原推无关的内容否。")
 
@@ -39,7 +41,7 @@ Q_REPLY = ("state.items.{k} 是 X 上一条推文下的回复。它是否包含�
 class CRun(ar.Run):
     def __init__(self, source: str, jev_min: float = 0.0):
         self.source, self.topic, self.stage, self.jev_min = source, NAMES[source], "digest", jev_min
-        self.dir = BASE / (source + (f"_jev{jev_min}" if jev_min else ""))
+        self.dir = BASE / (source + (f"_jev{jev_min}_v2" if jev_min else ""))
         self.dir.mkdir(parents=True, exist_ok=True)
         self.light = agent.tier_model("light") or "claude-haiku-5-5"
         self.cost, self.secs, self.fails = {}, {}, {}
@@ -141,31 +143,92 @@ def x_posts(limit: int) -> list[dict]:
     return out[:limit]
 
 
-def x_thread(c: httpx.Client, p: dict) -> tuple[str, list[dict]]:
+def _gx(c: httpx.Client, path: str, params: dict) -> dict:
+    r = c.get("https://api.getxapi.com" + path, params=params, headers={"Authorization": f"Bearer {os.environ['GETXAPI_KEY'].strip()}"})
+    r.raise_for_status()
+    return r.json() or {}
+
+
+def _reply(x: dict) -> dict | None:
+    text = re.sub(r"^(@\w+\s+)+", "", hnd.comment_text(x.get("text") or ""))
+    a = x.get("author") or {}
+    if not text or not a.get("userName"):
+        return None
+    return {"tid": str(x.get("id")), "depth": 0, "author": a["userName"], "text": text[:hnd.MAX_COMMENT], "replies": 0, "likes": x.get("likeCount") or 0,
+            "fol": a.get("followers") or 0}
+
+
+def x_replies(c: httpx.Client, tid: str, top_pages: int = X_TOP_PAGES, new_pages: int = X_NEW_PAGES) -> list[dict]:
+    """高赞回复（搜索 conversation_id + min_faves，Top）在前，再补最新回复；按 id 去重。"""
     hn.load_env()
-    key, cur, out = os.environ["TWITTER_API_KEY"].strip(), "", []
-    for _ in range(X_PAGES):
-        d = c.get("https://api.twitterapi.io/twitter/tweet/replies", params={"tweetId": p["id"], "cursor": cur}, headers={"X-API-Key": key}).json()
+    got: dict[str, dict] = {}
+    cur = ""
+    for _ in range(top_pages):
+        d = _gx(c, "/twitter/tweet/advanced_search", {"q": f"conversation_id:{tid} min_faves:{X_MIN_FAVES} filter:replies", "product": "Top", "cursor": cur})
         for x in d.get("tweets") or []:
-            text = re.sub(r"^(@\w+\s+)+", "", hnd.comment_text(x.get("text") or ""))
-            if text:
-                out.append({"id": len(out) + 1, "depth": 0, "author": (x.get("author") or {}).get("userName") or "", "text": text[:hnd.MAX_COMMENT], "replies": 0, "likes": x.get("likeCount") or 0})
+            if (r := _reply(x)):
+                got.setdefault(r["tid"], r)
         cur = d.get("next_cursor") or ""
-        if not d.get("has_next_page") or not cur:
+        if not d.get("has_more") or not cur:
             break
-    return p["author"], out
+    n_top, cur = len(got), ""
+    for _ in range(new_pages):
+        d = _gx(c, "/twitter/tweet/replies", {"id": tid, "cursor": cur})
+        for x in d.get("replies") or []:
+            if (r := _reply(x)):
+                got.setdefault(r["tid"], r)
+        cur = d.get("next_cursor") or ""
+        if not d.get("has_more") or not cur:
+            break
+    out = sorted(got.values(), key=lambda r: -r["likes"])
+    return out[:X_MAX_REPLIES]
+
+
+def dedup_replies(rs: list[dict]) -> list[dict]:
+    """同一句话只留一条，同一个人最多留 2 条（刷屏、模板回复）。"""
+    seen, per, out = set(), {}, []
+    for r in rs:
+        k = re.sub(r"\W+", "", r["text"].lower())[:80]
+        if k in seen or per.get(r["author"], 0) >= 2:
+            continue
+        seen.add(k)
+        per[r["author"]] = per.get(r["author"], 0) + 1
+        out.append(r)
+    return out
+
+
+def x_thread(c: httpx.Client, p: dict) -> tuple[str, list[dict]]:
+    rs = dedup_replies(x_replies(c, p["id"]))
+    return p["author"], [{**r, "id": n + 1} for n, r in enumerate(rs)]
+
+
+def xart_posts(limit: int) -> list[dict]:
+    db = sqlite3.connect(f"file:{DATA_DIR / 'app.db'}?mode=ro", uri=True)
+    rows = db.execute("select id, user, title, summary, likes, views from x_art where stage='scored' order by q desc, likes desc limit 80").fetchall()
+    out = []
+    with httpx.Client(timeout=30) as c:
+        hn.load_env()
+        for tid, user, title, summary, likes, views in rows:
+            n = _gx(c, "/twitter/tweet/replies", {"id": tid}).get("reply_count") or 0
+            if n >= X_ART_MIN_REPLIES:
+                out.append({"id": tid, "title": title, "url": f"https://x.com/{user}/status/{tid}", "points": likes, "comments": n, "link": f"https://x.com/{user}/status/{tid}",
+                            "ts": 0, "author": user, "summary": summary or ""})
+            if len(out) >= limit:
+                break
+    return out
 
 
 def digest(r: CRun, p: dict, c: httpx.Client) -> dict | None:
     f = r.dir / f"{p['id']}.json"
     if f.exists():
         return json.loads(f.read_text("utf-8"))
-    if r.source == "x":
+    if r.source in ("x", "xart"):
         op, comments = x_thread(c, p)
         read = len(comments)
         if r.jev_min:
             sc = jev_scores([x["text"] for x in comments])
-            comments = [{**x, "id": n + 1} for n, x in enumerate(x for x, v in zip(comments, sc) if v >= r.jev_min)]
+            keep = [x for x, v in zip(comments, sc) if v >= r.jev_min or (x["fol"] >= X_BIG and v >= 0.4)]
+            comments = [{**x, "id": n + 1} for n, x in enumerate(keep)]
     else:
         op, comments = lobsters_thread(c, p) if r.source == "lobsters" else forum_thread(c, r.source, p)
         read = len(comments)
@@ -174,7 +237,7 @@ def digest(r: CRun, p: dict, c: httpx.Client) -> dict | None:
     text = hnd.render(comments)
     before = r.cost.get("digest", 0.0)
     t0 = time.time()
-    raw = r.call(r.light, system(r.source), hnd._payload({"title": p["title"], "url": p["url"], "popularity": p["points"]}, text))
+    raw = r.call(r.light, system(r.source), hnd._payload({"title": p["title"], "url": p["url"], "summary": p.get("summary", ""), "popularity": p["points"]}, text))
     if not isinstance(raw, dict):
         return None
     d = hnd.clean_digest(raw, comments, text, op)
@@ -190,7 +253,7 @@ def digest(r: CRun, p: dict, c: httpx.Client) -> dict | None:
 def run(source: str, limit: int, jev_min: float = 0.0) -> list[dict]:
     r = CRun(source, jev_min)
     with httpx.Client(timeout=hnd.TIMEOUT, follow_redirects=True) as c:
-        posts = x_posts(limit) if source == "x" else lobsters_posts(c, limit) if source == "lobsters" else forum_posts(c, source, limit)
+        posts = x_posts(limit) if source == "x" else xart_posts(limit) if source == "xart" else lobsters_posts(c, limit) if source == "lobsters" else forum_posts(c, source, limit)
         with ThreadPoolExecutor(hnd.WORKERS) as ex:
             res = list(ex.map(lambda p: digest(r, p, c), posts))
     return [d for d in res if d]

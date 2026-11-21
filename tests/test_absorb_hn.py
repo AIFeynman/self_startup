@@ -265,3 +265,10 @@ def test_api_x_source_is_separate_and_react_logs_src(client, tmp_path, monkeypat
     assert client.post(f"/api/absorb/hn/runs/{rid}/react?src=x", json={"topic": 0, "stars": 4}).status_code == 200
     assert json.loads((tmp_path / "fb.jsonl").read_text().splitlines()[0])["src"] == "x"
     assert client.get("/api/absorb/feedback").json()["n"] == 0
+
+
+def test_dedup_replies_drops_copies_and_caps_per_author():
+    from app.modules import _absorb_comm as cm
+    r = lambda a, t: {"author": a, "text": t}  # noqa: E731
+    out = cm.dedup_replies([r("a", "Fix remote access!"), r("b", "fix remote access"), r("c", "one"), r("c", "two"), r("c", "three")])
+    assert [(x["author"], x["text"]) for x in out] == [("a", "Fix remote access!"), ("c", "one"), ("c", "two")]
