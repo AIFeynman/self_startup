@@ -149,3 +149,15 @@ def test_blog_entry_uses_full_content_and_strips_html():
     s = M.blog_entry(p, e)
     assert s["id"] == "blog:https://karpathy.bearblog.dev/post/" and s["kind"] == "own" and s["date"] == "2026-04-02"
     assert "I keep a wiki." in s["text"] and "<" not in s["text"]
+
+
+def test_upload_day_reads_video_json(tmp_path):
+    (tmp_path / "video.json").write_text('{"upload_date": "20261110"}')
+    assert M.upload_day(tmp_path) == "2026-11-10"
+    assert M.upload_day(tmp_path / "nope") == ""
+
+
+def test_picked_reuse_fills_date_from_new_info():
+    prev = {"link:u#0": {"id": "link:u#0", "kind": "link", "person": "mollick", "url": "u", "date": "", "author": "深读", "title": "t", "text": "x"}}
+    got = M.picked_sources([{"url": "u", "person": "mollick", "date": "2026-11-10"}], prev)
+    assert [(s["id"], s["date"]) for s in got] == [("link:u#0", "2026-11-10")]

@@ -347,7 +347,7 @@ def picked_sources(picked: list[dict], prev: dict[str, dict]) -> list[dict]:
     for x in picked:
         old = [s for s in prev.values() if s["url"] == x["url"] and s["person"] == x["person"]]
         if old:
-            out += old
+            out += [{**o, "date": x.get("date") or o["date"]} for o in old]
             continue
         text = x.get("text") or fetch_text(x["url"])
         for k, part in enumerate(chunks(text)):
@@ -359,6 +359,15 @@ def picked_sources(picked: list[dict], prev: dict[str, dict]) -> list[dict]:
 def learn_people(title: str, note: str, pool: list[dict]) -> list[str]:
     head = f"{title}\n{note[:NOTE_HEAD]}"
     return [p["id"] for p in pool if any(r.search(head) for r in name_res(p["id"]))]
+
+
+def upload_day(d: Path) -> str:
+    """深读视频的发布日期（video.json 的 upload_date，如 20261110）；文章没有可靠的发布日期，留空。"""
+    try:
+        u = str(json.loads((d / "video.json").read_text("utf-8")).get("upload_date") or "")
+    except (OSError, ValueError):
+        return ""
+    return f"{u[:4]}-{u[4:6]}-{u[6:8]}" if re.fullmatch(r"\d{8}", u) else ""
 
 
 def learn_picks(pool: list[dict]) -> list[dict]:
@@ -373,7 +382,7 @@ def learn_picks(pool: list[dict]) -> list[dict]:
         if kind == "video" and not text:
             continue
         for pid in learn_people(title or "", note, pool):
-            out.append({"url": url, "person": pid, "title": title or "", "text": text, "author": "深读" if text else ""})
+            out.append({"url": url, "person": pid, "title": title or "", "text": text, "author": "深读" if text else "", "date": upload_day(d)})
     return out
 
 

@@ -47,13 +47,22 @@ const CSS = `
 .pm-ev summary { cursor: pointer; color: var(--muted); }
 .pm-ev li { margin: 4px 0; line-height: 1.5; overflow-wrap: anywhere; }
 .pm-ev q { color: var(--text); }
+.pm-sort { margin: 0 0 12px; }
+.pm-who { font-size: 12.5px; color: var(--accent); font-weight: 500; }
+.pm-day { font-size: 12px; color: var(--muted); }
 @media (max-width: 640px) { .pp-it { grid-template-columns: minmax(0, 1fr) auto; } .pp-it .pp-ch { grid-column: 1 / -1; justify-self: start; } }
 `;
 
 const CH = { x: 'X', blog: '博客', youtube: 'YouTube', podcast: '播客', paper: '论文', news: '新闻', bili: 'B站' };
 // 视频和播客深读时才转写：播客传音频直链，按视频走字幕 / whisper
 const DEEP = new Set(['blog', 'youtube', 'podcast', 'paper', 'news', 'bili']);
-const state = { view: 'today', person: '', batch: '', focus: '' };
+const SORTS = [['pick', '按人 · 推荐顺序'], ['person_time', '按人 · 按时间'], ['time', '全部 · 按时间']];
+const loadSort = () => { try { return localStorage.getItem('pm-sort') || 'pick'; } catch { return 'pick'; } };
+const saveSort = (v) => { try { localStorage.setItem('pm-sort', v); } catch { /* 无痕窗口等存不了，只影响下次默认 */ } };
+// 卡片日期：出处日期；出处没有日期（访谈链接）就用证据里最新的；都没有的排最后
+const cardDay = (m) => m.origin.date || m.evidence.map((e) => e.date).filter(Boolean).sort().pop() || '';
+const byTime = (a, b) => cardDay(b).localeCompare(cardDay(a));
+const state = { view: 'today', person: '', batch: '', focus: '', msort: loadSort() };
 const KIND = { own: '本人', retell: '转述', link: '访谈 / 报道' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
@@ -141,7 +150,8 @@ export function peopleTab(box, ctx, sub = []) {
     } finally { polling = false; }
   }
 
-  const method = (m) => h('div.pm-m', {}, [
+  const method = (m, person = null) => h('div.pm-m', {}, [
+    person ? h('div', {}, [h('span.pm-who', {}, who(person)), h('span.pm-day', {}, cardDay(m) ? ` · ${cardDay(m)}` : ' · 日期不明')]) : null,
     h('div.pm-name', {}, [h('span.pm-tag.weak', {}, m.kind), h('b', {}, m.name),
       h('span.pm-tag' + (m.own ? '' : '.weak'), { title: m.own ? '有本人发的推文 / 文章' : '只找到别人的转述，可能失真' }, m.own ? '本人原话' : '仅转述'),
       m.retellers ? h('span.pm-tag.weak', {}, `${m.retellers} 人转述`) : null,
@@ -172,9 +182,14 @@ export function peopleTab(box, ctx, sub = []) {
     box.replaceChildren(bar(ps), h('div.pm-head', {}, [h('span', {}, `名人很有启发的做法和观点，带原话和出处 · ${src}`), run,
       r.error ? h('span', { style: { color: 'var(--warn, #b7791f)' } }, r.error) : null]),
     h('div.pm-add', { style: { marginBottom: '12px' } }, [sel, url, add]),
-    ...(d?.people.length ? d.people.map((g) => h('div.card.pp-grp', {}, [
-      h('div.pp-who', {}, [h('b', {}, who(idx[g.person.id] || g.person)), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 条`)]),
-      ...g.methods.map(method)])) : [ui.empty('还没有卡片', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')]));
+    d?.people.length ? h('div.fd-seg.pm-sort', {}, SORTS.map(([id, name]) => h('button' + (state.msort === id ? '.on' : ''),
+      { onclick: () => { state.msort = id; saveSort(id); methods(); } }, name))) : '',
+    ...(!d?.people.length ? [ui.empty('还没有卡片', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')]
+      : state.msort === 'time' ? [h('div.card.pp-grp', {}, d.people.flatMap((g) => g.methods.map((m) => [m, idx[g.person.id] || g.person]))
+        .sort(([a], [b]) => byTime(a, b)).map(([m, p]) => method(m, p)))]
+      : d.people.map((g) => h('div.card.pp-grp', {}, [
+        h('div.pp-who', {}, [h('b', {}, who(idx[g.person.id] || g.person)), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 条`)]),
+        ...(state.msort === 'person_time' ? [...g.methods].sort(byTime) : g.methods).map((m) => method(m))]))));
     if (r.running) mpoll();
   }
 
