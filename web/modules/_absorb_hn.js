@@ -60,7 +60,7 @@ function res(t, D) {
 
 function campsHtml(t) {
   const tot = t.camps.reduce((a, c) => a + c.n, 0) || 1;
-  return `<div class="hn-bar">${t.camps.map((c, i) => `<i style="flex:${c.n};background:${COL[i % 5]}" title="${E(c.claim)}"><b>${i + 1}</b><span>${Math.round(c.n / tot * 100)}%</span></i>`).join('')}</div>
+  return `<div class="hn-bar">${t.camps.map((c, i) => `<i style="flex:${c.n};background:${COL[i % 5]}" title="${E(c.claim)}"><span>${Math.round(c.n / tot * 100)}%</span></i>`).join('')}</div>
 <ul class="hn-camps">${t.camps.map((c, i) => `<li><span class="hn-sw" style="background:${COL[i % 5]}">${i + 1}</span><div class="hn-ct">${E(c.claim)}</div><div class="hn-cn">${c.n} 条 · ${Math.round(c.n / tot * 100)}% ${src(c.cid)}</div></li>`).join('')}</ul>`;
 }
 
