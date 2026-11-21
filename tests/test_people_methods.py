@@ -125,3 +125,27 @@ def test_retell_scan_finds_each_named_person_once(monkeypatch):
     monkeypatch.setattr(M.sqlite3, "connect", lambda *a, **k: Conn())
     got = sorted((s["id"], s["kind"]) for s in M.retell_x_art([M.P.by_id()["karpathy"], M.P.by_id()["dean"]]))
     assert got == [("xart:1:dean", "retell"), ("xart:1:karpathy", "retell"), ("xart:2:karpathy", "own")]
+
+
+def test_chunks_cover_whole_text_on_paragraph_boundaries():
+    text = "\n\n".join(f"段落{i} " + "字" * 300 for i in range(40))
+    parts = M.chunks(text, 2000)
+    assert all(len(p) <= 2000 for p in parts)
+    assert "".join(parts).replace("\n", "") == text.replace("\n", "")
+    assert all(p.lstrip().startswith("段落") for p in parts)
+
+
+def test_learn_people_matches_title_and_note_head():
+    pool = [M.P.by_id()[i] for i in ("mollick", "karpathy")]
+    got = M.learn_people("Ethan Mollick 谈新书（Ground Truths 直播访谈）", "嘉宾是沃顿商学院教授", pool)
+    assert got == ["mollick"]
+    assert M.learn_people("I tested 4 AI agents", "评测了四个 agent", pool) == []
+
+
+def test_blog_entry_uses_full_content_and_strips_html():
+    p = M.P.by_id()["karpathy"]
+    e = {"link": "https://karpathy.bearblog.dev/post/", "title": "On wikis", "published_parsed": (2026, 4, 2, 0, 0, 0, 0, 0, 0),
+         "content": [{"value": "<p>I keep a <b>wiki</b>.</p>" + "<p>more</p>" * 3}], "summary": "short"}
+    s = M.blog_entry(p, e)
+    assert s["id"] == "blog:https://karpathy.bearblog.dev/post/" and s["kind"] == "own" and s["date"] == "2026-04-02"
+    assert "I keep a wiki." in s["text"] and "<" not in s["text"]

@@ -151,14 +151,14 @@ export function peopleTab(box, ctx, sub = []) {
     m.try ? h('div.pm-try', {}, [h('b', {}, '今天就能试：'), m.try]) : null,
     h('details.pm-ev', {}, [h('summary', {}, `原话与出处 ${m.evidence.length} 条`), h('ul', {}, m.evidence.map((e) => h('li', {}, [
       h('span.pm-tag.weak', {}, KIND[e.kind]), ' ', h('q', {}, e.quote), ' — ',
-      h('a', { href: safeUrl(e.url), target: '_blank', rel: 'noopener' }, `${e.kind === 'link' ? '' : '@'}${e.author}${e.date ? ' · ' + e.date : ''}`)])))]),
+      h('a', { href: safeUrl(e.url), target: '_blank', rel: 'noopener' }, `${e.author.includes('.') || e.kind === 'link' ? '' : '@'}${e.author}${e.date ? ' · ' + e.date : ''}`)])))]),
   ]);
 
   async function methods() {
     const [r, ps] = await Promise.all([api.get('/api/feed/people/methods'), api.get('/api/feed/people?days=1')]);
     const idx = Object.fromEntries(ps.people.map((p) => [p.id, p]));
     const sel = h('select', {}, [...ps.people].sort((a, b) => a.tier - b.tier).map((p) => h('option', { value: p.id }, who(p))));
-    const url = h('input', { type: 'url', placeholder: '访谈 / 博客链接，下次提炼时抓正文' });
+    const url = h('input', { type: 'url', placeholder: '访谈 / 文章链接，下次提炼时抓正文（深读过的访谈会自动收进来）' });
     const add = h('button.ghost.sm', { onclick: async () => {
       try { await api.post('/api/feed/people/methods/links', { url: url.value, person: sel.value }); url.value = ''; toast('已加入，点「重新提炼」生效'); }
       catch (e) { toast(e.message, true); }
@@ -168,7 +168,7 @@ export function peopleTab(box, ctx, sub = []) {
       catch (e) { toast(e.message, true); }
     } }, [ui.icon('refresh'), r.running ? `提炼中 · ${r.stage_name} ${r.step}/${r.steps}` : '重新提炼']);
     const d = r.data;
-    const src = d ? `${d.n} 条 · 材料：本人高赞推文 ${d.sources.own} 条、点名转述 ${d.sources.retell} 篇、访谈链接 ${d.sources.link} 篇，Jev 筛后 ${d.screened} 份进模型，只留启发度最高的一档` : '还没提炼过';
+    const src = d ? `${d.n} 条 · 材料：本人高赞推文 ${d.sources.tweet} 条、本人博客 ${d.sources.blog} 篇、点名转述 ${d.sources.retell} 篇、深读和手动链接 ${d.sources.picked} 篇，Jev 筛后 ${d.screened} 份进模型，只留启发度最高的一档` : '还没提炼过';
     box.replaceChildren(bar(ps), h('div.pm-head', {}, [h('span', {}, `名人很有启发的做法和观点，带原话和出处 · ${src}`), run,
       r.error ? h('span', { style: { color: 'var(--warn, #b7791f)' } }, r.error) : null]),
     h('div.pm-add', { style: { marginBottom: '12px' } }, [sel, url, add]),

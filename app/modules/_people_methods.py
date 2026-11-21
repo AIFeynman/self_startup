@@ -26,7 +26,9 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
+from pathlib import Path
 
+import feedparser
 import httpx
 
 from .. import agent, settings
@@ -54,8 +56,10 @@ QUARTERS = 4
 PAGE_FULL = 18     # 一页约 20 条，接近满页说明窗口里还有更多
 SNIP_WIDTH = 700
 SNIP_MAX = 3000
-LINK_MAX = 20000    # 手动加的链接本来就是讲这个人的访谈 / 报道，整篇给模型
+LINK_MAX = 12000    # 手动加的链接本来就是讲这个人的访谈 / 报道，整篇给模型
 LATIN = r"[A-Za-z\u00C0-\u024F]+"   # 拉丁字母含重音（Lütke、François），不吞中文
+NOTE_HEAD = 1500    # 深读笔记开头（标题、嘉宾、摘要）里点到名才算是讲这个人的
+BLOG_MAX = 20
 SURNAME_MIN = 6     # 只写姓的提法（“Karpathy 说”）也算点名；Dean、Musk 这类短姓太常见，要全名
 BATCH = 6
 
@@ -273,36 +277,119 @@ def retell_x_art(pool: list[dict]) -> list[dict]:
     return out
 
 
-def link_sources(pool: list[dict]) -> list[dict]:
-    ids = {p["id"] for p in pool}
+def blog_entry(p: dict, e: dict) -> dict:
+    html = ((e.get("content") or [{}])[0].get("value") or e.get("summary") or "")
+    tm = e.get("published_parsed") or e.get("updated_parsed")
+    return {"id": f"blog:{e['link']}", "kind": "own", "person": p["id"], "author": _host(e["link"]), "url": e["link"],
+            "date": "%04d-%02d-%02d" % tuple(tm[:3]) if tm else "", "title": e.get("title", ""),
+            "text": snap.extract_text(html, "text/html")[:SNIP_MAX * 4]}
+
+
+def blog_sources(pool: list[dict]) -> list[dict]:
+    """本人博客订阅源：全文输出的直接用，只给摘要的再抓正文。"""
     out = []
-    for x in links():
-        if x["person"] not in ids:
+    with src._client() as c:
+        def one(p):
+            try:
+                r = c.get(p["rss"], headers={"User-Agent": src.BROWSER_UA})
+                r.raise_for_status()
+                return p, feedparser.parse(r.text).entries
+            except Exception:  # noqa: BLE001
+                return p, []
+        with ThreadPoolExecutor(4) as ex:
+            for p, entries in ex.map(one, [p for p in pool if p.get("rss")]):
+                for e in entries[:BLOG_MAX]:
+                    if not e.get("link"):
+                        continue
+                    s = blog_entry(p, e)
+                    if len(s["text"]) < 1500:
+                        s["text"] = (fetch_text(s["url"]) or s["text"])[:SNIP_MAX * 4]
+                    out.append(s)
+    return out
+
+
+def chunks(text: str, size: int = LINK_MAX) -> list[str]:
+    """长访谈 / 转写按段落切成几块，整篇都读到（只截前一段会漏掉后面讲的方法）。"""
+    out, cur = [], ""
+    for para in re.split(r"(?<=\n\n)", text):
+        while len(para) > size:
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(para[:size])
+            para = para[size:]
+        if len(cur) + len(para) > size:
+            out.append(cur)
+            cur = ""
+        cur += para
+    return [c for c in out + [cur] if c.strip()]
+
+
+def fetch_text(url: str) -> str:
+    try:
+        code, ct, body = snap.fetch_retry(url)
+        text = snap.extract_text(body, ct, url) if code < 400 else ""
+        if len(text) < 500:
+            code, ct, body = snap.jina_fetch(url)
+            text = snap.normalize(body) if code < 400 else ""
+        return text
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _host(url: str) -> str:
+    return re.sub(r"^www\.", "", re.sub(r"^https?://([^/]+).*", r"\1", url))
+
+
+def picked_sources(picked: list[dict], prev: dict[str, dict]) -> list[dict]:
+    """人挑过的材料（手动链接、深读过的访谈和文章）：已经抓过的沿用，新的才抓正文；长的按段切块。"""
+    out = []
+    for x in picked:
+        old = [s for s in prev.values() if s["url"] == x["url"] and s["person"] == x["person"]]
+        if old:
+            out += old
             continue
-        try:
-            code, ct, body = snap.fetch_retry(x["url"])
-            text = snap.extract_text(body, ct, x["url"]) if code < 400 else ""
-            if len(text) < 500:
-                code, ct, body = snap.jina_fetch(x["url"])
-                text = snap.normalize(body) if code < 400 else ""
-        except Exception:  # noqa: BLE001
+        text = x.get("text") or fetch_text(x["url"])
+        for k, part in enumerate(chunks(text)):
+            out.append({"id": f"link:{x['url']}#{k}", "kind": "link", "person": x["person"], "author": x.get("author") or _host(x["url"]),
+                        "url": x["url"], "date": x.get("date", ""), "title": x.get("title") or text.splitlines()[0][:80], "text": part})
+    return out
+
+
+def learn_people(title: str, note: str, pool: list[dict]) -> list[str]:
+    head = f"{title}\n{note[:NOTE_HEAD]}"
+    return [p["id"] for p in pool if any(r.search(head) for r in name_res(p["id"]))]
+
+
+def learn_picks(pool: list[dict]) -> list[dict]:
+    """深读里讲到名单上的人的访谈 / 演讲 / 文章：视频用本地转写，文章抓原文。"""
+    out = []
+    c = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    for kind, url, title, path in c.execute("select kind, url, title, output_path from learn_items where status='done' and kind in ('video', 'article')"):
+        d = Path(path or "").parent
+        note = (d / "note.md").read_text("utf-8", errors="replace") if (d / "note.md").exists() else ""
+        tr = d / "transcript.md"
+        text = tr.read_text("utf-8", errors="replace") if kind == "video" and tr.exists() else ""
+        if kind == "video" and not text:
             continue
-        if not text:
-            continue
-        host = re.sub(r"^www\.", "", re.sub(r"^https?://([^/]+).*", r"\1", x["url"]))
-        out.append({"id": f"link:{x['url']}", "kind": "link", "person": x["person"], "author": host, "url": x["url"],
-                    "date": "", "title": text.splitlines()[0][:80], "text": text[:LINK_MAX]})
+        for pid in learn_people(title or "", note, pool):
+            out.append({"url": url, "person": pid, "title": title or "", "text": text, "author": "深读" if text else ""})
     return out
 
 
 def s_collect(r: MRun) -> list:
-    """本人推文增量抓，和上次的合并；长文库和链接每次重扫（本地 / 量小）。"""
+    """本人推文、博客增量抓，和上次的合并（订阅源只给最近几篇）；长文库每次重扫；手动链接和深读抓过的沿用。"""
     pool = [P.by_id()[i] for i in r.pids]
+    ids = {p["id"] for p in pool}
     last = r.load(OWN_STATE) if r.has(OWN_STATE) else {}
-    prev = {s["id"]: s for s in (r.load("collect.json") if r.has("collect.json") else []) if s["kind"] == "own"}
-    own = {**prev, **{s["id"]: s for s in own_x(pool, last)}}
+    prev = {s["id"]: s for s in (r.load("collect.json") if r.has("collect.json") else []) if s["person"] in ids}
+    tweets = {k: v for k, v in prev.items() if v["kind"] == "own" and not k.startswith("blog:")}
+    tweets |= {s["id"]: s for s in own_x(pool, last)}
     r.save(OWN_STATE, {**last, **{p["id"]: datetime.date.today().isoformat() for p in pool if p.get("x")}})
-    return list(own.values()) + retell_x_art(pool) + link_sources(pool)
+    blogs = {k: v for k, v in prev.items() if k.startswith("blog:")} | {s["id"]: s for s in blog_sources(pool)}
+    picked = [x for x in links() if x["person"] in ids] + learn_picks(pool)
+    old = {k: v for k, v in prev.items() if v["kind"] == "link"}
+    return list(tweets.values()) + list(blogs.values()) + retell_x_art(pool) + picked_sources(picked, old)
 
 
 # ---------- 2 Jev 筛材料 ----------
@@ -437,7 +524,10 @@ def s_page(r: MRun) -> dict:
         people.append({"person": {k: p.get(k) for k in ("id", "name", "zh", "x", "tier", "role", "group")}, "methods": mine})
     people.sort(key=lambda g: (g["person"]["tier"], -sum(c["own"] for c in g["methods"]), -len(g["methods"])))
     return {"built": time.time(), "people": people, "n": len(cards),
-            "sources": {k: sum(s["kind"] == k for s in sources.values()) for k in JEV_KIND}, "screened": len(r.load("screen.json")["keep"])}
+            "sources": {"tweet": sum(s["kind"] == "own" and not k.startswith("blog:") for k, s in sources.items()),
+                        "blog": sum(k.startswith("blog:") for k in sources), "retell": sum(s["kind"] == "retell" for s in sources.values()),
+                        "picked": len({s["url"] for s in sources.values() if s["kind"] == "link"})},
+            "screened": len(r.load("screen.json")["keep"])}
 
 
 def _read(name: str, default):
