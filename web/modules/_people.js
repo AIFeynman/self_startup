@@ -47,7 +47,11 @@ const CSS = `
 .pm-ev summary { cursor: pointer; color: var(--muted); }
 .pm-ev li { margin: 4px 0; line-height: 1.5; overflow-wrap: anywhere; }
 .pm-ev q { color: var(--text); }
-.pm-sort { margin: 0 0 12px; }
+.pm-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+.pm-filter { flex: 0 1 260px; min-width: 0; }
+.pm-addbox { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); }
+.pm-addbox summary { cursor: pointer; }
+.pm-addbox .pm-add { margin-top: 8px; }
 .pm-who { font-size: 12.5px; color: var(--accent); font-weight: 500; }
 .pm-day { font-size: 12px; color: var(--muted); }
 @media (max-width: 640px) { .pp-it { grid-template-columns: minmax(0, 1fr) auto; } .pp-it .pp-ch { grid-column: 1 / -1; justify-self: start; } }
@@ -62,7 +66,7 @@ const saveSort = (v) => { try { localStorage.setItem('pm-sort', v); } catch { /*
 // 卡片日期：出处日期；出处没有日期（访谈链接）就用证据里最新的；都没有的排最后
 const cardDay = (m) => m.origin.date || m.evidence.map((e) => e.date).filter(Boolean).sort().pop() || '';
 const byTime = (a, b) => cardDay(b).localeCompare(cardDay(a));
-const state = { view: 'today', person: '', batch: '', focus: '', msort: loadSort() };
+const state = { view: 'today', person: '', batch: '', focus: '', msort: loadSort(), mperson: '' };
 const KIND = { own: '本人', retell: '转述', link: '访谈 / 报道' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
@@ -178,16 +182,22 @@ export function peopleTab(box, ctx, sub = []) {
       catch (e) { toast(e.message, true); }
     } }, [ui.icon('refresh'), r.running ? `提炼中 · ${r.stage_name} ${r.step}/${r.steps}` : '重新提炼']);
     const d = r.data;
+    if (state.mperson && !d?.people.some((g) => g.person.id === state.mperson)) state.mperson = '';
+    const shown = (d?.people || []).filter((g) => !state.mperson || g.person.id === state.mperson);
     const src = d ? `${d.n} 条 · 材料：本人高赞推文 ${d.sources.tweet} 条、本人博客 ${d.sources.blog} 篇、点名转述 ${d.sources.retell} 篇、深读和手动链接 ${d.sources.picked} 篇，Jev 筛后 ${d.screened} 份进模型，只留启发度最高的一档` : '还没提炼过';
     box.replaceChildren(bar(ps), h('div.pm-head', {}, [h('span', {}, `名人很有启发的做法和观点，带原话和出处 · ${src}`), run,
       r.error ? h('span', { style: { color: 'var(--warn, #b7791f)' } }, r.error) : null]),
-    h('div.pm-add', { style: { marginBottom: '12px' } }, [sel, url, add]),
-    d?.people.length ? h('div.fd-seg.pm-sort', {}, SORTS.map(([id, name]) => h('button' + (state.msort === id ? '.on' : ''),
-      { onclick: () => { state.msort = id; saveSort(id); methods(); } }, name))) : '',
+    h('details.pm-addbox', {}, [h('summary', {}, '补充访谈 / 文章链接'), h('div.pm-add', {}, [sel, url, add])]),
+    d?.people.length ? h('div.pm-tools', {}, [
+      h('select.pm-filter', { title: '只看某个人', onchange: (e) => { state.mperson = e.target.value; methods(); } },
+        [h('option', { value: '' }, `全部名人（${d.n} 条）`), ...d.people.map((g) => h('option', { value: g.person.id, selected: state.mperson === g.person.id },
+          `${who(idx[g.person.id] || g.person)}（${g.methods.length}）`))]),
+      h('div.fd-seg.pm-sort', {}, SORTS.map(([id, name]) => h('button' + (state.msort === id ? '.on' : ''),
+        { onclick: () => { state.msort = id; saveSort(id); methods(); } }, name)))]) : '',
     ...(!d?.people.length ? [ui.empty('还没有卡片', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')]
-      : state.msort === 'time' ? [h('div.card.pp-grp', {}, d.people.flatMap((g) => g.methods.map((m) => [m, idx[g.person.id] || g.person]))
+      : state.msort === 'time' ? [h('div.card.pp-grp', {}, shown.flatMap((g) => g.methods.map((m) => [m, idx[g.person.id] || g.person]))
         .sort(([a], [b]) => byTime(a, b)).map(([m, p]) => method(m, p)))]
-      : d.people.map((g) => h('div.card.pp-grp', {}, [
+      : shown.map((g) => h('div.card.pp-grp', {}, [
         h('div.pp-who', {}, [h('b', {}, who(idx[g.person.id] || g.person)), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 条`)]),
         ...(state.msort === 'person_time' ? [...g.methods].sort(byTime) : g.methods).map((m) => method(m))]))));
     if (r.running) mpoll();
