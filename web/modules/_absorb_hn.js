@@ -112,6 +112,8 @@ function match(t, D, F, R) {
   if (F.todo && R[t.key] && R[t.key].act) return false;
   if (F.res) { const { rec, oth } = res(t, D); if (![...rec, ...(F.incl ? oth : [])].some((r) => kk(r.kind) === F.res)) return false; }
   if (F.exp && !t.exps.some((x) => x.outcome === F.exp)) return false;
+  const st = (R[t.key] && R[t.key].stars) || 0;
+  if (F.star && (F.star === '0' ? st : st < +F.star)) return false;
   return true;
 }
 
@@ -140,7 +142,7 @@ export async function hnView(el, ctx, src = 'hn') {
 
   function paint(D, R, undone) {
     const M = D.meta, byKey = Object.fromEntries(D.topics.map((t) => [t.key, t]));
-    const F = { cons: '', res: '', exp: '', time: '', incl: false, todo: false, open: new Set() };
+    const F = { cons: '', res: '', exp: '', time: '', star: '', incl: false, todo: false, open: new Set() };
     const months = [...new Set(D.topics.map((t) => day(t.ts).slice(0, 7)))].sort().reverse();
     let view = 'topic';
     const done = () => `已表态 ${D.topics.filter((t) => R[t.key] && (R[t.key].act || R[t.key].stars)).length}/${D.topics.length}`;
@@ -153,12 +155,13 @@ export async function hnView(el, ctx, src = 'hn') {
 ${sel('cons', '共识度：全部', ['有分歧', '基本共识', '讨论少'].map((k) => [k, `${k} · ${cs[k] || 0}`]))}
 ${sel('res', '含推荐资源：不限', KO.map((k) => [k, k]))}${F.res ? `<label><input type="checkbox" data-incl ${F.incl ? 'checked' : ''}> 也算只被引用的</label>` : ''}
 ${sel('exp', '含经验：不限', OUT.map((k) => [k, k]))}
+${sel('star', '星级：全部', [['0', '未打星'], ['3', '≥3 星'], ['4', '≥4 星'], ['5', '5 星']])}
 <label><input type="checkbox" data-todo ${F.todo ? 'checked' : ''}> 只看未表态</label>
 <span class="ab-m">显示 ${L.length} / ${D.topics.length} 个话题 · ${done()}</span></div></div>`;
       body.innerHTML = `<div class="ab-m">${E(M.start)} 至 ${E(M.end)} · ${M.weeks} 周合并 · 观点和经验的原话已逐字核对，归并和结论由模型完成，未经人工校对${undone.length ? ` · 另有 ${undone.length} 周没跑完：${undone.map((u) => E(u.id.replace('_', ' 至 ') + (u.running ? '（进行中）' : '（中断）'))).join('、')}` : ''}</div>
 <div class="ab-note">${N(M.collected)} 帖里 ${N(M.ai + M.edge)} 帖与 AI 相关，压成 <b>${M.topics} 个话题</b>（覆盖 ${M.in_topics} 帖），另有 ${M.tail} 帖在长尾。先看<b>有分歧 ${cs['有分歧'] || 0}</b>：社区没谈拢；<b>基本共识 ${cs['基本共识'] || 0}</b> 看一句话结论即可。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张 <kbd>1</kbd>–<kbd>4</kbd> 表态</span></div>
 <div class="ab-bar">${[['topic', '话题'], ['how', '口径']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span><span class="ab-m">推荐资源 ${M.recommended} · 经验 ${M.exps}</span></div>
-${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<div class="ab-m">这个筛选下没有话题</div>') + (!F.res && !F.exp && !F.cons && !F.todo && !F.time ? `<details class="ab-fold hn-tail"><summary>长尾：另有 ${M.tail} 帖没并进话题</summary><ul>${D.tail.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a>${p.tldr ? ' · ' + E(p.tldr) : ''}</span></li>`).join('')}</ul></details>` : '') : how(D, src)}`;
+${view === 'topic' ? filters + (L.map((t) => topic(t, R, D, F)).join('') || '<div class="ab-m">这个筛选下没有话题</div>') + (!F.res && !F.exp && !F.cons && !F.todo && !F.time && !F.star ? `<details class="ab-fold hn-tail"><summary>长尾：另有 ${M.tail} 帖没并进话题</summary><ul>${D.tail.map((p) => `<li>${link(p.url, p.title)} <span class="ab-m">· <a href="${E(p.hn_url)}" target="_blank" rel="noopener">${N(p.comments)} 评论</a>${p.tldr ? ' · ' + E(p.tldr) : ''}</span></li>`).join('')}</ul></details>` : '') : how(D, src)}`;
     };
     const vis = () => [...body.querySelectorAll('.hn-t')];
     const focus = (x) => { if (!x) return; body.querySelectorAll('.hn-t.cur').forEach((y) => y.classList.remove('cur')); x.classList.add('cur'); x.scrollIntoView({ block: 'nearest' }); };

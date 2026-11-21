@@ -906,6 +906,20 @@ def people_methods_run():
     return methods_mod.start()
 
 
+class MethodRateIn(BaseModel):
+    key: str
+    stars: int
+
+
+@router.post("/people/methods/rate")
+def people_methods_rate(body: MethodRateIn):
+    if not 0 <= body.stars <= 5:
+        raise HTTPException(400, "星级只能是 0–5")
+    if not methods_mod.rate(body.key, body.stars):
+        raise HTTPException(404, "没有这张卡")
+    return {"ok": True}
+
+
 class MethodLinkIn(BaseModel):
     url: str
     person: str

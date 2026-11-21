@@ -47,6 +47,7 @@ JEV_CACHE = "jev.json"
 JEV_MIN = 0.8       # 两人试跑校准：留约四成材料、三分之一字符，最终卡片用到的材料保住 25/27
 JEV_TEXT = 1500
 SPARK_MIN = 3
+RATINGS = "ratings.json"  # 你给卡片打的星，和提炼结果分开存，重跑不丢
 OWN_STATE = "own.json"   # 每人本人推文抓到哪天；之后只抓这之后的（往回多搭 3 天，晚到的高赞也能补上）
 OWN_OVERLAP = 3
 WEEK_DAYS = 7
@@ -152,10 +153,41 @@ def assemble(groups: dict[str, list[dict]], units: dict[str, dict], sources: dic
                 evid.append({"kind": s["kind"], "author": s["author"], "url": s["url"], "date": s.get("date", ""), "title": s.get("title", ""),
                              "quote": units[u]["quote"], "said": units[u].get("said", "")})
             evid.sort(key=lambda e: (e["kind"] != "own", e["kind"] != "link", e["date"] or ""))
-            cards.append({"person": pid, "kind": kinds.most_common(1)[0][0], "spark": spark, "name": g["name"], "how": g.get("how", ""), "why": g.get("why", ""), "try": g.get("try", ""),
+            units_sorted = sorted(refs)
+            cards.append({"person": pid, "key": hashlib.sha1("|".join(units_sorted).encode()).hexdigest()[:12], "units": units_sorted,
+                          "kind": kinds.most_common(1)[0][0], "spark": spark, "name": g["name"], "how": g.get("how", ""), "why": g.get("why", ""), "try": g.get("try", ""),
                           "own": bool(own), "origin": {"url": origin["url"], "date": origin.get("date", ""), "author": origin["author"], "kind": origin["kind"]},
                           "retellers": len({s["author"].lower() for s in srcs if s["kind"] == "retell"}), "evidence": evid})
     return cards
+
+
+def attach_ratings(people: list[dict], ratings: dict[str, dict]) -> None:
+    """评分按卡片 key 存；重新归并后 key 会变（多了材料或换了分组），就按同一个人、共享条目最多的那条评分认回来。"""
+    for g in people:
+        mine = [r for r in ratings.values() if r.get("person") == g["person"]["id"]]
+        for m in g["methods"]:
+            r = ratings.get(m["key"])
+            if not r:
+                us = set(m["units"])
+                best = max(mine, key=lambda x: len(us & set(x["units"])), default=None)
+                r = best if best and us & set(best["units"]) else None
+            m["stars"] = r["stars"] if r else 0
+
+
+def rate(key: str, stars: int) -> bool:
+    page = _read("page.json", None) or {}
+    card = next(((g["person"]["id"], m) for g in page.get("people", []) for m in g["methods"] if m["key"] == key), None)
+    if not card:
+        return False
+    pid, m = card
+    ratings = _read(RATINGS, {})
+    ratings = {k: v for k, v in ratings.items() if not (v.get("person") == pid and set(v["units"]) & set(m["units"]))}
+    if stars:
+        ratings[key] = {"stars": stars, "units": m["units"], "person": pid, "name": m["name"], "at": time.time()}
+    tmp = BASE / (RATINGS + ".tmp")
+    tmp.write_text(json.dumps(ratings, ensure_ascii=False), "utf-8")
+    tmp.replace(BASE / RATINGS)
+    return True
 
 
 def links() -> list[dict]:
@@ -562,7 +594,10 @@ def state() -> dict:
 
 
 def view() -> dict:
-    return {"data": _read("page.json", None), "links": links(), **state()}
+    page = _read("page.json", None)
+    if page:
+        attach_ratings(page["people"], _read(RATINGS, {}))
+    return {"data": page, "links": links(), **state()}
 
 
 def due(st: dict, now: float, running: bool = False, days: float = WEEK_DAYS) -> bool:

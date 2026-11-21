@@ -140,19 +140,20 @@ def _log(ev: dict) -> None:
 class ReactIn(BaseModel):
     card: int
     act: str = ""
+    stars: int = 0
 
 
 @router.post("/runs/{rid}/react")
 def react(rid: str, body: ReactIn):
     d = _dir(rid)
-    if body.act and body.act not in ACTS:
-        raise HTTPException(400, "表态只能是：" + " / ".join(ACTS))
+    if (body.act and body.act not in ACTS) or not 0 <= body.stars <= 5:
+        raise HTTPException(400, "表态只能是：" + " / ".join(ACTS) + "；星级 0–5")
     r = _read(d / "reactions.json", {})
     snap = _snap(d, rid, body.card)
     if snap:
-        _log({**snap, "act": body.act, "at": time.time()})
-    if body.act:
-        r[str(body.card)] = {"act": body.act, "at": time.time()}
+        _log({**snap, "act": body.act, "stars": body.stars, "at": time.time()})
+    if body.act or body.stars:
+        r[str(body.card)] = {"act": body.act, "stars": body.stars, "at": time.time()}
     else:
         r.pop(str(body.card), None)
     tmp = d / "reactions.json.tmp"

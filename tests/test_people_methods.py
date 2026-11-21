@@ -161,3 +161,35 @@ def test_picked_reuse_fills_date_from_new_info():
     prev = {"link:u#0": {"id": "link:u#0", "kind": "link", "person": "mollick", "url": "u", "date": "", "author": "深读", "title": "t", "text": "x"}}
     got = M.picked_sources([{"url": "u", "person": "mollick", "date": "2026-11-10"}], prev)
     assert [(s["id"], s["date"]) for s in got] == [("link:u#0", "2026-11-10")]
+
+
+def test_cards_carry_stable_key_and_units():
+    sources = {"x1": _src("x1", "own", "karpathy", "u1", "2026-04-02")}
+    units = {"x1#0": {"sid": "x1", "quote": "q", "spark": 3, "kind": "做法"}, "x1#1": {"sid": "x1", "quote": "q", "spark": 3, "kind": "做法"}}
+    a, = M.assemble({"karpathy": [{"name": "n", "how": "h", "why": "", "try": "", "refs": ["x1#1", "x1#0"]}]}, units, sources)
+    b, = M.assemble({"karpathy": [{"name": "换了标题", "how": "h", "why": "", "try": "", "refs": ["x1#0", "x1#1"]}]}, units, sources)
+    assert a["key"] == b["key"] and a["units"] == ["x1#0", "x1#1"]
+
+
+def test_ratings_follow_card_after_remerge():
+    people = [{"person": {"id": "karpathy"}, "methods": [
+        {"key": "k-new", "units": ["a#0", "b#0", "c#0"]},      # 重新归并后多了一条材料，key 变了
+        {"key": "k-other", "units": ["z#0"]}]}]
+    ratings = {"k-old": {"stars": 5, "units": ["a#0", "b#0"], "person": "karpathy"},
+               "k-elsewhere": {"stars": 2, "units": ["z#0"], "person": "dean"}}
+    M.attach_ratings(people, ratings)
+    assert people[0]["methods"][0]["stars"] == 5
+    assert people[0]["methods"][1]["stars"] == 0
+
+
+def test_api_rate_method(client, tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(M, "BASE", tmp_path)
+    page = {"n": 1, "people": [{"person": {"id": "karpathy", "tier": 1}, "methods": [{"key": "k1", "units": ["a#0"], "name": "LLM wiki"}]}]}
+    (tmp_path / "page.json").write_text(json.dumps(page))
+    assert client.post("/api/feed/people/methods/rate", json={"key": "k1", "stars": 4}).status_code == 200
+    assert client.get("/api/feed/people/methods").json()["data"]["people"][0]["methods"][0]["stars"] == 4
+    assert client.post("/api/feed/people/methods/rate", json={"key": "k1", "stars": 6}).status_code == 400
+    assert client.post("/api/feed/people/methods/rate", json={"key": "nope", "stars": 3}).status_code == 404
+    assert client.post("/api/feed/people/methods/rate", json={"key": "k1", "stars": 0}).status_code == 200
+    assert client.get("/api/feed/people/methods").json()["data"]["people"][0]["methods"][0]["stars"] == 0

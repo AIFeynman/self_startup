@@ -51,6 +51,10 @@ const CSS = `
 .pm-filter { flex: 0 1 260px; min-width: 0; }
 .pm-search { flex: 1 1 220px; min-width: 0; }
 .pm-found { font-size: 12.5px; color: var(--muted); }
+.pm-stars { display: inline-flex; gap: 1px; margin-left: auto; }
+.pm-stars button { border: 0; background: none; padding: 0 1px; font-size: 18px; line-height: 1; color: var(--line-2, #ccc); cursor: pointer; }
+.pm-stars button.on { color: var(--warn, #b7791f); }
+.pm-starf { flex: 0 1 140px; min-width: 0; }
 .pm-addbox { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); }
 .pm-addbox summary { cursor: pointer; }
 .pm-addbox .pm-add { margin-top: 8px; }
@@ -68,7 +72,9 @@ const saveSort = (v) => { try { localStorage.setItem('pm-sort', v); } catch { /*
 // 卡片日期：出处日期；出处没有日期（访谈链接）就用证据里最新的；都没有的排最后
 const cardDay = (m) => m.origin.date || m.evidence.map((e) => e.date).filter(Boolean).sort().pop() || '';
 const byTime = (a, b) => cardDay(b).localeCompare(cardDay(a));
-const state = { view: 'today', person: '', batch: '', focus: '', msort: loadSort(), mperson: '', mq: '' };
+const state = { view: 'today', person: '', batch: '', focus: '', msort: loadSort(), mperson: '', mq: '', mstar: '' };
+const STAR_F = [['', '星级：全部'], ['0', '未评'], ['3', '≥3 星'], ['4', '≥4 星'], ['5', '5 星']];
+const starOk = (m, f) => !f || (f === '0' ? !m.stars : (m.stars || 0) >= +f);
 const KIND = { own: '本人', retell: '转述', link: '访谈 / 报道' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
@@ -156,12 +162,25 @@ export function peopleTab(box, ctx, sub = []) {
     } finally { polling = false; }
   }
 
+  async function rateCard(m, n, wrap) {
+    const stars = m.stars === n ? 0 : n;
+    try { await api.post('/api/feed/people/methods/rate', { key: m.key, stars }); } catch (e) { toast('没存上：' + e.message, true); return; }
+    m.stars = stars;
+    wrap.querySelectorAll('button').forEach((b) => b.classList.toggle('on', stars >= +b.dataset.n));
+    onRated?.();
+  }
+  let onRated = null;
+  const starsOf = (m) => {
+    const wrap = h('span.pm-stars', { title: '对你有多大用：1 星没用，5 星很受用；再点同一颗星取消' });
+    wrap.append(...[1, 2, 3, 4, 5].map((n) => h('button' + ((m.stars || 0) >= n ? '.on' : ''), { 'data-n': n, onclick: () => rateCard(m, n, wrap) }, '★')));
+    return wrap;
+  };
   const method = (m, person = null) => h('div.pm-m', {}, [
     person ? h('div', {}, [h('span.pm-who', {}, who(person)), h('span.pm-day', {}, cardDay(m) ? ` · ${cardDay(m)}` : ' · 日期不明')]) : null,
     h('div.pm-name', {}, [h('span.pm-tag.weak', {}, m.kind), h('b', {}, m.name),
       h('span.pm-tag' + (m.own ? '' : '.weak'), { title: m.own ? '有本人发的推文 / 文章' : '只找到别人的转述，可能失真' }, m.own ? '本人原话' : '仅转述'),
       m.retellers ? h('span.pm-tag.weak', {}, `${m.retellers} 人转述`) : null,
-      h('a', { href: safeUrl(m.origin.url), target: '_blank', rel: 'noopener', style: { fontSize: '12.5px' } }, `出处 · ${KIND[m.origin.kind]} ${m.origin.date || ''}`)]),
+      h('a', { href: safeUrl(m.origin.url), target: '_blank', rel: 'noopener', style: { fontSize: '12.5px' } }, `出处 · ${KIND[m.origin.kind]} ${m.origin.date || ''}`), starsOf(m)]),
     h('div.pm-how', {}, m.how),
     m.why ? h('div.pm-why', {}, (m.kind === '观点' ? '理由：' : '为什么有效：') + m.why) : null,
     m.try ? h('div.pm-try', {}, [h('b', {}, '今天就能试：'), m.try]) : null,
@@ -192,12 +211,13 @@ export function peopleTab(box, ctx, sub = []) {
     // 筛选、排序、搜索只重画列表，不重新请求
     const draw = () => {
       const q = state.mq.trim().toLowerCase();
-      const hit = (m, g) => !q || [m.name, m.how, m.why, m.try, m.kind, who(personOf(g)), ...m.evidence.map((e) => `${e.quote} ${e.author}`)]
-        .join(' ').toLowerCase().includes(q);
+      const hit = (m, g) => starOk(m, state.mstar) && (!q || [m.name, m.how, m.why, m.try, m.kind, who(personOf(g)), ...m.evidence.map((e) => `${e.quote} ${e.author}`)]
+        .join(' ').toLowerCase().includes(q));
       const groups = d.people.filter((g) => !state.mperson || g.person.id === state.mperson)
         .map((g) => ({ ...g, methods: g.methods.filter((m) => hit(m, g)) })).filter((g) => g.methods.length);
       const n = groups.reduce((k, g) => k + g.methods.length, 0);
-      found.textContent = q || state.mperson ? `找到 ${n} 条` : '';
+      const rated = d.people.reduce((k, g) => k + g.methods.filter((m) => m.stars).length, 0);
+      found.textContent = `${q || state.mperson || state.mstar ? `找到 ${n} 条 · ` : ''}已评 ${rated}/${d.n}`;
       list.replaceChildren(...(!n ? [ui.empty('没有匹配的卡片', '换个关键词，或把人物筛选改回「全部名人」')]
         : state.msort === 'time' ? [h('div.card.pp-grp', {}, groups.flatMap((g) => g.methods.map((m) => [m, personOf(g)]))
           .sort(([x], [y]) => byTime(x, y)).map(([m, p]) => method(m, p)))]
@@ -219,8 +239,11 @@ export function peopleTab(box, ctx, sub = []) {
         h('select.pm-filter', { title: '只看某个人', onchange: (e) => { state.mperson = e.target.value; draw(); } },
           [h('option', { value: '' }, `全部名人（${d.n} 条）`), ...d.people.map((g) => h('option', { value: g.person.id, selected: state.mperson === g.person.id },
             `${who(personOf(g))}（${g.methods.length}）`))]),
+        h('select.pm-starf', { title: '按你打的星筛', onchange: (e) => { state.mstar = e.target.value; draw(); } },
+          STAR_F.map(([v, l]) => h('option', { value: v, selected: state.mstar === v }, l))),
         sorts, found]),
       list]));
+    onRated = () => { if (state.mstar) draw(); else found.textContent = found.textContent.replace(/已评 \d+/, `已评 ${d.people.reduce((k, g) => k + g.methods.filter((m) => m.stars).length, 0)}`); };
     if (d?.people.length) draw();
     if (r.running) mpoll();
   }

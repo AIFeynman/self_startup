@@ -34,6 +34,10 @@ const CSS = `
 .ab-act { display: flex; gap: 5px; flex-wrap: wrap; margin: 7px 0 0 72px; }
 .ab-act button { font-size: 12px; padding: 1px 10px; }
 .ab-act button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ab-act .ab-stars { display: inline-flex; gap: 1px; margin-left: 8px; }
+.ab-act .ab-stars button { border: 0; background: none; padding: 0 1px; font-size: 18px; line-height: 1; color: var(--line-2); }
+.ab-act .ab-stars button.on { background: none; color: var(--warn); }
+.ab-bar select { width: auto; font: inherit; font-size: 13px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); }
 .ab-d { margin: 8px 0 2px 72px; font-size: 13px; display: none; overflow-wrap: anywhere; }
 .ab-c.open .ab-d { display: block; }
 .ab-d h5 { margin: 8px 0 3px; font-size: 12px; color: var(--muted); font-weight: 600; }
@@ -174,36 +178,38 @@ export default {
         else body.append(h('button.primary', { onclick: async () => { await api.post('/api/absorb/runs', { topic: r.topic, start: r.start, end: r.end }); show(); } }, '接着跑'));
         return;
       }
-      paint(r.data, Object.fromEntries(Object.entries(r.reactions).map(([k, v]) => [k, v.act])));
+      paint(r.data, r.reactions);
     };
 
     const paint = (D, R) => {
       const M = D.meta, byId = Object.fromEntries(D.cards.map((c) => [c.id, c]));
-      let flt = 'all', view = 'brief';
+      let flt = 'all', view = 'brief', sflt = '';
+      const acted = (id) => R[id] && (R[id].act || R[id].stars);
       const card = (c) => `<div class="ab-c" data-c="${c.id}"><div class="ab-ch"><span class="ab-tg ${TG[c.tag][1]}">${TG[c.tag][0]}</span><div><div class="ab-cl">${E(c.claim)}</div>${c.scope ? `<div class="ab-sc">适用：${E(c.scope)}</div>` : ''}${vs(c)}${lights(c)}</div></div>
-<div class="ab-act">${ACT.map((a, i) => `<button data-a="${a}" title="键盘 ${i + 1}：${ACT_TIP[a]}" class="${R[c.id] === a ? 'on' : ''}">${a}</button>`).join('')}</div><div class="ab-d"></div></div>`;
-      const pick = (cs) => flt === 'todo' ? cs.filter((c) => !R[c.id]) : flt === 'all' ? cs : cs.filter((c) => c.tag === flt);
+<div class="ab-act">${ACT.map((a, i) => `<button data-a="${a}" title="键盘 ${i + 1}：${ACT_TIP[a]}" class="${R[c.id]?.act === a ? 'on' : ''}">${a}</button>`).join('')}<span class="ab-stars" title="这条整理得好不好用：1 星很差，5 星很好；再点同一颗星取消">${[1, 2, 3, 4, 5].map((n) => `<button data-n="${n}" class="${(R[c.id]?.stars || 0) >= n ? 'on' : ''}">★</button>`).join('')}</span></div><div class="ab-d"></div></div>`;
+      const starOk = (c) => !sflt || (sflt === '0' ? !R[c.id]?.stars : (R[c.id]?.stars || 0) >= +sflt);
+      const pick = (cs) => (flt === 'todo' ? cs.filter((c) => !acted(c.id)) : flt === 'all' ? cs : cs.filter((c) => c.tag === flt)).filter(starOk);
       const brief = () => D.questions.map((q) => {
         const cs = pick(D.cards.filter((c) => c.qid === q.id));
-        if (flt !== 'all' && !cs.length) return '';
-        return `<div class="ab-q" data-qid="${q.id}"><h2>${E(q.q)}<span class="ab-st ${ST[q.status] || 'ab-st2'}">${E(q.status)}</span></h2><div class="ab-m">${N(q.n_units)} 条认知 → ${q.n_shown} 张需要看${flt === 'all' ? '' : `，这里列出 ${cs.length} 张`}</div>
+        if ((flt !== 'all' || sflt) && !cs.length) return '';
+        return `<div class="ab-q" data-qid="${q.id}"><h2>${E(q.q)}<span class="ab-st ${ST[q.status] || 'ab-st2'}">${E(q.status)}</span></h2><div class="ab-m">${N(q.n_units)} 条认知 → ${q.n_shown} 张需要看${flt === 'all' && !sflt ? '' : `，这里列出 ${cs.length} 张`}</div>
 ${q.now ? `<div class="ab-now"><b>现状：</b>${E(q.now).replace(/\[C(\d+)\]/g, (m, n) => `<a data-j="${n}">[${n}]</a>`)}</div>` : ''}
 ${cs.slice(0, 3).map(card).join('')}<div class="ab-rest ab-hide">${cs.slice(3).map(card).join('')}</div>
 ${cs.length > 3 ? `<div class="ab-more"><button data-more>再看 ${cs.length - 3} 张</button></div>` : ''}
-${flt === 'all' && q.fold.length ? `<details class="ab-fold"><summary>另有 ${N(q.fold.length)} 张单一来源的卡（已折叠）</summary><ul>${q.fold.map((f) => `<li>${E(f[0])} <a href="https://x.com/${E(f[1])}/status/${E(f[2])}" target="_blank" rel="noopener">@${E(f[1])}</a></li>`).join('')}</ul></details>` : ''}</div>`;
+${flt === 'all' && !sflt && q.fold.length ? `<details class="ab-fold"><summary>另有 ${N(q.fold.length)} 张单一来源的卡（已折叠）</summary><ul>${q.fold.map((f) => `<li>${E(f[0])} <a href="https://x.com/${E(f[1])}/status/${E(f[2])}" target="_blank" rel="noopener">@${E(f[1])}</a></li>`).join('')}</ul></details>` : ''}</div>`;
       }).join('') || ui.empty('这个筛选下没有卡').outerHTML;
       const qmap = () => `<div class="ab-qg">${D.questions.map((q) => {
         const cs = D.cards.filter((c) => c.qid === q.id), t = TAGS.map((k) => [k, cs.filter((c) => c.tag === k).length]).filter((x) => x[1]);
-        return `<div class="ab-qc" data-q="${q.id}"><div class="t">${E(q.q)}</div><span class="ab-st ${ST[q.status] || 'ab-st2'}" style="margin:0">${E(q.status)}</span> <span class="ab-m">${N(q.n_units)} 条认知 → ${q.n_shown} 张需要看 · 已表态 ${cs.filter((c) => R[c.id]).length}</span>
+        return `<div class="ab-qc" data-q="${q.id}"><div class="t">${E(q.q)}</div><span class="ab-st ${ST[q.status] || 'ab-st2'}" style="margin:0">${E(q.status)}</span> <span class="ab-m">${N(q.n_units)} 条认知 → ${q.n_shown} 张需要看 · 已表态 ${cs.filter((c) => acted(c.id)).length}</span>
 <div class="ab-sb">${t.map(([k, n]) => `<i class="${TG[k][1]}" style="flex:${n}"></i>`).join('')}</div><div class="ab-m">${t.map(([k, n]) => `${TG[k][0]} ${n}`).join(' · ')}</div></div>`;
       }).join('')}</div><p class="ab-m">点一个问题跳到它的卡片。没归到任何问题的认知有 ${N(M.unassigned)} 条。</p>`;
-      const done = () => `已表态 ${D.cards.filter((c) => R[c.id]).length}/${D.cards.length}`;
+      const done = () => `已表态 ${D.cards.filter((c) => acted(c.id)).length}/${D.cards.length} · 已打星 ${D.cards.filter((c) => R[c.id]?.stars).length}`;
       const T = M.tags || {};
       const draw = () => {
         body.innerHTML = `<div class="ab-m">${E(M.window)} · 抽取与比对由模型完成，未经人工校对${M.minutes ? ` · 耗时 ${M.minutes} 分钟` : ''} · 模型花费 $${M.cost}</div>
 <div class="ab-note">${N(M.units)} 条认知压成 ${N(M.shown)} 张需要看（约 ${M.ratio} : 1）。先看<b>有争议 ${N(T.c)}</b>：来源之间互相冲突；再看<b>高置信 ${N(T.h)}</b>，多个独立来源和硬证据撑着，可以放心用；<b>中置信 ${N(T.m)}</b>和<b>低置信 ${N(T.l)}</b>多为单一或少量来源，用前再核。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张，<kbd>1</kbd>–<kbd>4</kbd> 表态（没增量 / 有收获 / 很受用 / 会用上，受用程度由低到高）并跳到下一张，<kbd>o</kbd> 展开原话和证据。</span></div>
 <div class="ab-bar">${[['brief', '卡片'], ['map', '问题'], ['how', '口径'], ['fb', '反馈']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span>
-${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['todo', '未表态']].map((x) => `<button data-f="${x[0]}" class="${flt === x[0] ? 'on' : ''}">${x[1]}${T[x[0]] ? ' ' + T[x[0]] : ''}</button>`).join('') + `<span class="ab-m ab-done">${done()}</span>` : ''}</div>
+${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['todo', '未表态']].map((x) => `<button data-f="${x[0]}" class="${flt === x[0] ? 'on' : ''}">${x[1]}${T[x[0]] ? ' ' + T[x[0]] : ''}</button>`).join('') + `<select data-sf title="按你打的星筛">${[['', '星级：全部'], ['0', '未打星'], ['3', '≥3 星'], ['4', '≥4 星'], ['5', '5 星']].map(([v, l]) => `<option value="${v}"${sflt === v ? ' selected' : ''}>${l}</option>`).join('')}</select><span class="ab-m ab-done">${done()}</span>` : ''}</div>
 <div>${view === 'brief' ? brief() : view === 'map' ? qmap() : view === 'how' ? how(D) : '<div class="ab-fb ab-m">加载中</div>'}</div>`;
         if (view === 'fb') api.get('/api/absorb/feedback').then((F) => { const x = body.querySelector('.ab-fb'); if (x) x.outerHTML = fb(F); });
       };
@@ -224,11 +230,13 @@ ${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['to
         x.classList.add('cur');
         x.scrollIntoView({ block: 'nearest' });
       };
-      const react = async (c, a) => {
-        const id = c.dataset.c, act = R[id] === a ? '' : a;
-        try { await api.post(`/api/absorb/runs/${encodeURIComponent(cur)}/react`, { card: +id, act }); } catch (err) { toast(err.message || '没存上'); return false; }
-        if (act) R[id] = act; else delete R[id];
-        c.querySelectorAll('.ab-act button').forEach((b) => b.classList.toggle('on', R[id] === b.dataset.a));
+      const react = async (c, patch) => {
+        const id = c.dataset.c, old = R[id] || {}, nx = { act: old.act || '', stars: old.stars || 0, ...patch };
+        for (const k of Object.keys(patch)) if (old[k] === patch[k]) nx[k] = k === 'stars' ? 0 : '';
+        try { await api.post(`/api/absorb/runs/${encodeURIComponent(cur)}/react`, { card: +id, act: nx.act, stars: nx.stars }); } catch (err) { toast(err.message || '没存上'); return false; }
+        if (nx.act || nx.stars) R[id] = nx; else delete R[id];
+        c.querySelectorAll('.ab-act [data-a]').forEach((b) => b.classList.toggle('on', nx.act === b.dataset.a));
+        c.querySelectorAll('.ab-act [data-n]').forEach((b) => b.classList.toggle('on', nx.stars >= +b.dataset.n));
         body.querySelector('.ab-done').textContent = done();
         return true;
       };
@@ -239,7 +247,7 @@ ${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['to
         if (e.key === 'j') focus(L[i + 1] || L[i]);
         else if (e.key === 'k') focus(L[Math.max(0, i - 1)]);
         else if (c && (e.key === 'o' || e.key === 'Enter')) open(c.dataset.c);
-        else if (c && ACT[e.key - 1]) { e.preventDefault(); if (await react(c, ACT[e.key - 1])) focus(L[i + 1] || c); return; }
+        else if (c && ACT[e.key - 1]) { e.preventDefault(); if (await react(c, { act: ACT[e.key - 1] })) focus(L[i + 1] || c); return; }
         else return;
         e.preventDefault();
       };
@@ -248,13 +256,15 @@ ${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['to
         const t = e.target, d = t.dataset, q = t.closest('[data-q]');
         if (d.v) { view = d.v; return draw(); }
         if (d.f) { flt = d.f; return draw(); }
-        if (d.a) return react(t.closest('.ab-c'), d.a);
+        if (d.a) return react(t.closest('.ab-c'), { act: d.a });
+        if (d.n) return react(t.closest('.ab-c'), { stars: +d.n });
         if (d.more !== undefined) { t.closest('.ab-q').querySelector('.ab-rest').classList.remove('ab-hide'); return t.parentNode.remove(); }
-        if (d.j) { if (flt !== 'all') { flt = 'all'; draw(); } return open(d.j, true); }
-        if (q) { view = 'brief'; flt = 'all'; draw(); return body.querySelector(`[data-qid="${q.dataset.q}"]`).scrollIntoView(); }
+        if (d.j) { if (flt !== 'all' || sflt) { flt = 'all'; sflt = ''; draw(); } return open(d.j, true); }
+        if (q) { view = 'brief'; flt = 'all'; sflt = ''; draw(); return body.querySelector(`[data-qid="${q.dataset.q}"]`).scrollIntoView(); }
         const hd = t.closest('.ab-ch');
         if (hd && !t.closest('a')) { focus(hd.parentNode); open(hd.parentNode.dataset.c); }
       };
+      body.onchange = (e) => { if (e.target.dataset.sf !== undefined) { sflt = e.target.value; draw(); } };
       draw();
     };
     await show();
