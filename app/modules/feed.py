@@ -23,6 +23,7 @@ from . import _feed_cluster as cluster
 from . import _feed_gist as gist
 from . import _feed_hn as hnd
 from . import _people as people_mod
+from . import _people_methods as methods_mod
 from . import _feed_product as pa
 from . import _read_log
 from . import _feed_profile as prof
@@ -893,6 +894,28 @@ def people_refresh(body: PeopleRefreshIn):
     chans = body.channels or people_mod.manual_channels()
     started = bool(chans) and people_mod.start(chans)
     return {"started": started, **people_mod.status()}
+
+
+@router.get("/people/methods")
+def people_methods():
+    return methods_mod.view()
+
+
+@router.post("/people/methods/run")
+def people_methods_run():
+    return methods_mod.start()
+
+
+class MethodLinkIn(BaseModel):
+    url: str
+    person: str
+
+
+@router.post("/people/methods/links")
+def people_methods_link(body: MethodLinkIn):
+    if not re.match(r"https?://", body.url.strip()) or body.person not in people_mod.by_id():
+        raise HTTPException(400, "链接要以 http 开头，人物要在名单里")
+    return {"links": methods_mod.add_link(body.url.strip(), body.person)}
 
 
 class FollowIn(BaseModel):

@@ -1,5 +1,5 @@
 // 信息推荐 ·「名人」：名单里的人最近在 X / YouTube / 播客 / 论文 / 新闻 / B站 的发声，按人归组（后端见 app/modules/_people.py）。
-// 路由：#feed/people、#feed/people/<人物 id>、#feed/people/batch/<提醒批次>（点提醒进来，只看那一次提醒里的发声）
+// 路由：#feed/people、#feed/people/methods（高人方法）、#feed/people/<人物 id>、#feed/people/batch/<提醒批次>（点提醒进来，只看那一次提醒里的发声）
 const CSS = `
 .pp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
 .pp-chans { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); }
@@ -30,6 +30,23 @@ const CSS = `
 .pp-people small { display: block; color: var(--muted); font-size: 12px; }
 .pp-more { font-size: 12.5px; }
 .pp-it a.pp-done, .pp-it a.muted { font-size: 12.5px; white-space: nowrap; }
+.pm-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; font-size: 12.5px; color: var(--muted); }
+.pm-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pm-add select { flex: 0 1 220px; min-width: 0; }
+.pm-add input { min-width: 0; flex: 1 1 240px; }
+.pm-m { padding: 10px 0; border-top: 1px dashed var(--line); }
+.pm-m:first-of-type { border-top: 0; }
+.pm-name { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.pm-name b { font-size: 14.5px; }
+.pm-tag { font-size: 11.5px; border-radius: 6px; padding: 1px 7px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.pm-tag.weak { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+.pm-how { font-size: 13.5px; line-height: 1.6; margin-top: 3px; }
+.pm-why, .pm-try { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-top: 2px; }
+.pm-try b { color: var(--text); font-weight: 500; }
+.pm-ev { font-size: 12.5px; margin-top: 4px; }
+.pm-ev summary { cursor: pointer; color: var(--muted); }
+.pm-ev li { margin: 4px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.pm-ev q { color: var(--text); }
 @media (max-width: 640px) { .pp-it { grid-template-columns: minmax(0, 1fr) auto; } .pp-it .pp-ch { grid-column: 1 / -1; justify-self: start; } }
 `;
 
@@ -37,17 +54,20 @@ const CH = { x: 'X', blog: '博客', youtube: 'YouTube', podcast: '播客', pape
 // 视频和播客深读时才转写：播客传音频直链，按视频走字幕 / whisper
 const DEEP = new Set(['blog', 'youtube', 'podcast', 'paper', 'news', 'bili']);
 const state = { view: 'today', person: '', batch: '', focus: '' };
+const KIND = { own: '本人', retell: '转述', link: '访谈 / 报道' };
 const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? u : '#');
 
 export function peopleTab(box, ctx, sub = []) {
   const { api, h, ui, toast } = ctx;
   if (!document.getElementById('pp-style')) document.head.append(h('style#pp-style', {}, CSS));
   if (sub[0] === 'batch' && sub[1]) { state.view = 'batch'; state.batch = sub[1]; state.focus = sub[2] ? decodeURIComponent(sub[2]) : ''; }
+  else if (sub[0] === 'methods') state.view = 'methods';
   else if (sub[0]) { state.view = 'person'; state.person = sub[0]; }
   else if (state.view === 'batch') state.view = 'today';
   const go = (view, person = '') => {
     state.view = view; state.person = person;
-    if (location.hash !== '#feed/people') history.replaceState(history.state, '', '#feed/people');
+    const want = view === 'methods' ? '#feed/people/methods' : '#feed/people';
+    if (location.hash !== want) history.replaceState(history.state, '', want);
     load();
   };
   let polling = false;
@@ -103,7 +123,7 @@ export function peopleTab(box, ctx, sub = []) {
         if (r.started || r.running) poll();
       } catch (e) { toast(e.message, true); }
     } }, [ui.icon('refresh'), s.running ? '搜索中…' : '立即搜一轮']);
-    return h('div.pp-bar', {}, [h('div.fd-seg', {}, [seg('today', '今天'), seg('week', '近 7 天'), seg('all', '按人')]), refresh,
+    return h('div.pp-bar', {}, [h('div.fd-seg', {}, [seg('today', '今天'), seg('week', '近 7 天'), seg('all', '按人'), seg('methods', '高人方法')]), refresh,
       h('div.pp-chans', {}, s.channels.map((c) => h('span.pp-chan' + (c.errors?.length ? '.err' : ''), { title: (c.errors || []).join('\n') || `每 ${c.hours} 小时一轮` },
         `${c.name} · ${ago(c.at)}${c.at ? ` · ${c.count} 条` : ''}${c.errors?.length ? ' · 有错误' : ''}`)))]);
   }
@@ -121,7 +141,59 @@ export function peopleTab(box, ctx, sub = []) {
     } finally { polling = false; }
   }
 
+  const method = (m) => h('div.pm-m', {}, [
+    h('div.pm-name', {}, [h('b', {}, m.name),
+      h('span.pm-tag' + (m.own ? '' : '.weak'), { title: m.own ? '有本人发的推文 / 文章' : '只找到别人的转述，可能失真' }, m.own ? '本人原话' : '仅转述'),
+      m.retellers ? h('span.pm-tag.weak', {}, `${m.retellers} 人转述`) : null,
+      h('a', { href: safeUrl(m.origin.url), target: '_blank', rel: 'noopener', style: { fontSize: '12.5px' } }, `出处 · ${KIND[m.origin.kind]} ${m.origin.date || ''}`)]),
+    h('div.pm-how', {}, m.how),
+    m.why ? h('div.pm-why', {}, '为什么有效：' + m.why) : null,
+    m.try ? h('div.pm-try', {}, [h('b', {}, '今天就能试：'), m.try]) : null,
+    h('details.pm-ev', {}, [h('summary', {}, `原话与出处 ${m.evidence.length} 条`), h('ul', {}, m.evidence.map((e) => h('li', {}, [
+      h('span.pm-tag.weak', {}, KIND[e.kind]), ' ', h('q', {}, e.quote), ' — ',
+      h('a', { href: safeUrl(e.url), target: '_blank', rel: 'noopener' }, `${e.kind === 'link' ? '' : '@'}${e.author}${e.date ? ' · ' + e.date : ''}`)])))]),
+  ]);
+
+  async function methods() {
+    const [r, ps] = await Promise.all([api.get('/api/feed/people/methods'), api.get('/api/feed/people?days=1')]);
+    const idx = Object.fromEntries(ps.people.map((p) => [p.id, p]));
+    const sel = h('select', {}, [...ps.people].sort((a, b) => a.tier - b.tier).map((p) => h('option', { value: p.id }, who(p))));
+    const url = h('input', { type: 'url', placeholder: '访谈 / 博客链接，下次提炼时抓正文' });
+    const add = h('button.ghost.sm', { onclick: async () => {
+      try { await api.post('/api/feed/people/methods/links', { url: url.value, person: sel.value }); url.value = ''; toast('已加入，点「重新提炼」生效'); }
+      catch (e) { toast(e.message, true); }
+    } }, '加链接');
+    const run = h('button.ghost.sm', { disabled: r.running, onclick: async () => {
+      try { const x = await api.post('/api/feed/people/methods/run', {}); toast(x.started ? '开始提炼，名单里的人都过一遍，要一阵子' : '正在提炼中'); mpoll(); }
+      catch (e) { toast(e.message, true); }
+    } }, [ui.icon('refresh'), r.running ? `提炼中 · ${r.stage_name} ${r.step}/${r.steps}` : '重新提炼']);
+    const d = r.data;
+    const src = d ? `${d.n} 个方法 · 材料：本人高赞推文 ${d.sources.own} 条、点名转述 ${d.sources.retell} 篇、访谈链接 ${d.sources.link} 篇` : '还没提炼过';
+    box.replaceChildren(bar(ps), h('div.pm-head', {}, [h('span', {}, `名人自己提出、推荐或在用的做法，带原话和出处 · ${src}`), run,
+      r.error ? h('span', { style: { color: 'var(--warn, #b7791f)' } }, r.error) : null]),
+    h('div.pm-add', { style: { marginBottom: '12px' } }, [sel, url, add]),
+    ...(d?.people.length ? d.people.map((g) => h('div.card.pp-grp', {}, [
+      h('div.pp-who', {}, [h('b', {}, who(idx[g.person.id] || g.person)), h('span.pp-role', {}, `Tier${g.person.tier} · ${g.person.role || ''} · ${g.methods.length} 个方法`)]),
+      ...g.methods.map(method)])) : [ui.empty('还没有方法卡', '点「重新提炼」，从名人的高赞推文、点名转述的长文和你加的访谈链接里抽')]));
+    if (r.running) mpoll();
+  }
+
+  let mpolling = false;
+  async function mpoll() {
+    if (mpolling) return;
+    mpolling = true;
+    try {
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 5000));
+        if (!box.isConnected || state.view !== 'methods') return;
+        const s = await api.get('/api/feed/people/methods');
+        if (!s.running) { await methods(); return; }
+      }
+    } finally { mpolling = false; }
+  }
+
   async function load() {
+    if (state.view === 'methods') return methods();
     if (state.view === 'person' && state.person) {
       const r = await api.get('/api/feed/people?person=' + encodeURIComponent(state.person));
       const p = r.person || { name: state.person };
