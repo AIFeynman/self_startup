@@ -219,3 +219,28 @@ def test_xarticle_listing_filters_by_domain_and_kind_and_score_unhides_good_mark
     monkeypatch.setattr(_xart.pl, "chat", lambda *a, **k: (json.dumps([{"id": i, **v} for i, v in out.items()]), 0))
     _xart.score(ids=["51", "52"])
     assert {r["id"]: r["mkt"] for r in db.rows("SELECT id,mkt FROM x_art WHERE id IN ('51','52')")} == {"51": 0, "52": 1}
+
+
+def _sync_in_another_process(n_docs: int, rounds: int) -> None:
+    from app import kb as k
+    docs = [{"id": i, "path": f"x-articles/{i}-器用貧乏な人ほど稼ぎやすくなっている理由.md", "text": f"# {i}\n",
+             "type": "xarticle", "title": str(i), "tags": [], "summary": "", "body": "", "date": "2026-01-01"} for i in range(n_docs)]
+    k.build = lambda: docs
+    k._graph_layer = lambda d: ({}, [], 0)
+    k._index = lambda d: ("# index\n", {})
+    for _ in range(rounds):
+        k.sync(refresh_graph=False)
+
+
+def test_sync_from_concurrent_processes_keeps_manifest_readable():
+    """服务进程和各个 jobrun 进程都会 sync；manifest 不能被并发写成半新半旧（曾在末尾留下另一份的残尾，读时 UnicodeDecodeError）。"""
+    import multiprocessing as mp
+    db.init([kb.FTS_SCHEMA])
+    ctx = mp.get_context("spawn")
+    procs = [ctx.Process(target=_sync_in_another_process, args=(1500 + 37 * i, 80)) for i in range(8)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(120)
+    assert [p.exitcode for p in procs] == [0] * len(procs)
+    assert isinstance(json.loads((kb.KB_DIR / kb.MANIFEST).read_text("utf-8")), list)

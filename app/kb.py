@@ -9,10 +9,13 @@ SQLite 仍是应用状态的唯一来源；kb/ 是自动生成、随时可重建
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import re
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import db
@@ -75,6 +78,17 @@ README = """# 本地知识库（自动生成，勿手改）
 """
 
 _lock = threading.Lock()
+
+
+@contextmanager
+def _sync_lock():
+    """服务进程和每个 jobrun 进程都会 sync，线程锁管不到别的进程。"""
+    KB_DIR.mkdir(parents=True, exist_ok=True)
+    with _lock, open(KB_DIR / ".sync.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
 _timer: threading.Timer | None = None
 
 
@@ -633,7 +647,7 @@ def _graph_layer(docs: list[dict]) -> tuple[dict[str, str], list[dict], int]:
 def sync(refresh_graph: bool = True) -> dict:
     """全量重建（数据量小，几百个文件毫秒级）；只写有变化的文件，删除已不存在的。
     概念层只读 LLM 缓存；有新增 / 改动的信号时在后台触发 kb_graph.refresh()（它跑完会再调 sync(refresh_graph=False)）。"""
-    with _lock:
+    with _sync_lock():
         docs = build()
         try:
             gfiles, gfts, stale = _graph_layer(docs)
@@ -648,9 +662,8 @@ def sync(refresh_graph: bool = True) -> dict:
         for t, ds in tags.items():
             files[f"tags/{_slug(t)}.md"] = f"# 标签：{t}\n\n" + "\n".join(
                 f"- [{TYPE_NAMES[d['type']]}] [{d['title']}](../{d['path']}) · {d['date']} — {d['summary'][:80]}" for d in ds) + "\n"
-        KB_DIR.mkdir(parents=True, exist_ok=True)
         mpath = KB_DIR / MANIFEST
-        old = set(json.loads(mpath.read_text())) if mpath.exists() else set()
+        old = set(json.loads(mpath.read_text("utf-8"))) if mpath.exists() else set()
         written = 0
         for rel, text in files.items():
             p = KB_DIR / rel
@@ -661,7 +674,9 @@ def sync(refresh_graph: bool = True) -> dict:
             written += 1
         for rel in old - set(files):
             (KB_DIR / rel).unlink(missing_ok=True)
-        mpath.write_text(json.dumps(sorted(files), ensure_ascii=False))
+        tmp = mpath.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(files), ensure_ascii=False), "utf-8")
+        os.replace(tmp, mpath)
         db.init([FTS_SCHEMA])
         with db._lock:
             c = db.conn()
