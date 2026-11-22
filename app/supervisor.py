@@ -9,10 +9,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import logging.handlers
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -23,10 +26,37 @@ PORT = int(os.environ.get("PORT", "8780"))
 WATCH = [ROOT / "app"]
 POLL = 2.0
 FLAG = DATA_DIR / ".reload_pending"
+SERVER_LOG = os.environ.get("SERVER_LOG", "")
+LOG_MAX_BYTES = 20 * 1024 * 1024
+LOG_BACKUPS = 5
+sink: logging.Logger | None = None
+
+
+def log_sink(path: Path, max_bytes: int = LOG_MAX_BYTES, backups: int = LOG_BACKUPS) -> logging.Logger:
+    """服务输出写进按大小轮转的日志（server.log → server.log.1 …）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out = logging.getLogger(f"server-log:{path}")
+    out.propagate = False
+    out.setLevel(logging.INFO)
+    if not out.handlers:
+        h = logging.handlers.RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(message)s"))
+        out.addHandler(h)
+    return out
+
+
+def pump(proc: subprocess.Popen, out: logging.Logger) -> None:
+    assert proc.stdout
+    for line in proc.stdout:
+        out.info(line.rstrip("\n"))
 
 
 def log(msg: str) -> None:
-    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} supervisor: {msg}", flush=True)
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} supervisor: {msg}"
+    if sink:
+        sink.info(line)
+    else:
+        print(line, flush=True)
 
 
 def snapshot() -> dict[str, float]:
@@ -58,7 +88,12 @@ def start(extra: list[str]) -> subprocess.Popen:
            "--timeout-graceful-shutdown", "30", *extra]
     log("启动服务：" + " ".join(cmd[2:]))
     from .agent import clean_env  # 服务本身（信息源抓取等）也不走继承来的 Claude Code 沙箱代理
-    return subprocess.Popen(cmd, cwd=str(ROOT), env=clean_env())
+    if not sink:
+        return subprocess.Popen(cmd, cwd=str(ROOT), env=clean_env())
+    proc = subprocess.Popen(cmd, cwd=str(ROOT), env=clean_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace")
+    threading.Thread(target=pump, args=(proc, sink), daemon=True, name="server-log").start()
+    return proc
 
 
 def stop(proc: subprocess.Popen) -> None:
@@ -83,7 +118,10 @@ def set_flag(files: list[str], b: dict | None) -> None:
 
 
 def main() -> None:
+    global sink
     extra = sys.argv[1:]
+    if SERVER_LOG:
+        sink = log_sink(Path(SERVER_LOG))
     FLAG.unlink(missing_ok=True)
     proc = start(extra)
     seen = snapshot()

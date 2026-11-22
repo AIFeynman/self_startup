@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import agent, settings
+from .. import agent, settings, usage
 from ..db import DATA_DIR, DB_PATH, ROOT
 
 BASE = DATA_DIR / "absorb"
@@ -157,6 +157,7 @@ class Run:
             try:
                 p = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=900, env=agent.clean_env(), cwd=str(self.dir))
                 j = json.loads(p.stdout)
+                usage.record("absorb", usage.from_claude(j), engine="claude")
                 with self.lock:
                     self.cost[self.stage] = self.cost.get(self.stage, 0.0) + float(j.get("total_cost_usd") or 0)
                 return json.loads(re.search(r"\{.*\}", (j.get("result") or "").strip(), re.S).group(0))

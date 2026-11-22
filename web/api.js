@@ -13,6 +13,10 @@ async function req(method, url, body) {
   return data;
 }
 
+// 页面显示「进行中」但任务其实已结束时，渲染 → 等待 → 刷新会立刻再来一轮；同一任务第二次等到结束先停一会儿
+const finishedJobs = new Set();
+const REWAIT_FINISHED_MS = 60000;
+
 export const api = {
   get: (u) => req('GET', u),
   post: (u, b = {}) => req('POST', u, b),
@@ -24,7 +28,11 @@ export const api = {
     for (;;) {
       const j = await req('GET', `/api/jobs/${id}`);
       onTick && onTick(j);
-      if (j.status === 'done' || j.status === 'failed') return j;
+      if (j.status === 'done' || j.status === 'failed') {
+        if (finishedJobs.has(id)) await new Promise((r) => setTimeout(r, REWAIT_FINISHED_MS));
+        finishedJobs.add(id);
+        return j;
+      }
       await new Promise((r) => setTimeout(r, intervalMs));
     }
   },

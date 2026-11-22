@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import agent, chat_images, db, jobs, kb, modules
+from . import agent, chat_images, db, jobs, kb, modules, usage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -227,6 +227,7 @@ def chat(module: str, body: ChatIn):
                     db.update("chat_sessions", sid, {"engine": engine, "engine_session": eng_session, "updated_at": db.now()})
             elif ev["type"] == "done":
                 final, used = ev["text"], ev["engine"]
+                usage.record(f"chat:{module}", ev.get("usage"), ref=f"chat:{sid}", engine=used)
             elif ev["type"] == "tool":
                 db.insert("chat_messages", {"session_id": sid, "role": "tool", "content": ev["text"], "created_at": db.now()})
             if talk and ev["type"] in ("text", "done"):

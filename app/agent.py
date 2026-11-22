@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-from . import settings
+from . import settings, usage
 from .db import DATA_DIR, ROOT
 
 log = logging.getLogger(__name__)
@@ -161,7 +161,7 @@ def _parse_claude(obj: dict) -> list[dict]:
             return [{"type": "error", "text": f"Claude 调用没有走本机登录（provider={bad}），已停止", "fatal": True, "gateway": True}]
         if obj.get("is_error"):
             out.append({"type": "error", "text": str(obj.get("result") or obj.get("subtype"))})
-        out.append({"type": "result", "text": obj.get("result") or "", "session": obj.get("session_id", "")})
+        out.append({"type": "result", "text": obj.get("result") or "", "session": obj.get("session_id", ""), "usage": usage.from_claude(obj)})
     return out
 
 
@@ -178,6 +178,8 @@ def _parse_codex(obj: dict) -> list[dict]:
             return [{"type": "tool", "text": f"shell: {str(item.get('command', ''))[:200]}"}]
         if it in ("web_search", "file_change", "mcp_tool_call"):
             return [{"type": "tool", "text": f"{it}: {json.dumps(item, ensure_ascii=False)[:200]}"}]
+    if t == "turn.completed":
+        return [{"type": "usage", "usage": usage.from_codex(obj)}]
     if t in ("turn.failed", "error"):
         msg = obj.get("error", {}).get("message") if isinstance(obj.get("error"), dict) else obj.get("message")
         return [{"type": "error", "text": str(msg)[:1000]}]
@@ -331,6 +333,7 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
     final = ""  # Claude 的 result 只含最终回答，不含过程中的旁白；开过后台任务时 CLI 会多发一个 result，正式回答在前面那个
     answered = ""  # 收尾钩子追问前的最后一段回答：钩子让它再答一轮时，result 只剩对钩子的回复
     errored = False
+    used = usage.empty()
     assert proc.stdout
     for line in proc.stdout:
         line = line.strip()
@@ -341,6 +344,10 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
         except json.JSONDecodeError:
             continue
         for ev in parse(obj):
+            if ev.get("usage"):
+                used = usage.add(used, ev["usage"])
+            if ev["type"] == "usage":
+                continue
             if ev["type"] == "text":
                 texts.append(ev["text"])
             if ev["type"] == "error":
@@ -365,7 +372,7 @@ def _read(engine: str, proc, parse) -> Iterator[dict]:
     if not final and texts:
         # Codex 的最后一条 agent_message 是最终回答
         final = texts[-1] if engine == "codex" else "\n\n".join(texts)
-    yield {"type": "done", "text": final, "engine": engine, "errored": errored and not texts}
+    yield {"type": "done", "text": final, "engine": engine, "errored": errored and not texts, "usage": used}
 
 
 # 启动器 / 网络的瞬时故障（还没开始干活就退出）：同一引擎稍等重试，不急着换引擎

@@ -87,9 +87,9 @@ def test_xart_daily_runs_once_a_day_and_stops_over_budget(client, monkeypatch):
     monkeypatch.setattr(x, "grab", lambda **k: {"ok": 10, "drop": 2})
     monkeypatch.setattr(x, "stale", lambda: 0)
     monkeypatch.setattr(x, "dedupe", lambda: {})
-    monkeypatch.setattr(x, "relevance", lambda **k: {})
+    monkeypatch.setattr(x, "relevance", lambda **k: {"todo": 0, "miss": 0, "err": 0})
     monkeypatch.setattr(x, "fulltext", lambda **k: {"ok": 3, "short": 0, "failed": 0})
-    monkeypatch.setattr(x, "score", lambda **k: {})
+    monkeypatch.setattr(x, "score", lambda **k: {"todo": 0, "miss": 0, "err": 0})
     now = datetime(2026, 11, 17, 5, 0)
     assert x.due(now) and not x.due(datetime(2026, 11, 17, 3, 0))
     assert x.daily(now)["calls"] == 415

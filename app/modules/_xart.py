@@ -274,7 +274,7 @@ def _chunks(text: str) -> list[str]:
 
 def _zh_chunk(part: str) -> str:
     for _ in range(2):
-        t = pl.chat(ZH_PROMPT, part)[0]
+        t = pl.chat(ZH_PROMPT, part, module="xart")[0]
         if len(t) >= len(part) * 0.3:
             break
     return t
@@ -411,7 +411,7 @@ def relevance(limit: int = 0, batch: int = 20, workers: int = 4) -> dict:
     def one(ch):
         user = "\n".join(f"### id={r['id']}\n标题: {r['title']}\n预览: {r['preview'][:200]}" for r in ch)
         try:
-            txt, _ = pl.chat(REL_PROMPT, user)
+            txt, _ = pl.chat(REL_PROMPT, user, module="xart")
         except Exception as e:  # noqa: BLE001
             log.warning("rel batch failed: %s", e)
             stat["err"] += len(ch)
@@ -489,7 +489,7 @@ def score(limit: int = 0, batch: int = 3, workers: int = 4, ids: list[str] | Non
 
     def one(ch):
         try:
-            txt, _ = pl.chat(system, "\n".join(_excerpt(r) for r in ch))
+            txt, _ = pl.chat(system, "\n".join(_excerpt(r) for r in ch), module="xart")
         except Exception as e:  # noqa: BLE001
             log.warning("score batch failed: %s", e)
             stat["err"] += len(ch)
@@ -606,7 +606,21 @@ _lock = threading.Lock()
 
 
 def _month_calls(today: str) -> int:
-    return db.row("SELECT COALESCE(SUM(calls),0) n FROM x_art_run WHERE status!='failed' AND substr(day,1,7)=?", [today[:7]])["n"]
+    return db.row("SELECT COALESCE(SUM(calls),0) n FROM x_art_run WHERE substr(day,1,7)=?", [today[:7]])["n"]
+
+
+def _calls(res: dict) -> int:
+    """已花掉的 GetXAPI 调用：抓取 + 取标题 + 取全文；中途失败也按已跑完的步骤算。"""
+    grab, full = res.get("grab") or {}, res.get("full") or {}
+    return (res.get("crawl") or {}).get("calls", 0) + grab.get("ok", 0) + grab.get("drop", 0) \
+        + full.get("ok", 0) + full.get("short", 0) + full.get("failed", 0)
+
+
+def _reap() -> None:
+    """服务重启会打断正在跑的一轮，留下永远 running 的记录（当天就不会再跑）；没在跑时标成 interrupted，不占当天的失败重试次数。"""
+    if not _lock.locked():
+        db.execute("UPDATE x_art_run SET status='interrupted', result=?, finished=? WHERE status='running'",
+                   [json.dumps({"error": "服务重启，运行被中断"}, ensure_ascii=False), db.now()])
 
 
 def due(now: datetime | None = None) -> bool:
@@ -633,8 +647,9 @@ def daily(now: datetime | None = None) -> dict:
     if _month_calls(today) >= MONTH_STOP_CALLS:
         return {"stopped": "月调用数到上限"}
     rid = db.insert("x_art_run", {"day": today, "status": "running", "started": db.now()})
+    res: dict = {}
     try:
-        res = {"crawl": crawl_since(int(now.timestamp()))}
+        res["crawl"] = crawl_since(int(now.timestamp()))
         res["stale"] = stale()
         res["gate"] = gate()
         res["grab"] = grab(ids=grab_ids())
@@ -644,9 +659,10 @@ def daily(now: datetime | None = None) -> dict:
         res["full"] = fulltext(per_day=ALL)
         res["score"] = score()
         _check("打分", res["score"])
-        calls = res["crawl"]["calls"] + res["grab"]["ok"] + res["grab"]["drop"] + res["full"]["ok"] + res["full"]["short"] + res["full"]["failed"]
+        calls = _calls(res)
     except Exception as e:  # noqa: BLE001
-        db.execute("UPDATE x_art_run SET status='failed', result=?, finished=? WHERE id=?", [json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"}, ensure_ascii=False), db.now(), rid])
+        db.execute("UPDATE x_art_run SET status='failed', calls=?, result=?, finished=? WHERE id=?",
+                   [_calls(res), json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"}, ensure_ascii=False), db.now(), rid])
         raise
     db.execute("UPDATE x_art_run SET status='ok', calls=?, result=?, finished=? WHERE id=?", [calls, json.dumps(res, ensure_ascii=False), db.now(), rid])
     return res | {"calls": calls}
@@ -658,6 +674,8 @@ def status() -> dict:
 
 
 def start(force: bool = False) -> bool:
+    init()
+    _reap()
     if not (force or due()) or not _lock.acquire(blocking=False):
         return False
 

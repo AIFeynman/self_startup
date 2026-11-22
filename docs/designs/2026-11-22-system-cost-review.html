@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系统开销盘点</title>
+<style>
+:root{--bg:#faf9f6;--fg:#1f1d1a;--muted:#6b665e;--line:#e4e0d8;--card:#fff;--p0:#b4372a;--p1:#b26b00;--p2:#3d6b8c;--ok:#2f7a4a;--bar:#d9d3c7}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17161a;--fg:#ece9e3;--muted:#a19c93;--line:#2e2c31;--card:#1f1e23;--p0:#e2705f;--p1:#e0a24a;--p2:#7fb0d4;--ok:#6cc08a;--bar:#3a3740}}
+:root[data-theme="dark"]{--bg:#17161a;--fg:#ece9e3;--muted:#a19c93;--line:#2e2c31;--card:#1f1e23;--p0:#e2705f;--p1:#e0a24a;--p2:#7fb0d4;--ok:#6cc08a;--bar:#3a3740}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,"PingFang SC","Helvetica Neue",sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:26px;margin:0 0 4px}
+h2{font-size:19px;margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.sub{color:var(--muted);font-size:13px}
+.lead{font-size:16px;margin:18px 0;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:10px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:14px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi b{display:block;font-size:22px}
+.kpi span{color:var(--muted);font-size:12.5px}
+table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:12.5px}
+td.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.bar{height:8px;background:var(--bar);border-radius:4px;min-width:2px}
+.tag{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:9px;border:1px solid currentColor;margin-right:6px}
+.P0{color:var(--p0)}.P1{color:var(--p1)}.P2{color:var(--p2)}.ok{color:var(--ok)}
+.item{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
+.item h3{font-size:15.5px;margin:0 0 4px}
+.item p{margin:4px 0}
+code{font:12.5px ui-monospace,Menlo,monospace;background:var(--line);padding:1px 5px;border-radius:4px;word-break:break-all}
+.scroll{overflow-x:auto}
+ul{padding-left:20px;margin:6px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>学习平台：空间、耗时与 Token 盘点</h1>
+<div class="sub">2026-11-22 · 数据来自本机 <code>data/</code>、<code>app.db</code>、<code>server.log</code>（11-19 至 11-22）与实测接口耗时</div>
+
+<div class="lead">
+结论：页面卡顿的主因（知识库索引整表重建）今天已修好。剩下最值得做的有两件：
+<b>① 轻量模型打标签被全局 hook 劫持</b>，X 长文判相关从 11-20 起连续 4 次全部失败，同时每天白耗约 3,500 次 GetXAPI 付费调用；
+<b>② 前端等待已完成任务时会进入死循环</b>，11-19 一小时内打了约 9.6 万次请求。
+空间上 11GB 里有约 6.7GB 是旧数据库备份。Claude 后台任务的 token 平台没有记录，目前无法统计。
+</div>
+
+<div class="kpis">
+  <div class="kpi"><b>11 GB</b><span>data/ 总占用，其中备份 6.7 GB</span></div>
+  <div class="kpi"><b>66 小时</b><span>1,111 个后台 Agent 任务累计运行时长</span></div>
+  <div class="kpi"><b>18,313 次</b><span>近 7 天 GetXAPI 调用（外部付费 API 第一）</span></div>
+  <div class="kpi"><b>30.6s → 0.09s</b><span>每次写操作后持数据库锁时间（今天已修）</span></div>
+</div>
+
+<h2>一、空间</h2>
+<div class="scroll"><table>
+<tr><th>位置</th><th class="n">大小</th><th style="width:30%"></th><th>说明</th></tr>
+<tr><td>数据库备份（<code>data/backups/</code> 6 个 + <code>data/app.db.bak-*</code> 6 个）</td><td class="n">6.7 GB</td><td><div class="bar" style="width:100%"></div></td><td>11-03 到 11-09 的 10 个改造前备份，加今天的 1.7GB</td></tr>
+<tr><td><code>data/learn/</code></td><td class="n">1.8 GB</td><td><div class="bar" style="width:27%"></div></td><td>22 个克隆仓库 1.48GB（其中 <code>.git</code> 434MB）；2 个 Deep Dive 又整份复制了仓库到 <code>lab/repo</code>，241MB</td></tr>
+<tr><td><code>data/app.db</code></td><td class="n">1.6 GB</td><td><div class="bar" style="width:24%"></div></td><td>见下表；另有 330MB 空闲页（VACUUM 可收回）</td></tr>
+<tr><td><code>data/absorb/</code></td><td class="n">575 MB</td><td><div class="bar" style="width:9%"></div></td><td>向量缓存 <code>_emb_cache</code> 169MB</td></tr>
+<tr><td><code>data/kb/</code></td><td class="n">157 MB</td><td><div class="bar" style="width:2.3%"></div></td><td>知识库 markdown 树</td></tr>
+<tr><td><code>data/logs/server.log</code></td><td class="n">97 MB</td><td><div class="bar" style="width:1.4%"></div></td><td>107 万行，没有轮转；七成以上是前端轮询的访问日志</td></tr>
+</table></div>
+
+<p><b>app.db 内部</b>（1.6GB）</p>
+<div class="scroll"><table>
+<tr><th>表</th><th class="n">大小</th><th>说明</th></tr>
+<tr><td><code>x_art</code></td><td class="n">492 MB</td><td>12.8 万行里 10.3 万是已丢弃的；其中 24,795 条“判不相关”的仍存着全文，共 163MB</td></tr>
+<tr><td>三个全文索引（kb / paper / oss）</td><td class="n">~370 MB</td><td>kb 今天已从 350MB 整理到 107MB</td></tr>
+<tr><td><code>oss_repos</code> / <code>paper_items</code></td><td class="n">153 / 107 MB</td><td>正常业务数据</td></tr>
+<tr><td>空闲页</td><td class="n">330 MB</td><td>84,122 页，VACUUM 后可还给磁盘</td></tr>
+</table></div>
+
+<h2>二、耗时</h2>
+<p><span class="tag ok">已修</span>知识库同步原来每次写请求后在全局数据库锁里整表重建索引，持锁 30.6 秒；现在只更新变化的行，持锁 0.09 秒（提交 <code>cd76159</code>）。</p>
+<p>空闲时主要接口都在 0.2 秒内：最慢的是 <code>/api/feed/picks</code> 163ms，<code>/api/feed/items</code> 81ms，其余都在 40ms 内。<code>/api/learn/plans/15</code> 一次返回 803KB，偏大。</p>
+<p><b>后台 Agent 任务累计时长</b></p>
+<div class="scroll"><table>
+<tr><th>板块</th><th class="n">任务数</th><th class="n">平均</th><th class="n">累计</th><th style="width:35%"></th></tr>
+<tr><td>深度学习 learn</td><td class="n">334</td><td class="n">4.9 分</td><td class="n">27.3 时</td><td><div class="bar" style="width:100%"></div></td></tr>
+<tr><td>调研 research（Claude + Codex）</td><td class="n">115</td><td class="n">5.3 分</td><td class="n">10.1 时</td><td><div class="bar" style="width:37%"></div></td></tr>
+<tr><td>产品雷达 intel</td><td class="n">514</td><td class="n">1.1 分</td><td class="n">9.4 时</td><td><div class="bar" style="width:34%"></div></td></tr>
+<tr><td>规划 plan</td><td class="n">32</td><td class="n">10.5 分</td><td class="n">5.6 时</td><td><div class="bar" style="width:21%"></div></td></tr>
+<tr><td>其他（vision / teen / review）</td><td class="n">116</td><td class="n">—</td><td class="n">2.0 时</td><td><div class="bar" style="width:7%"></div></td></tr>
+</table></div>
+<p>剩下的耗时问题：</p>
+<ul>
+<li>信息流刷新、X 长文、产品雷达等采集都跑在网页服务同一个进程里。刚启动时 CPU 满载约 1 分钟，期间 <code>/api/dev/status</code> 从 9ms 变成 2.1 秒。所有线程还共用一把全局数据库锁 <code>db._lock</code>。</li>
+<li>知识库同步除了索引，每次还要重新生成 6,654 个文档，约 2.4 秒 CPU；因为 <code>INDEX.md</code> 里带了当前时间，每次都会重写 35 个文件。同步期间页面请求偶尔会抖到 0.6 秒。</li>
+</ul>
+
+<h2>三、Token 与付费调用</h2>
+<div class="scroll"><table>
+<tr><th>来源</th><th class="n">用量</th><th>是否记账</th></tr>
+<tr><td>Claude 后台任务（1,071 个，订阅）</td><td class="n">未知</td><td>没记。CLI 最后一条 <code>result</code> 消息里带用量和等价费用，但 <code>app/agent.py:155</code> 只取了正文和会话 ID；会话日志也不在 <code>~/.claude/projects</code> 下</td></tr>
+<tr><td>Haiku 轻量打标签（X 长文 / 论文 / 开源项目）</td><td class="n">X 长文每次运行 136–383 批</td><td>没记</td></tr>
+<tr><td>GetXAPI</td><td class="n">7 天 18,313 次</td><td>只记成功运行的次数；失败运行的调用没计入月度上限</td></tr>
+<tr><td>DeepSeek</td><td class="n">7 天 1,254 次</td><td>只有论文脉络记了费用（共 $0.12）</td></tr>
+<tr><td>语音通话</td><td class="n">35 分钟</td><td>有，共 ¥0.69</td></tr>
+</table></div>
+
+<h2>四、优化清单（按优先级）</h2>
+
+<div class="item"><h3><span class="tag P0">P0</span>轻量模型调用关掉用户级 hook</h3>
+<p><b>现象：</b>X 长文“判相关”在 11-20、11-21 共 4 次运行全部失败（1357/1357、1955/1955、3229/3249、3830/3830），近 3 天 519 批无法解析。模型输出被全局收尾 hook 顶掉了，变成“这个未推送的提交不是我产生的……”。</p>
+<p><b>原因：</b><code>app/modules/_paper_label.py:102</code> 和 <code>app/modules/_oss_label.py:121</code> 直接调 <code>reclaude -p</code>，没像 <code>agent.py</code> 那样传 <code>--settings {"disableAllHooks":true}</code>。论文和开源项目打标签用的是同一种调用，也会被影响。</p>
+<p><b>后果：</b>3 天没有新的 X 长文入库；Haiku 调用全部白费；每天还白烧约 3,500 次 GetXAPI 调用。</p>
+<p><b>改法：</b>两处都加上关 hook 的参数，补一条测试；把失败运行已用掉的 GetXAPI 次数也记进 <code>x_art_run.calls</code>，让月度上限 9 万次真正生效。另外，今天 07:39 那次运行被服务重启打断，一直停在 <code>running</code>，导致今天不会再跑；启动时应把残留的 <code>running</code> 标成失败。</p></div>
+
+<div class="item"><h3><span class="tag P0">P0</span>前端等待已完成任务时的死循环</h3>
+<p><b>现象：</b>11-19 12:13–13:07 约一小时里，<code>/api/jobs/1036</code> 被请求 44,620 次，<code>/api/learn/plans/15</code>（每次 803KB）44,631 次，约每秒 26 次，相当于传了约 35GB。</p>
+<p><b>原因：</b><code>web/modules/learn.js:436</code> 的 <code>watchJob</code>：任务已经结束但页面状态还显示“生成中”时，<code>waitJob</code> 立刻返回、立刻刷新页面，重新渲染后又开始等待，中间没有任何间隔。</p>
+<p><b>改法：</b>第一次轮询就发现任务已结束的，不再触发刷新；刷新之间加最小间隔。</p></div>
+
+<div class="item"><h3><span class="tag P1">P1</span>清理旧备份，整理数据库</h3>
+<p>11-03 到 11-09 的 10 个备份共约 5GB，对应的改造都已稳定。建议保留今天那份和每个里程碑最新的一份，其余删除，可省约 5GB。<code>x_art</code> 里已丢弃行的正文清空后做一次 VACUUM，app.db 预计从 1.6GB 降到 1.0GB 左右。删除和 VACUUM 都要你点头。</p></div>
+
+<div class="item"><h3><span class="tag P1">P1</span>每个 Agent 任务记录 token 和等价费用</h3>
+<p>在 <code>agent.py</code> 解析 <code>result</code> 消息时，把 usage 和 <code>total_cost_usd</code> 存进 <code>jobs</code> 表，Haiku 打标签也一样。改完就能按板块、按天看消耗，下次盘点不用再猜。</p></div>
+
+<div class="item"><h3><span class="tag P1">P1</span>日志轮转，轮询请求不写访问日志</h3>
+<p>按大小轮转 <code>server.log</code>（例如 20MB × 5 份）；<code>/api/dev/status</code>、<code>/api/jobs/finished</code>、<code>/api/notify/since</code> 这几个轮询接口不写访问日志，日志量预计减少七成以上。</p></div>
+
+<div class="item"><h3><span class="tag P2">P2</span>采集任务移出网页进程</h3>
+<p>把信息流刷新、X 长文、产品雷达这些重任务放进现有的任务子进程里跑，网页服务只负责响应页面，启动后不再卡约 1 分钟。</p></div>
+
+<div class="item"><h3><span class="tag P2">P2</span>知识库同步在数据没变时跳过</h3>
+<p><code>INDEX.md</code> 不再写入当前时间，或在源数据没变时直接跳过整个同步，省下每次写操作后约 2.4 秒的 CPU。</p></div>
+
+<div class="item"><h3><span class="tag P2">P2</span>深读仓库瘦身</h3>
+<p>深读完成后删除 <code>src/.git</code>（434MB），或改用浅克隆；Deep Dive 的 <code>lab/repo</code> 改用 <code>git worktree</code> 或硬链接，不再整份复制。合计可省约 0.6GB。</p></div>
+
+<h2>没查清的</h2>
+<ul>
+<li>Claude 后台任务的真实 token：平台没记录，<code>reclaude</code> 包装器把会话日志存到了我没找到的位置。按 P1 改完后才有数据。</li>
+<li>GetXAPI 的单价：仓库里没有价格配置，所以没算成金额。</li>
+</ul>
+</main>
+</body>
+</html>

@@ -95,6 +95,22 @@ CREATE TABLE IF NOT EXISTS approvals (
     decided_at    TEXT,
     UNIQUE(job_id, item)
 );
+
+-- 大模型用量：后台任务、讨论、轻量打标签每次调用记一行；Claude 订阅下 cost_usd 是 CLI 报的等价价
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            TEXT NOT NULL,
+    module        TEXT NOT NULL,
+    ref           TEXT DEFAULT '',
+    engine        TEXT DEFAULT '',
+    model         TEXT DEFAULT '',
+    input_tokens  INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cache_read    INTEGER DEFAULT 0,
+    cache_write   INTEGER DEFAULT 0,
+    cost_usd      REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_at ON llm_usage(at);
 """
 
 _lock = threading.RLock()

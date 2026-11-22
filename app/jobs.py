@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from . import agent, db, kb, modules, settings
+from . import agent, db, kb, modules, settings, usage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -184,6 +184,7 @@ def _run(jid: int, module: str, prompt: str, engine: str, system: str, cwd, add_
                 session = ev["id"]
             elif ev["type"] == "done":
                 text, used = ev["text"], ev["engine"]
+                usage.record(module, ev.get("usage"), ref=f"job:{jid}", engine=used)
             elif ev["type"] in ("tool", "error", "engine"):
                 log_lines.append(f"[{ev['type']}] {ev['text']}")
                 db.update("jobs", jid, {"log": "\n".join(log_lines[-200:])})

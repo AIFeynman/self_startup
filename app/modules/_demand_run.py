@@ -17,7 +17,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from .. import agent, settings
+from .. import agent, settings, usage
 from ..db import DATA_DIR, DB_PATH
 
 BASE = DATA_DIR / "demand"
@@ -153,6 +153,7 @@ class Ctx:
             try:
                 p = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=900, env=agent.clean_env(), cwd=str(BASE))
                 j = json.loads(p.stdout)
+                usage.record("demand", usage.from_claude(j), engine="claude")
                 with self.lock:
                     self.cost += float(j.get("total_cost_usd") or 0)
                 return json.loads(re.search(r"\{.*\}", (j.get("result") or "").strip(), re.S).group(0))

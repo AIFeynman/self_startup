@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 
 import httpx
 
+from .. import usage
 from . import _feed_sources as fsrc
 
 MAX_CHARS = 200_000     # 正文上限：changelog 一般最新在前，截前面
@@ -325,7 +326,7 @@ PRICING_SYSTEM = """你在跟踪一家 AI 公司定价页的变化。输入是 J
 首次（old_structure 为空）changes 返回空数组。scale：涨降价、新套餐、砍套餐、免费额度大改 = major；限额小调 = normal；文案 = minor。"""
 
 
-def _deepseek(system: str, payload: dict, *, max_tokens: int = 4000, client: httpx.Client | None = None) -> dict:
+def _deepseek(system: str, payload: dict, *, max_tokens: int = 4000, client: httpx.Client | None = None, module: str = "intel") -> dict:
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY（项目根目录 .env）")
@@ -339,7 +340,9 @@ def _deepseek(system: str, payload: dict, *, max_tokens: int = 4000, client: htt
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]})
         r.raise_for_status()
-        return json.loads(r.json()["choices"][0]["message"]["content"])
+        j = r.json()
+        usage.record(module, usage.from_deepseek(j), engine="deepseek")
+        return json.loads(j["choices"][0]["message"]["content"])
     finally:
         if own:
             c.close()

@@ -9,9 +9,23 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks, voice, voice_call, voice_record
+from . import agent, annotations, chat, db, jobs, kb, modules, notify, settings, tasks, usage, voice, voice_call, voice_record
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
+class QuietPolls(logging.Filter):
+    """前端每隔几秒轮询的接口成功时不写访问日志（原来占 server.log 七成以上）。"""
+    PATHS = ("/api/dev/status", "/api/jobs/finished", "/api/notify/since", "/api/jobs/approvals")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args if isinstance(record.args, tuple) else ()
+        if len(args) < 5:
+            return True
+        return str(args[2]).split("?")[0] not in self.PATHS or int(args[4]) >= 400
+
+
+logging.getLogger("uvicorn.access").addFilter(QuietPolls())
 
 app = FastAPI(title="本地学习平台", version="0.1.0")
 settings.apply_timezone()
@@ -24,6 +38,7 @@ app.include_router(annotations.router)
 app.include_router(jobs.router)
 app.include_router(tasks.router)
 app.include_router(notify.router)
+app.include_router(usage.router)
 app.include_router(voice.router)
 app.include_router(voice_call.router)
 for name, m in mods.items():

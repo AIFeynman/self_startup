@@ -387,6 +387,7 @@ const DEF_KEY = 'ln-defaults';
 let onAgentDone = null;
 let current = null;
 const watching = new Set();
+const settled = new Set();
 const openSteps = new Set(); // 重绘时保持展开的步骤
 const closedSteps = new Set(); // 用户手动收起的「当前步骤」
 
@@ -434,9 +435,11 @@ const BADGE = { github: 'REPO', paper: 'PAPER', article: '文章', video: '视�
 const badge = (h, kind) => h('span.ln-badge.' + (BADGE[kind] ? kind : 'paper'), {}, BADGE[kind] || 'PAPER');
 
 function watchJob(ctx, jobId, status) {
-  if (!jobId || watching.has(jobId) || !BUSY.includes(status)) return;
+  if (!jobId || watching.has(jobId) || settled.has(jobId) || !BUSY.includes(status)) return;
   watching.add(jobId);
-  ctx.api.waitJob(jobId, null, 4000).catch(() => {}).finally(() => { watching.delete(jobId); softRefresh(); });
+  ctx.api.waitJob(jobId, null, 4000)
+    .then(() => settled.add(jobId), () => new Promise((r) => setTimeout(r, 4000)))
+    .finally(() => { watching.delete(jobId); softRefresh(); });
 }
 
 function stars(h, ui, value, onset, { readonly = false } = {}) {

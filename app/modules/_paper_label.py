@@ -24,11 +24,11 @@ from pathlib import Path
 
 import httpx
 
-from .. import db, settings
+from .. import db, settings, usage
 from ..agent import GATEWAY_ENV
 from . import _paper_collect as col
 from ._feed_judge import API as JEV_API, MODEL as JEV_MODEL
-from ._oss_label import DEEPSEEK_MODEL, DEEPSEEK_PRICE
+from ._oss_label import DEEPSEEK_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -91,16 +91,16 @@ def engine() -> str:
     return os.environ.get("PAPER_LLM_ENGINE") or str(settings.get("paper.llm_engine", "haiku") or "haiku")
 
 
-def chat(system: str, user: str, max_tokens: int = 16000, json_mode: bool = False) -> tuple[str, float]:
-    """→ (内容, 美元)。按 paper.llm_engine 走本机 Claude Code（默认）或 DeepSeek。"""
-    return (_deepseek if engine() == "deepseek" else _claude)(system, user, max_tokens, json_mode)
+def chat(system: str, user: str, max_tokens: int = 16000, json_mode: bool = False, module: str = "paper") -> tuple[str, float]:
+    """→ (内容, 美元)。按 paper.llm_engine 走本机 Claude Code（默认）或 DeepSeek；用量按 module 记进 llm_usage。"""
+    return (_deepseek if engine() == "deepseek" else _claude)(system, user, max_tokens, json_mode, module=module)
 
 
-def _claude(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple[str, float]:
+def _claude(system: str, user: str, max_tokens: int, json_mode: bool, module: str = "paper") -> tuple[str, float]:
     """本机 Claude Code 登录跑 light 档模型（Haiku）；美元是 CLI 报的等价价，订阅不按次付费。"""
     model = str((settings.get("model_tiers", {}) or {}).get("light") or "claude-haiku-5-5")
     cmd = [(settings.get("engines.claude", {}) or {}).get("bin", "claude"), "-p", "--model", model,
-           "--output-format", "json", "--tools", "", "--system-prompt", system]
+           "--output-format", "json", "--tools", "", "--system-prompt", system, "--settings", json.dumps({"disableAllHooks": True})]
     env = {k: v for k, v in os.environ.items() if k not in GATEWAY_ENV}
     for i in range(2):                                   # 偶发的空输出 / 非零退出重试一次，仍失败就报错
         p = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=TIMEOUT, env=env)
@@ -114,6 +114,7 @@ def _claude(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple[s
     bad = {m: u.get("provider") for m, u in (j.get("modelUsage") or {}).items() if u.get("provider") != "firstParty"}
     if bad or not j.get("modelUsage"):
         raise RuntimeError(f"Claude 调用没有走本机登录（provider={bad or '缺失'}），已停止")
+    usage.record(module, usage.from_claude(j), engine="claude")
     if j.get("is_error"):
         raise RuntimeError(f"Claude Code 返回错误：{str(j.get('result'))[:300]}")
     text = j.get("result") or ""
@@ -122,7 +123,7 @@ def _claude(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple[s
     return text, float(j.get("total_cost_usd") or 0)
 
 
-def _deepseek(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple[str, float]:
+def _deepseek(system: str, user: str, max_tokens: int, json_mode: bool, module: str = "paper") -> tuple[str, float]:
     """DeepSeek flash（关思考）→ (内容, 美元)。"""
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
@@ -139,11 +140,9 @@ def _deepseek(system: str, user: str, max_tokens: int, json_mode: bool) -> tuple
         time.sleep(3 * (i + 1))
     r.raise_for_status()
     j = r.json()
-    u = j.get("usage") or {}
-    hit = u.get("prompt_cache_hit_tokens", 0)
-    miss = u.get("prompt_cache_miss_tokens", u.get("prompt_tokens", 0) - hit)
-    hit_p, miss_p, out_p = DEEPSEEK_PRICE
-    return j["choices"][0]["message"]["content"], hit * hit_p + miss * miss_p + u.get("completion_tokens", 0) * out_p
+    u = usage.from_deepseek(j)
+    usage.record(module, u, engine="deepseek")
+    return j["choices"][0]["message"]["content"], u["cost_usd"]
 
 
 # ---------- 标注 ----------

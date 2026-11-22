@@ -301,7 +301,7 @@ def llm_json(system: str, payload: dict, max_tokens: int = 6000) -> dict:
     from .modules._intel_snap import _deepseek
     for i in range(3):   # 网络抖动 / 偶发截断的 JSON 重试两次
         try:
-            return _deepseek(system, payload, max_tokens=max_tokens)
+            return _deepseek(system, payload, max_tokens=max_tokens, module="kb")
         except Exception:  # noqa: BLE001
             if i == 2:
                 raise

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import httpx
 
-from .. import db, settings
+from .. import db, settings, usage
 from ._feed_sources import clean
 
 log = logging.getLogger(__name__)
@@ -30,8 +30,6 @@ TAXONOMY_PATH = Path(__file__).with_name("oss_taxonomy.json")
 BATCH = 50
 PARALLEL = {"deepseek": 8, "haiku": 4}
 DEEPSEEK_MODEL = "deepseek-v4-flash"
-# DeepSeek 美元 / token：缓存命中、未命中、输出（2026-11 官方价）
-DEEPSEEK_PRICE = (0.0028e-6, 0.14e-6, 0.28e-6)
 TIMEOUT = 600
 README_RELABEL_DAYS = 90
 
@@ -119,12 +117,14 @@ def _cli(prompt: str) -> dict:
     cfg = settings.get("engines.claude", {}) or {}
     model = str((settings.get("model_tiers", {}) or {}).get("light") or "claude-haiku-5-5")
     cmd = [cfg.get("bin", "claude"), "-p", prompt, "--model", model, "--output-format", "json", "--tools", "",
-           "--system-prompt", SYSTEM.format(tax=tax_text())]
+           "--system-prompt", SYSTEM.format(tax=tax_text()), "--settings", json.dumps({"disableAllHooks": True})]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
     try:
-        return json.loads(p.stdout)
+        j = json.loads(p.stdout)
     except Exception as e:  # noqa: BLE001
         raise RuntimeError((p.stdout + p.stderr)[-300:] or "空输出") from e
+    usage.record("oss", usage.from_claude(j), engine="claude")
+    return j
 
 
 def _deepseek(prompt: str) -> dict:
@@ -137,12 +137,9 @@ def _deepseek(prompt: str) -> dict:
         "messages": [{"role": "system", "content": SYSTEM.format(tax=tax_text())}, {"role": "user", "content": prompt}]})
     r.raise_for_status()
     j = r.json()
-    u = j.get("usage") or {}
-    hit = u.get("prompt_cache_hit_tokens", 0)
-    miss = u.get("prompt_cache_miss_tokens", u.get("prompt_tokens", 0) - hit)
-    hit_p, miss_p, out_p = DEEPSEEK_PRICE
-    return {"result": j["choices"][0]["message"]["content"],
-            "total_cost_usd": hit * hit_p + miss * miss_p + u.get("completion_tokens", 0) * out_p}
+    u = usage.from_deepseek(j)
+    usage.record("oss", u, engine="deepseek")
+    return {"result": j["choices"][0]["message"]["content"], "total_cost_usd": u["cost_usd"]}
 
 
 ENGINES = {"deepseek": _deepseek, "haiku": _cli}
