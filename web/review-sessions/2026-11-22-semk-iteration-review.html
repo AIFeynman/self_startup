@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>semk 迭代复盘</title>
+<style>
+:root{--bg:#f6f3ee;--fg:#22201c;--mute:#6b665d;--line:#ddd6ca;--acc:#b8432f;--card:#fffdf9}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1b19;--fg:#ece8e1;--mute:#a39d92;--line:#3a3732;--acc:#e07a63;--card:#252320}}
+body{background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,"PingFang SC",sans-serif;margin:0;padding:24px max(16px,env(safe-area-inset-left))}
+main{max-width:880px;margin:0 auto}h1{font-size:24px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 8px;border-top:1px solid var(--line);padding-top:16px}
+.sub{color:var(--mute)}.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:10px 0}
+table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.wrap{overflow-x:auto}b.k{color:var(--acc)}ol li,ul li{margin:4px 0}
+</style></head><body><main>
+<h1>semk 迭代复盘：想要的效果、卡在哪、怎么更快达成</h1>
+<p class="sub">2026-11-22 · 只分析，未改代码 · 依据：今天本地 23 个提交、5 条成片、两次回退、DeepSeek 多份稿对照</p>
+
+<div class="card"><b class="k">结论</b>：今天卡住的根本原因不在引擎，在于“内容骨架谁来定”一直没有固定下来。骨架包括每幕讲什么关系、有哪几项、每项写什么、从上一幕哪一项接过来。这些由 DeepSeek 一次性边写口播边顺手决定，每次写出来差别比引擎改进的幅度还大。再加上每轮只拿一份随机稿出一条片来评判，引擎改得好不好分辨不出来，于是路线来回摆了两次。<br><br>更快的路：①把写稿拆成“先定骨架，再写口播”；②引擎只做导演，每幕一张主图，交棒按骨架做；③固定两份骨架稿当靶子迭代引擎，写稿的波动另外统计。</div>
+
+<h2>一、想要的效果（你这几轮说过的话归纳）</h2>
+<ol>
+<li><b>围绕内容设计展示逻辑</b>：对比就是几个维度逐项对照，因果就是一条串起来的链，并列就是几项列出来。结构表达要比现成组件更好，不能只是几个圈加几个名词。</li>
+<li><b>元素丰富，引擎自由发挥</b>：时间线、图标、饼图、表格等都能用，但不是把组件直接套上去。</li>
+<li><b>动效服务讲解</b>：组件里的元素拆开，跟着口播逐个出场；焦点靠关键元素的变化来带。</li>
+<li><b>画布连贯</b>：换幕不清屏，有锚点元素承接，焦点平滑转到下一幕。</li>
+<li><b>通用、讲原则</b>：不堆规则；DeepSeek 能稳定写出来。</li>
+</ol>
+
+<h2>二、今天走过的路</h2>
+<div class="wrap"><table>
+<tr><th>段</th><th>做法</th><th>结果</th></tr>
+<tr><td>1 跨幕带节点</td><td>画板节点同名认亲飞行</td><td>能飞，但三件并排时画板太小</td></tr>
+<tr><td>2 口播画面对上</td><td>按真实发音时间触发、加念到率等尺子、不达标退回改稿</td><td>同流程三份稿：念到率 42–83%，承接 0–5 处。第三条片焦点没了、组件单一，<b>退回</b></td></tr>
+<tr><td>3–4 一个舞台</td><td>阶段稿格式：DeepSeek 只写句子和上台的东西，摆放交给引擎</td><td>出场跟口播了，但画面是一堆名词</td></tr>
+<tr><td>5 画板模仿组件</td><td>链条轨道、步骤卡、对比表外壳</td><td>你的评价“离组件效果差很远”，<b>撤掉</b></td></tr>
+<tr><td>6 真组件拆开 + 锚点</td><td>组件逐部件出场、同名飞行、焦点交棒兜底</td><td>结构清楚多了；但版面主次错、交棒靠兜底、写稿要靠容错才编得过</td></tr>
+</table></div>
+
+<h2>三、卡在哪（根因）</h2>
+<div class="card"><b>1. 内容骨架没有独立的一步</b><br>
+骨架包括关系、项、每项的说明和数、锚点、这一幕的要点，它才是“易懂易记”的来源。现在它是 DeepSeek 在写口播时顺手带出来的。证据：
+<ul><li>try2 填好了对比表的四行，但口播一行都没逐维讲，内容全塞进了 sub。</li><li>try1 讲“工作流和 Agent”时没用对照。</li><li>同题多份稿，组件种类从 2 种到 5 种不等，承接从 0 到 5 处不等。</li></ul>
+引擎再怎么改，也只是在演一份随机抽到的骨架。</div>
+<div class="card"><b>2. 评判回路分不清是引擎好还是稿子好</b><br>
+每轮只拿一份新写的稿出一条片，稿子的方差盖过了引擎的改进。第二条片好，是抽到了一份好稿；第三条片差，又被误当成是引擎退步。现有尺子（touch、crossed、念到率）量的也不是你关心的东西：主次、空屏、交棒、结构清不清楚。</div>
+<div class="card"><b>3. 承接被当成“同名”问题，其实是叙事问题</b><br>
+锚点应该是“下一幕展开的是上一幕的哪一项”，这在骨架阶段就该定下来。指望 DeepSeek 在第一句恰好写出同名项，几乎不会发生；引擎兜底交棒只能保证视觉上连着，语义上并不连。</div>
+<div class="card"><b>4. 引擎缺一个“导演层”</b><br>
+画板和组件同台时，版面只会均分：
+<ul><li>结论大字比主图还大；</li><li>对比表被挤到边上，还被裁掉；</li><li>交棒的目标部件画得很小，换幕时近乎空屏；</li><li>收尾一幕把旧组件全叫回来。</li></ul>
+缺的是这几条导演规则：每幕一张主图占中间、只留锚点陪着、文字结论做成字幕或注释、收尾只串一遍锚点。</div>
+
+<h2>四、怎么更优达成</h2>
+<ol>
+<li><b>写稿分两步：先定骨架，再写口播</b>
+<ul><li>骨架是一个很小的 JSON，每幕写关系、项（名字 + 一句说明 / 数）、从上一幕哪一项接过来、这一幕观众要记住的一句话。</li>
+<li>一次出 3–4 份骨架，按结构打分，自动挑一份。打分看：关系种类、每幕的项数、锚点链是否完整、对照有没有维度。骨架短，成本不高。</li>
+<li>口播逐项写，每句绑定一项。这样就不会出现“表填了但口播没讲”。</li></ul></li>
+<li><b>引擎当导演</b>
+<ul><li>每幕一张主图，居中、占大头。</li>
+<li>只有锚点从上一幕飞过来；新图从锚点长出去，锚点要大、要在视线中心。</li>
+<li>结论做成字幕或注释，不再是画板大字；收尾一幕只回看锚点链。</li>
+<li>旧图离场和新图长出要错开：锚点先飞，飞到后新图再长。</li></ul></li>
+<li><b>评判回路换靶子</b>
+<ul><li>固定 2 份骨架稿（Agent 这题 + 另一个题材），引擎每轮只在这 2 份上出片对比，结果是确定的。</li>
+<li>写稿的波动单独统计：同题 N 份骨架的通过率和分数分布，不靠单条片判断。</li>
+<li>尺子对准想要的效果：主图占屏比例、空屏秒数、每次换幕有没有交棒、部件出场和念到的时间差、组件有没有被裁。</li></ul></li>
+<li><b>丰富度最后做</b>：组件里加图标、增加登场方式。等主次和承接稳了再加，不然会掩盖主要问题。</li>
+</ol>
+
+<h2>五、建议顺序和代价</h2>
+<div class="wrap"><table>
+<tr><th>步</th><th>内容</th><th>预计</th><th>验证</th></tr>
+<tr><td>1</td><td>导演层：主图居中、结论降级、交棒目标放大、离场和长出错开</td><td>半天</td><td>用现成的 t2 稿重录，对照 comp-agents.mp4</td></tr>
+<tr><td>2</td><td>新增尺子：主图占比、空屏秒数、交棒率、组件被裁</td><td>2 小时</td><td>回归集加这几项</td></tr>
+<tr><td>3</td><td>骨架阶段：骨架提示、结构打分、出 N 份挑 1 份；口播逐项绑定</td><td>半天到 1 天</td><td>同题 4 份骨架的分数分布 + 1 条片</td></tr>
+<tr><td>4</td><td>换一个题材（租房或 RAG）走一遍</td><td>2 小时</td><td>1 条片</td></tr>
+<tr><td>5</td><td>组件加图标、增加登场方式</td><td>半天</td><td>同靶子稿重录</td></tr>
+</table></div>
+<p class="sub">需要你定的：第 3 步骨架打分的标准（建议：关系种类 ≥3、每次换幕都有锚点、对照至少 3 维、全片 4–5 幕 18–24 句）。</p>
+</main></body></html>
