@@ -28,7 +28,8 @@ def test_many_failures_in_one_round_make_one_message_grouped_by_error():
     rows = _alerts(m)
     assert len(rows) == 1 and rows[0]["id"] == nid
     assert "源A" in rows[0]["title"] and "抓取失败" in rows[0]["title"]
-    assert "源B、源C：ConnectTimeout: timed out" in rows[0]["body"]
+    assert "源B、源C：ConnectTimeout: timed out" in rows[0]["reasons"]
+    assert rows[0]["body"] == "源A（HTTP 403）、源B（超时）、源C（超时）" and rows[0]["system"] == 0
     assert notify.failures(m, "抓取", {"a": "HTTP 403", "e": "HTTP 500"}) and "e" in _alerts(m)[-1]["title"]
 
 
@@ -46,7 +47,7 @@ def test_flapping_source_does_not_realert_within_a_day(monkeypatch):
 def test_failure_alert_shows_in_inbox_as_failed(client):
     notify.failures("t_inbox", "抓取", {"z": "HTTP 502"}, link="#feed")
     it = next(x for x in client.get("/api/notify/history").json() if x["module"] == "t_inbox")
-    assert it["failed"] and "HTTP 502" in it["body"]
+    assert it["failed"] and it["body"] == "z（HTTP 502）"
 
 
 def test_feed_refresh_alerts_only_sources_that_got_nothing(monkeypatch):
@@ -61,7 +62,8 @@ def test_feed_refresh_alerts_only_sources_that_got_nothing(monkeypatch):
     feed._bg(["hn", "x", "reddit"])
     rows = _alerts("feed")
     assert len(rows) == 1
-    assert "ConnectTimeout" in rows[0]["body"] and "JSON" in rows[0]["body"] and "一个搜索词" not in rows[0]["body"]
+    assert "ConnectTimeout" in rows[0]["reasons"] and "JSON" in rows[0]["reasons"] and "一个搜索词" not in rows[0]["reasons"]
+    assert len(rows[0]["body"]) <= 160
     feed._bg(["hn", "x", "reddit"])
     assert len(_alerts("feed")) == 1
 
@@ -74,7 +76,7 @@ def test_xart_daily_failure_alerts(monkeypatch):
     except RuntimeError:
         pass
     rows = _alerts("xart")
-    assert len(rows) == 1 and "cookie 过期" in rows[0]["body"]
+    assert len(rows) == 1 and "cookie 过期" in rows[0]["reasons"]
 
 
 def test_paper_record_failure_alerts():
@@ -83,7 +85,7 @@ def test_paper_record_failure_alerts():
         _paper_maintain.record("weekly", lambda step: (_ for _ in ()).throw(ValueError("解析失败")))
     except ValueError:
         pass
-    assert "解析失败" in _alerts("paper")[-1]["body"]
+    assert "解析失败" in _alerts("paper")[-1]["reasons"]
 
 
 def test_intel_fetch_alert_names_company_and_source():

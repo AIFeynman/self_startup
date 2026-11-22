@@ -242,7 +242,10 @@ body.resizing { cursor: col-resize; user-select: none; } body.resizing iframe { 
 #notify-stack { position: fixed; right: 24px; bottom: 24px; z-index: 99; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; max-width: min(460px, calc(100vw - 32px)); }
 #notify-stack .toast.notice { position: static; align-items: flex-start; max-width: 100%; }
 .toast.notify .notify-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-.toast.notify .notify-main span { white-space: normal; }
+.toast.notify .notify-main span { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.toast.notify .notify-main { max-height: min(60vh, 420px); overflow-y: auto; overflow-wrap: anywhere; }
+.toast.notify .notify-main > * { flex-shrink: 0; }
+.toast.notify > a, .toast.notify > button.icon { flex-shrink: 0; }
 .toast.notify details summary { cursor: pointer; opacity: .85; font-size: 12px; }
 .toast.notify ul { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; opacity: .9; }
 @media (max-width: 720px) { #notify-stack { right: 16px; left: 16px; bottom: 16px; max-width: none; } }

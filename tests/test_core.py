@@ -296,9 +296,20 @@ def test_message_history_merges_notifications_and_finished_jobs(client):
     assert items[1]["body"] == "Sundar：X 1" and not items[0]["failed"]
 
 
-def test_clean_env_drops_claude_code_session_vars():
+def test_clean_env_drops_claude_code_session_vars(monkeypatch):
+    from app import agent
     from app.agent import clean_env
+    monkeypatch.setattr(agent, "_system_proxies", lambda: {})
     env = clean_env({"CLAUDECODE": "1", "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH": "1", "CLAUDE_CODE_SESSION_ID": "s",
                      "HTTPS_PROXY": "http://127.0.0.1:5555", "PATH": "/bin", "HOME": "/h"})
     assert env == {"PATH": "/bin", "HOME": "/h"}
     assert clean_env({"HTTPS_PROXY": "http://127.0.0.1:12000", "PATH": "/bin"})["HTTPS_PROXY"] == "http://127.0.0.1:12000"
+
+
+def test_clean_env_falls_back_to_system_proxy(monkeypatch):
+    """会话里起服务时去掉了沙箱代理，只剩 NO_PROXY 会让 Python 不再读系统代理，抓取全部直连超时；有系统代理就用系统代理。"""
+    from app import agent
+    monkeypatch.setattr(agent, "_system_proxies", lambda: {"http": "http://127.0.0.1:12000", "https": "http://127.0.0.1:12000"})
+    env = agent.clean_env({"CLAUDECODE": "1", "HTTPS_PROXY": "http://127.0.0.1:5555", "NO_PROXY": "localhost", "PATH": "/bin"})
+    assert env["HTTPS_PROXY"] == env["HTTP_PROXY"] == "http://127.0.0.1:12000" and env["NO_PROXY"] == "localhost"
+    assert agent.clean_env({"CLAUDECODE": "1", "HTTPS_PROXY": "http://proxy.corp:8080"})["HTTPS_PROXY"] == "http://proxy.corp:8080"

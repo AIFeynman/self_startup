@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -92,8 +93,16 @@ def failures(module: str, what: str, results: dict[str, str], link: str = "", na
     shown = [label(n) for n in fresh]
     title = f"{what}失败：{'、'.join(shown[:3])}{f' 等 {len(shown)} 个' if len(shown) > 3 else ''}"
     reasons = [f"{'、'.join(ns)}：{err}" for err, ns in groups.items()]
-    return notify(module, title, "；".join(reasons)[:600], reasons, link, kind="failure",
-                  subtitle="同一来源一直失败不再重复提醒，恢复后再坏才会再提醒")
+    body = "、".join(f"{label(n)}（{brief(err)}）" for n, err in fresh.items())
+    return notify(module, title, body[:160], reasons, link, kind="failure", mac=False)
+
+
+def brief(err: str) -> str:
+    """错误的一句话类型：HTTP 状态码或异常名，给提醒正文用；完整错误放在理由里。"""
+    if m := re.search(r"(?:HTTP|[Ee]rror) ?'?([45]\d\d)\b", err):
+        return f"HTTP {m.group(1)}"
+    head = err.split("：")[-1].split(":")[0].strip()
+    return "超时" if "Timeout" in head or "timed out" in err else head[:24] or "出错"
 
 
 def system(title: str, body: str = "", subtitle: str = "") -> bool:

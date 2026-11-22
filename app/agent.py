@@ -204,7 +204,20 @@ def clean_env(env: dict | None = None) -> dict:
             if any(h in env.get(k, "") for h in ("://127.0.0.1:", "://localhost:", "://[::1]:")):
                 env.pop(k)
         env = {k: v for k, v in env.items() if k != "CLAUDECODE" and not k.startswith("CLAUDE_CODE_")}
+        # 只要环境里还有 NO_PROXY，Python 就不再读 macOS 系统代理；去掉会话代理后显式补上系统代理，否则抓取全部直连超时
+        sysp = _system_proxies()
+        if not any(env.get(k) for k in _PROXY_KEYS):
+            env.update({k: sysp[s] for k, s in (("HTTPS_PROXY", "https"), ("HTTP_PROXY", "http")) if sysp.get(s)})
     return env
+
+
+def _system_proxies() -> dict:
+    import urllib.request
+    f = getattr(urllib.request, "getproxies_macosx_sysconf", None)
+    try:
+        return f() if f else {}
+    except Exception:  # noqa: BLE001  读系统配置失败就当没有系统代理
+        return {}
 
 
 def _proxy_up(url: str) -> bool:
