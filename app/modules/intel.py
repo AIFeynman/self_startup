@@ -27,7 +27,7 @@ from hashlib import sha1
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import db, jobs, settings
+from .. import db, jobs, notify, settings
 from . import _intel_events as ev
 from . import _intel_head as head
 from . import _intel_growth as gr
@@ -1192,6 +1192,7 @@ def startup_cycle(force: bool = False, cards: bool = True) -> dict:
         except Exception as e:  # noqa: BLE001
             log.exception("intel startup %s failed", name)
             res[name] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+    notify.failures("intel", "创业公司定时任务", {k: v.get("error", "") if isinstance(v, dict) else "" for k, v in res.items()}, link="#intel")
     return res
 
 
@@ -1352,6 +1353,7 @@ def run_cycle(force_fetch: bool = False, cards: bool = True) -> dict:
         srcs = due_sources(force_fetch)
         with ThreadPoolExecutor(max_workers=6) as ex:
             fetched = list(ex.map(fetch_source, srcs))
+        alert_fetch([s["id"] for s in srcs])
         res = {"fetched": len(srcs), "fetch_errors": sum(1 for f in fetched if not f.get("ok")),
                "snapshot_candidates": sum(f.get("candidates", 0) for f in fetched), "feed_candidates": scan_feed()}
         res.update(classify_pending())
@@ -1365,6 +1367,15 @@ def run_cycle(force_fetch: bool = False, cards: bool = True) -> dict:
         _lock.release()
 
 
+def alert_fetch(ids: list[int]) -> int | None:
+    if not ids:
+        return None
+    rs = db.rows(f"SELECT s.id, s.label, s.last_err, c.name FROM intel_source s JOIN intel_company c ON c.id=s.company_id "
+                 f"WHERE s.id IN ({','.join('?' * len(ids))})", ids)
+    return notify.failures("intel", "情报来源抓取", {str(r["id"]): r["last_err"] or "" for r in rs}, link="#intel",
+                           names={str(r["id"]): f"{r['name']} · {r['label']}" for r in rs})
+
+
 def _bg(**kw) -> bool:
     if _lock.locked():
         return False
@@ -1375,8 +1386,10 @@ def _bg(**kw) -> bool:
 def _safe_cycle(**kw):
     try:
         run_cycle(**kw)
-    except Exception:  # noqa: BLE001
+        notify.failures("intel", "情报定时任务", {"cycle": ""})
+    except Exception as e:  # noqa: BLE001
         log.exception("intel cycle failed")
+        notify.failures("intel", "情报定时任务", {"cycle": f"{type(e).__name__}: {str(e)[:200]}"}, link="#intel", names={"cycle": "整轮"})
 
 
 def _loop():

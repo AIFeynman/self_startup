@@ -169,7 +169,7 @@ def test_voice_filter_drops_commentary_and_keeps_batch_on_failure():
 def test_run_merges_people_judges_new_only_and_notifies_once(monkeypatch):
     _wipe()
     sent = []
-    monkeypatch.setattr(P.notify, "notify", lambda *a, **k: sent.append((a, k)) or 1)
+    monkeypatch.setattr(P.notify, "notify", lambda *a, **k: k.get("kind") == "failure" or sent.append((a, k)) or 1)
     batches = [[P._item("youtube:v1", "youtube", ["karpathy"], "Karpathy talk", "u", "2026-11-10"),
                 P._item("youtube:v2", "youtube", ["karpathy"], "About Karpathy", "u", "2026-11-10")],
                [P._item("youtube:v1", "youtube", ["feifei"], "Karpathy talk", "u", "2026-11-10"),

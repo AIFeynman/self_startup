@@ -16,7 +16,7 @@ import signal
 import sys
 import traceback
 
-from .. import db
+from .. import db, notify
 
 _stop = False
 
@@ -64,11 +64,14 @@ def main(rid: int) -> None:
         if r["task"] in ("label", "daily", "weekly"):
             prog["label"] = lab.run(limit=limit, on_progress=tick("label_at"))
         _set(rid, status="done", progress=prog, finished=db.now())
+        notify.failures("oss", "开源雷达", {r["task"]: ""})
     except Stopped:
         _set(rid, status="stopped", progress=prog, finished=db.now())
     except Exception as e:  # noqa: BLE001
         _set(rid, status="failed", progress=prog, finished=db.now(),
              log=f"{type(e).__name__}: {e}\n{traceback.format_exc()[-1500:]}")
+        notify.failures("oss", "开源雷达", {r["task"]: f"{type(e).__name__}: {str(e)[:200]}"}, link="#kb/repo",
+                        names={"collect": "全量采集", "daily": "每日增量", "weekly": "每周刷新", "label": "打标签"})
 
 
 if __name__ == "__main__":

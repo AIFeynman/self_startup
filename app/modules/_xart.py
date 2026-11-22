@@ -22,7 +22,7 @@ from pathlib import Path
 
 import httpx
 
-from .. import db, settings
+from .. import db, notify, settings
 from . import _paper_label as pl
 
 log = logging.getLogger(__name__)
@@ -664,8 +664,10 @@ def daily(now: datetime | None = None) -> dict:
     except Exception as e:  # noqa: BLE001
         db.execute("UPDATE x_art_run SET status='failed', calls=?, result=?, finished=? WHERE id=?",
                    [_calls(res), json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"}, ensure_ascii=False), db.now(), rid])
+        notify.failures("xart", "X 长文每日抓取", {"daily": f"{type(e).__name__}: {str(e)[:200]}"}, link="#feed", names={"daily": "每日运行"})
         raise
     db.execute("UPDATE x_art_run SET status='ok', calls=?, result=?, finished=? WHERE id=?", [calls, json.dumps(res, ensure_ascii=False), db.now(), rid])
+    notify.failures("xart", "X 长文每日抓取", {"daily": ""})
     return res | {"calls": calls}
 
 

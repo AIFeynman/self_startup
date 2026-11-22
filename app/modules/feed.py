@@ -17,7 +17,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import agent, db, settings
+from .. import agent, db, notify, settings
 from . import _feed_follow as follow
 from . import _feed_cluster as cluster
 from . import _feed_gist as gist
@@ -780,8 +780,20 @@ def _bg(only, gists=None):
     _warm_rank()   # 算好再报「刷新完成」，页面一重载就是新结果
     with _state_lock:
         _state.update(running=False, finished_at=db.now(), results=res)
+    alert_failures(res)
     if only is None or {"hf", "alphaxiv"} & set(only):
         paper_ingest()
+
+
+STEP_LABEL = {"_": "整轮刷新", "gist": "中文一句话", "judge": "判断", "events": "事件归并", "hn_digest": "HN 评论提炼",
+              "paper_affil": "论文单位", "product_analysis": "产品分析"}
+
+
+def alert_failures(res: dict) -> int | None:
+    """一个来源 / 步骤这轮一条没拿到又报了错才算失败；拿到了部分（比如个别搜索词超时）不提醒。"""
+    return notify.failures("feed", "信息推荐抓取 / 解析", {
+        k: "；".join(map(str, v.get("errors") or [])) if not v.get("count") else ""
+        for k, v in res.items() if isinstance(v, dict)}, link="#feed", names={**rk.SOURCE_LABEL, **STEP_LABEL})
 
 
 def paper_ingest() -> dict | None:

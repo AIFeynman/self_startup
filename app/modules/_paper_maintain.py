@@ -17,7 +17,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
-from .. import db, settings
+from .. import db, notify, settings
 from . import _paper_collect as col, _paper_label as lab, _paper_orgs
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS paper_runs (
 );
 """
 _lock = threading.Lock()
+RUN_LABEL = {"feed": "每日热门入库", "weekly": "每周维护"}
 
 
 def init() -> None:
@@ -58,7 +59,9 @@ def record(kind: str, fn) -> dict:
     except Exception as e:  # noqa: BLE001
         db.execute("UPDATE paper_runs SET status='failed', step=?, finished=? WHERE id=?",
                    [f"{type(e).__name__}: {str(e)[:200]}", db.now(), rid])
+        notify.failures("paper", "论文库定时任务", {kind: f"{type(e).__name__}: {str(e)[:200]}"}, link="#learn", names=RUN_LABEL)
         raise
+    notify.failures("paper", "论文库定时任务", {kind: ""})
     st = "partial" if res.get("errors") else "ok"
     db.execute("UPDATE paper_runs SET status=?, step='完成', result=?, finished=? WHERE id=?",
                [st, json.dumps(res, ensure_ascii=False), db.now(), rid])

@@ -303,6 +303,8 @@ def run_daily(*, make_cards: bool = True) -> int:
             except Exception as e:  # noqa: BLE001
                 log.warning("vision fetch %s failed: %s", cfg["id"], e)
                 results[cfg["id"]] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+        notify.failures("vision", "愿景数据抓取", {k: v.get("error", "") if isinstance(v, dict) else "" for k, v in results.items()},
+                        link="#vision")
         made = []
         if make_cards:
             today_n = db.row("SELECT count(*) AS n FROM vision_cards WHERE attempt=1 AND created_at>=?", [db.today()])["n"]

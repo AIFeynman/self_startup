@@ -12,7 +12,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import agent, settings
+from .. import agent, notify, settings
 from ..db import ROOT
 from . import _absorb_hn as hn
 from . import _absorb_run as ar
@@ -271,6 +271,7 @@ def hn_maybe_run(now: float | None = None) -> str:
     d = hn.BASE / f"{start}_{end}"
     if d.exists():
         st = _hn_state(d)
+        notify.failures("absorb", "HN 每日吸收", {"hn": "" if st["running"] else st["error"]}, link="#absorb/hn", names={"hn": "HN 精读"})
         if st["done"]:
             return ""
         if now - float(_read(d / "status.json", {}).get("updated") or 0) < RETRY_S:
@@ -285,8 +286,8 @@ def _hn_loop() -> None:
     while True:
         try:
             hn_maybe_run()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            notify.failures("absorb", "HN 每日吸收", {"hn": f"{type(e).__name__}: {str(e)[:200]}"}, link="#absorb/hn", names={"hn": "HN 精读"})
         time.sleep(1800)
 
 

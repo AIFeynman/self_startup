@@ -763,6 +763,8 @@ def run(channels: list[str] | None = None, judge=None) -> dict:
 
     with ThreadPoolExecutor(max(1, len(chans))) as ex:
         results = dict(ex.map(one, chans))
+    notify.failures("people", "名人发声抓取", {ch: "；".join(r["errors"]) if not r["count"] and r["errors"] else "" for ch, r in results.items()},
+                    link="#feed/people", names={ch: n for ch, (n, _) in CHANNELS.items()})
     db.execute("DELETE FROM people_rejected WHERE at < ?", [(datetime.now() - timedelta(days=14)).isoformat(timespec="seconds")])
     runner, model = judge or _haiku_runner()
     for e in backfill(runner, model):
