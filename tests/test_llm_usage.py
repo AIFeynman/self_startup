@@ -60,9 +60,21 @@ def test_job_records_usage(client, monkeypatch):
     jobs._run(jid, "learn", "p", "claude", "", None, [])
     [r] = rows("learn")
     assert r["ref"] == f"job:{jid}" and r["engine"] == "claude" and r["output_tokens"] == 20
-    s = client.get("/api/usage", params={"days": 1}).json()
-    assert {"module": "learn", "calls": 1} in [{"module": m["module"], "calls": m["calls"]} for m in s["by_module"]]
-    assert sum(d["calls"] for d in s["by_day"]) == len(db.rows("SELECT id FROM llm_usage"))
+
+
+
+def test_usage_daily_groups_by_kind_and_module(client):
+    day = "2026-10-05"
+    for module, ref, engine, cost in (("learn", "job:1", "claude", 1.0), ("learn", "job:2", "claude", 0.5), ("chat:plan", "chat:3", "claude", 0.2),
+                                      ("xart", "", "claude", 0.01), ("intel", "", "deepseek", 0.002)):
+        db.insert("llm_usage", {"at": f"{day}T10:00:00", "module": module, "ref": ref, "engine": engine, "model": "m",
+                                "input_tokens": 10, "output_tokens": 5, "cache_read": 100, "cache_write": 1, "cost_usd": cost})
+    db.insert("llm_usage", {"at": "2026-10-09T10:00:00", "module": "learn", "ref": "job:9", "engine": "claude", "cost_usd": 9})
+    r = client.get("/api/usage", params={"start": day, "end": day}).json()
+    got = {(x["day"], x["kind"], x["module"]): (x["calls"], round(x["cost_usd"], 3), x["output_tokens"]) for x in r["rows"]}
+    assert got == {(day, "job", "learn"): (2, 1.5, 10), (day, "chat", "chat:plan"): (1, 0.2, 5),
+                   (day, "light", "xart"): (1, 0.01, 5), (day, "deepseek", "intel"): (1, 0.002, 5)}
+    assert r["since"] <= day
 
 
 def _stub_xart(x, monkeypatch, rel):

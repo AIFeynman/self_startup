@@ -60,12 +60,18 @@ def record(module: str, u: dict | None, *, ref: str = "", engine: str = "") -> N
         log.exception("llm usage record failed")
 
 
+KIND = ("CASE WHEN ref LIKE 'job:%' THEN 'job' WHEN module LIKE 'chat:%' THEN 'chat' "
+        "WHEN engine='deepseek' THEN 'deepseek' ELSE 'light' END")
+
+
 @router.get("")
-def summary(days: int = 7) -> dict:
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00")
+def daily(start: str = "", end: str = "") -> dict:
+    """[start, end] 每天 × 类型（后台任务 / 讨论 / 轻量模型 / DeepSeek）× 板块的调用数、token 和等价美元。"""
+    end = end or datetime.now().strftime("%Y-%m-%d")
+    start = start or (datetime.fromisoformat(end) - timedelta(days=29)).strftime("%Y-%m-%d")
     sums = ", ".join(f"SUM({k}) AS {k}" for k in FIELDS)
-    return {"days": days,
-            "by_module": db.rows(f"SELECT module, engine, COUNT(*) AS calls, {sums} FROM llm_usage WHERE at>=? "
-                                 "GROUP BY module, engine ORDER BY cost_usd DESC", [since]),
-            "by_day": db.rows(f"SELECT substr(at,1,10) AS day, COUNT(*) AS calls, {sums} FROM llm_usage WHERE at>=? "
-                              "GROUP BY day ORDER BY day", [since])}
+    rows = db.rows(f"SELECT substr(at,1,10) AS day, {KIND} AS kind, module, COUNT(*) AS calls, {sums} FROM llm_usage "
+                   "WHERE at>=? AND at<? GROUP BY day, kind, module ORDER BY day, kind, module",
+                   [start, (datetime.fromisoformat(end) + timedelta(days=1)).strftime("%Y-%m-%d")])
+    first = db.row("SELECT MIN(at) AS at FROM llm_usage")["at"]
+    return {"start": start, "end": end, "since": (first or "")[:10], "rows": rows}

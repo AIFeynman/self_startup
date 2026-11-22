@@ -1,9 +1,10 @@
 // 复盘（首页）：问候 + 一句话状态 + 大输入框（记一条 / 问 Agent）+ 今日三卡（事项 / AI 建议 / Agent 效率）
-// 标签页：当日复盘（复盘 / Agent 效率 / 人工效率）/ 时间线 / 问题与经验 / 已读历史。路由：#review/<YYYY-MM-DD>/<tab>/<view>
+// 标签页：当日复盘（复盘 / Agent 效率 / 人工效率）/ 时间线 / 问题与经验 / 已读历史 / 用量。路由：#review/<YYYY-MM-DD>/<tab>/<view>
 import { today, noteHtml } from '../api.js';
 import { utilization } from './_utilchart.js';
 import { deliveries } from './_deliveries.js';
 import { coreMetrics } from './_coremetrics.js';
+import { usagePanel } from './_usage.js';
 import { approvals } from './_approvals.js';
 import { agentBoard, agentPatterns } from './_agentboard.js';
 import { annotate } from './_annotate.js';
@@ -166,7 +167,7 @@ const MSG_CLS = { correct: 'warn', interrupt: 'err', approve: '', check: 'warn',
 const REVIEW_AREAS = ['产品迭代', '个人效率', 'AI协作', '学习提升'];
 const REVIEW_ASPECTS = { 做得好的: '做成了什么、有什么收获，一行一条，回车再加一条', 有问题的: '哪里有问题、下一步怎么办，一行一条，回车再加一条' };
 const reviewDraft = {};
-const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', sessions: 'session复盘', reads: '已读历史' };
+const TABS = { day: '当日复盘', timeline: '时间线', notes: '问题与经验', sessions: 'session复盘', reads: '已读历史', usage: '用量' };
 const DAY_VIEWS = { review: '复盘', agent: 'Agent 效率', human: '人工效率' };
 const FRAGMENT_TARGET = 70;
 const foldOverride = {};
@@ -585,6 +586,12 @@ export default {
       await load();
     }
 
+    // ---------- 用量 ----------
+    async function renderUsage() {
+      loadDay();
+      body.replaceChildren(ui.section('大模型用量', '后台任务、讨论、轻量模型、DeepSeek 每天花了多少'), await usagePanel(ctx, { end: state.date }));
+    }
+
     // ---------- 问题与经验 ----------
     async function renderNotes() {
       loadDay();
@@ -821,6 +828,7 @@ export default {
         else if (state.tab === 'timeline') await renderTimeline();
         else if (state.tab === 'notes') await renderNotes();
         else if (state.tab === 'sessions') await renderSessions();
+        else if (state.tab === 'usage') await renderUsage();
         else await renderReads();
       } catch (e) {
         body.replaceChildren(h('pre.error', {}, e.message));
