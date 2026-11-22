@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS x_art (
 );
 CREATE INDEX IF NOT EXISTS x_art_ix_stage ON x_art(stage);
 CREATE INDEX IF NOT EXISTS x_art_ix_day ON x_art(day);
+CREATE INDEX IF NOT EXISTS x_art_ix_user_title ON x_art(user, title);
 CREATE TABLE IF NOT EXISTS x_art_zh (id TEXT PRIMARY KEY, zh TEXT, updated TEXT);
 CREATE TABLE IF NOT EXISTS x_art_day (day TEXT PRIMARY KEY, found INTEGER, calls INTEGER, done_at TEXT);
 CREATE TABLE IF NOT EXISTS x_art_mark (k TEXT PRIMARY KEY, v INTEGER);
