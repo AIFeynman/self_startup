@@ -28,7 +28,7 @@ GOLD_SYSTEM = (
     "你是严格的标注员。每条输入是一个视频 / 播客 / 新闻 / 论文 / 推文 / 博客，以及它关联的 AI 人物（带身份）。\n"
     "目标是发现该人物新的原始发声。voice=true 只算：本人新出镜或出声的完整访谈、演讲、播客、发布会、听证会（原节目或官方频道发布，含官方频道剪出的片段）；"
     "本人撰写或署名的文章、论文；直接报道本人新说了什么、宣布了什么的新闻。\n"
-    "voice=false：同名的其他人；以他为话题的评论、解读、八卦、传记、盘点；股价或公司新闻；第三方剪辑、Shorts、搬运、翻译配字幕、AI 配音；"
+    "voice=false：同名的其他人；以他为话题的评论、解读、八卦、传记、盘点；股价或公司新闻；第三方剪辑、Shorts（seconds 小于 60 的视频）、搬运、翻译配字幕、AI 配音；"
     "旧内容（原始发声明显早于发布日期一个月以上）的重发；只是提到名字。\n"
     "voice=true 时给 event：这次发声的简短英文标识（人物 + 场合，如 altman-raj-shamani-podcast、hinton-guardian-interview），"
     "同一场访谈 / 演讲 / 表态的不同报道用同一个 event。\n"
@@ -89,6 +89,12 @@ def ref_youtube(pool):
                                                          f"https://www.youtube.com/watch?v={vid}", (sn.get("publishedAt") or "")[:19],
                                                          sn.get("description", ""), uploader=sn.get("channelTitle", "")))
                         it["people"] = sorted(set(it["people"]) | {p["id"]})
+        ids = list(out)
+        for i in range(0, len(ids), 50):
+            r = c.get("https://www.googleapis.com/youtube/v3/videos", params={
+                "key": key, "part": "contentDetails", "id": ",".join(ids[i:i + 50])})
+            for v in r.json().get("items", []) if r.status_code == 200 else []:
+                out[v["id"]]["extra"]["seconds"] = src._iso_dur((v.get("contentDetails") or {}).get("duration", ""))
     return list(out.values())
 
 
@@ -164,7 +170,8 @@ def gold_label(items: list[dict], labels: dict) -> dict:
         batch = todo[i:i + 30]
         rows = [{"id": it["id"], "people": [f"{idx[p]['name']}（{idx[p].get('zh') or ''}），{idx[p]['role']}" for p in it["people"]],
                  "channel": it["channel"], "date": it["date"], "title": it["title"], "summary": it["summary"][:400],
-                 "source": it["extra"].get("uploader") or it["extra"].get("outlet") or it["extra"].get("show") or ""} for it in batch]
+                 "source": it["extra"].get("uploader") or it["extra"].get("outlet") or it["extra"].get("show") or "",
+                 "seconds": it["extra"].get("seconds")} for it in batch]
         r = agent.run_once(json.dumps(rows, ensure_ascii=False), engine="claude", system=GOLD_SYSTEM, model=GOLD_MODEL,
                            readonly=True, fallback=False)
         m = P.re.search(r"\{.*\}", r.get("text") or "", P.re.S)
