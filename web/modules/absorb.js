@@ -1,4 +1,4 @@
-// 吸收：按选题看一段时间的认知卡。每个问题先看现状，再看有争议的和高置信的；每张卡给出判断的来源构成（几位作者、几篇论文 / 项目 / 产品 / 讨论佐证、几处反对）和置信度，点开看各作者原话和挂上的证据；键盘 j/k 逐张、1–4 表态。
+// 吸收：按选题看一段时间的认知卡。默认先看 know-how 地图（领域结构、做事流程、成熟度、每个问题的成功做法和失败教训、分歧、失败模式、该跟的人、空白，每条挂着依据的卡）；卡片视图里每个问题先看现状，再看有争议的和高置信的；每张卡给出判断的来源构成（几位作者、几篇论文 / 项目 / 产品 / 讨论佐证、几处反对）和置信度，点开看各作者原话和挂上的证据；键盘 j/k 逐张、1–4 表态。
 import { hnView } from './_absorb_hn.js';
 
 const CSS = `
@@ -67,6 +67,18 @@ const CSS = `
 .ab-fb .bar { display: inline-block; height: 8px; border-radius: 3px; background: var(--accent); vertical-align: middle; margin-right: 6px; }
 .ab-fb .bar.k { background: var(--line-2); } .ab-fb .bar.d { background: var(--err); }
 .ab-fb h3 { font: 700 15px/1.5 var(--serif); margin: 14px 0 2px; }
+.ab-kh h3 { font: 700 16px/1.5 var(--serif); margin: 22px 0 6px; } .ab-kh .ab-q { scroll-margin-top: 60px; }
+.ab-kt { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin: 4px 0; }
+.ab-kt th, .ab-kt td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ab-kt th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; } .ab-kt tr:last-child td { border-bottom: 0; }
+.ab-flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 4px 0; }
+.ab-flow div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; } .ab-flow b { display: block; font-size: 14px; }
+.ab-k5 { font-size: 12px; font-weight: 700; margin: 8px 0 0; } .ab-k5.d { color: var(--ok); } .ab-k5.f { color: var(--err); }
+.ab-kl { margin: 2px 0 0; padding-left: 20px; font-size: 14px; } .ab-kl li { margin: 5px 0; } .ab-kl.d li::marker { color: var(--ok); } .ab-kl.f li::marker { color: var(--err); }
+.ab-rf, .ab-qa { font-size: 11.5px; color: var(--muted); } .ab-rf a, .ab-qa a { cursor: pointer; margin-left: 4px; }
+.ab-split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0; } .ab-split div { background: var(--bg); border-radius: 8px; padding: 6px 10px; font-size: 13.5px; }
+.ab-cond { font-size: 13px; color: var(--muted); margin: 4px 0 0; } .ab-cond b { color: var(--accent); font-size: 12px; margin-right: 6px; }
+@media (max-width: 720px) { .ab-split { grid-template-columns: 1fr; } .ab-kt thead { display: none; } .ab-kt, .ab-kt tbody, .ab-kt tr, .ab-kt td { display: block; } .ab-kt tr { border-bottom: 1px solid var(--line); padding: 6px 0; } .ab-kt td { border: 0; padding: 2px 10px; } .ab-kt td:not(:first-child)::before { content: attr(data-l) "："; color: var(--muted); font-size: 12px; } }
 @media (max-width: 720px) { .ab-fun { grid-template-columns: repeat(2, 1fr); } .ab-ch { grid-template-columns: 58px minmax(0, 1fr); } .ab-act, .ab-d { margin-left: 0; } .ab-new label { flex: 1 1 120px; } .ab-key { display: none; } .ab-bar { gap: 4px; } .ab-bar button { padding: 2px 9px; } .ab-qg { grid-template-columns: 1fr; } }
 `;
 
@@ -98,6 +110,29 @@ function detail(c, byId) {
   s += '<h5>各作者的说法（按时间）</h5>' + c.src.map((u) => `<div class="ab-s"><a href="${E(u.url)}" target="_blank" rel="noopener">@${E(u.user)}</a> <span class="ab-m">${E(u.day.slice(5))} · ${E(u.kind)}</span>${u.gain ? ` <span class="g">＋${E(u.gain)}</span>` : ''}<br>${E(u.claim)}${u.thesis ? `<br><span class="ab-m">这篇文章的主张：${E(u.thesis)}</span>` : ''}<br><q>${E(u.quote)}</q></div>`).join('');
   if (c.ev.length) s += '<h5>其他来源的证据</h5>' + c.ev.map((e) => `<div class="ab-e"><span class="v ${e.v === '反对' ? 'v0' : 'v1'}">${POOL[e.pool]}·${e.v}</span>${/^https?:/.test(e.url) ? `<a href="${E(e.url)}" target="_blank" rel="noopener">${E(e.title)}</a>` : E(e.title)} <span class="ab-m">${E(e.date)}${e.pool === 'repos' ? ` · ★${N(e.meta)}` : e.pool === 'papers' ? (e.meta ? ` · 引用 ${e.meta}` : '') : e.meta ? ` · ${E(e.meta)}` : ''} · ${E(e.why)}</span></div>`).join('');
   return s;
+}
+
+function kh(D) {
+  const S = D.synth;
+  if (!S) return `<div class="ab-q"><h2>还没有 know-how 地图</h2><p class="ab-m">这个选题是在加“综合”这一步之前跑的。生成地图只补最后两步：按每个问题整理成功做法和失败教训，再综合出领域结构、做事流程、成熟度、分歧和失败模式；前面的抽取、合并、挂证据都不重跑，大约 5 分钟。</p><button class="primary" data-syn>生成 know-how 地图</button></div>`;
+  const R = D.refs || {}, Q = Object.fromEntries(D.questions.map((q) => [q.id, q]));
+  const ref = (ids) => `<span class="ab-rf">${ids.filter((i, k) => R[i] && (R[i].shown || ids.findIndex((j) => R[j] && !R[j].shown && R[j].user === R[i].user) === k)).map((i) => { const r = R[i]; return r.shown ? `<a data-j="${i}" title="${E(r.claim)}">[${i}]</a>` : `<a href="${E(r.url)}" target="_blank" rel="noopener" title="${E(r.claim)}">@${E(r.user)}</a>`; }).join('')}</span>`;
+  const qa = (qs) => `<span class="ab-qa">${(qs || []).filter((q) => Q[q]).map((q) => `<a data-kq="${q}" title="${E(Q[q].q)}">${q}</a>`).join('')}</span>`;
+  const tbl = (hs, rows) => `<table class="ab-kt"><thead><tr>${hs.map((x) => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td data-l="${hs[i]}">${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const li = (xs, k) => (xs.length ? `<div class="ab-k5 ${k}">${k === 'd' ? '成功做法' : '失败教训'}</div><ul class="ab-kl ${k}">${xs.map((x) => `<li>${E(x.t)} ${ref(x.c)}</li>`).join('')}</ul>` : '');
+  const n = D.questions.reduce((a, q) => a + ((S.q[q.id] || {}).do || []).length + ((S.q[q.id] || {}).fail || []).length, 0);
+  return `<div class="ab-kh">${S.line ? `<div class="ab-note"><b>一句话：</b>${E(S.line)}</div>` : ''}
+<div class="ab-m">${D.questions.length} 个关键问题 · ${n} 条做法和教训，每条都挂着依据：[编号] 是需要看的卡，点开跳到卡片；@作者 是折叠起来的单一来源，点开看原文。</div>
+${S.structure.length ? `<h3>领域由哪几块组成</h3>${tbl(['组成部分', '包含', '最常见的坑', '相关问题'], S.structure.map((x) => [`<b>${E(x.name)}</b>`, E(x.what), E(x.pitfall), qa(x.q)]))}` : ''}
+${S.flow.length ? `<h3>做事流程</h3><div class="ab-flow">${S.flow.map((x, i) => `<div><b>${i + 1} · ${E(x.name)}</b>${E(x.what)} ${qa(x.q)}</div>`).join('')}</div>` : ''}
+${S.levels.length ? `<h3>成熟度：从手工到自动</h3>${tbl(['级别', '怎么做', '前提', '例子', '主要风险'], S.levels.map((x) => [`<b>${E(x.name)}</b>`, E(x.how), E(x.needs), E(x.example), E(x.risk)]))}` : ''}
+<h3>关键问题：成功做法与失败教训</h3>
+${D.questions.map((q) => { const p = S.q[q.id] || { do: [], fail: [] }; return `<div class="ab-q" id="kh-${q.id}"><h2>${E(q.q)}<span class="ab-st ${ST[q.status] || 'ab-st2'}">${E(q.status)}</span></h2>${q.now ? `<div class="ab-now"><b>现状：</b>${E(q.now).replace(/\[C(\d+)\]/g, (m, k) => `<a data-j="${k}">[${k}]</a>`)}</div>` : ''}${li(p.do, 'd')}${li(p.fail, 'f')}${p.do.length || p.fail.length ? '' : '<div class="ab-m">这个问题下的材料不够整理出做法。</div>'}</div>`; }).join('')}
+${S.disputes.length ? `<h3>分歧：做过的人结论相反的地方</h3>${S.disputes.map((x) => `<div class="ab-q"><b>${E(x.t)}</b> ${ref(x.c)}<div class="ab-split"><div>${E(x.a)}</div><div>${E(x.b)}</div></div><div class="ab-cond"><b>怎么选</b>${E(x.cond)}</div></div>`).join('')}` : ''}
+${S.failures.length ? `<h3>失败模式</h3>${tbl(['失败模式', '长什么样', '看哪个问题'], S.failures.map((x) => [`<b>${E(x.name)}</b>`, E(x.looks), qa(x.q)]))}` : ''}
+${(D.people || []).length ? `<h3>该持续跟的人</h3>${tbl(['作者', '文章 / 认知', '涉及问题', '代表说法'], D.people.map((p) => [`<a href="${E(p.url)}" target="_blank" rel="noopener">@${E(p.user)}</a>`, `${p.arts} 篇 / ${p.units} 条`, qa(p.qs), E(p.best)]))}` : ''}
+${S.gaps.length ? `<h3>空白</h3><ul class="ab-kl">${S.gaps.map((g) => `<li>${E(g)}</li>`).join('')}</ul>` : ''}
+<p class="ab-m">地图由模型根据本选题的认知卡综合，只用卡片里有的信息；做法和教训必须引用到卡片，引用不上的已丢弃。该跟的人按实践者、官方一手文章数排。</p></div>`;
 }
 
 function how(D) {
@@ -163,7 +198,7 @@ export default {
       ...runs.map((r) => chips[r.id] = h('button', { class: r.id === cur ? 'active' : '', onclick: () => go(r.id) }, label(r))),
       h('button', { onclick: () => { form.classList.toggle('ab-hide'); check(); } }, '＋ 新选题'),
     ]), form);
-    el.append(h('style', {}, CSS), ui.pageHead('吸收', '按选题把一段时间的长文压成认知卡：每个问题先看现状，再看哪些有争议、哪些有多个独立来源撑着', []), head, body);
+    el.append(h('style', {}, CSS), ui.pageHead('吸收', '按选题把一段时间的长文压成 know-how 地图和认知卡：领域结构、关键问题的成功做法与失败教训、分歧和失败模式，每条都能追到原文', []), head, body);
     if (!cur) { form.classList.remove('ab-hide'); check(); body.append(ui.empty('还没有跑过的选题，填上面的表单开始第一个')); return; }
 
     const show = async () => {
@@ -178,12 +213,12 @@ export default {
         else body.append(h('button.primary', { onclick: async () => { await api.post('/api/absorb/runs', { topic: r.topic, start: r.start, end: r.end }); show(); } }, '接着跑'));
         return;
       }
-      paint(r.data, r.reactions);
+      paint(r.data, r.reactions, r);
     };
 
-    const paint = (D, R) => {
+    const paint = (D, R, run) => {
       const M = D.meta, byId = Object.fromEntries(D.cards.map((c) => [c.id, c]));
-      let flt = 'all', view = 'brief', sflt = '';
+      let flt = 'all', view = D.synth ? 'kh' : 'brief', sflt = '';
       const acted = (id) => R[id] && (R[id].act || R[id].stars);
       const card = (c) => `<div class="ab-c" data-c="${c.id}"><div class="ab-ch"><span class="ab-tg ${TG[c.tag][1]}">${TG[c.tag][0]}</span><div><div class="ab-cl">${E(c.claim)}</div>${c.scope ? `<div class="ab-sc">适用：${E(c.scope)}</div>` : ''}${vs(c)}${lights(c)}</div></div>
 <div class="ab-act">${ACT.map((a, i) => `<button data-a="${a}" title="键盘 ${i + 1}：${ACT_TIP[a]}" class="${R[c.id]?.act === a ? 'on' : ''}">${a}</button>`).join('')}<span class="ab-stars" title="这条整理得好不好用：1 星很差，5 星很好；再点同一颗星取消">${[1, 2, 3, 4, 5].map((n) => `<button data-n="${n}" class="${(R[c.id]?.stars || 0) >= n ? 'on' : ''}">★</button>`).join('')}</span></div><div class="ab-d"></div></div>`;
@@ -207,10 +242,10 @@ ${flt === 'all' && !sflt && q.fold.length ? `<details class="ab-fold"><summary>�
       const T = M.tags || {};
       const draw = () => {
         body.innerHTML = `<div class="ab-m">${E(M.window)} · 抽取与比对由模型完成，未经人工校对${M.minutes ? ` · 耗时 ${M.minutes} 分钟` : ''} · 模型花费 $${M.cost}</div>
-<div class="ab-note">${N(M.units)} 条认知压成 ${N(M.shown)} 张需要看（约 ${M.ratio} : 1）。先看<b>有争议 ${N(T.c)}</b>：来源之间互相冲突；再看<b>高置信 ${N(T.h)}</b>，多个独立来源和硬证据撑着，可以放心用；<b>中置信 ${N(T.m)}</b>和<b>低置信 ${N(T.l)}</b>多为单一或少量来源，用前再核。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张，<kbd>1</kbd>–<kbd>4</kbd> 表态（没增量 / 有收获 / 很受用 / 会用上，受用程度由低到高）并跳到下一张，<kbd>o</kbd> 展开原话和证据。</span></div>
-<div class="ab-bar">${[['brief', '卡片'], ['map', '问题'], ['how', '口径'], ['fb', '反馈']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span>
+<div class="ab-note${view === 'brief' ? '' : ' ab-hide'}">${N(M.units)} 条认知压成 ${N(M.shown)} 张需要看（约 ${M.ratio} : 1）。先看<b>有争议 ${N(T.c)}</b>：来源之间互相冲突；再看<b>高置信 ${N(T.h)}</b>，多个独立来源和硬证据撑着，可以放心用；<b>中置信 ${N(T.m)}</b>和<b>低置信 ${N(T.l)}</b>多为单一或少量来源，用前再核。<span class="ab-key">键盘 <kbd>j</kbd>/<kbd>k</kbd> 逐张，<kbd>1</kbd>–<kbd>4</kbd> 表态（没增量 / 有收获 / 很受用 / 会用上，受用程度由低到高）并跳到下一张，<kbd>o</kbd> 展开原话和证据。</span></div>
+<div class="ab-bar">${[['kh', '地图'], ['brief', '卡片'], ['map', '问题'], ['how', '口径'], ['fb', '反馈']].map((x) => `<button data-v="${x[0]}" class="${view === x[0] ? 'on' : ''}">${x[1]}</button>`).join('')}<span class="ab-sp"></span>
 ${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['todo', '未表态']].map((x) => `<button data-f="${x[0]}" class="${flt === x[0] ? 'on' : ''}">${x[1]}${T[x[0]] ? ' ' + T[x[0]] : ''}</button>`).join('') + `<select data-sf title="按你打的星筛">${[['', '星级：全部'], ['0', '未打星'], ['3', '≥3 星'], ['4', '≥4 星'], ['5', '5 星']].map(([v, l]) => `<option value="${v}"${sflt === v ? ' selected' : ''}>${l}</option>`).join('')}</select><span class="ab-m ab-done">${done()}</span>` : ''}</div>
-<div>${view === 'brief' ? brief() : view === 'map' ? qmap() : view === 'how' ? how(D) : '<div class="ab-fb ab-m">加载中</div>'}</div>`;
+<div>${view === 'kh' ? kh(D) : view === 'brief' ? brief() : view === 'map' ? qmap() : view === 'how' ? how(D) : '<div class="ab-fb ab-m">加载中</div>'}</div>`;
         if (view === 'fb') api.get('/api/absorb/feedback').then((F) => { const x = body.querySelector('.ab-fb'); if (x) x.outerHTML = fb(F); });
       };
       const open = (id, keep) => {
@@ -259,7 +294,9 @@ ${view === 'brief' ? [['all', '全部'], ...TAGS.map((k) => [k, TG[k][0]]), ['to
         if (d.a) return react(t.closest('.ab-c'), { act: d.a });
         if (d.n) return react(t.closest('.ab-c'), { stars: +d.n });
         if (d.more !== undefined) { t.closest('.ab-q').querySelector('.ab-rest').classList.remove('ab-hide'); return t.parentNode.remove(); }
-        if (d.j) { if (flt !== 'all' || sflt) { flt = 'all'; sflt = ''; draw(); } return open(d.j, true); }
+        if (d.j) { if (view !== 'brief' || flt !== 'all' || sflt) { view = 'brief'; flt = 'all'; sflt = ''; draw(); } return open(d.j, true); }
+        if (d.kq) return body.querySelector('#kh-' + d.kq)?.scrollIntoView({ block: 'start' });
+        if (d.syn !== undefined) { t.disabled = true; try { await api.post('/api/absorb/runs', { topic: run.topic, start: run.start, end: run.end }); } catch (err) { t.disabled = false; return toast(err.message || '发起失败'); } return show(); }
         if (q) { view = 'brief'; flt = 'all'; sflt = ''; draw(); return body.querySelector(`[data-qid="${q.dataset.q}"]`).scrollIntoView(); }
         const hd = t.closest('.ab-ch');
         if (hd && !t.closest('a')) { focus(hd.parentNode); open(hd.parentNode.dataset.c); }

@@ -1,4 +1,5 @@
-"""吸收流水线：给一个选题和时间窗，把 X 长文抽成认知、归到问题、合并成卡、标出矛盾，再挂上论文 / 开源项目 / 产品动态 / 讨论四类证据。
+"""吸收流水线：给一个选题和时间窗，把 X 长文抽成认知、归到问题、合并成卡、标出矛盾，再挂上论文 / 开源项目 / 产品动态 / 讨论四类证据，
+最后综合成 know how 地图：每个问题的成功做法和失败教训，以及领域结构、做事流程、成熟度、分歧、失败模式。
 
 每一步的结果存在 data/absorb/<run>/ 下，已有结果的步骤不重跑；页面读最后一步的 cards.json（接口见 absorb.py）。
 只读 app.db 和知识库，不写正式库。向量用本机的 Embedding 模型，解释器和模型路径在设置 absorb.* 里。
@@ -30,12 +31,13 @@ from ..db import DATA_DIR, DB_PATH, ROOT
 
 BASE = DATA_DIR / "absorb"
 KB = DATA_DIR / "kb"
-STAGES = ["profile", "theme", "extract", "questions", "pools", "compare", "cards", "evidence", "page"]
+STAGES = ["profile", "theme", "extract", "questions", "pools", "compare", "cards", "evidence", "synth", "page"]
 STAGE_NAME = {"profile": "定选题范围", "theme": "筛选长文", "extract": "抽取认知", "questions": "定问题并归位", "pools": "准备证据池",
-              "compare": "问题内比对", "cards": "合并成卡并复核矛盾", "evidence": "挂证据并写现状", "page": "生成页面数据"}
+              "compare": "问题内比对", "cards": "合并成卡并复核矛盾", "evidence": "挂证据并写现状", "synth": "综合 know how", "page": "生成页面数据"}
 SIM_PAIR = 0.68
 SIM_EVID = 0.45
 POOL_LABEL = {"papers": "论文", "repos": "开源项目", "intel": "产品动态", "disc": "讨论"}
+SYN_CARDS = 80
 
 P_PROFILE = """你为一个选题划定范围，供后面从大量文章、论文、开源项目里筛选材料。
 输入有：选题名、用户知识库里这个选题下已有的概念（可能为空）、长文库的领域代码、论文库和开源项目库的二级分类。
@@ -96,6 +98,29 @@ P_NOW = """你为一个“问题”写现状综述，材料只有下面这些认
 不要写具体数字，只说判断和结论，用“明显”“好几倍”“多数”之类的说法。
 再给一个状态：共识为主 / 有分歧 / 证据少。
 只输出 JSON：{"now":"……[C12]。……[C3][C7]。","status":"共识为主|有分歧|证据少"}"""
+
+P_QSYN = """你在为选题“{topic}”的一个关键问题整理 know how：做过这件事的人总结出来、别人可以照着做或者避开的经验。输入是这个问题下的认知卡，每行“编号 | 说法（适用条件）| 独立作者数 | 来源类型”。
+输出两组：
+do = 成功做法：被证明有效、可以照做的做法或判断。写清在什么条件下、做什么、效果或依据（有数字就带上，并写清和什么比）。
+fail = 失败教训：踩过的坑、做了没用或变差的尝试、看似合理但不成立的做法。写清坑在哪、后果、怎么避免。
+要求：
+- 只用输入卡片里的信息，不补充事实；每条用 c 列出依据的卡片编号（整数），至少一个。
+- 说同一件事的卡合并成一条，引用全部编号；多人印证的、实践者一手的优先。
+- do 4–7 条，fail 2–5 条，每条不超过 90 字；输入里没有失败经验就少写，不要把做法改写成反面来凑数。
+- 句子像同事口头转述，不用“依据：”之类的标签，不用分号堆砌。
+只输出 JSON：{{"do":[{{"t":"……","c":[12,40]}}],"fail":[{{"t":"……","c":[7]}}]}}"""
+
+P_SYN = """你为选题“{topic}”写一份领域 know how 地图的骨架。读者想在十分钟内建立这个领域的体系：它由哪几块组成、做事按什么顺序、团队从手工到成熟分几级、做过的人在哪些地方结论相反、最常见的失败长什么样、哪里还是空白。
+输入：每个关键问题的编号、问题、现状、证据状态，以及已整理好的成功做法和失败教训（方括号里是卡片编号）；最后是复核过的矛盾对。
+输出 JSON，各字段：
+line：一句话总结这个领域的共识、分歧和空白，不超过 150 字；
+structure：这个领域由哪几块组成，4–8 块，按从软到硬或从上游到下游排，每块 {{"name":"≤10字","what":"包含什么≤30字","pitfall":"这一块最常见的坑≤30字","q":["相关问题编号"]}}；
+flow：做这件事的先后步骤，4–8 步，每步 {{"name":"≤8字","what":"这一步要做对什么≤30字","q":["相关问题编号"]}}；
+levels：团队从手工到自动的成熟度，3–5 级，每级 {{"name":"≤10字","how":"这一级怎么做≤30字","needs":"进入这一级的前提≤30字","example":"输入里出现的做法或团队≤30字","risk":"主要风险≤25字"}}；
+disputes：做过的人结论相反的地方，3–7 组，每组 {{"t":"分歧点≤16字","a":"一方的做法和理由≤60字","b":"另一方≤60字","cond":"看什么条件选哪边≤50字","c":[依据的卡片编号]}}；
+failures：最常见的失败模式，6–12 种，每种 {{"name":"≤12字","looks":"长什么样≤40字","q":["对应问题编号"]}}；
+gaps：还没人验证或证据很少的地方，2–5 条，每条不超过 50 字。
+要求：只用输入里的信息，不补充事实；问题编号只能用输入里的，卡片编号只能用输入里出现过的；分歧必须是真的结论相反，侧重点不同不算；cond 写你据输入判断的取舍条件。只输出 JSON。"""
 
 
 def slug(topic: str, start: str, end: str) -> str:
@@ -451,6 +476,100 @@ def s_evidence(r: Run) -> dict:
     return {"shown": sh, "ev": {str(k): v for k, v in evid.items()}, "sum": summarize(r, qs, cards, sh, d)}
 
 
+def _ids(v, ok: set) -> list[int]:
+    out = []
+    for x in v or []:
+        m = re.search(r"\d+", str(x))
+        if m and int(m.group()) in ok and int(m.group()) not in out:
+            out.append(int(m.group()))
+    return out
+
+
+def _txt(v, n: int) -> str:
+    return str(v or "").strip()[:n]
+
+
+def _cited(xs, ok: set, n: int) -> list[dict]:
+    out = []
+    for x in xs or []:
+        if isinstance(x, dict) and (t := _txt(x.get("t"), 160)) and (c := _ids(x.get("c"), ok)):
+            out.append({"t": t, "c": c})
+    return out[:n]
+
+
+def _rows(xs, keys: tuple, need: str, n: int, qids: set | None = None) -> list[dict]:
+    out = []
+    for x in xs or []:
+        if not isinstance(x, dict) or not _txt(x.get(need), 200):
+            continue
+        row = {k: _txt(x.get(k), 120) for k in keys}
+        if qids is not None:
+            row["q"] = [q for q in dict.fromkeys(str(q) for q in x.get("q") or []) if q in qids]
+        out.append(row)
+    return out[:n]
+
+
+def s_synth(r: Run) -> dict:
+    qd, d, e = r.load("questions.json"), r.load("merged.json"), r.load("evidence.json")
+    units, qs, cards = qd["U"], qd["Q"], d["C"]
+    shown, now = set(e["shown"]), e.get("sum", {})
+
+    def kinds(c):
+        return "、".join(sorted({units[i]["source_kind"] for i in c["members"]} - {""})) or "未知"
+
+    def runq(q):
+        cs = sorted((c for c in cards if c["qid"] == q["id"]), reverse=True,
+                    key=lambda c: (c["id"] in shown, len(c["authors"]), units[c["rep"]]["source_kind"] in ("实践者", "官方"), c["maxq"], bool(re.search(r"\d", c["claim"]))))[:SYN_CARDS]
+        if not cs:
+            return q["id"], {"do": [], "fail": []}
+        ok = {c["id"] for c in cs}
+        o = r.call(r.strong, P_QSYN.format(topic=r.topic), f"关键问题：{q['q']}\n现状：{now.get(q['id'], {}).get('now', '') or '无'}\n\n认知卡：\n"
+                   + "\n".join(f"{c['id']} | {c['claim']}（{c['scope'] or '不限'}）| {len(c['authors'])} 位作者 | {kinds(c)}" for c in cs)) or {}
+        return q["id"], {"do": _cited(o.get("do"), ok, 8), "fail": _cited(o.get("fail"), ok, 6)}
+    per = dict(_pmap(runq, qs, 5))
+    qids = {q["id"] for q in qs}
+    ok = {i for p in per.values() for k in ("do", "fail") for x in p[k] for i in x["c"]} | {i for x in d["conf"] for i in (x["a"], x["b"])}
+    lines = []
+    for q in qs:
+        s = now.get(q["id"], {})
+        lines.append(f"{q['id']} {q['q']}（{s.get('status', '证据少')}）\n现状：{s.get('now', '') or '无'}\n"
+                     + "\n".join(f"成功做法：{x['t']} {x['c']}" for x in per[q["id"]]["do"]) + "\n"
+                     + "\n".join(f"失败教训：{x['t']} {x['c']}" for x in per[q["id"]]["fail"]))
+    conf = [f"[{x['a']}] {cards[x['a']]['claim']} ↔ [{x['b']}] {cards[x['b']]['claim']}（矛盾点：{x['point']}）" for x in d["conf"]]
+    g = r.call(r.strong, P_SYN.format(topic=r.topic), "\n\n".join(lines) + "\n\n复核过的矛盾：\n" + ("\n".join(conf) or "无")) or {}
+    return {"q": per, "line": _txt(g.get("line"), 300),
+            "structure": _rows(g.get("structure"), ("name", "what", "pitfall"), "name", 8, qids),
+            "flow": _rows(g.get("flow"), ("name", "what"), "name", 8, qids),
+            "levels": _rows(g.get("levels"), ("name", "how", "needs", "example", "risk"), "name", 5),
+            "disputes": [{k: _txt(x.get(k), 120) for k in ("t", "a", "b", "cond")} | {"c": c} for x in g.get("disputes") or []
+                         if isinstance(x, dict) and _txt(x.get("t"), 120) and (c := _ids(x.get("c"), ok))][:7],
+            "failures": _rows(g.get("failures"), ("name", "looks"), "name", 12, qids),
+            "gaps": [t for x in g.get("gaps") or [] if (t := _txt(x, 120))][:5]}
+
+
+def synth_refs(syn: dict, cards: list, units: list, shown: set) -> dict:
+    cited = {i for p in syn.get("q", {}).values() for k in ("do", "fail") for x in p.get(k, []) for i in x["c"]} | {i for x in syn.get("disputes", []) for i in x["c"]}
+    out = {}
+    for i in sorted(cited):
+        u = units[cards[i]["rep"]]
+        out[str(i)] = {"claim": cards[i]["claim"], "user": u["user"], "url": f"https://x.com/{u['user']}/status/{u['aid']}", "shown": i in shown, "n": len(cards[i]["authors"])}
+    return out
+
+
+def people(units: list, n: int = 12) -> list[dict]:
+    by = collections.defaultdict(list)
+    for u in units:
+        if u["qid"] != "X" and u["source_kind"] in ("实践者", "官方"):
+            by[u["user"]].append(u)
+    top = sorted(by.items(), key=lambda kv: (-len({u["aid"] for u in kv[1]}), -sum(u["q"] for u in kv[1])))[:n]
+    out = []
+    for user, us in top:
+        best = max(us, key=lambda u: (u["w"], u["q"], len(u["claim"])))
+        out.append({"user": user, "arts": len({u["aid"] for u in us}), "units": len(us), "qs": sorted({u["qid"] for u in us}),
+                    "best": best["claim"], "url": f"https://x.com/{user}/status/{best['aid']}"})
+    return out
+
+
 TAGS = "chml"
 
 
@@ -505,13 +624,15 @@ def s_page(r: Run) -> dict:
             "rel": dict(collections.Counter(j["rel"] for j in links)), "tags": dict(collections.Counter(c["tag"] for c in out)),
             "pools": {k: len(v) for k, v in pools.items()}, "evn": {f"{k[0]}:{k[1]}": v for k, v in collections.Counter((x["pool"], x["v"]) for c in out for x in c["ev"]).items()},
             "minutes": round(sum(st["secs"].values()) / 60), "fails": sum(st.get("fails", {}).values())}
-    return {"meta": meta, "profile": r.load("profile.json"), "questions": qout, "cards": out}
+    syn = r.load("synth.json") if r.has("synth.json") else None
+    return {"meta": meta, "profile": r.load("profile.json"), "questions": qout, "cards": out,
+            "synth": syn, "refs": synth_refs(syn, cards, units, shown) if syn else {}, "people": people(units)}
 
 
 OUT = {"profile": "profile.json", "theme": "theme.json", "extract": "extract.json", "questions": "questions.json", "pools": "pools.json",
-       "compare": "compare.json", "cards": "merged.json", "evidence": "evidence.json", "page": "cards.json"}
+       "compare": "compare.json", "cards": "merged.json", "evidence": "evidence.json", "synth": "synth.json", "page": "cards.json"}
 FN = {"profile": s_profile, "theme": s_theme, "extract": s_extract, "questions": s_questions, "pools": s_pools,
-      "compare": s_compare, "cards": s_cards, "evidence": s_evidence, "page": s_page}
+      "compare": s_compare, "cards": s_cards, "evidence": s_evidence, "synth": s_synth, "page": s_page}
 NPY = {"compare": ["unit_emb.npy", "pool_emb.npy"], "evidence": ["shown_emb.npy"]}
 
 
@@ -532,7 +653,8 @@ README = """# 吸收的中间结果：{topic}，{start} 至 {end}
 | compare.json、unit_emb.npy | 6 问题内比对 | 相近认知两两判 重复 / 增益 / 反驳 / 不同；向量顺序同 questions.json 的 U |
 | merged.json | 7 合并成卡 | 合并后的卡、复核过的矛盾 |
 | evidence.json、shown_emb.npy | 8 挂证据并写现状 | 需要看的卡、每张卡挂上的佐证和反对、各问题的现状 |
-| cards.json | 9 生成页面数据 | 页面直接用的数据：meta 漏斗数字、questions、cards |
+| synth.json | 9 综合 know how | 每个问题的成功做法 do 和失败教训 fail（引用卡片编号），领域结构、做事流程、成熟度、分歧、失败模式、空白 |
+| cards.json | 10 生成页面数据 | 页面直接用的数据：meta 漏斗数字、questions、cards、synth、refs（地图引用到的卡）、people（该跟的人） |
 | reactions.json | | 你在页面上的表态（已知 / 采纳 / 不信 / 想试） |
 | run.log | | 从页面发起时的运行日志 |
 
