@@ -1207,3 +1207,13 @@ def test_alphaxiv_native_paper_links_to_alphaxiv_not_arxiv(monkeypatch):
     arxiv, native = src.fetch_alphaxiv()
     assert arxiv["url"] == "https://arxiv.org/abs/2611.00002"
     assert native["url"] == "https://www.alphaxiv.org/abs/2611.composable-soft-prompt-distillation"
+
+
+def test_cn_tab_lists_zhihu_and_bilibili_only(client, monkeypatch):
+    from app.modules import feed
+    fake = [_it("zhihu:1", "Claude 证明了黎曼猜想？", source="zhihu"), _it("bilibili:2", "11 分钟讲清 agent", source="bilibili"),
+            _it("hn:3", "Claude Code agent tips", pop=200)]
+    monkeypatch.setattr(feed, "_collectors", lambda stats=None: {"mix": lambda: fake})
+    client.post("/api/feed/refresh", json={"sources": ["mix"], "wait": True})
+    ids = {x["id"] for x in client.get("/api/feed/items", params={"type": "cn", "limit": 200}).json()["items"]}
+    assert {"zhihu:1", "bilibili:2"} <= ids and not any(i.startswith("hn:") for i in ids)

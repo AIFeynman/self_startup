@@ -158,7 +158,7 @@ CFG_DEFAULTS = {
 # 分类 → 采集器：分类页上的「刷新」只跑这些来源
 TYPE_SOURCES = {"paper": ["hf", "alphaxiv", "arxiv_search"], "blog": ["rss", "sites", "zhihu"], "podcast": ["podcast", "xiaoyuzhou"],
                 "product": ["producthunt", "yc", "trustmrr", "analysis"], "repo": ["github"], "discussion": ["reddit", "x", "zhihu"],
-                "x_article": ["x"], "video": ["video"], "hn": ["hn"]}
+                "x_article": ["x"], "video": ["video"], "hn": ["hn"], "cn": ["zhihu", "video"]}
 TYPES = {"paper": "论文", "blog": "博客", "podcast": "播客", "product": "产品", "repo": "项目", "discussion": "讨论",
          "video": "视频", "news": "资讯"}
 
@@ -380,6 +380,9 @@ def _scored(include_hidden: bool, stale_ok: bool) -> list[dict]:
         return _rebuild_rank(include_hidden, version, inputs)
 
 
+CN_SOURCES = ("zhihu", "bilibili")
+
+
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
            sort: str = "score", read: str = "", stale_ok: bool = False, events: bool = True) -> list[dict]:
     """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合（默认）/ day 按天（新的天在前，天内按综合） / new 最新 / hot 最热（同源热度百分位）；
@@ -394,6 +397,8 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = [x for x in out if x["extra"].get("x_article")]
     elif type_ == "hn":       # 「HN 精读」标签页：HN 帖子单独一页，带评论区提炼
         out = [x for x in out if x["source"] == "hn"]
+    elif type_ == "cn":       # 「国内」标签页：知乎、B 站
+        out = [x for x in out if x["source"] in CN_SOURCES]
     elif type_ == "discussion":   # HN 移到「HN 精读」，讨论里只留 Reddit / X / 知乎
         out = [x for x in out if x["type"] == type_ and x["source"] != "hn"]
     elif type_:
