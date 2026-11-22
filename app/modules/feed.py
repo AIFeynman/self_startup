@@ -417,6 +417,7 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
         out = [x for x in out if x["deep"] and x["deep"]["finished"]]
     elif read and not saved:
         out = [x for x in out if x["read"] == (read == "read")]
+    out = rk.lead_bursts(out)
     if events and not saved:
         out = cluster.collapse(out)
     if sort in ("new", "hot", "day", "views", "followers"):

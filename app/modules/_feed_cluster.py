@@ -42,18 +42,20 @@ def group(items: list[dict], *, run, model: str = "claude-haiku-5-5") -> list[di
 
 
 def collapse(items: list[dict]) -> list[dict]:
-    """排好序的条目里，同一事件只留第一条（综合分最高），挂上 event = {key, title, n, items: 被折叠的其余条目}。"""
+    """排好序的条目里，同一事件（跨来源突发 burst，或 X 上 haiku 归的事件）只留第一条（综合分最高），挂上 event = {key, title, n, items: 被折叠的其余条目}。"""
     leads: dict[str, dict] = {}
     out = []
     for x in items:
         ex = x.get("extra") or {}
-        key = ex.get("event") if x.get("source") == "twitter" else ""
+        burst = x.get("burst") or {}
+        key = burst.get("key") or (ex.get("event") if x.get("source") == "twitter" else "")
         if not key:
             out.append(x)
         elif key in leads:
             leads[key]["event"]["items"].append({k: x.get(k) for k in ("id", "title", "url", "date")} | {"gist": ex.get("gist", "")})
         else:
-            lead = {**x, "event": {"key": key, "title": ex.get("event_title", ""), "items": []}}
+            title = f"{burst['title']} · {burst['sources']} 个来源" if burst else ex.get("event_title", "")
+            lead = {**x, "event": {"key": key, "title": title, "items": []}}
             leads[key] = lead
             out.append(lead)
     for lead in leads.values():

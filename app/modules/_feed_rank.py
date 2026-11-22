@@ -7,6 +7,7 @@ score = 热度(同源近 30 天内的百分位) + 新鲜度(按类型的半衰�
 from __future__ import annotations
 
 import bisect
+import math
 import re
 from collections import Counter
 from collections.abc import Iterable
@@ -17,7 +18,7 @@ W = {"pop": 1.0, "fresh": 2.0, "interest": 0.45, "interest_max": 3, "token": 0.2
      "source": 0.6, "self_like": 1.0, "self_dislike": -2.0, "stale": -0.8, "gone": -1.5,
      "follow": 0.3, "priority": 1.2, "paper_org": 0.6, "also": 0.25, "also_max": 2, "official": 1.2, "release": 0.8, "x_article": 0.4, "viral_article": 0.5, "trending": 0.8,
      "value": 0.6, "practice": 0.35, "noise": -0.8, "top_rank": 0.3,
-     "pref": 0.3, "pref_max": 3, "avoid": -0.4, "avoid_max": 3}
+     "pref": 0.3, "pref_max": 3, "avoid": -0.4, "avoid_max": 3, "event": 1.0, "event_src": 0.25, "event_n": 0.25, "event_max": 4}
 # 官方博客（发布主体本身的一手消息）：博客没有热度数据，靠这个和聚合站 / 个人博客拉开。按文章链接的域名认
 OFFICIAL_BLOGS = {"anthropic.com": "Anthropic", "claude.com": "Anthropic", "claude.dev": "Anthropic",
                   "openai.com": "OpenAI", "deepmind.google": "Google DeepMind", "blog.google": "Google",
@@ -422,8 +423,126 @@ def rank(items: list[dict], *, now: datetime | None = None, half_life_h: float =
             n = Counter(it["also"])
             it["why"] = (it["why"] + " · " if it["why"] else "") + "也见于 " + "、".join(
                 f"{k}×{v}" if v > 1 else k for k, v in n.items())
+    by_id = {x["id"]: x for x in out}
+    for ev in bursts(scored, now):
+        for i in ev["ids"]:
+            if i in by_id:
+                by_id[i]["burst"] = {"key": ev["key"], "title": ev["title"], "sources": ev["sources"], "n": len(ev["ids"])}
     out.sort(key=lambda x: (-x["score"], x["id"]))
     return out
+
+
+def lead_bursts(items: list[dict]) -> list[dict]:
+    """过滤（已读、产品雷达）之后再给每个突发事件剩下的最高分条目加事件热度分，返回按分数重排的新列表；成员留着给 collapse 折叠。"""
+    leads: dict[str, dict] = {}
+    for x in items:
+        b = x.get("burst")
+        if b and (b["key"] not in leads or x["score"] > leads[b["key"]]["score"]):
+            leads[b["key"]] = x
+    if not leads:
+        return items
+    boosted = {}
+    for x in leads.values():
+        b = x["burst"]
+        bonus = W["event"] + W["event_src"] * min(b["sources"] - BURST_MIN_SOURCES, W["event_max"]) \
+            + W["event_n"] * min(math.log2(max(b["n"], BURST_MIN_ITEMS) / BURST_MIN_ITEMS), W["event_max"])
+        boosted[x["id"]] = {**x, "score": round(x["score"] + bonus, 3),
+                            "why": f"大事件 · {b['sources']} 个来源都在讨论" + (" · " + x["why"] if x["why"] else "")}
+    return sorted((boosted.get(x["id"], x) for x in items), key=lambda x: (-x["score"], x["id"]))
+
+
+# 突发事件：近 BURST_HOURS 小时里突然被很多来源同时写进标题 / gist 的词（平时少见），共享条目的词合成一个事件
+BURST_HOURS, BURST_BASE_DAYS = 48, 28
+BURST_MIN_ITEMS, BURST_MIN_SOURCES, BURST_RATIO, BURST_LINK = 8, 4, 10, 1 / 3
+_CJK_RUN = re.compile(r"[一-鿿]{2,}")
+
+
+def burst_terms(it: dict) -> set[str]:
+    """标题 + 中文一句话（gist，把英文条目接到中文说法上）里的拉丁词（≥5 个字母）和连续汉字切成的两字词；去掉 @作者。"""
+    text = re.sub(r"^@\w+：", "", it.get("title") or "") + " " + re.sub(r"@\w+", "", str((it.get("extra") or {}).get("gist") or ""))
+    latin = {t for t in tokens(text) if len(t) >= 5 and t[0].isascii()}
+    return latin | {run[i:i + 2] for run in _CJK_RUN.findall(text) for i in range(len(run) - 1)}
+
+
+def bursts(items: list[dict], now: datetime) -> list[dict]:
+    """[{key, title, sources, ids, terms}]：一个词近 48 小时出现在 ≥8 条、≥4 个来源的标题或 gist 里，
+    且占近 48 小时条目的比例 ≥ BURST_RATIO × 前 28 天的比例（加一平滑，抵消抓取量变化）；共享条目占较小一方 ≥1/3 的词合并。
+    每条只归一个事件（来源多的优先）。"""
+    recent: dict[str, set[str]] = {}
+    base: Counter = Counter()
+    src, n_recent, n_base = {}, 0, 0
+    for it in items:
+        t = item_time(it, now)
+        if not t:
+            continue
+        age_h = (now - t).total_seconds() / 3600
+        if 0 <= age_h <= BURST_HOURS:
+            n_recent += 1
+            src[it["id"]] = it.get("source")
+            for w in burst_terms(it):
+                recent.setdefault(w, set()).add(it["id"])
+        elif BURST_HOURS < age_h <= BURST_HOURS + BURST_BASE_DAYS * 24:
+            n_base += 1
+            base.update(burst_terms(it))
+    core = {w: ids for w, ids in recent.items()
+            if len(ids) >= BURST_MIN_ITEMS and len({src[i] for i in ids}) >= BURST_MIN_SOURCES
+            and len(ids) / n_recent >= BURST_RATIO * (base[w] + 1) / max(n_base, 1)}
+    groups: list[dict] = []
+    for w in sorted(core, key=lambda w: (-len(core[w]), w)):
+        ids = core[w]
+        hit = next((g for g in groups if len(g["ids"] & ids) >= BURST_LINK * min(len(g["ids"]), len(ids))), None)
+        if hit:
+            hit["terms"].append(w)
+            hit["ids"] |= ids
+        else:
+            groups.append({"terms": [w], "ids": set(ids)})
+    for g in groups:
+        g["sources"] = len({src[i] for i in g["ids"]})
+    out, taken = [], set()
+    named = [g for g in groups if _named(g["terms"], [it for it in items if it["id"] in g["ids"]])]
+    for g in sorted(named, key=lambda g: (-g["sources"], -len(g["ids"]))):
+        ids = g["ids"] - taken
+        taken |= ids
+        term = next((w for w in g["terms"] if w[0].isascii()), g["terms"][0])
+        title = _original_case(term, items, ids) if term[0].isascii() else _cjk_word(term, g["terms"])
+        out.append({"key": f"burst:{term}", "title": title, "sources": g["sources"], "ids": ids,
+                    "terms": g["terms"]})
+    return out
+
+
+def _named(terms: list[str], members: list[dict]) -> bool:
+    """像一个具体的名字才算事件，普通词（running、动作）一起变多不算：拉丁词带数字 / 连字符，或在标题中间基本都大写开头；
+    或两字词首尾相接拼出三个字以上（黎曼 + 曼猜 + 猜想 = 黎曼猜想）。"""
+    for w in terms:
+        if not w[0].isascii():
+            continue
+        if re.search(r"[\d\-]", w):
+            return True
+        caps = [m.group(0)[0].isupper() for it in members
+                for m in re.finditer(rf"(?<=\s){re.escape(w)}", re.sub(r"^@\w+：", "", it.get("title") or ""), re.I)]
+        if len(caps) >= 3 and sum(caps) >= 0.8 * len(caps):
+            return True
+    cjk = {w for w in terms if not w[0].isascii()}
+    return any(a[1] == b[0] for a in cjk for b in cjk if a != b)
+
+
+def _cjk_word(term: str, terms: list[str]) -> str:
+    """两字词首尾相接拼回整词：黎曼 + 曼猜 + 猜想 → 黎曼猜想。"""
+    nxt = {w[0]: w for w in terms if not w[0].isascii()}
+    prv = {w[1]: w for w in terms if not w[0].isascii()}
+    while term[0] in prv and prv[term[0]][0] not in term:
+        term = prv[term[0]][0] + term
+    while term[-1] in nxt and nxt[term[-1]][1] not in term:
+        term += nxt[term[-1]][1]
+    return term
+
+
+def _original_case(term: str, items: list[dict], ids: set[str]) -> str:
+    pat = re.compile(re.escape(term), re.I)
+    for it in items:
+        if it["id"] in ids and (m := pat.search(it.get("title") or "")):
+            return m.group(0)
+    return term
 
 
 EVENT_MIN_SHARED, EVENT_JACCARD, EVENT_DAYS = 3, 0.5, 4
