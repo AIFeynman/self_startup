@@ -295,7 +295,8 @@ let onKey;
 let liveTimer; // 「正在执行」面板的轮询
 let closeMenu = () => {};
 let closeDetail = () => {};
-const collapsed = new Set(); // 折叠的父事项 id（跨重绘保留）
+const toggled = new Set(); // 手动展开 / 收起过的父事项 id（跨重绘保留）
+const isFolded = (t) => !!t.daily_set !== toggled.has(t.id);
 const foldedGroups = new Set(['done', 'dropped']);
 const watching = new Set(); // 已在轮询的 job id
 
@@ -867,8 +868,8 @@ export default {
       const run = state.runs.find((r) => r.task_id === t.id);
       const done = kids.filter((k) => k.status === 'done').length;
       const caret = kids.length ? h('button.pl-caret', { title: '展开 / 收起子任务', onclick: (e) => {
-        e.stopPropagation(); collapsed.has(t.id) ? collapsed.delete(t.id) : collapsed.add(t.id); paintList();
-      } }, collapsed.has(t.id) ? '▸' : '▾') : null;
+        e.stopPropagation(); toggled.has(t.id) ? toggled.delete(t.id) : toggled.add(t.id); paintList();
+      } }, isFolded(t) ? '▸' : '▾') : null;
       return h(`div.pl-irow${kid ? '.kid' : ''}${['done', 'dropped'].includes(t.status) ? '.closed' : ''}${state.sel === t.id && !inPanel ? '.sel' : ''}`,
         { 'data-id': t.id, onclick: () => openDetail(t.id) }, [
           inPanel ? null : caret, pr, h('span.pl-id', {}, `#${t.id}`), st,
@@ -915,7 +916,7 @@ export default {
         for (const t of list) {
           const kids = [...t.children].sort(byPrio);
           parts.push(row(t, { kids }));
-          if (!collapsed.has(t.id)) kids.forEach((k) => parts.push(row(k, { kid: true })));
+          if (q || !isFolded(t)) kids.forEach((k) => parts.push(row(k, { kid: true })));
         }
       }
       listBox.replaceChildren(head, h('div.card.pl-issues', {}, parts));
