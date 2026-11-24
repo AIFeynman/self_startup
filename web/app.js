@@ -9,7 +9,7 @@ import { initChat, openChat, chatBusy, chatSnapshot } from './chat.js';
 import * as ui from './ui.js';
 import { voiceBusy } from './voice.js';
 
-const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar', vision: 'globe', teen: 'bulb', wealth: 'wallet', talk: 'mic', notes: 'bulb', tiers: 'bolt', absorb: 'box' };
+const ICONS = { review: 'review', plan: 'plan', feed: 'feed', research: 'research', learn: 'learn', kb: 'kb', agents: 'robot', intel: 'radar', vision: 'globe', teen: 'bulb', wealth: 'wallet', talk: 'mic', notes: 'bulb', absorb: 'box' };
 let meta;
 const page = document.getElementById('page');
 
