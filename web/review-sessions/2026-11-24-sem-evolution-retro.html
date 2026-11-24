@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>sem 系列迭代复盘</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#23262b;--mut:#6a6f78;--line:#dedad0;--card:#fff;--acc:#a4452c;--ok:#2f7050;--warn:#8f6410;--code:#f1eee6}
+@media (prefers-color-scheme:dark){:root{--bg:#17191d;--fg:#e4e3df;--mut:#9aa0a9;--line:#343840;--card:#1f2227;--acc:#e58a6d;--ok:#79c39b;--warn:#d9ae57;--code:#282c33}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.75 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+main{max-width:960px;margin:0 auto;padding:40px 16px 80px}h1{font-size:28px;line-height:1.3;margin:0 0 6px}h2{font-size:21px;margin:44px 0 10px;padding-top:14px;border-top:1px solid var(--line)}h3{font-size:17px;margin:26px 0 6px}
+p,ul,ol{margin:8px 0}li{margin:4px 0}.mut{color:var(--mut);font-size:14px}code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px;word-break:break-all}
+.box{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:6px;padding:12px 18px;margin:16px 0}
+.t{overflow-x:auto;margin:12px 0}table{border-collapse:collapse;width:100%;min-width:560px;font-size:14px;line-height:1.55}th,td{border-bottom:1px solid var(--line);padding:7px 10px 7px 0;text-align:left;vertical-align:top}th{color:var(--mut);font-weight:600}
+b.ok{color:var(--ok)}b.no{color:var(--acc)}b.q{color:var(--warn)}.x{color:var(--warn);font-size:12px;border:1px solid var(--line);border-radius:3px;padding:0 4px;white-space:nowrap}
+nav a{color:inherit;margin-right:14px;font-size:14px}
+</style></head><body><main>
+<h1>sem 系列迭代复盘：sem → sem2 → semk → transcribe → loop</h1>
+<p class="mut">读者：继续做讲解引擎的人 · 覆盖 2026-11-13 至 11-24 · 只分析，未改代码、未重跑评测、未看成片<br>
+证据范围：<code>/Users/libiao/project/test_feynman</code> 内的 git、文档和 worktree 产物。标 <span class="x">外</span> 的来自范围限定之前读到的本机会话记录（含 Gemini 日志），没有再复核。原始逐轮评分 JSON 大多已丢，凡无法复算的分数都按“文档记载”看待。</p>
+<nav><a href="#a">结论</a><a href="#b">路线</a><a href="#c">逐段</a><a href="#d">分数能信多少</a><a href="#e">根因</a><a href="#f">有效清单</a><a href="#g">现状风险</a><a href="#h">下一步</a><a href="#i">未证实</a></nav>
+
+<h2 id="a">一、结论</h2>
+<div class="box"><p><b>12 天做了两代引擎加一个重写内核，引擎能力确实变强，但没有证据说明产品路径（DeepSeek 只看题目写稿）的成片质量持续上升。</b>最新两部独立评审是 2.5 和 2.0（满分 5），都判定不能发布。</p></div>
+<ol>
+<li><b>每一代换线都没有退出结论。</b>sem 停在 6 题均分 2.92–3.17 <span class="x">外</span>，sem2 停在 30 题首过 83%，都没有写下“哪条假设被证伪、哪些必须带走”。结果是同样的问题（骨架、承接、组件感）换个名字再来一遍。</li>
+<li><b>优化对象和产品错位。</b>transcribe 两天优化的是“Opus 看着参考片改写”，DeepSeek 写稿几乎用不上新增组件。</li>
+<li><b>尺子量不到用户要的东西，而且会移动。</b>评委主要看每句静帧，用户抱怨的是换幕、焦点、像 PPT。收敛规则、底线口径、评委、题集都在中途改过，几处头条涨幅来自分母变化。</li>
+<li><b>内容骨架长期没有固定。</b>引擎每轮都在演一份随机抽到的稿，稿子的波动（同题重写差 0.2–0.6）大于引擎改动。</li>
+<li><b>增益方向最清楚的是“看过画面再改一轮”</b>，但在 11-21 之后没有作为主线继续。</li>
+</ol>
+
+<h2 id="b">二、路线总览</h2>
+<div class="t"><table>
+<tr><th>阶段</th><th>时间</th><th>核心假设</th><th>模型写什么</th><th>结局</th></tr>
+<tr><td><b>sem</b></td><td>11-13～16</td><td>语义级组件 + 引擎自动编排，能逼近 Opus 逐题手写</td><td>节点、关系、逐拍动作</td><td>首稿率约 80–88%，画面分仍比 Opus 低 1.2 以上 <span class="x">外</span>；两条主干未合流</td></tr>
+<tr><td><b>sem2</b></td><td>11-16～17</td><td>更严的结构契约换稳定</td><td>先两阶段（配方 + 逐幕填槽），flex 末版改为一条主线</td><td>30 题首过 83%，未到 85%；11-17 05:34 后无提交，被 semk 自然取代</td></tr>
+<tr><td><b>semk 起步</b></td><td>11-17</td><td>从 58 部 Opus 参考片手法重写轻内核</td><td>cast / acts / beats，11 个动词，不写坐标</td><td>6 部盲评 2.53→2.87；Excel 一类题静止仍高</td></tr>
+<tr><td><b>semk-transcribe</b></td><td>11-17～19</td><td>把 Opus 片反写成 semk，找缺口、补内核</td><td>Opus 看答案转写</td><td>能力大增也大膨胀，向 DeepSeek 转移未证明</td></tr>
+<tr><td><b>semk-loop</b></td><td>11-19～24</td><td>回到 DeepSeek，轮流换写法、画布、舞台、骨架</td><td>多次更换稿件格式</td><td>盲写停在约 3.2；多次回退；31 个提交只在本机</td></tr>
+</table></div>
+<p>继承关系（git 核实）：<code>trace-kernel-proto</code> → <code>sem-kernel</code> → <code>semk-loop</code> 是一条线。sem2 与它互不包含，semk 目录里也没有 sem2 字样，等于全部重写。sem、sem2、semk 的引擎分支都没有进 main。</p>
+<p>规模（git 统计）：</p>
+<div class="t"><table>
+<tr><th>提交</th><th>日期</th><th>parts 目录文件数</th><th>内核行数</th><th>内核字符</th><th>semk_run.py 行数</th></tr>
+<tr><td><code>148757318</code> sem-kernel 末</td><td>11-17</td><td>33</td><td>2,675</td><td>276k</td><td>818</td></tr>
+<tr><td><code>773520962</code> transcribe 末</td><td>11-19</td><td>41</td><td>3,942</td><td>436k</td><td>2,593</td></tr>
+<tr><td><code>968d68ecb</code> 删组件后</td><td>11-19</td><td>29</td><td>3,344</td><td>362k</td><td>3,347</td></tr>
+<tr><td><code>4b42f55be</code> 远端基线</td><td>11-21</td><td>30</td><td>3,772</td><td>414k</td><td>3,688</td></tr>
+<tr><td><code>9e19c6ae3</code> 当前</td><td>11-24</td><td>33</td><td>5,266</td><td>529k</td><td>4,001</td></tr>
+</table></div>
+<p>7 天内核翻倍。评测与写稿脚本长到 4,001 行，和内核同量级。</p>
+
+<h2 id="c">三、逐段复盘</h2>
+<h3>1. sem（11-13～16）</h3>
+<p><b>做了什么</b>：节点 / 关系 / 动作词表、程序修稿、单画布加镜头、占位账本、15 个风格、编辑器与流式分支。</p>
+<ul>
+<li><b class="ok">有效</b>：程序修稿与一次列全错误；占位账本 <code>a76333376</code> 把 24 部脚本里持续文字重叠 57 对降到 0 <span class="x">外</span>，但只管文字压文字。</li>
+<li><b class="no">失败</b>：讲法宏，用与不用首稿率 83.5% 对 85.7%，整层删除（<code>66e23101c</code>）<span class="x">外</span>。强制每题一张主图（<code>1bd2adb50</code>），6 题均分 3.17→2.92 <span class="x">外</span>：机制题受益，循环题、尺度题受损。</li>
+<li><b class="no">副作用</b>：单画布改造 <code>924a22a53</code> 换来连贯结构，也带来跳变，用户先发现，评委没发现 <span class="x">外</span>。</li>
+<li><b>缺口很早就定位了</b>：图形数 sem 约 9 对 Opus 37（<code>2026-11-14-sem-eval-system.md</code>），后续没有显著改善；11-15 缺口文档把根子归为全片常驻和身份色，但 27 部里只有 2 部实渲，其余为推断。</li>
+</ul>
+<p><b>教训</b>：首稿能过和好看脱钩 <span class="x">外</span>。风格、编辑器、流式在骨架未稳时先铺开，风格从 4 扩到 15 又砍到 10。</p>
+
+<h3>2. sem2（11-16～17）</h3>
+<div class="t"><table>
+<tr><th>批次</th><th>n</th><th>首过 / 终过</th></tr>
+<tr><td>ref0 → ref2</td><td>30</td><td>67/87% → <b>83/100%</b></td></tr>
+<tr><td>讲稿规则 s2 → s3</td><td>4</td><td>50/100% → 25/100%</td></tr>
+<tr><td>静止规则 s4 / s5 / s6</td><td>2</td><td>0/50、0/0、0/50%</td></tr>
+<tr><td>flex 主线版 s1</td><td>4</td><td>25/100%</td></tr>
+</table></div>
+<p class="mut">来源：<code>feynman_claw-sem2</code>、<code>feynman_claw-flex</code> 下 <code>prototypes/sem2/out/eval/*/report.json</code>。s 系列题数不同，只能看方向。</p>
+<ul>
+<li><b class="ok">有效</b>：确定性归一器（67→83%）；焦点状态机与画布迁移后静止下降 <span class="x">外</span>。</li>
+<li><b class="no">失败</b>：把“不要重复、不要静止”做成硬拒收，首过跌到 0–50%。两阶段、配方、骨架最终在 <code>841fdd978</code> 一次删除（+1258/−7438 行）。</li>
+<li>用户评价“明显灵活性不如 sem”、“还是不行，先分析讲法和骨架” <span class="x">外</span>。没有找到停止 sem2 的明确决定。</li>
+</ul>
+<p><b>教训</b>：可靠性靠收紧模型自由度换来，代价是版式集中（ref2 的 30 份结果里约 23 份含 gallery-walk 字样，文件级计数，仅供方向参考）。</p>
+
+<h3>3. semk 起步（11-17）</h3>
+<ul>
+<li>放弃 form 与配方，宽松归一：单个动作错只丢该动作。6 题 × 2 稿 12/12，这与 sem2 的严格首过<b>不能并列</b>。</li>
+<li>盲评 6 部：骨架 2.5→3.0，收尾 2.3→3.2，布局和动效都停在 2.7；参考片 5。静止帧占比 0.55–0.68（<code>8c24977a2</code>）。</li>
+<li>来回：逐焦点重排每分钟 16–24 次，Opus 为 0 <span class="x">外</span> → 冻结布局并删自动推镜（<code>43849ff33</code>）→ “像 PPT” → 补回相机（<code>c3fd4645a</code>）→ “运镜有些多” <span class="x">外</span>。地图插卡 <code>c70caecf9</code> 合入后几分钟即被 <code>e089d9e0f</code> 回退。</li>
+</ul>
+<p><b>教训</b>：运镜、焦点、静止是互相牵制的一组，逐项修会修一面伤一面，需要一次定义“主体稳定、只为内容动”。</p>
+
+<h3>4. semk-transcribe（11-17～19）</h3>
+<p><b>机制</b>：Opus 转写参考片 → 渲染 → codex 打分 → 独立评审 → 架构师 / 反方 → 改内核 → 同一批片重跑。</p>
+<div class="t"><table>
+<tr><th>轮（3 部训练）</th><th>训练分差</th><th>留出分差</th><th>底线</th></tr>
+<tr><td>base</td><td>0.59</td><td>0.90</td><td>29</td></tr>
+<tr><td>r0（框架不动）</td><td>0.61</td><td>0.74</td><td>28</td></tr>
+<tr><td>r1</td><td>0.64</td><td>0.74</td><td>33</td></tr>
+<tr><td>r2</td><td>0.45</td><td>0.66</td><td>31</td></tr>
+<tr><td>r3</td><td>0.49</td><td>0.79</td><td>2</td></tr>
+<tr><td>r4</td><td>0.46</td><td>0.66</td><td>1</td></tr>
+</table></div>
+<p class="mut">来源：分支 <code>claude/semk-transcribe</code> 的 <code>docs/design/semk/transcribe-loop.html</code>。r0 什么都没改，留出就动了 −0.16，可视作噪声下界；r2→r4 留出净零。r3 的底线 31→2 是否因口径变化，两份文档说法矛盾。</p>
+<p><b>三处“进步”经复算不成立：</b></p>
+<div class="t"><table>
+<tr><th>文档头条</th><th>复算</th></tr>
+<tr><td>验收轮新内核 3.51 对旧 3.42</td><td>新内核只有 4 部出分。<b>同 4 部：旧 3.56 → 新 3.51；每拍高差距 1.86 → 2.11；底线不过 3 → 27 拍</b>（<code>semk-review/ho</code>）</td></tr>
+<tr><td>高差距 2.73 → 2.08</td><td>4 部对 5 部。<b>同 5 部：c4 2.10 → c5r 2.08</b>（<code>semk-review/c5r</code>），c3 为 2.26</td></tr>
+<tr><td>B3 “逐部基本持平”</td><td><b>同 6 部：0.39 → 0.57 → 0.43</b>（<code>semk-review/b3</code>）</td></tr>
+</table></div>
+<p>另有 <code>f346ed5e2</code>：r2 的挡分上升，按原规则未收敛，规则随即改为“挡分 + 转写失误”，同一轮便判收敛。这条改动有道理，但是在看到结果之后改的，应当标注并用新数据重判。</p>
+<ul>
+<li><b class="ok">有效</b>：暴露了内核能力缺口，画出大量参考模式；组件、镜头、便签、退场等确有改进。</li>
+<li><b class="no">不转移</b>：DeepSeek 14 份稿，scatter、geo、density、array、matrix、problem 使用 0 次；每部用 3–6 件，转写最多 36 件（<code>2026-11-19-self-iteration-retro.html</code>）。只换内核不换稿的 c4k 为 2.26，c3 为 2.20，没有可测的纯内核增益（无区间，不能证明为 0）。</li>
+<li><b class="no">膨胀</b>：同期组件文件 33→41，随后多数只服务转写的组件被删。</li>
+<li>台账 30 条，confirmed 0；r5 之后 actual 与 uses 基本没再填。</li>
+<li>人评意见里有“都要尽量提炼、压榨完”（<code>human-notes.json</code>，前提是不牺牲泛化性），给了方向，也推高了增量配额，不能全算在 Agent 头上。</li>
+</ul>
+<p>当时的复盘已指出“生成器错位、没有留出集、尺子跟着结果变”；之后建立的 gate 与抗过拟合方案（<code>8a4a70613</code>），本次没找到任何已执行产物。</p>
+
+<h3>5. semk-loop（11-19～24）</h3>
+<div class="t"><table>
+<tr><th>做法</th><th>动机</th><th>数据与结果</th></tr>
+<tr><td>两段式写稿 <code>44948b033</code></td><td>提示词变短</td><td>3.12 对 3.23，噪声内 <span class="x">外</span></td></tr>
+<tr><td>Opus 看画面回改 <code>e022b96b4</code></td><td>测上限</td><td>3 题：修内核后 3.57 → 回改两轮 3.91 → 自由绘制 4.00；Opus 原片 4.21 <span class="x">外</span></td></tr>
+<tr><td>DeepSeek 回改环 <code>b91b9e5b3</code></td><td>产品路径</td><td>3.25→3.52，Opus 4.14 <span class="x">外</span></td></tr>
+<tr><td>删 14 组件、动作落词 <code>bcb2a4aa4</code></td><td>同步与精简</td><td>clear 3.59→3.49（噪声内），同步 3.13→3.68 <span class="x">外</span></td></tr>
+<tr><td>board 网格 / 一张画布 / 关系网 / 解释图</td><td>去组件感、去 PPT</td><td>多在 2.7–3.0；解释图首报 2.95，3 题 × 3 次实为 2.72 <span class="x">外</span></td></tr>
+<tr><td>版面树 <code>e7ddfbdb8</code></td><td>坐标太难写</td><td>盲写 3.17→3.22，回改一轮 3.40→3.69 <span class="x">外</span></td></tr>
+<tr><td>框架重构 <code>semk-refactor-attempt</code></td><td>精简、零件化</td><td>用户“效果变差了”，回退 <span class="x">外</span></td></tr>
+<tr><td>防重叠一组至 <code>4b42f55be</code></td><td>稳定性</td><td>8 部回归：字压字 8→1、线穿字 7→1（提交记载），推为远端基线</td></tr>
+<tr><td>口播同步、承接、瘦提示 <code>71b93e3c9</code>～<code>3c8f16b61</code></td><td>换幕与同步</td><td>念到率各稿 37.5–76%，受稿子波动支配 <span class="x">外</span></td></tr>
+<tr><td>活舞台 / 关系壳 / 真组件</td><td>“都是框和箭头”</td><td>主要单片判断，被评“全部都是一个 logo + 文字” <span class="x">外</span></td></tr>
+<tr><td>骨架先行 <code>2d6b4924a</code>～<code>fb9091277</code></td><td>11-22 复盘建议</td><td>交棒首报 4/4 为程序猜的，按骨架实为 3/4；片更长 <span class="x">外</span></td></tr>
+<tr><td>11-24 三提交 <code>65da263f9</code>、<code>7d79362f8</code>、<code>9e19c6ae3</code></td><td>画布相机、漏斗/象限、主体驱动骨架</td><td>无提交正文、无独立评审</td></tr>
+</table></div>
+<p><b>三处反复</b></p>
+<ul>
+<li><b>组件 ↔ 零件</b>：至少 4 轮往返，触发语交替是“像模板 / PPT”和“只有框和箭头、离组件效果差很远”。两句话并不矛盾，共同指向“画面没有题目专属的内容”。</li>
+<li><b>骨架</b>：命名骨架 → 拆掉（<code>3bbe3db8b</code>）→ 内容骨架先行 → 主体 + 状态变化。前两者是版面骨架，后两者是内容骨架，不是同一东西。</li>
+<li><b>承接</b>：同名飞行、整页换掉就退稿、从命名部件长出、兜底交棒、按骨架交棒、关键词胶囊，已试 5–6 种。11-22 复盘的判断是：承接是叙事问题，同名匹配只能做到视觉连着。</li>
+</ul>
+<p><b>11-23 独立评审（pdca126 2.5、fraud56 2.0）</b>：关键数不上屏（12 分钟目标、100 万和 40 万）、高亮指错、重叠与裁切、上一幕残字、末尾总览不可读，另有编造与归类错误（“婚恋借款”、两案合一）。评的是哪个提交（<code>7d79362f8</code>）由会话记录推得 <span class="x">外</span>；没有听音频。</p>
+
+<h2 id="d">四、分数能信多少</h2>
+<div class="box"><p><b>不要把各阶段分数连成一条曲线。</b>题集、评委、次数、量表、稿源都换过：sem 为 Opus 六项看静帧，semk 早期为 codex 适配/讲清楚，transcribe 为“高差距/拍”，loop 为 codex clear，11-23 为独立评审看动态。</p></div>
+<ul>
+<li><b>噪声</b>：同片重打约 0.17–0.4；同题重写 0.2–0.6。因此盲写 3.17、3.21、3.22、3.21 是同一水平。</li>
+<li><b>可信的方向</b>：与 Opus 的差距长期存在；看画面回改有正收益；DeepSeek 用不上转写组件。</li>
+<li><b>不可信的结论</b>：单轮 ±0.1 的涨跌；“一次通过率”跨引擎比较；程序自报的交棒率；作者模型自评的 3.4–4.3 <span class="x">外</span>。</li>
+<li><b>回归基线放宽过</b>：<code>023276a3c</code> 把 <code>docs/design/semk/regress/baseline.json</code> 中一项 <code>crossed</code> 从 0 改为 3，属于随改动调整基线，理由在提交正文里，但没有单独审过。</li>
+</ul>
+
+<h2 id="e">五、根因（按影响排序）</h2>
+<ol>
+<li><b>内容骨架没有被固定为独立产物。</b>写稿模型一次同时决定讲什么、画什么、怎么动。11-21 同框架对比：Opus 27 句、<code>set</code> 11 次，DeepSeek 13 句、<code>set</code> 2 次（租房题）。Opus 贯穿一个带数的例子；DeepSeek 写成清单再点亮。旁证只有单例，样本小。反例：换另一版提示时两者持平（wx01 2.85/3.12，<code>opus-revised</code> 页），说明过紧的规则也会把 Opus 压平。</li>
+<li><b>优化对象错位。</b>环里是看答案的 Opus，产品里是只看题目的 DeepSeek。</li>
+<li><b>尺子不对齐，也不冻结。</b>静帧打分看不到换幕、焦点、同步，于是“分没动、人说差”长期并存；规则和分母又在运行中改。</li>
+<li><b>一轮多变量，单片定路线。</b>稿、内核、尺子、样本同时变，看一条新片就换格式。</li>
+<li><b>通用化与题目专属画面没有分层。</b>强制主图、种类多样、模板组件都把手段当规则；题目专属的图（楔子、聊天记录、20 米路线）始终画不出来。</li>
+<li><b>软目标做成硬约束。</b>静止、重复、复用限制等直接伤首过，或被改稿绕过。</li>
+<li><b>换线没有退出门。</b>36 个 sem2 / flex 提交、4 个 sem-hero 提交留在本地，评分材料散在临时目录且已丢，所以旧结论无法复用。</li>
+<li><b>工具换手后缺独立复验。</b>11-24 三提交由另一工具完成 <span class="x">外</span>，提交说明不足，评审落后一个提交。</li>
+</ol>
+
+<h2 id="f">六、值得留下 / 应当丢下</h2>
+<div class="t"><table>
+<tr><th>留下</th><th>依据</th></tr>
+<tr><td>渲染 → 看画面 → 回改一轮</td><td>codex 评审约 +0.29，DeepSeek 看图约 +0.18 <span class="x">外</span>；第二轮有涨有跌，只做一轮</td></tr>
+<tr><td>宽松归一、先修再判、动作级丢弃</td><td>sem2 67→83%，semk 12/12</td></tr>
+<tr><td>引擎算位置，模型只写版面树 / 语义</td><td>两种写法同分（3.21 / 3.22），但免去模型写坐标 <span class="x">外</span></td></tr>
+<tr><td>主体稳定 + 同一块内容随讲随填</td><td>Opus 写法与用户反馈一致</td></tr>
+<tr><td>防重叠的机械检查、真实发音时间触发</td><td>字压字 8→1，同步分 3.13→3.68 <span class="x">外</span></td></tr>
+</table></div>
+<div class="t"><table>
+<tr><th>丢下</th><th>原因</th></tr>
+<tr><td>看答案转写作为主循环</td><td>不转移；只适合偶尔测“表达上限”</td></tr>
+<tr><td>单片观感直接换写稿格式</td><td>波动大于效果</td></tr>
+<tr><td>盲写提示词反复微调</td><td>停在 3.2</td></tr>
+<tr><td>按组件种类、镜头次数、静止占比凑分</td><td>和用户“动效只为内容”的要求冲突</td></tr>
+<tr><td>同名匹配式承接、兜底交棒</td><td>视觉连、语义不连，且会刷高交棒率</td></tr>
+</table></div>
+
+<h2 id="g">七、现状风险（11-24）</h2>
+<ul>
+<li><b class="no">只有本机一份</b>：本地 <code>claude/semk-loop</code> 领先远端 31 个提交（远端与 <code>semk-stable-v1</code> 同为 <code>4b42f55be</code>），覆盖 11-21 18:46 起的全部工作；除 <code>semk-stable-v1</code> 外的 <code>semk-*</code> 标签都没推。</li>
+<li><b class="no">未提交</b>：<code>feynman_claw-semk-general</code> 有 4 个文件（+160/−62）。</li>
+<li><b class="q">过拟合信号</b>：未提交的 <code>semk_run.py</code> 把评测题 pdca126 的“带饮料 18.5 / 不带饮料 11 / 目标 12”写进通用骨架提示和范例。应当改成抽象描述后再看。</li>
+<li><b class="q">9e19c6ae3 无独立评分</b>；551–556 项测试通过为会话自报 <span class="x">外</span>，本次未重跑。</li>
+<li>transcribe worktree 也有 2 个未提交文件，且本地多 5 个文档提交未入 loop。</li>
+</ul>
+
+<h2 id="h">八、建议的下一步</h2>
+<p>只做一条主线，按顺序，每步有停止条件。</p>
+<ol>
+<li><b>冻结（半天）</b>：备份本机 31 个提交和工作区（推送要你确认）；把 <code>9e19c6ae3</code> 和工作区改动当作未验证的候选，不当新基线。</li>
+<li><b>定靶（1 天）</b>：选 5 题，跨循环、尺度、因果、对比、案例，调试 2 题 + 验收 3 题，验收题不出现在任何提示和测试里。每题固定 2 份内容骨架（人工或 Opus 定稿）。</li>
+<li><b>定尺（半天，之后不改）</b>：每次 3 稿均值；同题成对比较；看动态帧带而不是句末静帧；记录关键数上屏率、空屏秒数、高亮指错、残字、裁切。改尺必须重评旧版本。先做同片重评 3 次测噪声，涨幅小于噪声不算。</li>
+<li><b>分开归因（1 天）</b>：2×2：固定骨架 / DeepSeek 骨架 × 当前引擎 / <code>semk-stable-v1</code>。<b>停止条件</b>：固定骨架仍在 3 以下，问题在引擎；固定骨架明显高、DeepSeek 骨架低，问题在写稿，停止加组件。</li>
+<li><b>按归因改一处</b>：写稿侧先做“骨架 → 口播 → 一轮看图回改”；引擎侧只修两片评审的共性坏版（残字、裁切、高亮指错、空屏）。</li>
+<li><b>退出门</b>：两轮验收题均值提升不超过噪声就停下写结论，再决定换路线。</li>
+</ol>
+<p>建议固化的四条做法：换线前写一页退出结论；改规则必须重判旧数据；评分原始 JSON 随提交归档到 OSS 索引；提示词、测试里不得出现验收题的数字与名词。</p>
+
+<h2 id="i">九、没能证实的</h2>
+<ul>
+<li>sem、loop 的绝大多数分数无法从原始数据复算，标 <span class="x">外</span> 的尤其如此。</li>
+<li>transcribe 的 lift、底线、人选来自其自有页面，人评页默认选中“这一轮”且不盲。</li>
+<li>没有做“DeepSeek + 旧内核”对照，因此“新组件没用”不能推到“内核层改动没用”。</li>
+<li>sem2 与 sem 的同题比较用到不同批次口径，未作为结论。</li>
+<li>没有看成片、没有听音频，没有重跑测试。总花费和总耗时没有找到记录。</li>
+</ul>
+</main></body></html>
