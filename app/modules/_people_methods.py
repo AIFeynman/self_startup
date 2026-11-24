@@ -31,7 +31,7 @@ from pathlib import Path
 import feedparser
 import httpx
 
-from .. import agent, settings
+from .. import agent, settings, usage
 from ..db import DATA_DIR, DB_PATH, ROOT
 from . import _absorb_run as ar
 from . import _feed_sources as src
@@ -460,7 +460,9 @@ def jev(sources: list[dict], cache: dict[str, dict]) -> tuple[dict[str, dict], l
                            "questions": {k: {"type": "noul", "instructions": P_JEV.format(k=k, name=idx[s["person"]]["name"], kind=JEV_KIND[s["kind"]])}
                                          for k, s in refs.items()}})
                 r.raise_for_status()
-                ans = r.json().get("answers") or {}
+                j = r.json()
+                usage.record("people", usage.from_jev(j), engine="jev")
+                ans = j.get("answers") or {}
             except Exception as e:  # noqa: BLE001
                 errs.append(f"第 {i // 20 + 1} 批：{type(e).__name__}: {str(e)[:100]}")
                 continue

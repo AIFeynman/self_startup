@@ -165,7 +165,7 @@ def gold_label(items: list[dict], labels: dict) -> dict:
         rows = [{"id": it["id"], "people": [f"{idx[p]['name']}（{idx[p].get('zh') or ''}），{idx[p]['role']}" for p in it["people"]],
                  "channel": it["channel"], "date": it["date"], "title": it["title"], "summary": it["summary"][:400],
                  "source": it["extra"].get("uploader") or it["extra"].get("outlet") or it["extra"].get("show") or ""} for it in batch]
-        r = agent.run_once(json.dumps(rows, ensure_ascii=False), engine="claude", system=GOLD_SYSTEM, model=GOLD_MODEL,
+        r = agent.run_once(json.dumps(rows, ensure_ascii=False), module="eval", engine="claude", system=GOLD_SYSTEM, model=GOLD_MODEL,
                            readonly=True, fallback=False)
         m = P.re.search(r"\{.*\}", r.get("text") or "", P.re.S)
         for x in (json.loads(m.group(0)).get("items") or []) if m else []:
@@ -191,7 +191,7 @@ def main():
     pool = sample_pool()
     lab_file = out / "labels.json"
     labels = {} if a.relabel or not lab_file.exists() else json.loads(lab_file.read_text())
-    runner = (lambda prompt, system="", model="": agent.run_once(prompt, engine="claude", system=system, model=model,
+    runner = (lambda prompt, system="", model="": agent.run_once(prompt, module="eval", engine="claude", system=system, model=model,
                                                                   readonly=True, fallback=False))
     report = {}
     for ch in a.channels.split(","):

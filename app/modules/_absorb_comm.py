@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
-from .. import agent
+from .. import agent, usage
 from ..db import DATA_DIR, ROOT
 from . import _absorb_hn as hn
 from . import _absorb_run as ar
@@ -121,8 +121,10 @@ def jev_scores(texts: list[str]) -> list[float]:
                 "model": "jev-latest", "state": {"items": {k: {"text": t[:600]} for k, t in refs.items()}},
                 "questions": {k: {"type": "noul", "instructions": Q_REPLY.format(k=k)} for k in refs}})
             res.raise_for_status()
+            j = res.json()
+            usage.record("absorb", usage.from_jev(j), engine="jev")
             for k in refs:
-                v = (res.json().get("answers", {}).get(k) or {}).get("noul")
+                v = (j.get("answers", {}).get(k) or {}).get("noul")
                 if not isinstance(v, (int, float)):
                     raise RuntimeError("Jev 没返回概率")
                 out.append(round(float(v), 3))

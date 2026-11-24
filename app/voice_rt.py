@@ -11,7 +11,7 @@ from datetime import date
 
 import httpx
 
-from . import voice_tools
+from . import usage, voice_tools
 
 DEFAULT_MODEL = "qwen-audio-3.1-realtime-flash"
 DEFAULT_VOICE = "longanqian_v3.1"
@@ -67,6 +67,7 @@ def web_search(query: str, limit: int = 5) -> dict:
         r = httpx.post(f"{base}/v1/tools/search", headers={"Authorization": f"Bearer {key}"},
                        json={"model": "deepseek-search", "query": query}, timeout=SEARCH_TIMEOUT_S, trust_env=False)
         r.raise_for_status()
+        usage.record("voice", usage.search(), engine="deepseek")
         results = r.json().get("results") or []
     except (httpx.HTTPError, ValueError) as e:
         return {"error": f"搜索失败：{type(e).__name__}"}
@@ -93,6 +94,7 @@ def spoken_search(question: str, found: dict) -> tuple[str, dict]:
                          {"role": "user", "content": f"今天是 {date.today()}。用户问：{question}\n\n搜索结果：{json.dumps(results, ensure_ascii=False)}"}]})
         r.raise_for_status()
         j = r.json()
+        usage.record("voice", usage.from_deepseek(j), engine="deepseek")
         return j["choices"][0]["message"]["content"].strip(), j.get("usage") or {}
     except (httpx.HTTPError, ValueError, KeyError, IndexError) as e:
         top = results[0]

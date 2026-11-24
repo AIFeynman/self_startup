@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .. import usage
 from ..db import DATA_DIR
 from ._feed_gist import fit
 
@@ -295,7 +296,9 @@ def digest_one(it: dict, *, model: str, key: str, base: str, c: httpx.Client) ->
         "thinking": {"type": "disabled"}, "response_format": {"type": "json_object"},
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": _payload(it, text)}]})
     r.raise_for_status()
-    raw = json.loads(r.json()["choices"][0]["message"]["content"])
+    j = r.json()
+    usage.record("feed", usage.from_deepseek(j), engine="deepseek")
+    raw = json.loads(j["choices"][0]["message"]["content"])
     return clean_digest(raw if isinstance(raw, dict) else {}, comments, text, op)
 
 

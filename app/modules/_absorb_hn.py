@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .. import agent
+from .. import agent, usage
 from ..db import DATA_DIR, ROOT
 from . import _absorb_run as ar
 from . import _feed_hn as hnd
@@ -160,8 +160,10 @@ def s_relevance(r: HRun) -> dict:
                 "state": {"items": {k: {"title": p["title"], "domain": urlsplit(p["url"]).netloc, "points": p["points"], "comments": p["comments"]} for k, p in refs.items()}},
                 "questions": {k: {"type": "noul", "instructions": Q_AI.format(k=k)} for k in refs}})
             res.raise_for_status()
+            j = res.json()
+            usage.record("absorb", usage.from_jev(j), engine="jev")
             for k, p in refs.items():
-                v = (res.json().get("answers", {}).get(k) or {}).get("noul")
+                v = (j.get("answers", {}).get(k) or {}).get("noul")
                 if not isinstance(v, (int, float)) or not 0 <= v <= 1:
                     raise RuntimeError(f"Jev 没返回 {p['id']} 的概率")
                 probs[p["id"]] = round(float(v), 3)

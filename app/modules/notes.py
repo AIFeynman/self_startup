@@ -159,7 +159,7 @@ def api_thread_summarize(nid: int):
     """用户点了才把这条线发给模型（便签平时不发给大模型）。"""
     t = thread(nid)
     items = "\n".join(f"- {n['date']} {n['text']}" for n in t["items"])
-    r = agent.run_once(SUMMARIZE_PROMPT.format(items=items), readonly=True, model=agent.module_model("notes"))
+    r = agent.run_once(SUMMARIZE_PROMPT.format(items=items), module="notes", readonly=True, model=agent.module_model("notes"))
     gist = (r.get("text") or "").strip()
     if not gist:
         raise HTTPException(502, "归纳失败，再试一次")

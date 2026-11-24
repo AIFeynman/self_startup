@@ -342,7 +342,8 @@ def test_screen_asks_jev_whether_each_item_is_substance(monkeypatch):
     from app.modules import _feed_judge as J
     seen = []
 
-    def judge(todo):
+    def judge(todo, module="feed"):
+        assert module == "people"
         seen.extend(todo)
         return {"twitter:1": {"judge_value": 0.1}}, ["第 1 批少返回 1 条"]
     monkeypatch.setattr(J, "judge", judge)

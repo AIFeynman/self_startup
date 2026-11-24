@@ -4,7 +4,7 @@
 英文来源（HN / GitHub / Reddit / YouTube / X）用 en，知乎用 zh；某主题写了 "github" 之类的键就只给那个来源用它。
 每个来源有词数上限（搜索按次计费 / 限流），效果差的词排到最后、先被截掉。
 settings 里显式写了 feed.<来源>_queries（老配置）时，那个来源仍用老列表，不从主题表派生。
-不依赖 app 包，feed.py 把条目、反馈传进来。
+数据由 feed.py 把条目、反馈传进来；模型调用记进用量账本。
 """
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
+
+from .. import usage
 
 # 来源键 → 用哪种语言的词；键名同条目的 source（X 的条目 source 是 twitter）
 LANG = {"hn": "en", "github": "en", "reddit": "en", "youtube": "en", "x": "en", "zhihu": "zh", "arxiv": "en"}
@@ -188,7 +190,9 @@ def suggest(liked_titles: list[str], topics: list[dict], dismissed: list[str], *
             "response_format": {"type": "json_object"},
             "messages": [{"role": "system", "content": SUGGEST_SYSTEM}, {"role": "user", "content": user}]})
         r.raise_for_status()
-        rows = json.loads(r.json()["choices"][0]["message"]["content"]).get("topics") or []
+        j = r.json()
+        usage.record("feed", usage.from_deepseek(j), engine="deepseek")
+        rows = json.loads(j["choices"][0]["message"]["content"]).get("topics") or []
     except Exception as e:  # noqa: BLE001
         return [], f"{type(e).__name__}: {str(e)[:160]}"
     finally:

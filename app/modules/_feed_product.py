@@ -13,6 +13,7 @@ from hashlib import sha1
 
 import httpx
 
+from .. import usage
 from ._feed_gist import fit
 
 SOURCES = ("producthunt", "yc", "trustmrr")
@@ -88,7 +89,9 @@ def generate(items: list[dict], *, model: str = "deepseek-v4-flash",
                     "messages": [{"role": "system", "content": SYSTEM},
                                  {"role": "user", "content": json.dumps([_row(it) for it in batch], ensure_ascii=False)}]})
                 r.raise_for_status()
-                rows = json.loads(r.json()["choices"][0]["message"]["content"]).get("items") or []
+                j = r.json()
+                usage.record("feed", usage.from_deepseek(j), engine="deepseek")
+                rows = json.loads(j["choices"][0]["message"]["content"]).get("items") or []
                 by_id = {it["id"]: it for it in batch}
                 for x in rows:
                     it = by_id.get(str((x or {}).get("id")))

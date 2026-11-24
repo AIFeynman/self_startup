@@ -17,6 +17,8 @@ from hashlib import sha1
 
 import httpx
 
+from .. import usage
+
 API = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 BATCH = 20
@@ -114,7 +116,7 @@ def _state(it: dict, org: str) -> dict:
     return row
 
 
-def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = None) -> tuple[dict[str, dict], list[str]]:
+def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = None, module: str = "feed") -> tuple[dict[str, dict], list[str]]:
     """todo: [(item, kind, org)]，kind 是 "ai" / "important" / "value" / "deep" / "pick" / "case"。返回 ({id: {"judge_<kind>": p}}, errors)。"""
     key = (os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY") or "").strip()
     if not key:
@@ -134,7 +136,9 @@ def judge(todo: list[tuple[dict, str, str]], *, client: httpx.Client | None = No
             try:
                 r = c.post(API, headers={"Authorization": f"Bearer {key}"}, json=payload)
                 r.raise_for_status()
-                answers = r.json().get("answers") or {}
+                j = r.json()
+                usage.record(module, usage.from_jev(j), engine="jev")
+                answers = j.get("answers") or {}
                 for k, (it, kind, _) in refs.items():
                     p = (answers.get(f"{k}_{kind}") or {}).get("noul")
                     if isinstance(p, (int, float)) and 0 <= p <= 1:   # 缺字段不能当 0 分

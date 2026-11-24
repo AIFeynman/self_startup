@@ -24,7 +24,7 @@ def main():
     a = ap.parse_args()
     d = Path(a.eval_dir)
     labels = json.loads((d / "labels.json").read_text())
-    run = lambda prompt, system="", model="": agent.run_once(prompt, engine="claude", system=system, model=model, readonly=True, fallback=False)
+    run = lambda prompt, system="", model="": agent.run_once(prompt, module="eval", engine="claude", system=system, model=model, readonly=True, fallback=False)
     for ch in a.channels.split(","):
         f = d / f"pool_{ch}.json"
         if not f.exists():

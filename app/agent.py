@@ -446,14 +446,15 @@ def run_stream(prompt: str, *, engine: str = "", system: str = "", session: str 
         yield {"type": "engine", "text": f"切换到 {order[i + 1]}"}
 
 
-def run_once(prompt: str, **kw) -> dict:
-    """阻塞执行，返回 {text, session, engine, log}。"""
+def run_once(prompt: str, *, module: str, **kw) -> dict:
+    """阻塞执行，返回 {text, session, engine, log}；用量记在 module 名下。"""
     text, session, eng, log = "", "", kw.get("engine", ""), []
     for ev in run_stream(prompt, **kw):
         if ev["type"] == "session":
             session = ev["id"]
         elif ev["type"] == "done":
             text, eng = ev["text"], ev["engine"]
+            usage.record(module, ev.get("usage"), engine=eng)
         elif ev["type"] in ("tool", "error", "engine"):
             log.append(f"[{ev['type']}] {ev['text']}")
     return {"text": text, "session": session, "engine": eng, "log": "\n".join(log)}

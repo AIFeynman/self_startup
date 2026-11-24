@@ -311,7 +311,9 @@ def judge_recent(client: httpx.Client | None = None) -> dict:
         try:
             resp = c.post(JEV_API, headers={"Authorization": f"Bearer {key}"}, json=payload)
             resp.raise_for_status()
-            ans = resp.json().get("answers") or {}
+            j = resp.json()
+            usage.record("paper", usage.from_jev(j), engine="jev")
+            ans = j.get("answers") or {}
             for k, r in refs.items():
                 p = (ans.get(f"{k}_junk") or {}).get("noul")
                 if isinstance(p, (int, float)) and 0 <= p <= 1:

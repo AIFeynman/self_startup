@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Callable
 
-from . import agent
+from . import agent, usage
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +117,7 @@ class Thinker:
                     text = text if text else ev["text"]
                 elif kind == "done":
                     final = ev["text"]
+                    usage.record("voice", ev.get("usage"), engine=ev.get("engine", ""))
                 elif kind == "error" and ev.get("fatal"):
                     failed = ev["text"]
                 # 念的那几句一写完就送，不等后面的正文

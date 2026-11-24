@@ -589,7 +589,7 @@ export default {
     // ---------- 用量 ----------
     async function renderUsage() {
       loadDay();
-      body.replaceChildren(ui.section('大模型用量', '后台任务、讨论、轻量模型、DeepSeek 每天花了多少'), await usagePanel(ctx, { end: state.date }));
+      body.replaceChildren(ui.section('大模型用量', '后台任务、讨论、Claude 批量与单次调用、DeepSeek、Jev 和语音每天花了多少'), await usagePanel(ctx, { end: state.date }));
     }
 
     // ---------- 问题与经验 ----------

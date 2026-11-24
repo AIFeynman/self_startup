@@ -592,7 +592,7 @@ def screen(items: list[dict]) -> tuple[dict[str, float], list[str]]:
     idx = by_id()
     who = lambda it: "；".join(f"{idx[p]['name']}，{idx[p]['role']}" for p in it["people"] if p in idx) + f" · channel={it['channel']}"
     todo = [({"id": it["id"], "source": "people", "title": it["title"], "summary": it["summary"], "url": it["url"]}, "value", who(it)) for it in items]
-    got, errs = J.judge(todo)
+    got, errs = J.judge(todo, module="people")
     return {i: v["judge_value"] for i, v in got.items() if "judge_value" in v}, errs
 
 

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from . import db, settings
+from .usage import from_bailian, record as record_usage
 from .db import DATA_DIR
 
 log = logging.getLogger(__name__)
@@ -49,12 +50,14 @@ class Recorder:
         self.t0 = time.monotonic()
         self.id, self.dir, self.mic_f, self.bot_f, self.events_f = None, None, None, None, None
         self.totals = dict.fromkeys(USAGE_FIELDS, 0)
+        self.model = ""
         self.responses = 0
 
     def at(self, now: float | None = None) -> float:
         return round((time.monotonic() if now is None else now) - self.t0, 3)
 
     def open(self, model: str, voice: str) -> None:
+        self.model = model
         try:
             self.id = db.insert("voice_calls", {"model": model, "voice": voice, "started_at": db.now()})
             self.dir = CALLS_DIR / str(self.id)
@@ -110,6 +113,8 @@ class Recorder:
         for k, v in usage_tokens(usage).items():
             self.totals[k] += v
         self.responses += 1
+        tokens = usage_tokens(usage)
+        record_usage("voice", from_bailian(self.model, tokens, cost_of(tokens)), ref=f"voice_call:{self.id}", engine="bailian")
         db.update("voice_calls", self.id, {**self.totals, "responses": self.responses, "cost_yuan": round(cost_of(self.totals), 6),
                                            "duration_s": self.at()})
 

@@ -15,7 +15,7 @@ import threading
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from . import agent, db, kb, settings
+from . import agent, db, kb, settings, usage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/annotations", tags=["annotations"])
@@ -289,6 +289,7 @@ def _answer(aid: int, mid: int, question: str, source: str) -> None:
                 errors.append(ev["text"])
             elif ev["type"] == "done":
                 final = ev["text"]
+                usage.record("annotate", ev.get("usage"), ref=f"annotation:{aid}", engine=ev.get("engine", ""))
         status = "done" if final else "failed"
     except Exception as e:  # noqa: BLE001
         log.exception("annotation %s answer failed", aid)

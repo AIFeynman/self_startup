@@ -184,7 +184,7 @@ def test_claude_transient_error_retries_before_fallback(monkeypatch):
     blip = [{"type": "error", "text": 'claude 退出码 1: reclaude: unavailable right now: Get "https://x/client/account": EOF', "fatal": True}]
     ok = [{"type": "done", "text": "好了", "engine": "claude", "errored": False}]
     calls = _fake_runs(monkeypatch, [blip, ok])
-    r = agent.run_once("p", engine="claude")
+    r = agent.run_once("p", module="t", engine="claude")
     assert calls == ["claude", "claude"] and r["engine"] == "claude" and r["text"] == "好了"
 
 
@@ -193,7 +193,7 @@ def test_claude_persistent_transient_error_still_falls_back(monkeypatch):
     blip = [{"type": "error", "text": "claude 退出码 1: unavailable right now", "fatal": True}]
     ok = [{"type": "done", "text": "codex 完成", "engine": "codex", "errored": False}]
     calls = _fake_runs(monkeypatch, [blip] * (agent.TRANSIENT_RETRIES + 1) + [ok])
-    r = agent.run_once("p", engine="claude")
+    r = agent.run_once("p", module="t", engine="claude")
     assert calls == ["claude"] * (agent.TRANSIENT_RETRIES + 1) + ["codex"] and r["engine"] == "codex"
 
 
@@ -202,7 +202,7 @@ def test_claude_non_transient_error_falls_back_immediately(monkeypatch):
     bad = [{"type": "error", "text": "claude 退出码 1: unknown option --foo", "fatal": True}]
     ok = [{"type": "done", "text": "codex 完成", "engine": "codex", "errored": False}]
     calls = _fake_runs(monkeypatch, [bad, ok])
-    assert agent.run_once("p", engine="claude")["engine"] == "codex" and calls == ["claude", "codex"]
+    assert agent.run_once("p", module="t", engine="claude")["engine"] == "codex" and calls == ["claude", "codex"]
 
 
 def test_answer_survives_a_later_background_task_note():

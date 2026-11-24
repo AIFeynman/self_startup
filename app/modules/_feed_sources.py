@@ -19,6 +19,8 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import feedparser
 import httpx
 
+from .. import usage
+
 UA = "self-startup-feed/0.1 (local learning platform)"
 TIMEOUT = httpx.Timeout(15.0, connect=8.0)
 SUMMARY_MAX = 400
@@ -1247,6 +1249,7 @@ def zhihu_search(c: httpx.Client, key: str, queries: list[str], days: int = 14, 
         r = c.post(DEEPSEEK_SEARCH, headers={"Authorization": f"Bearer {key}"}, timeout=30, json={
             "query": f"site:zhuanlan.zhihu.com {q} after:{since:%Y-%m-%d}", "count": count, "need_content": False})
         r.raise_for_status()
+        usage.record("feed", usage.search(), engine="deepseek")
         for res in r.json().get("results") or []:
             m = ZHIHU_P_RE.search(res.get("url") or "")
             if not m or f"zhihu:p{m.group(1)}" in out:

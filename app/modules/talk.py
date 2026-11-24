@@ -144,7 +144,7 @@ def _organize(session_id: int) -> dict:
     transcript = _transcript(session_id)
     if not transcript:
         raise HTTPException(400, "这个讨论还没有内容")
-    r = agent.run_once(TOPIC_PROMPT.format(frames=kb_lens.index(), transcript=transcript), readonly=True, model=agent.module_model("talk"))
+    r = agent.run_once(TOPIC_PROMPT.format(frames=kb_lens.index(), transcript=transcript), module="talk", readonly=True, model=agent.module_model("talk"))
     d = _parse_card(r["text"])
     old = _row(db.row("SELECT * FROM talk_topics WHERE session_id=?", [session_id]))
     tid = old["id"] if old else db.insert("talk_topics", {"session_id": session_id, "created_at": db.now()})

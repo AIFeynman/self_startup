@@ -624,7 +624,7 @@ echo '{"type":"result","result":"好","session_id":"s","modelUsage":{"m":{"provi
     fake.chmod(0o755)
     monkeypatch.setattr(agent, "_claude_cmd", lambda *a, **k: [str(fake)])
     monkeypatch.setattr(agent, "available", lambda e: True)
-    assert agent.run_once("问", engine="claude")["text"] == "好"
+    assert agent.run_once("问", module="t", engine="claude")["text"] == "好"
 
 
 def test_helper_call_without_provider_passes_but_no_provider_at_all_stops():

@@ -1,13 +1,14 @@
-// 大模型用量（复盘 · 用量）：每天的等价费用 / token，按类型（后台任务 / 讨论 / 轻量模型 / DeepSeek）堆叠，下面按板块拆开
+// 大模型用量（复盘 · 用量）：每天的等价费用 / token，按类型（后台任务 / 讨论 / Claude 批量与单次调用 / DeepSeek / 其他 API）堆叠，下面按板块拆开
 // 数据：/api/usage?start=&end=（llm_usage 表；Claude 订阅下费用是 CLI 报的等价美元）
 // 用法：import { usagePanel } from './_usage.js'; el.append(await usagePanel(ctx, { end: date }))
 const KINDS = [
   { id: 'job', name: '后台 Agent 任务', light: '#2a78d6', dark: '#3987e5' },
   { id: 'chat', name: '讨论', light: '#eb6834', dark: '#d95926' },
-  { id: 'light', name: '轻量模型打标签', light: '#1baf7a', dark: '#199e70' },
+  { id: 'light', name: 'Claude 批量与单次调用', light: '#1baf7a', dark: '#199e70' },
   { id: 'deepseek', name: 'DeepSeek', light: '#eda100', dark: '#c98500' },
+  { id: 'api', name: 'Jev / 百炼语音', light: '#6250d6', dark: '#9085e9' },
 ];
-const EXTRA_NAMES = { xart: 'X 长文', paper: '论文库', oss: '开源项目', verify: '验证', nomod: '其他' };
+const EXTRA_NAMES = { xart: 'X 长文', paper: '论文库', oss: '开源项目', verify: '验证', annotate: '文档批注', voice: '语音', people: '名人动态', eval: '评测脚本', nomod: '其他' };
 const METRICS = { cost: '等价费用', tokens: 'token' };
 
 const tokensOf = (r) => r.input_tokens + r.output_tokens + r.cache_read + r.cache_write;
@@ -60,7 +61,7 @@ export async function usagePanel(ctx, { end }) {
       content.replaceChildren(tiles, h('div.card.flat.muted', {}, `这段时间没有用量。${note}`));
       return;
     }
-    content.replaceChildren(tiles, chart(days, rows), h('div.muted.us-note', {}, note + '。Claude 走订阅，费用是 CLI 报的等价价，不是实际扣费。'),
+    content.replaceChildren(tiles, chart(days, rows), h('div.muted.us-note', {}, note + '。Claude 走订阅，费用是 CLI 报的等价价，不是实际扣费；DeepSeek 搜索、Jev 没有单价，只算调用次数；百炼按人民币折美元。'),
       byKind(rows, total), byDay(days, rows));
   }
 

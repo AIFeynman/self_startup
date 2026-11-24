@@ -671,7 +671,7 @@ def _patch_extra(item_id: str, patch: dict) -> None:
 
 
 def _haiku(prompt: str, system: str = "", model: str = "") -> dict:
-    r = agent.run_once(prompt, engine="claude", system=system, model=model, readonly=True, fallback=False)
+    r = agent.run_once(prompt, module="feed", engine="claude", system=system, model=model, readonly=True, fallback=False)
     if not (r.get("text") or "").strip():
         raise RuntimeError((r.get("log") or "本机 Claude 没有返回内容")[-200:])
     return r
@@ -1369,7 +1369,7 @@ def run_profile() -> dict:
                              f"现在 {len(sample['liked'])} / {len(sample['disliked'])}")
         interests = list(cfg("interests") or [])
         model = agent.tier_model("standard")
-        r = agent.run_once(prof.prompt(sample, interests), engine="claude", fallback=False, readonly=True, model=model)
+        r = agent.run_once(prof.prompt(sample, interests), module="feed", engine="claude", fallback=False, readonly=True, model=model)
         raw = plan.extract_json(r["text"])
         data = prof.normalize(raw, sample, interests) if isinstance(raw, dict) else {}
         if not data.get("summary"):
