@@ -31,6 +31,7 @@ SEARCH_CAP = 1000         # Search API 单个查询最多翻到 1000 条
 README_BATCH = 20         # 每个仓库要探 6 个 README 路径：50 个一批 GitHub 常 502，20 个一批约 6 秒
 README_PARALLEL = 6       # 实测 20×6 并发约 1,100 个 / 分钟、不触发 502；全库约 1 小时
 REFRESH_RESUME_HOURS = 48 # 这段时间内刷过的不重刷：每周刷新失败重跑时接着上次的做
+REFRESH_RETRY_WAIT = 60   # GitHub 偶发 5xx 多是几十秒内恢复：没刷到的批次等这么久再当轮重试一次
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS oss_repos (
@@ -310,42 +311,60 @@ def _fetch(rows: list[dict], with_text: bool):
             yield from ex.map(one, batches[i:i + README_PARALLEL])
 
 
+def _apply_refresh(batch: list[dict], got: dict, now: str) -> tuple[int, int, int]:
+    upd = gone = renamed = 0
+    for r in batch:
+        n = got.get(r["node_id"])
+        if n is None:
+            db.execute("UPDATE oss_repos SET status='gone', gone_at=CASE WHEN gone_at='' THEN ? ELSE gone_at END WHERE id=?",
+                       [now, r["id"]])
+            gone += 1
+            continue
+        oid, _ = _readme_of(n)
+        name = n.get("nameWithOwner") or r["name"]
+        if name != r["name"]:
+            renamed += 1
+            db.execute("UPDATE oss_labels SET name=? WHERE name=?", [name, r["name"]])
+        topics = [x["topic"]["name"] for x in ((n.get("repositoryTopics") or {}).get("nodes") or [])]
+        db.execute("UPDATE oss_repos SET name=?, stars=?, pushed=?, archived=?, descr=?, lang=?, topics=?, "
+                   "readme_oid=CASE WHEN readme_oid IS NULL THEN NULL WHEN readme_oid!=? THEN ? ELSE readme_oid END, "
+                   "status='ok', gone_at='', updated=? WHERE id=?",
+                   [name, int(n.get("stargazerCount") or 0), n.get("pushedAt") or "", int(bool(n.get("isArchived"))),
+                    clean(n.get("description") or ""), (n.get("primaryLanguage") or {}).get("name") or "",
+                    json.dumps(topics, ensure_ascii=False), oid, oid, now, r["id"]])
+        upd += 1
+    return upd, gone, renamed
+
+
 def refresh(on_batch=None) -> dict:
     """每周：按 node_id 批量刷新 star / push / 归档 / 改名 / README oid；查不到的标 gone，gone 超过 30 天的删掉。
 
-    某批查不到不影响其余批次，全部过完后报错；刚刷过的跳过，所以重跑只补没刷到的。
+    某批查不到不影响其余批次，全部过完后等一会儿当轮重试一次，还查不到才报错；刚刷过的跳过，所以重跑只补没刷到的。
     """
     recent = (datetime.now() - timedelta(hours=REFRESH_RESUME_HOURS)).isoformat(timespec="seconds")
     rows = db.rows("SELECT id, name, node_id FROM oss_repos WHERE node_id!='' AND updated<? ORDER BY updated", [recent])
-    upd = gone = renamed = seen = errors = 0
+    upd = gone = renamed = seen = 0
     now = db.now()
+    failed: list[list[dict]] = []
     for batch, got in _fetch(rows, with_text=False):
         seen += len(batch)
         if got is None:
-            errors += 1
+            failed.append(batch)
             continue
-        for r in batch:
-            n = got.get(r["node_id"])
-            if n is None:
-                db.execute("UPDATE oss_repos SET status='gone', gone_at=CASE WHEN gone_at='' THEN ? ELSE gone_at END WHERE id=?",
-                           [now, r["id"]])
-                gone += 1
-                continue
-            oid, _ = _readme_of(n)
-            name = n.get("nameWithOwner") or r["name"]
-            if name != r["name"]:
-                renamed += 1
-                db.execute("UPDATE oss_labels SET name=? WHERE name=?", [name, r["name"]])
-            topics = [x["topic"]["name"] for x in ((n.get("repositoryTopics") or {}).get("nodes") or [])]
-            db.execute("UPDATE oss_repos SET name=?, stars=?, pushed=?, archived=?, descr=?, lang=?, topics=?, "
-                       "readme_oid=CASE WHEN readme_oid IS NULL THEN NULL WHEN readme_oid!=? THEN ? ELSE readme_oid END, "
-                       "status='ok', gone_at='', updated=? WHERE id=?",
-                       [name, int(n.get("stargazerCount") or 0), n.get("pushedAt") or "", int(bool(n.get("isArchived"))),
-                        clean(n.get("description") or ""), (n.get("primaryLanguage") or {}).get("name") or "",
-                        json.dumps(topics, ensure_ascii=False), oid, oid, now, r["id"]])
-            upd += 1
+        u, g, r = _apply_refresh(batch, got, now)
+        upd, gone, renamed = upd + u, gone + g, renamed + r
         if on_batch:
             on_batch(seen, len(rows))
+    errors = 0
+    if failed:
+        log.info("oss refresh: %d 批没刷到，%d 秒后重试", len(failed), REFRESH_RETRY_WAIT)
+        time.sleep(REFRESH_RETRY_WAIT)
+        for batch, got in _fetch([r for b in failed for r in b], with_text=False):
+            if got is None:
+                errors += 1
+                continue
+            u, g, r = _apply_refresh(batch, got, now)
+            upd, gone, renamed = upd + u, gone + g, renamed + r
     if errors:
         raise RuntimeError(f"{errors} 批没刷到（共 {len(rows)} 个仓库，刷到 {upd + gone} 个），下次接着补")
     cutoff = (datetime.now() - timedelta(days=GONE_PURGE_DAYS)).isoformat(timespec="seconds")

@@ -286,6 +286,7 @@ def test_refresh_survives_a_bad_batch_and_next_run_only_redoes_it(monkeypatch):
     col.upsert(REPOS, "slice")
     db.execute("UPDATE oss_repos SET updated='2026-01-01T00:00:00'")
     monkeypatch.setattr(col, "README_BATCH", 1)
+    monkeypatch.setattr(col.time, "sleep", lambda s: None)
     asked, broken = [], {"N_b/ocrkit"}
 
     def fake(c, ids, with_text):
@@ -301,6 +302,27 @@ def test_refresh_survives_a_bad_batch_and_next_run_only_redoes_it(monkeypatch):
     asked.clear()
     broken.clear()
     assert col.refresh()["updated"] == 1 and asked == ["N_b/ocrkit"]
+
+
+def test_refresh_retries_a_flaky_batch_in_the_same_run(monkeypatch):
+    """某一批 GitHub 偶发 500：同一轮里等一会儿重试补上，不报失败。"""
+    col.upsert(REPOS, "slice")
+    db.execute("UPDATE oss_repos SET updated='2026-01-01T00:00:00'")
+    monkeypatch.setattr(col, "README_BATCH", 1)
+    monkeypatch.setattr(col.time, "sleep", lambda s: None)
+    asked, flaky = [], {"N_b/ocrkit"}
+
+    def fake(c, ids, with_text):
+        asked.extend(ids)
+        if flaky & set(ids):
+            flaky.clear()
+            raise RuntimeError("Server error '500 Internal Server Error'")
+        return {i: {"nameWithOwner": i[2:], "stargazerCount": 7777} for i in ids}
+    monkeypatch.setattr(col, "gql_nodes", fake)
+    out = col.refresh()
+    stars = {r["name"]: r["stars"] for r in db.rows("SELECT name, stars FROM oss_repos")}
+    assert out["updated"] == len(REPOS) and all(v == 7777 for v in stars.values())
+    assert asked.count("N_b/ocrkit") == 2
 
 
 def test_validate_bad_kind_or_domain_falls_back():
