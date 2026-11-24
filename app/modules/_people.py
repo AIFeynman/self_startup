@@ -408,8 +408,9 @@ def fetch_blog(pool: list[dict]) -> tuple[list[dict], list[str]]:
     return out, errs
 
 
-# ---------- B站：经公共 RSSHub 按中文名搜视频（实例常不可用，失败不影响其他渠道） ----------
-def fetch_bili(pool: list[dict], bases: list[str] | None = None) -> tuple[list[dict], list[str]]:
+# ---------- B站：经公共 RSSHub 按中文名搜视频（实例常不可用，失败不影响其他渠道；连发会被 429，人与人之间留间隔） ----------
+def fetch_bili(pool: list[dict], bases: list[str] | None = None, pause: float = 3,
+               retry_wait: float = 20) -> tuple[list[dict], list[str]]:
     from .feed import cfg
     bases = bases or cfg("rsshub_bases") or src.RSSHUB_BASES
     since = _cutoff("bili")
@@ -417,11 +418,17 @@ def fetch_bili(pool: list[dict], bases: list[str] | None = None) -> tuple[list[d
     errs = []
     zh = [p for p in pool if p.get("zh")]
     with src._client() as c:
-        for p in zh:
+        for n, p in enumerate(zh):
+            if n and pause:
+                time.sleep(pause)
             text = None
             for b in bases:
+                url = f"{b.rstrip('/')}/bilibili/vsearch/{quote(p['zh'])}/pubdate"
                 try:
-                    r = c.get(f"{b.rstrip('/')}/bilibili/vsearch/{quote(p['zh'])}/pubdate", timeout=15)
+                    r = c.get(url, timeout=15)
+                    if r.status_code == 429 and retry_wait:
+                        time.sleep(retry_wait)
+                        r = c.get(url, timeout=15)
                     if r.status_code == 200:
                         text = r.text
                         break

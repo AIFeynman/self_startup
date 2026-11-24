@@ -161,8 +161,6 @@ DEFAULTS: dict = {
                       "link": "https://qwen.ai/blog?id={path}"}},
             {"name": "Cursor", "url": "https://cursor.com/blog", "link_re": r"/blog/[a-z0-9][a-z0-9-]+"},
             {"name": "Cognition", "url": "https://cognition.ai/blog", "link_re": r"/blog/[a-z0-9][a-z0-9-]+"},
-            {"name": "Tencent Newsroom", "url": "https://www.tencent.com/newsroom/",
-             "link_re": r"https://www\.tencent\.com/[a-z0-9][a-z0-9-]{20,}/?", "ai_only": True},
         ],
         # 播客 RSS（只取标题 + 节目简介，不转写）
         "podcasts": [

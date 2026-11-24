@@ -127,6 +127,24 @@ def test_news_items_keep_titles_naming_the_person_within_window():
     assert P.search_names(_person("ng")) == ["Andrew Ng", "吴恩达"] and P.search_names(_person("yangzhilin")) == ["杨植麟"]
 
 
+def test_bili_waits_and_retries_when_rsshub_rate_limits(monkeypatch):
+    """公共 RSSHub 一轮连发会被 429：人和人之间留间隔，429 了等一会儿同一实例再试一次。"""
+    slept, hits = [], []
+    monkeypatch.setattr(P.time, "sleep", lambda s: slept.append(s))
+    rss = (f'<?xml version="1.0"?><rss version="2.0"><channel><item><title>吴恩达谈智能体</title>'
+           f'<link>https://www.bilibili.com/video/BV1aa411c7mD</link><pubDate>{_xtime(0.1)}</pubDate></item></channel></rss>')
+
+    def handler(req):
+        hits.append(req.url.host)
+        if len(hits) == 1:
+            return httpx.Response(429)
+        return httpx.Response(200, text=rss)
+    _mock(monkeypatch, handler)
+    items, errs = P.fetch_bili([_person("ng"), _person("feifei")], bases=["https://hub.a"], pause=2, retry_wait=9)
+    assert not errs and [i["id"] for i in items] == ["bilibili:BV1aa411c7mD"]
+    assert hits == ["hub.a"] * 3 and slept == [9, 2]
+
+
 def test_bilingual_people_are_searched_in_both_languages(monkeypatch):
     terms = []
 
