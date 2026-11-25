@@ -63,7 +63,7 @@ def _clean(client, monkeypatch):
     monkeypatch.setattr(today, "_llm", offline)
     kb_judge._init()
     for t in ("intel_analysis", "intel_event", "intel_company", "intel_growth_case", "intel_growth_item",
-              "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "kb_judgments"):
+              "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "today_scores", "kb_judgments", "intel_ph_day"):
         db.execute(f"DELETE FROM {t}")
     yield
 
@@ -124,6 +124,43 @@ def test_deep_is_left_short_when_nothing_is_worth_it(client, monkeypatch):
     assert d["deep"] == [] and d["quick"]
 
 
+def test_new_products_from_product_hunt_and_yc_enter_the_pool(client):
+    db.execute("INSERT OR REPLACE INTO intel_ph_day (date, items, summary) VALUES (?,?,?)", [TODAY, json.dumps([
+        {"id": "producthunt:1", "rank": 1, "name": "Granular", "title": "Granular：Put your AI agents to work in a visual workspace",
+         "url": "https://www.producthunt.com/products/granular", "votes": 131, "why": "可视化编排多个 Agent"}], ensure_ascii=False), ""])
+    db.insert("feed_items", {"id": "yc:1", "source": "yc", "type": "product", "title": "Light Anchor: the AI-native P&G",
+                             "summary": "Building self-driving consumer brands", "url": "https://lightanchor.ai", "date": TODAY, "popularity": 11})
+    _event(level="S", title="大公司某功能更新", type_="feature")
+    cards = client.get("/api/today").json()["all"]
+    new = [c for c in cards if c["label"].startswith("新产品")]
+    assert {c["title"].split("：")[0] for c in new} >= {"Granular", "Light Anchor: the AI-native P&G"}
+    ph = next(c for c in new if c["title"].startswith("Granular"))
+    assert ph["summary"] == "可视化编排多个 Agent" and ph["due"] and ph["prediction"]
+
+
+def test_deep_cards_carry_other_angles(client, monkeypatch):
+    from app.modules import _people, today
+    from app.db import DATA_DIR
+    db.init([_people.SCHEMA])
+    db.execute("DELETE FROM people_items")
+    _event(level="S", title="Anthropic 推出 Claude Ship 测试版", type_="launch")
+    monkeypatch.setattr(today, "_llm", lambda s, p: {"items": [{"key": it["key"], "score": 8, "why": "多 Agent 评审", "question": "评审该拿多少上下文？",
+                                                               "terms": ["Claude Ship"]} for it in p["items"]]})
+    db.insert("people_items", {"id": "blog:1", "channel": "blog", "people": json.dumps(["simonw"]), "title": "Notes on Claude Ship",
+                               "summary": "PR Steward is the interesting part", "url": "https://simonwillison.net/x", "date": TODAY})
+    db.insert("feed_items", {"id": "hn:99", "source": "hn", "type": "discussion", "title": "Claude Ship: code review to merge",
+                             "url": "https://example.com", "date": TODAY, "popularity": 300})
+    cache = DATA_DIR / "absorb" / "hn" / "_cache" / "digests"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "99.json").write_text(json.dumps({"d": {"tldr": "多数人担心审批被自动化", "opinions": [
+        {"stance": "反对", "claim": "自动审批会放过回归", "by": "alice", "quote": "q"}]}}, ensure_ascii=False))
+    card = next(c for c in client.get("/api/today").json()["deep"] if c["kind"] == "product")
+    angles = card["angles"]
+    assert any(a["kind"] == "people" and "Simon" in a["who"] for a in angles)
+    hn = next(a for a in angles if a["kind"] == "hn")
+    assert hn["tldr"] == "多数人担心审批被自动化" and hn["opinions"][0]["claim"] == "自动审批会放过回归"
+
+
 def test_broken_cards_are_filtered_out(client):
     _event(title="正常的卡")
     _event(title="额度报错的卡", content="You've hit your weekly limit · resets 5pm", sections={})
@@ -134,7 +171,7 @@ def test_broken_cards_are_filtered_out(client):
     assert "不完整的卡" not in titles
 
 
-def test_quick_cards_always_include_s_level_and_respect_cap(client):
+def test_quick_cards_keep_some_s_level_and_respect_cap(client):
     for i in range(6):
         _event(level="S", title=f"S 级事件 {i}")
     for i in range(10):
@@ -142,8 +179,8 @@ def test_quick_cards_always_include_s_level_and_respect_cap(client):
     d = client.get("/api/today").json()
     assert len(d["deep"]) <= 3
     assert len(d["quick"]) <= 9
-    shown = {c["title"] for c in d["deep"] + d["quick"]}
-    assert all(f"S 级事件 {i}" in shown for i in range(6))
+    quick_s = [c for c in d["quick"] if c.get("level") == "S"]
+    assert 1 <= len(quick_s) <= 3
 
 
 def test_many_s_level_events_do_not_crowd_out_papers(client):

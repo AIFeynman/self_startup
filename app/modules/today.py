@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS today_feedback (
     created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS today_scores (         -- 值不值得深想：按条目缓存，一条只打一次分
-    key TEXT PRIMARY KEY, score INTEGER, why TEXT DEFAULT '', question TEXT DEFAULT '', hit TEXT DEFAULT '', src TEXT DEFAULT '', at TEXT
+    key TEXT PRIMARY KEY, score INTEGER, why TEXT DEFAULT '', question TEXT DEFAULT '', hit TEXT DEFAULT '', src TEXT DEFAULT '', at TEXT,
+    terms TEXT DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS today_opps (           -- 机会卡：想到 → 写透 → 验证过 → 放弃 / 推进
     id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT DEFAULT '', day TEXT DEFAULT '',
@@ -43,7 +44,7 @@ CREATE TABLE IF NOT EXISTS today_opps (           -- 机会卡：想到 → 写�
 router = APIRouter()
 
 DEEP_N, QUICK_MAX, WINDOW_DAYS = 3, 9, 3
-QUICK_QUOTA = {"product": 2, "tech": 2, "eng": 2}
+QUICK_QUOTA = {"product": 1, "new": 2, "tech": 2, "eng": 2}
 BROKEN = re.compile(r"weekly limit|hit your .{0,20}limit|不是我这次改的|我保留不动|rate limit|traceback", re.I)
 LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -55,11 +56,12 @@ RELATES = [
                           r"投机解码|speculative|loop transformer|scaling law", re.I)),
     ("增长", re.compile(r"增长|拉新|留存|获客|投放|growth|retention|onboarding|funnel|acquisition", re.I)),
 ]
-QUICK_S_MAX = 5
+QUICK_S_MAX = 3
 TECH_HINT = re.compile(r"agent|harness|memory|eval|benchmark|reasoning|\brl\b|reinforcement|attention|moe|distill|coding|tool", re.I)
 DEEP_MIN = 6
 NEWS_TYPES = {"pricing", "packaging", "revenue", "funding", "partnership", "deprecation", "people"}
-SCORE_POOL = {"product": 12, "tech": 8, "growth": 3}
+SCORE_POOL = {"product": 12, "new": 8, "tech": 8, "growth": 3}
+ANGLE_DAYS = 14
 PROFILE = """用户画像（2026-11-25 确认，会随学习更新）：
 - M0 发现机会（统领）：看技术和产品是为了找值得自己做的机会：什么之前做不到现在能做，谁有痛点，空白在哪。
 - M1 让自己的 AI 知识讲解视频产品跑起来：要能执行、能验证的增长打法和差异化定位。增长方法基础弱。
@@ -70,12 +72,14 @@ PROFILE = """用户画像（2026-11-25 确认，会随学习更新）：
 SCORE_SYSTEM = """你在为一位用户挑选“今天值得花 5 分钟深想”的 3 条内容。读者画像和他最近亲口问过、还没解决的问题在 profile / open_questions 里。
 对 items 里每一条打 0–10 分的“深想价值”，标准：
 1. 有东西可想：新的机制、取舍、打法、分歧或反常识的结果，而不只是“发生了什么”。纯新闻（版本号升级、定价调整、套餐变化、融资、人事、合作公告）一律 ≤ 3 分，除非它直接回答了用户的某个开放问题。
+   新产品（kind=new，Product Hunt / YC 新上线的）比大公司已有产品的某个功能更新更值得看：新产品看它切了什么人群和痛点、为什么现在能做、有没有空白；大公司的功能更新只有涉及新的交互形态，或直接命中用户问题才给高分。
 2. 和用户的动机或开放问题直接相关（能点名是哪一条）。
 3. 想完能落到可检验的判断，或能动手验证。
 每条输出：score；why（一句话，说清对这位用户为什么值得想，点名动机或问题，≤40 字，不值得就留空）；
 question（给他的一个深想问题，要求给场景、要他做决定并说怎么验证，≤60 字；不值得就留空）；
-hit（命中的 open_questions 原文，没有就留空）。
-输出 JSON：{"items": [{"key": "原样返回", "score": 0, "why": "", "question": "", "hit": ""}]}"""
+hit（命中的 open_questions 原文，没有就留空）；
+terms（2–4 个用来在名人发言、HN、X 上找相关讨论的检索词：产品名、公司名、论文或技术的专有名词，中英文都可，不要泛词）。
+输出 JSON：{"items": [{"key": "原样返回", "score": 0, "why": "", "question": "", "hit": "", "terms": []}]}"""
 
 
 def _llm(system: str, payload: dict) -> dict:
@@ -96,6 +100,8 @@ def _open_questions(limit: int = 40) -> list[str]:
 
 
 def _fallback_score(c: dict) -> int:
+    if c["kind"] == "new":
+        return DEEP_MIN
     if c["kind"] == "product":
         return 2 if c.get("type") in NEWS_TYPES else DEEP_MIN
     if c["kind"] == "growth":
@@ -104,9 +110,10 @@ def _fallback_score(c: dict) -> int:
 
 
 def _scores(cards: list[dict]) -> dict:
+    _ensure_cols()
     keys = [c["key"] for c in cards]
     have = {r["key"]: r for r in db.rows(f"SELECT * FROM today_scores WHERE key IN ({','.join('?' * len(keys))})", keys)} if keys else {}
-    todo = [c for c in cards if c["key"] not in have or have[c["key"]]["src"] != "llm"]
+    todo = [c for c in cards if c["key"] not in have or have[c["key"]]["src"] != "llm" or have[c["key"]].get("terms") in (None, "", "[]")]
     if todo:
         items = [{"key": c["key"], "kind": c["kind"], "type": c.get("type", ""), "title": c["title"], "summary": c.get("summary", ""),
                   "detail": _plain(" ".join((c.get("reveal") or {}).values()), 500)} for c in todo]
@@ -118,13 +125,110 @@ def _scores(cards: list[dict]) -> dict:
             got, src = {}, "rule"
         for c in todo:
             x = got.get(c["key"])
-            row = {"key": c["key"], "score": int(x.get("score") or 0) if x else _fallback_score(c),
+            terms = [str(t).strip() for t in (x or {}).get("terms") or [] if len(str(t).strip()) >= 3][:4] or _fallback_terms(c)
+            row = {"key": c["key"], "score": int(x.get("score") or 0) if x else _fallback_score(c), "terms": json.dumps(terms, ensure_ascii=False),
                    "why": str((x or {}).get("why") or "")[:80], "question": str((x or {}).get("question") or "")[:120],
                    "hit": str((x or {}).get("hit") or "")[:160], "src": src if x or src == "rule" else "rule", "at": db.now()}
-            db.execute("INSERT OR REPLACE INTO today_scores (key, score, why, question, hit, src, at) VALUES (?,?,?,?,?,?,?)",
-                       [row[k] for k in ("key", "score", "why", "question", "hit", "src", "at")])
+            db.execute("INSERT OR REPLACE INTO today_scores (key, score, why, question, hit, src, at, terms) VALUES (?,?,?,?,?,?,?,?)",
+                       [row[k] for k in ("key", "score", "why", "question", "hit", "src", "at", "terms")])
             have[c["key"]] = row
     return have
+
+
+def _ensure_cols() -> None:
+    if "terms" not in {r["name"] for r in db.rows("PRAGMA table_info(today_scores)")}:   # 老库补列
+        db.execute("ALTER TABLE today_scores ADD COLUMN terms TEXT DEFAULT '[]'")
+
+
+def _fallback_terms(c: dict) -> list[str]:
+    words = [c.get("company") or ""] + re.findall(r"[A-Z][\w.\-]+(?: [A-Z][\w.\-]+)?", c["title"])
+    return [w for w in dict.fromkeys(w.strip() for w in words) if len(w) >= 3][:3]
+
+
+# ---------- 不同角度：名人怎么说 / HN 怎么吵 / 实践者经验（只读现有采集） ----------
+
+def _people_names() -> dict:
+    try:
+        from pathlib import Path
+        raw = json.loads((Path(__file__).parent / "people.json").read_text("utf-8"))
+        return {p["id"]: p.get("zh") or p["name"] for p in (raw if isinstance(raw, list) else raw.get("people", []))}
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def _like(terms: list[str], cols: list[str]) -> tuple[str, list]:
+    conds, args = [], []
+    for t in terms:
+        conds.append("(" + " OR ".join(f"{c} LIKE ?" for c in cols) + ")")
+        args += [f"%{t}%"] * len(cols)
+    return " OR ".join(conds), args
+
+
+def _hn_digest(hid: str) -> dict:
+    try:
+        from ._feed_hn import CACHE_DIR
+        return (json.loads((CACHE_DIR / f"{hid}.json").read_text("utf-8")) or {}).get("d") or {}
+    except (OSError, ValueError, ImportError):
+        return {}
+
+
+def _angles(terms: list[str], day: str) -> list[dict]:
+    if not terms:
+        return []
+    since = (date.fromisoformat(day) - timedelta(days=ANGLE_DAYS)).isoformat()
+    out = []
+    if _has("people_items"):
+        names = _people_names()
+        where, args = _like(terms, ["title", "summary"])
+        for r in db.rows(f"SELECT people, channel, title, summary, url, date FROM people_items WHERE substr(date,1,10)>=? AND ({where}) "
+                         "ORDER BY CASE channel WHEN 'blog' THEN 0 WHEN 'podcast' THEN 0 WHEN 'youtube' THEN 1 WHEN 'x' THEN 2 ELSE 3 END, "
+                         "date DESC LIMIT 2", [since, *args]):
+            who = "、".join(names.get(p, p) for p in json.loads(r["people"] or "[]"))
+            out.append({"kind": "people", "label": "名人怎么说", "who": who, "channel": r["channel"], "title": _plain(r["title"], 120),
+                        "summary": _plain(r["summary"], 160), "url": r["url"], "date": (r["date"] or "")[:10]})
+    if _has("feed_items"):
+        where, args = _like(terms, ["title"])
+        for r in db.rows(f"SELECT id, title, url, extra, popularity FROM feed_items WHERE source='hn' AND substr(date,1,10)>=? AND ({where}) "
+                         "ORDER BY popularity DESC LIMIT 1", [since, *args]):
+            hid = r["id"].split(":", 1)[1]
+            dg = _hn_digest(hid)
+            ex = json.loads(r["extra"] or "{}")
+            out.append({"kind": "hn", "label": "HN 怎么吵", "title": r["title"], "points": int(r["popularity"] or 0),
+                        "tldr": _plain(dg.get("tldr", ""), 200),
+                        "opinions": [{"stance": o.get("stance", ""), "claim": _plain(o.get("claim", ""), 120), "by": o.get("by", "")}
+                                     for o in (dg.get("opinions") or [])[:3]],
+                        "url": ex.get("hn_url") or f"https://news.ycombinator.com/item?id={hid}"})
+    if _has("x_art"):
+        where, args = _like(terms, ["title", "summary"])
+        for r in db.rows(f"SELECT user, title, summary, take FROM x_art WHERE q>=3 AND day>=? AND ({where}) ORDER BY q DESC, views DESC LIMIT 1",
+                         [since, *args]):
+            out.append({"kind": "practice", "label": "实践者经验", "who": "@" + r["user"], "title": _plain(r["title"], 120),
+                        "summary": _plain(r["summary"], 160), "takeaway": _plain(r["take"], 160), "url": "#kb/xart"})
+    return out
+
+
+def _new_products(day: str) -> list[dict]:
+    since = (date.fromisoformat(day) - timedelta(days=WINDOW_DAYS)).isoformat()
+    due = (date.fromisoformat(day) + timedelta(days=180)).isoformat()
+    out = []
+
+    def card(key, label, name, title, summary, url, d):
+        return {"key": key, "kind": "new", "label": label, "title": title, "company": name, "date": d, "summary": summary,
+                "prediction": f"{name} 半年内会有明显起色（融资、收入或持续上榜）", "due": due,
+                "question": "它切的是谁的什么痛点？为什么现在才能做？半年后还在吗？", "reveal": {},
+                "relates": _relates(title, summary), "link": url}
+    if _has("intel_ph_day"):
+        for r in db.rows("SELECT date, items FROM intel_ph_day WHERE date>=? AND date<=? ORDER BY date DESC", [since, day]):
+            for it in json.loads(r["items"] or "[]")[:5]:
+                out.append(card(f"ph:{it.get('id')}", f"新产品 · PH 第 {it.get('rank')}", it.get("name", ""), it.get("title", ""),
+                                _plain(it.get("why", ""), 160), it.get("url", ""), r["date"]))
+    if _has("feed_items"):
+        for r in db.rows("SELECT id, title, summary, url, date, extra FROM feed_items WHERE source='yc' AND substr(date,1,10)>=? "
+                         "AND substr(date,1,10)<=? ORDER BY popularity DESC LIMIT 6", [since, day]):
+            ex = json.loads(r["extra"] or "{}")
+            out.append(card(f"feed:{r['id']}", "新产品 · YC", ex.get("company") or r["title"].split(":")[0], r["title"],
+                            ex.get("gist") or _plain(r["summary"], 160), ex.get("website") or r["url"], (r["date"] or "")[:10]))
+    return out
 
 
 def _has(table: str) -> bool:
@@ -292,12 +396,12 @@ def _seen_before(day: str) -> set[str]:
 def pick(day: str) -> dict:
     seen = _seen_before(day)
     pools = {k: [c for c in f(day) if c["key"] not in seen] for k, f in
-             (("product", _products), ("growth", _growth), ("tech", _papers), ("eng", _engineering))}
+             (("product", _products), ("new", _new_products), ("growth", _growth), ("tech", _papers), ("eng", _engineering))}
     cand = [c for k, n in SCORE_POOL.items() for c in pools[k][:n]]
     sc = _scores(cand)
     for c in cand:
         s = sc[c["key"]]
-        c.update(depth=s["score"], why=s["why"], hit=s["hit"])
+        c.update(depth=s["score"], why=s["why"], hit=s["hit"], terms=json.loads(s.get("terms") or "[]"))
         if s["question"]:
             c["question"] = s["question"]
     ranked = sorted((c for c in cand if c["depth"] >= DEEP_MIN), key=lambda c: -c["depth"])
@@ -308,8 +412,9 @@ def pick(day: str) -> dict:
                 deep.append(c)
     for c in deep:
         pools[c["kind"]].remove(c)
+        c["angles"] = _angles(c.get("terms") or [], day)
     s_level = [c for c in pools["product"] if c["level"] == "S"][:QUICK_S_MAX]
-    others = pools["tech"][:QUICK_QUOTA["tech"]] + pools["eng"][:QUICK_QUOTA["eng"]]
+    others = pools["new"][:QUICK_QUOTA["new"]] + pools["tech"][:QUICK_QUOTA["tech"]] + pools["eng"][:QUICK_QUOTA["eng"]]
     a_level = [c for c in pools["product"] if c["level"] != "S"][:QUICK_QUOTA["product"]]
     quick = (s_level + others + a_level)[:QUICK_MAX]
     return {"deep": deep, "quick": quick}

@@ -49,11 +49,28 @@ export default {
       return h('div.td-reveal', {}, [
         ...shown.map(([k, v]) => h('div', {}, [h('div.td-sec', {}, k), md(v)])),
         ...folded.map(([k, v]) => h('details.td-more', {}, [h('summary', {}, k), md(v)])),
+        angles(c),
         c.kind === 'tech' ? h('div.row', {}, [
           h('button', { onclick: async () => { try { await api.post('/api/learn/items', { url: c.url, reuse: true }); toast('已送去深读'); } catch (e) { toast(e.message); } } }, '送去深读'),
         ]) : null,
         feedbackRow(c),
       ]);
+    }
+
+    const ext = (url, text) => (url ? h('a', url.startsWith('#') ? { href: url } : { href: url, target: '_blank', rel: 'noopener' }, text) : null);
+    function angles(c) {
+      const list = c.angles || [];
+      if (!list.length) return null;
+      return h('div.td-angles', {}, [h('div.td-sec', {}, '不同角度'), ...list.map((a) => {
+        if (a.kind === 'hn') {
+          return h('div.td-angle', {}, [h('div.td-al', {}, [a.label, ' · ', ext(a.url, `${a.title}（${a.points} 分）`)]),
+            a.tldr ? h('div', {}, a.tldr) : null,
+            ...(a.opinions || []).map((o) => h('div.td-op', {}, [h('span.tag.gray', {}, o.stance || '观点'), o.claim, o.by ? h('span.muted', {}, ' — ' + o.by) : null]))]);
+        }
+        return h('div.td-angle', {}, [h('div.td-al', {}, [a.label, ' · ', a.who || '', a.date ? ` · ${a.date}` : '']),
+          h('div', {}, ext(a.url, a.title)), a.summary ? h('div.muted', {}, a.summary) : null,
+          a.takeaway ? h('div.td-take', {}, ['可迁移：', a.takeaway]) : null]);
+      })]);
     }
 
     function judgeForm(c) {
@@ -68,7 +85,7 @@ export default {
       const out = h('span.td-prob-v', {}, PROB_DEFAULT + '%');
       const prob = h('input', { type: 'range', min: 0, max: 100, step: 5, value: PROB_DEFAULT, 'aria-label': '概率', oninput: () => { out.textContent = prob.value + '%'; } });
       const reason = h('input', { placeholder: '一句理由（可选）', 'aria-label': '理由' });
-      const withProb = c.kind === 'product';
+      const withProb = !!c.prediction && (c.kind === 'product' || c.kind === 'new');
       return h('div.td-judge', {}, [
         h('div.td-q', {}, c.question), text,
         withProb ? h('div.row.td-prob', {}, ['兑现概率', prob, out, h('span.muted', {}, '到期 ' + c.due)]) : null,
@@ -152,6 +169,10 @@ function injectStyle() {
 .td-judge textarea, .td-judge input, .td-opp input { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); color: var(--text); }
 .td-judge input[type=range] { flex: 1; min-width: 120px; padding: 0; border: 0; }
 .td-q { font-weight: 600; }
+.td-angles { margin-top: 12px; }
+.td-angle { border-top: 1px solid var(--line); padding: 8px 0; font-size: 14px; display: grid; gap: 3px; }
+.td-al { font-size: 12px; color: var(--accent); }
+.td-op { font-size: 13px; }
 .td-why { font-size: 14px; margin: 4px 0; }
 .td-hit { font-size: 13px; color: var(--muted); margin: 2px 0 8px; border-left: 3px solid var(--accent-soft); padding-left: 8px; }
 .td-prob { font-size: 14px; }
