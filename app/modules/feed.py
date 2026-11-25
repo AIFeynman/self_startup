@@ -226,6 +226,8 @@ def _upsert(items: list[dict]) -> tuple[int, int]:
         if old:
             merged = {**_extra(old), **{k: v for k, v in extra.items() if v not in ("", None, [], {})}}
             merged.setdefault("first_seen", rk.FIRST_SEEN_LEGACY)
+            if merged.get("search_only") and not extra.get("search_only"):
+                merged.pop("search_only")   # 信息源刷新也抓到了，回到正常推荐
             if merged.get("article_title") and not extra.get("article_title"):
                 it = {**it, "title": old["title"], "summary": old["summary"]}   # X 长文已补过标题，别被占位文案盖掉
             if (it.get("summary") or "").startswith("链接到") and old["summary"] and not old["summary"].startswith("链接到"):
@@ -383,6 +385,31 @@ def _scored(include_hidden: bool, stale_ok: bool) -> list[dict]:
 CN_SOURCES = ("zhihu", "bilibili")
 
 
+def matches_query(x: dict, q: str) -> bool:
+    """空格分开的每个词都出现（不要求连在一起、不分大小写），或这条就是用这个词联网搜到的。"""
+    ql = " ".join(q.lower().split())
+    if ql in (x["extra"].get("web_q") or []):
+        return True
+    e = x["extra"]
+    hay = " ".join(str(v) for v in (x["title"], x["summary"], e.get("gist", ""), e.get("channel", ""), e.get("author", ""),
+                                    rk.SOURCE_LABEL.get(x["source"], x["source"]))).lower()
+    return all(w in hay for w in ql.split())
+
+
+def _stem(w: str) -> str:
+    return w[:-1] if len(w) > 3 and w.endswith("s") else w
+
+
+def relevance(q: str, text: str) -> float:
+    """查询里的实词（去掉 your / first 这类停用词，复数当单数）有几成出现在 text 里；查询全是停用词时按全部词算。"""
+    words = {_stem(w) for w in rk.tokens(q)} or {_stem(w) for w in q.lower().split()}
+    t = (text or "").lower()
+    return sum(w in t for w in words) / len(words) if words else 0.0
+
+
+WEB_MIN_RELEVANCE = 0.6   # 联网搜到的只留标题 + 简介命中六成以上实词的：X 热门、HN、网页搜索按单个词就会返回很多不相干的
+
+
 def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | None = None, days: float = 0,
            sort: str = "score", read: str = "", stale_ok: bool = False, events: bool = True) -> list[dict]:
     """days: 只要最近 N 天发布的（0 = 不限）；sort: score 综合（默认）/ day 按天（新的天在前，天内按综合） / new 最新 / hot 最热（同源热度百分位）；
@@ -404,8 +431,9 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     elif type_:
         out = [x for x in out if x["type"] == type_]
     if q:
-        ql = q.lower()
-        out = [x for x in out if ql in f"{x['title']} {x['summary']} {x['extra'].get('gist', '')}".lower()]
+        out = [x for x in out if matches_query(x, q)]
+    elif not saved:
+        out = [x for x in out if not x["extra"].get("search_only")]
     out = rk.within_days(out, days, now)
     if not (saved or q or read in ("read", "deep")):
         out = _without_radar(out)
@@ -421,9 +449,11 @@ def ranked(type_: str = "", saved: bool = False, q: str = "", now: datetime | No
     if events and not saved:
         out = cluster.collapse(out)
     if sort in ("new", "hot", "day", "views", "followers"):
-        return rk.sort_items(out, sort, now)
-    if not (type_ or saved or q or days):
+        out = rk.sort_items(out, sort, now)
+    elif not (type_ or saved or q or days):
         out = rk.diversify(out)
+    if q:   # 搜索时标题命中查询词多的在前，同样多的保持原排序
+        out = sorted(out, key=lambda x: -relevance(q, x["title"]))
     return out
 
 
@@ -835,6 +865,32 @@ def hn_library(q: str = "", days: float = 0):
     items = rk.within_days(items, days, datetime.now(timezone.utc))
     total = (db.row("SELECT count(*) n FROM feed_items WHERE source='hn'") or {}).get("n", 0)
     return {**hnd.library(items, q), "total": total}
+
+
+class WebSearchIn(BaseModel):
+    q: str
+
+
+@router.post("/search_web")
+def search_web(body: WebSearchIn):
+    """本地没排上来的：现搜 YouTube / X / 网页（DeepSeek）/ HN，入库并记下搜索词，之后同一个词在本地筛选里也能找到。
+    只靠联网搜到的条目标 search_only，不进日常推荐和精选；信息源刷新也抓到了就去掉标记。"""
+    q = " ".join(body.q.split())
+    if not q:
+        raise HTTPException(400, "q 不能为空")
+    found, errors = src.search_web(q)
+    ql = q.lower()
+    items = []
+    found = {k: [x for x in xs if relevance(q, f"{x['title']} {x['summary']}") >= WEB_MIN_RELEVANCE] for k, xs in found.items()}
+    for it in (x for xs in found.values() for x in xs):
+        old = db.row("SELECT extra FROM feed_items WHERE id=?", [it["id"]])
+        oe = _extra(old) if old else {}
+        extra = {**it["extra"], "web_q": list(dict.fromkeys([*(oe.get("web_q") or []), ql]))}
+        if not old or oe.get("search_only"):
+            extra["search_only"] = True
+        items.append({**it, "extra": extra})
+    _, new = _upsert(items)
+    return {"q": q, "counts": {k: len(v) for k, v in found.items()}, "new": new, "errors": errors}
 
 
 class RefreshIn(BaseModel):

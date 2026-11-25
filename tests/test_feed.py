@@ -1217,3 +1217,27 @@ def test_cn_tab_lists_zhihu_and_bilibili_only(client, monkeypatch):
     client.post("/api/feed/refresh", json={"sources": ["mix"], "wait": True})
     ids = {x["id"] for x in client.get("/api/feed/items", params={"type": "cn", "limit": 200}).json()["items"]}
     assert {"zhihu:1", "bilibili:2"} <= ids and not any(i.startswith("hn:") for i in ids)
+
+
+def test_search_web_keeps_relevant_and_stays_out_of_daily_feed(client, monkeypatch):
+    from app.modules import feed
+    now = datetime.now(timezone.utc).isoformat()
+    found = {"youtube": [{**_it("youtube:19HDQ9HppOA", "Ship your first Managed Agent", source="youtube"), "date": now}],
+             "web": [{**_it("web:car", "Car Shipping Lubbock, TX", source="web"), "date": now}], "x": [], "hn": []}
+    monkeypatch.setattr(feed.src, "search_web", lambda q: (found, ["hn: boom"]))
+    r = client.post("/api/feed/search_web", json={"q": "Ship your  first manged agents"}).json()
+    assert r["counts"] == {"youtube": 1, "web": 0, "x": 0, "hn": 0} and r["new"] == 1 and r["errors"] == ["hn: boom"]
+    ids = lambda u: [x["id"] for x in client.get(u).json()["items"]]   # noqa: E731
+    assert ids("/api/feed/items?q=ship+your+first+manged+agents") == ["youtube:19HDQ9HppOA"]   # 拼错的原词也能再找到
+    assert ids("/api/feed/items?q=managed+ship") == ["youtube:19HDQ9HppOA"]                    # 词序无关
+    assert "youtube:19HDQ9HppOA" not in ids("/api/feed/items")
+    feed.upsert([{**found["youtube"][0], "extra": {"via": "search"}}])                          # 信息源刷新也抓到了
+    assert "youtube:19HDQ9HppOA" in ids("/api/feed/items")
+
+
+def test_web_items_routes_youtube_and_skips_tweets():
+    got = src.web_items([{"url": "https://www.youtube.com/watch?v=19HDQ9HppOA", "title": "Ship your first Managed Agent"},
+                         {"url": "https://x.com/a/status/123", "title": "tweet"},
+                         {"url": "https://example.com/post?utm=1", "title": "Managed Agents guide", "date": "2026-11-21"}], "q")
+    assert [(x["source"], x["type"]) for x in got] == [("youtube", "video"), ("web", "blog")]
+    assert got[0]["id"] == "youtube:19HDQ9HppOA" and got[1]["id"].startswith("web:")

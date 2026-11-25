@@ -119,7 +119,7 @@ LE_LABEL = {"star": "learn_evolve 标星", "good": "learn_evolve 好评", "skip"
 SOURCE_LABEL = {"hn": "HN", "github": "GitHub", "hf": "HF Papers", "arxiv": "AlphaXiv", "reddit": "Reddit",
                 "blog": "博客", "producthunt": "Product Hunt", "twitter": "X", "podcast": "播客", "xiaoyuzhou": "小宇宙",
                 "openrouter": "OpenRouter", "youtube": "YouTube", "bilibili": "B 站", "zhihu": "知乎", "yc": "Launch YC", "huggingface": "HF",
-                "analysis": "产品分析", "trustmrr": "TrustMRR"}
+                "analysis": "产品分析", "trustmrr": "TrustMRR", "web": "网页"}
 POP_UNIT = {"hn": "分", "github": "★", "hf": "赞", "arxiv": "赞", "reddit": "赞", "producthunt": "票",
             "twitter": "赞", "huggingface": "赞", "yc": "票",
             "xiaoyuzhou": "播放", "youtube": "播放", "bilibili": "播放"}

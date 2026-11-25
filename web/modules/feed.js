@@ -272,7 +272,7 @@ export default {
 
     // ---------- 输入框 ----------
     const MODES = [
-      { id: 'filter', label: '筛选', placeholder: '输入即筛选标题 / 简介 / 来源…', hint: '边输边筛 · Esc 清空' },
+      { id: 'filter', label: '筛选', placeholder: '输入即筛选标题 / 简介 / 来源，回车联网搜…', hint: '边输边筛 · 回车联网搜 YouTube / X / 网页 / HN · Esc 清空' },
       { id: 'interest', label: '加兴趣', placeholder: '输入兴趣词，回车加入（逗号分隔可一次加多个）', hint: '兴趣词影响排序' },
       { id: 'ask', label: '问 Agent', placeholder: '比如：最近有什么 agent 评测相关的新论文？', hint: '发给信息推荐 Agent' },
     ];
@@ -282,7 +282,7 @@ export default {
       onSubmit: async (t, mode) => {
         if (mode === 'ask') { ask(t); return; }
         if (mode === 'interest') { await addInterests(t); return; }
-        setFilter(t, true); return false; // 筛选：保留文字
+        setFilter(t, true); webSearch(t); return false; // 筛选：保留文字
       },
     });
     const ta = comp.querySelector('textarea');
@@ -315,6 +315,8 @@ export default {
     const tabs = h('div.tabs');
     const listBox = h('div.fd-list');
     const hnBar = h('div.fd-hnbar');
+    const webBar = h('div.fd-hnbar.fd-web');
+    let web = null;   // 最近一次联网搜：{ q, busy, counts, new, errors }
     const libBox = h('div.fd-lib');
     const peopleBox = h('div.fd-people');
     const sentinel = h('div.fd-sentinel');
@@ -335,7 +337,7 @@ export default {
     let fresh = null;   // { since, added, label }
     el.append(h('style', {}, CSS), head, evoBox, kwBox, followBox, comp, intsEl, quick, readingBox, waitBox,
       ui.section('今日精选', '按热度 · 新鲜度 · 兴趣词 · 你的反馈 · 每个来源最多 1 条 · 不含已读'), topBox, earlierBox,
-      h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, listBox, libBox, peopleBox, sentinel);
+      h('div.fd-bar', {}, [tabs, tabRefresh, freshNote, opts, kbd]), hnBar, webBar, listBox, libBox, peopleBox, sentinel);
 
     // ---------- 状态 / 刷新 ----------
     function renderStatus() {
@@ -1030,9 +1032,36 @@ export default {
         h('section', {}, [h('h4', {}, ['被推荐的链接', h('span', {}, `${r.links.length} 个 · 博客 / 视频 / 仓库 / 产品…`)]), ...(links.length ? links : [h('div.muted', {}, '无')]), capNote(r.links.length, L)]),
         h('section', {}, [h('h4', {}, ['经验卡片', h('span', {}, `${r.experiences.length} 条 · 评论者亲身做过的事和结果`)]), exps.length ? h('div.fd-exps', {}, exps) : h('div.muted', {}, '无'), capNote(r.experiences.length, X)]));
     }
+    const WEB_SRC = { youtube: 'YouTube', x: 'X', web: '网页', hn: 'HN' };
+    function renderWebBar() {
+      const q = st.q;
+      if (!q || st.tab === 'people' || libView()) { webBar.replaceChildren(); webBar.style.display = 'none'; return; }
+      webBar.style.display = '';
+      const mine = web && web.q.toLowerCase() === q.toLowerCase().split(/\s+/).join(' ') ? web : null;
+      const btn = h('button.ghost.sm', { disabled: !!mine?.busy, onclick: () => webSearch(q) }, [ui.icon('search'), h('span', {}, mine?.busy ? '联网搜索中…' : mine ? '再搜一次' : `联网搜「${q}」`)]);
+      const note = mine?.busy ? '正在搜 YouTube / X / 网页 / HN，约 15 秒'
+        : mine ? `搜到 ${Object.entries(mine.counts).map(([k, n]) => `${WEB_SRC[k] || k} ${n}`).join(' · ')}，新收 ${mine.new} 条，已并入下面列表${mine.errors.length ? `（${mine.errors.map((e) => e.split(':')[0]).join('、')} 报错）` : ''}`
+          : '本地没找到想要的？回车或点这里，现搜 YouTube / X / 网页 / HN 并收进来';
+      webBar.replaceChildren(btn, h('span', { title: mine?.errors?.join('\n') || '' }, note));
+    }
+    async function webSearch(q) {
+      q = q.trim();
+      if (!q || web?.busy) return;
+      web = { q: q.split(/\s+/).join(' '), busy: true };
+      renderWebBar();
+      try {
+        web = { ...(await api.post('/api/feed/search_web', { q })), busy: false };
+      } catch (e) {
+        web = null;
+        toast('联网搜索失败：' + e.message);
+      }
+      renderWebBar();
+      if (st.q) loadList();
+    }
     async function loadList() {
       const seq = ++loadSeq;
       renderHnBar();
+      renderWebBar();
       const people = st.tab === 'people';
       peopleBox.style.display = people ? '' : 'none';
       opts.style.display = kbd.style.display = people ? 'none' : '';
@@ -1069,7 +1098,7 @@ export default {
     function withDays(rows, prev) {
       const out = [];
       for (const e of rows) {
-        if (st.sort === 'day' && e.x.day && e.x.day !== prev) out.push(h('div.fd-day', {}, dayName(e.x.day)));
+        if (st.sort === 'day' && !st.q && e.x.day && e.x.day !== prev) out.push(h('div.fd-day', {}, dayName(e.x.day)));
         prev = e.x.day;
         out.push(mount(e));
       }

@@ -530,11 +530,13 @@ X_PROVIDERS = [
     {"name": "getxapi", "env": "GETXAPI_KEY", "base": "https://api.getxapi.com",
      "auth": lambda k: {"Authorization": f"Bearer {k}"},
      "timeline": ("/twitter/user/tweets", lambda u: {"userName": u}),
-     "search": ("/twitter/tweet/advanced_search", lambda q: {"q": q, "product": "Latest"})},
+     "search": ("/twitter/tweet/advanced_search", lambda q: {"q": q, "product": "Latest"}),
+     "top": ("/twitter/tweet/advanced_search", lambda q: {"q": q, "product": "Top"})},
     {"name": "twitterapi.io", "env": "TWITTER_API_KEY", "base": "https://api.twitterapi.io",
      "auth": lambda k: {"X-API-Key": k},
      "timeline": ("/twitter/user/last_tweets", lambda u: {"userName": u}),
-     "search": ("/twitter/tweet/advanced_search", lambda q: {"query": q, "queryType": "Latest"})},
+     "search": ("/twitter/tweet/advanced_search", lambda q: {"query": q, "queryType": "Latest"}),
+     "top": ("/twitter/tweet/advanced_search", lambda q: {"query": q, "queryType": "Top"})},
 ]
 _TCO = re.compile(r"\s*https://t\.co/\w+")
 _X_ARTICLE = re.compile(r"(?:x|twitter)\.com/i/article/\d+")
@@ -1139,14 +1141,14 @@ def yt_lang_ok(sn: dict, langs=YT_LANGS) -> bool:
 
 
 def youtube_search(c: httpx.Client, key: str, queries: list[str], days: int = 7, per_query: int = 10,
-                   langs=YT_LANGS) -> list[dict]:
+                   langs=YT_LANGS, order: str = "viewCount") -> list[dict]:
     """YouTube Data API v3：每个关键词取最近 days 天按播放量排的前 per_query 个，再批量补播放量和时长（search 100 配额 / 次，
     videos 1 配额 / 次；默认 4 个词每天跑 4 次 ≈ 1600，免费额度 10000 / 天）。"""
-    since = _days_ago(days).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = {"publishedAfter": _days_ago(days).strftime("%Y-%m-%dT%H:%M:%SZ")} if days else {}
     found: dict[str, tuple[dict, str]] = {}
     for q in queries:
         r = c.get("https://www.googleapis.com/youtube/v3/search", params={
-            "key": key, "part": "snippet", "q": q, "type": "video", "order": "viewCount", "publishedAfter": since,
+            "key": key, "part": "snippet", "q": q, "type": "video", "order": order, **since,
             "maxResults": per_query})
         r.raise_for_status()
         for it in r.json().get("items", []):
@@ -1398,3 +1400,64 @@ def resolve_youtube_channel(text: str) -> tuple[str, str]:
         if not m:
             raise ValueError("频道页里没找到频道 id")
         return m.group(1), clean(_meta(r.text[:300_000], "og:title"), 80)
+
+
+# ---------- 联网搜索：本地库里没有时，按用户输入的词现搜各平台（不限时间、不按 AI 词过滤） ----------
+YT_WATCH_RE = re.compile(r"(?:youtube\.com/watch\?(?:.*&)?v=|youtu\.be/)([\w-]{11})")
+X_STATUS_RE = re.compile(r"(?:x|twitter)\.com/\w+/status/\d+")
+
+
+def web_items(results: list[dict], q: str) -> list[dict]:
+    """DeepSeek 搜索结果 → 条目：YouTube 链接归到视频，X 推文链接跳过（X 另有接口搜，带赞数），其余算网页。"""
+    out = []
+    for res in results:
+        url = res.get("url") or ""
+        if not url.startswith("http") or X_STATUS_RE.search(url):
+            continue
+        title, summary = clean(res.get("title") or "", 200), clean(res.get("summary") or res.get("snippet") or "", 600)
+        extra = {"via": "web_search", "query": q, "channel": clean(res.get("site_name") or "", 40)}
+        if m := YT_WATCH_RE.search(url):
+            out.append(_yt_item(m.group(1), title, summary, res.get("date") or "", 0, extra["channel"], "", "web_search", query=q))
+            continue
+        out.append({"id": "web:" + sha1(_strip_query(url).encode()).hexdigest()[:16], "source": "web", "type": "blog",
+                    "title": title, "summary": summary, "url": url, "date": res.get("date") or "", "popularity": 0.0,
+                    "extra": extra})
+    return [x for x in out if x["title"]]
+
+
+def search_web(q: str, per_source: int = 10) -> tuple[dict[str, list[dict]], list[str]]:
+    """一个词并行搜 YouTube（按相关度）、X（热门）、DeepSeek 网页搜索、HN；没配 key 的来源跳过。返回 ({来源: 条目}, 错误)。"""
+    yt_key, ds_key = (os.environ.get(k, "").strip() for k in ("YOUTUBE_API_KEY", "DEEPSEEK_API_KEY"))
+    provs = _x_providers()
+
+    def youtube(c):
+        return youtube_search(c, yt_key, [q], days=0, per_query=per_source, langs=(), order="relevance") if yt_key else []
+
+    def x(c):
+        got = [x_item(t, q) for t in _x_call(c, provs, "top", q)] if provs else []
+        return sorted((g for g in got if g), key=lambda g: -g["popularity"])[:per_source]
+
+    def web(c):
+        if not ds_key:
+            return []
+        r = c.post(DEEPSEEK_SEARCH, headers={"Authorization": f"Bearer {ds_key}"}, timeout=30,
+                   json={"query": q, "count": per_source, "need_content": False})
+        r.raise_for_status()
+        usage.record("feed", usage.search(), engine="deepseek")
+        return web_items(r.json().get("results") or [], q)
+
+    def hn(_c):
+        return fetch_hn([q], days=3650, min_points=5, per_query=per_source)
+
+    jobs = {"youtube": youtube, "x": x, "web": web, "hn": hn}
+    out: dict[str, list[dict]] = {}
+    errors = []
+    with _client() as c, ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+        futs = {name: ex.submit(fn, c) for name, fn in jobs.items()}
+        for name, f in futs.items():
+            try:
+                out[name] = f.result()
+            except Exception as e:  # noqa: BLE001
+                out[name] = []
+                errors.append(f"{name}: {type(e).__name__}: {str(e)[:120]}")
+    return out, errors
