@@ -1,0 +1,178 @@
+import json
+from datetime import date, timedelta
+
+import pytest
+
+from app import db
+
+TODAY = date.today().isoformat()
+YDAY = (date.today() - timedelta(days=1)).isoformat()
+
+PRODUCT_SECTIONS = {
+    "变了什么": "- 某视频平台上线动效工作室，开始做讲解视频。[官方博客](https://example.com/a, 2026-11-25)",
+    "用户问题": "- 知识类创作者做讲解视频成本高。",
+    "产品逻辑": "- 从生成工具走向工作流。",
+    "商业逻辑": "- 订阅制。",
+    "所以呢": "- **可验证预测**：到 2027-02-28，它会推出知识讲解模板。判断标准是官方页面出现模板入口。\n- **值得亲手试**：用同一份讲稿各生成一遍。",
+}
+GROWTH_CONTENT = """## 一句话
+Revid 用榜单和 Reddit 评论，把 ChatGPT 带来的新用户 10 周翻倍。
+
+## 背景与数字
+- 每周新用户从 355 涨到 781。
+
+## 触达动作
+1. 挖榜单并买前排位置。
+
+## 我能怎么用
+- 先摸清买家会问 AI 什么问题。
+"""
+
+
+def _company(name="某视频平台"):
+    return db.insert("intel_company", {"slug": name, "name": name})
+
+
+def _event(level="S", title="某视频平台上线动效工作室", day=TODAY, content=None, sections=None, complete=1):
+    eid = db.insert("intel_event", {"company_id": _company(title), "title": title, "level": level, "date": day,
+                                    "card_status": "done"})
+    db.insert("intel_analysis", {"event_id": eid, "content": content if content is not None else "## 变了什么\n" + "x" * 800,
+                                 "sections": json.dumps(sections if sections is not None else PRODUCT_SECTIONS, ensure_ascii=False),
+                                 "complete": complete})
+    return eid
+
+
+def _growth(day=TODAY, item="twitter:1"):
+    db.insert("intel_growth_item", {"id": item, "title": "how we doubled the users ChatGPT sends Revid", "company": "Revid"})
+    return db.insert("intel_growth_case", {"item_id": item, "day": day, "company": "Revid", "status": "done",
+                                           "content": GROWTH_CONTENT, "complete": 1})
+
+
+def _paper(pid="hf:1", title="Agent memory that learns", day=TODAY, pop=50):
+    db.insert("feed_items", {"id": pid, "source": "hf", "type": "paper", "title": title, "url": f"https://arxiv.org/abs/{pid}",
+                             "date": day, "popularity": pop, "extra": json.dumps({"gist": "让 Agent 记忆按价值更新"}, ensure_ascii=False)})
+
+
+@pytest.fixture(autouse=True)
+def _clean(client):
+    from app import kb_judge
+    kb_judge._init()
+    for t in ("intel_analysis", "intel_event", "intel_company", "intel_growth_case", "intel_growth_item",
+              "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "kb_judgments"):
+        db.execute(f"DELETE FROM {t}")
+    yield
+
+
+def test_deep_cards_cover_product_tech_growth(client):
+    _event()
+    _growth()
+    _paper()
+    d = client.get("/api/today").json()
+    kinds = [c["kind"] for c in d["deep"]]
+    assert sorted(kinds) == ["growth", "product", "tech"]
+    prod = next(c for c in d["deep"] if c["kind"] == "product")
+    assert prod["prediction"].startswith("到 2027-02-28")
+    assert prod["due"] == "2027-02-28"
+    assert prod["link"].startswith("#intel/e/")
+    growth = next(c for c in d["deep"] if c["kind"] == "growth")
+    assert "10 周翻倍" in growth["reveal"]["一句话"]
+    assert growth["link"].startswith("#intel/g/")
+
+
+def test_broken_cards_are_filtered_out(client):
+    _event(title="正常的卡")
+    _event(title="额度报错的卡", content="You've hit your weekly limit · resets 5pm", sections={})
+    _event(title="不完整的卡", complete=0)
+    titles = [c["title"] for c in client.get("/api/today?refresh=1").json()["all"]]
+    assert "正常的卡" in titles
+    assert "额度报错的卡" not in titles
+    assert "不完整的卡" not in titles
+
+
+def test_quick_cards_always_include_s_level_and_respect_cap(client):
+    for i in range(6):
+        _event(level="S", title=f"S 级事件 {i}")
+    for i in range(10):
+        _paper(pid=f"hf:{i}", title=f"论文 {i}")
+    d = client.get("/api/today").json()
+    assert len(d["deep"]) <= 3
+    assert len(d["quick"]) <= 9
+    shown = {c["title"] for c in d["deep"] + d["quick"]}
+    assert all(f"S 级事件 {i}" in shown for i in range(6))
+
+
+def test_many_s_level_events_do_not_crowd_out_papers(client):
+    for i in range(8):
+        _event(level="S", title=f"S 级事件 {i}")
+    for i in range(4):
+        _paper(pid=f"hf:{i}", title=f"Agent 论文 {i}")
+    quick = client.get("/api/today").json()["quick"]
+    assert len(quick) <= 9
+    assert sum(c["kind"] == "tech" for c in quick) >= 1
+
+
+def test_relates_tags_are_specific(client):
+    _event(level="S", title="某模型 API 定价公布", sections={**PRODUCT_SECTIONS, "变了什么": "- 输入 $2，输出 $10，推理 token 按输出计价。",
+                                                           "用户问题": "- 开发者关心成本。"})
+    card = client.get("/api/today").json()["deep"][0]
+    assert "增长" not in card["relates"] and "基座机制" not in card["relates"]
+
+
+def test_selection_is_stable_within_a_day(client):
+    _event()
+    _paper()
+    first = [c["key"] for c in client.get("/api/today").json()["deep"]]
+    _event(level="S", title="后来才抓到的事件")
+    assert [c["key"] for c in client.get("/api/today").json()["deep"]] == first
+
+
+def test_judgment_goes_into_existing_ledger_with_probability(client):
+    _event()
+    card = next(c for c in client.get("/api/today").json()["deep"] if c["kind"] == "product")
+    r = client.post("/api/today/judge", json={"key": card["key"], "text": card["prediction"], "prob": 70,
+                                              "reason": "大平台补齐工作流是常规动作", "due": card["due"]})
+    assert r.status_code == 200
+    row = db.row("SELECT * FROM kb_judgments")
+    assert row["type"] == "预测" and row["due"] == "2027-02-28"
+    assert "70%" in row["note"] and "大平台补齐工作流" in row["note"]
+    assert json.loads(row["sources"])[0]["link"] == card["link"]
+    d = client.get("/api/today").json()
+    assert d["progress"]["deep_done"] == 1
+    assert next(c for c in d["deep"] if c["key"] == card["key"])["done"]
+
+
+def test_growth_guess_is_kept_but_not_sent_to_ledger(client):
+    _growth()
+    card = client.get("/api/today").json()["deep"][0]
+    client.post("/api/today/guess", json={"key": card["key"], "text": "靠 SEO 榜单"})
+    assert db.row("SELECT COUNT(*) n FROM kb_judgments")["n"] == 0
+    c = next(c for c in client.get("/api/today").json()["deep"] if c["key"] == card["key"])
+    assert c["done"] and c["guess"] == "靠 SEO 榜单"
+
+
+def test_no_gain_feedback_and_opportunity_card(client):
+    _event()
+    card = client.get("/api/today").json()["deep"][0]
+    client.post("/api/today/feedback", json={"key": card["key"], "value": "no_gain"})
+    r = client.post("/api/today/opps", json={"key": card["key"], "title": "知识讲解模板市场",
+                                             "change": "大平台开始做讲解视频", "pain": "创作者做讲解视频慢", "test": "做 3 个模板看转化", "prob": 40})
+    assert r.status_code == 200
+    opps = client.get("/api/today/opps").json()
+    assert opps[0]["title"] == "知识讲解模板市场" and opps[0]["prob"] == 40 and opps[0]["status"] == "idea"
+    d = client.get("/api/today").json()
+    assert d["progress"]["no_gain"] == 1 and d["progress"]["opps"] == 1
+
+
+def test_seen_items_are_not_repeated_next_day(client):
+    _event(day=YDAY)
+    old = client.get(f"/api/today?day={YDAY}").json()["deep"][0]
+    client.post("/api/today/feedback", json={"key": old["key"], "value": "useful", "day": YDAY})
+    _event(title="今天的新事件")
+    keys = [c["key"] for c in client.get("/api/today").json()["all"]]
+    assert old["key"] not in keys
+
+
+def test_due_judgments_come_from_ledger(client):
+    db.insert("kb_judgments", {"text": "到期的预测", "type": "预测", "due": YDAY, "created_at": db.now()})
+    due = client.get("/api/today").json()["due"]
+    assert any(j["claim"] == "到期的预测" or j.get("title") == "到期的预测" for j in due)

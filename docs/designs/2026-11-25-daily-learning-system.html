@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>每日学习系统</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #202b3c; --muted: #798497; --line: #d2dae3; --panel: #f4f7f9;
+  --navy: #19365c; --teal: #008078; --teal-soft: #eef5f4; --warn: #ea963b; --warn-soft: #fff4e5;
+  --bad: #b23a48; --good: #2e7d4f; --row: #f7fafa; --th-fg: #ffffff;
+  --serif: "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", serif;
+  --sans: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC", system-ui, sans-serif;
+  --mono: ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f151c; --fg: #dbe3ea; --muted: #93a2b1; --line: #2a3644; --panel: #16202a;
+  --navy: #9cc0f0; --teal: #46c2c0; --teal-soft: #14302f; --warn: #e3a25e; --warn-soft: #2e2416;
+  --bad: #ef7d8a; --good: #6cc790; --row: #131c25; --th-fg: #0f151c; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f151c; --fg: #dbe3ea; --muted: #93a2b1; --line: #2a3644; --panel: #16202a;
+  --navy: #9cc0f0; --teal: #46c2c0; --teal-soft: #14302f; --warn: #e3a25e; --warn-soft: #2e2416;
+  --bad: #ef7d8a; --good: #6cc790; --row: #131c25; --th-fg: #0f151c; color-scheme: dark }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.7 var(--sans); }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 40px 16px 72px; }
+.kicker { color: var(--teal); font-size: 13px; letter-spacing: .04em; }
+h1 { font: 700 30px/1.3 var(--serif); color: var(--navy); margin: 6px 0 8px; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+h2 { font: 700 21px/1.4 var(--serif); color: var(--navy); margin: 44px 0 14px; padding-bottom: 6px; border-bottom: 2px solid var(--teal); }
+h3 { font: 700 16px/1.5 var(--sans); color: var(--teal); margin: 26px 0 8px; }
+p { margin: 8px 0; }
+.note, .warn { padding: 12px 16px; margin: 14px 0; border-left: 4px solid var(--teal); background: var(--teal-soft); }
+.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.tbl { width: 100%; overflow-x: auto; margin: 12px 0; }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 14px; }
+th { background: var(--navy); color: var(--th-fg); text-align: left; padding: 8px 10px; font-weight: 600; white-space: nowrap; }
+td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:nth-child(even) td { background: var(--row); }
+.tag { display: inline-block; padding: 0 7px; border-radius: 4px; font-size: 12px; white-space: nowrap; border: 1px solid currentColor; }
+.hi { color: var(--good); } .mid { color: var(--warn); } .lo { color: var(--bad); } .na { color: var(--muted); }
+.big { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 16px 0; }
+.big div { border: 1px solid var(--line); padding: 12px 14px; }
+.big b { display: block; font: 700 24px/1.2 var(--serif); color: var(--teal); }
+.big span { font-size: 13px; color: var(--muted); }
+.flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; margin: 14px 0; }
+.flow div { flex: 1 1 150px; background: var(--panel); border: 1px solid var(--line); padding: 10px 12px; font-size: 13px; }
+.flow div b { display: block; color: var(--navy); font-size: 14px; }
+.mock-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin: 16px 0; }
+.mock { border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--bg); font-size: 14px; }
+.mock .cap { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.mock .ttl { font-weight: 700; color: var(--navy); margin: 6px 0 4px; }
+.mock .why { color: var(--muted); font-size: 13px; }
+.mock .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mock .btns span { border: 1px solid var(--teal); color: var(--teal); padding: 3px 10px; border-radius: 14px; font-size: 13px; }
+.mock .btns span.on { background: var(--teal); color: var(--bg); }
+.mock ul { margin: 6px 0; padding-left: 18px; }
+.mock .lbl { display: inline-block; font-size: 12px; color: var(--teal); font-weight: 700; margin-top: 8px; }
+ol.tight, ul.tight { margin: 6px 0; padding-left: 22px; }
+code { font: 13px var(--mono); background: var(--panel); padding: 1px 5px; }
+q { color: var(--navy); }
+footer { margin-top: 56px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 600px) { h1 { font-size: 24px; } h2 { font-size: 19px; } .wrap { padding-top: 24px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="kicker">设计稿 v2 · 2026-11-25 · 学习平台 self_startup</div>
+<h1>每日学习系统：按你关心的问题和短板，每天 3 小时扫、想、学、做</h1>
+<p class="sub">目标：跟紧实时不漏、判断力能计分并持续变准、快速学会新领域。前提：注意力有限，每天总共 180 分钟，上午为主；内容质量是一切的前提。</p>
+
+<div class="note"><b>结论。</b>这一版按三件事重新设计：
+<br>① <b>以你为中心</b>：从你的 119 条批注提问、29 次章节作答、8 次测试和 26 条判断问题线里，归纳出你背后的动机和各领域现在的等级（已和你确认）。最上层的动机是<b>从技术和产品里发现值得做的机会</b>；下面是让自己的产品跑起来（要实用的增长打法）、系统深入地掌握大模型和 Agent、用 AI teams 放大个人产出、建立自己的判断，以及把想透的东西做成内容、建立个人品牌。画像每周按信号更新，等级一变，内容难度跟着换档。你的<b>理解</b>（测试平均 95 分）和<b>判断</b>（94 分）都强，<b>应用</b>只有 31 分；作答方向常常对，但经常缺“结论、为什么、量化、怎么验证”。所以每天的材料都从你自己问过、还没解决的问题出发，练习重点放在“给场景、做决定、说怎么验证”。
+<br>② <b>复用优先，现有栏目不改</b>：所有新东西放进一个新的独立 TAB，它只读取现有栏目的内容，现有栏目一律不改。你反复看、反复用的是增长 Case、学习章节、少数深读和讨论；每天的内容八成以上直接用这些现成产物拼出来，新做的部分只负责“先猜”“对你的项目意味着什么”和“这里有机会吗”。
+<br>③ <b>宁缺毋滥、量力而行</b>：名人和趋势撑不起每天的量，降为每周几张；槽位没有合格内容就空着；生成失败的内容在新 TAB 里过滤掉；大模型任务按每日预算排队。
+<br>④ <b>时间</b>：工作日 180 分钟全部放在上午 8:00–11:00（扫 30 → 想 60 → 做 50 → 学 40），下午和晚上不安排。
+<br>现实预期：3 个月能做到每天稳定产出、基本不漏、增长和产品审美有明显积累、看清自己判断的系统偏差；预判准确度的显著提升要半年以上；“3 天学透”改成“3 天能判断，再加 4 周动手到 know-how”。</div>
+
+<h2>0. 这一版相对上一版改了什么</h2>
+<div class="tbl"><table>
+<tr><th>你的反馈</th><th>改成了什么</th></tr>
+<tr><td>不够详细：要有素材来源、筛选提炼、质量保证、交互</td><td>第 10–12 节：来源按领域列到具体名字，筛选漏斗，质量门；第 5 节：卡片版式和交互</td></tr>
+<tr><td>各栏目 TAB 是否有价值</td><td>第 9 节：逐个 TAB 的价值，以及新 TAB 怎么复用它（栏目本身不改）</td></tr>
+<tr><td>注意力有限，质量和组织最重要</td><td>每天一个入口、有上限、看完即止；卡片固定版式、先结论；宁缺毋滥</td></tr>
+<tr><td>要有深度学习和思考的时间和材料</td><td>第 6 节：每天 60 分钟深度时段，主题来自你自己的开放问题</td></tr>
+<tr><td>要动手，特别是产品和开源</td><td>第 7 节：每天 50 分钟，选品来自你问过“有没有必要自建、优势怎么实现”的那些</td></tr>
+<tr><td>每天 3 小时，上午多一些；下午 5 点的“做”也挪到上午</td><td>第 4 节：工作日 180 分钟全部在 8:00–11:00</td></tr>
+<tr><td>现有栏目不要改，充分复用，形成一个新的 TAB</td><td>第 9 节：现有栏目一律不改；新做一个板块，只读复用现有内容，所有新功能都在它里面</td></tr>
+<tr><td>现有提炼材料要充分复用；真这么做能达到吗，内容撑得起吗</td><td>第 8 节复用对照表；第 13–14 节指标和反思：撑不起的槽位已降配</td></tr>
+<tr><td>从你的反馈看你关心什么、认知水平如何</td><td>第 1 节：画像和它对设计的影响，贯穿第 5–8 节</td></tr>
+<tr><td>画像要看背后的动机和能力，并随学习变化</td><td>第 1 节：5 个动机，每个写清背后想要什么、现在几级、差距和设计；按五级尺子每周更新，升级后内容换档</td></tr>
+<tr><td>看技术和产品，更想要的是发现机会</td><td>M0 发现机会作为统领动机；每张卡加“这里有机会吗”；第 6 节的机会卡和机会台账</td></tr>
+</table></div>
+<p class="warn"><b>更正。</b>v1 前一轮说“判断台账只有 1 条”是错的，台账实际有 153 条（观点 113、疑问 25、评价 13、预测 2），复查 0 条。能到期对答案的预测只有 2 条，结论不变。</p>
+
+<h2>1. 你关心什么、现在的认知水平</h2>
+<p>依据：119 条批注里的提问（涉及 84 处划线）、29 次“停一下”和章末作答的点评、8 次章末测试的分维度得分、判断台账的 26 条问题线、讨论议题、打分和反复阅读的记录。</p>
+
+<h3>背后的动机：你真正想要什么，现在到了哪一级</h3>
+<p>表面上是“看了很多增长案例、开了很多学习计划、追问了很多机制”，背后是 6 个动机（已经和你确认过），M0 发现机会统领其余。能力按同一把五级尺子量：<b>L1 知道</b>（是什么）→ <b>L2 懂机制</b>（怎么做到、为什么）→ <b>L3 会判断</b>（该不该用、边界、对比）→ <b>L4 做得出</b>（自己用起来、量化验证）→ <b>L5 能预判</b>（提前看准，有命中记录）。</p>
+<p>当前等级的一条主要证据是你提问的类型分布（关键词粗分，只作参考）：</p>
+<ul class="tight">
+  <li><b>Agent 方向</b>：52 问中，决策类 13、机制类 10、概念类 3，已经在问“该不该、值不值”。</li>
+  <li><b>基座方向</b>：42 问中，概念类 11、机制类 10、决策类 4，还在搞懂“是什么、怎么做到”。</li>
+</ul>
+<div class="tbl"><table>
+<tr><th>动机</th><th>表面行为</th><th>背后想要什么</th><th>现在的能力</th><th>差距</th><th>设计怎么服务它</th></tr>
+<tr><td><b>M0 发现机会</b>（统领其他几个）</td><td>看技术、看产品、看创业公司收入；常问<q>能做成产品吗</q>、<q>有自建必要没</q>、<q>这个商业价值怎样</q>、<q>这个思路是不是可以用在很多知识型 / 规则型 Agent，比如客服</q></td><td>看技术和产品不是为了“知道”，而是为了找到<b>值得自己去做的机会</b>：什么之前做不到、现在能做了，谁有痛点，空白在哪，为什么是现在</td><td><span class="tag mid">L2–L3</span>：能从一个变化联想到新的用法和产品（比如把规则筛选思路迁到客服）；还缺验证方法：需求有多真、市场有多大、谁已经在做、怎么用最小成本试</td><td>想法多，验证少；没有机会台账，看不出自己的眼光准不准</td><td>每张技术和产品卡加“机会一问”；新增<b>机会卡</b>和<b>机会台账</b>（见第 6 节）；每周机会复盘；复用产品需求聚类、TrustMRR 收入、PH、产品雷达找空白和证据</td></tr>
+<tr><td><b>M1 让自己的产品跑起来</b></td><td>反复看增长 Case（Revid 12 次）；讨论大平台进场后的定位</td><td>一套自己能执行、能验证的增长打法，以及清楚的差异化定位</td><td>增长 <span class="tag lo">L1–L2</span>：看得懂案例，但基础概念（如 onboarding）不熟，没在自己产品上跑过实验。产品定位 <span class="tag hi">L3</span>：判断准（<q>速度、成本会被抹平，要往讲得好走</q>）</td><td>没有自己的增长实验和数据</td><td>增长 Case 之后，每周 1 个在自己产品上 2 小时内能跑完的小实验；常用手册按你产品的获客、激活、留存来组织；竞品成对亲测</td></tr>
+<tr><td><b>M2 系统深入地学一遍大模型和 Agent</b></td><td>开了 14 个学习计划（含“AI 专业人士学习体系”、CS336）；基座追问到计算细节；要对比表加复杂度</td><td>一张完整、自己真懂的地图，以及能独立判断新东西的底子</td><td>Agent <span class="tag hi">L3</span>（判断 94）；基座 <span class="tag mid">L2 入门</span>，术语基础还在补；应用 31，整体还没到 L4</td><td>野心大于推进速度（176 步完成 6 步）；懂了不会用</td><td>一张总地图标出每块的等级，按地图补；新 TAB 每天只排 2 个计划（原计划不动）；每章带定量应用题；Agent 方向不再学入门，改做判断和落地</td></tr>
+<tr><td><b>M3 用 AI teams 把个人产出放大</b></td><td>“人工等待”问题线有 10 条判断；讨论 AI teams 三层框架；建 Agent 看板</td><td>让一个人干一个团队的活，而且能证明</td><td>架构 <span class="tag hi">L3–L4</span>（正在自己的平台上做）；度量 <span class="tag mid">L2</span>：定义了“分子 / 分母”，但还没有基线数据</td><td>“百倍”只是判断，没有里程碑和数据</td><td>深度主题从你平台的真实问题出（人工等待、验收）；把“百倍”拆成季度里程碑，用平台已有的 Agent 看板和时间利用数据自动对账</td></tr>
+<tr><td><b>M4 有自己的判断，不被忽悠</b></td><td>常问<q>结论是否置信</q>、<q>现在还成立吗</q>、<q>省、快的结论可信吗</q></td><td>独立、有依据、能被验证的判断</td><td>质疑 <span class="tag hi">L3</span>；量化和验证 <span class="tag lo">L1–L2</span></td><td>会怀疑，但给不出数字和验证方法</td><td>每张卡做证据分级（自述 / 核实 / 推测）；预测台账；思考稿里“量化”和“验证”加权</td></tr>
+<tr><td><b>M5 个人品牌和知识内容</b>（已确认）</td><td>问题线“个人品牌与内容策略该怎么做”有 4 条；做过论文短视频</td><td>把学到、想透的东西变成内容和影响力；内容本身也是检验“真懂了没有”的方式</td><td><span class="tag lo">L1–L2</span>（暂定）：有素材和工具，还没有稳定的产出和数据</td><td>没有固定节奏，没有内容数据可以复盘</td><td>每周 1 条内容：从本周最好的思考稿或机会卡改写，<b>用你自己的讲解视频产品来做</b>（同时是 M1 的真实使用和增长实验）；内容必须带你自己的判断或预测（服务 M4）；发布后的数据进周复盘</td></tr>
+</table></div>
+<p><b>时间按动机分配</b>：M0 发现机会贯穿所有卡片和动手，不单独占时间。“想”的深度主题按 M2 : M3 : M1 约 4 : 3 : 3 轮换；“做”的产品亲测主要服务 M0 和 M1，开源上手主要服务 M2 和 M3；“学”主要补 M2 的基座和 M1 的增长基础；M5 用周日的 30 分钟，把一周的思考变成 1 条内容。</p>
+
+<h3>你最关心的 5 类问题</h3>
+<div class="tbl"><table>
+<tr><th>类别</th><th>你实际问过的（节选）</th><th>你的关注点</th></tr>
+<tr><td><b>Agent 工程</b>（最多）：Harness、多 Agent、记忆、自进化、评测、工具加载</td><td><q>这么多 skill 怎么组织能准确且少轮次、少 token 地加载</q>；<q>检索噪音导致召回不准、Q 值降低，这也不合理</q>；<q>Claude Code 和 Codex 启动子 Agent 是什么机制</q>；<q>Opus 5.5 这么强了还需要 code review 吗，这个库独特价值在哪</q>；问题线“如何减少 Agent 协作中的人工等待”有 10 条判断</td><td>机制怎么实现、效果怎么保障、在强模型下还有没有必要、能不能用到自己的平台</td></tr>
+<tr><td><b>基座模型机制</b></td><td>MLA / KDA / CSA / HCA / GDN 的区别；MTP 和投机解码；STE 和 4.82 bit；PPO / CISPO / IcePop 的优势函数；Muon 和 AdamW；为什么用激活参数算 Chinchilla</td><td>追到计算细节，要求“通俗一点”“举例子”“用表格总结并加上复杂度”</td></tr>
+<tr><td><b>产品与竞争</b>（围绕你的知识讲解视频产品）</td><td><q>即梦上了动效工作室，开始进攻讲解视频，怎么找好定位和差异</q>；<q>速度、成本很快会被抹平，要往讲得好走</q>；<q>这批新功能解决什么痛点，对你的产品借鉴意义在哪</q></td><td>差异化、真实痛点、能不能做成产品、有没有自建必要</td></tr>
+<tr><td><b>增长运营</b></td><td><q>这三个平台能详细分析下具体功能吗？有自建必要没，能做成产品吗</q>；<q>丑素材的逻辑是什么</q>；<q>onboarding 是哪些内容，怎么获取的</q>；Revid 那张 Case 看了 12 次</td><td>可复制的打法，以及背后的机制</td></tr>
+<tr><td><b>效率与度量</b></td><td>AI teams 能否百倍千倍提效（你自己定义了分子分母）；<q>文章里提出的指标哪个可以借鉴来衡量提效</q>；<q>结论是否置信</q></td><td>怎么量化、结论可不可信</td></tr>
+</table></div>
+
+<h3>认知画像（按证据）</h3>
+<div class="big">
+  <div><b>理解 95</b><span>章末测试“理解”维度平均分（7 次）：看懂、讲清方向基本没问题</span></div>
+  <div><b>判断 94</b><span>“判断”维度平均分（4 次）：有立场、会质疑（“结论是否置信”“现在还成立吗”）</span></div>
+  <div><b>应用 31</b><span>“应用”维度平均分（6 次，有两次 0 分）：给场景做决定、设计验证，是最大短板</span></div>
+  <div><b>停一下 60%</b><span>近 7 天“停一下”写判断的平均分，目标 65%</span></div>
+</div>
+<div class="tbl"><table>
+<tr><th>维度</th><th>现状</th><th>证据</th><th>对设计的影响</th></tr>
+<tr><td>系统和架构直觉</td><td><span class="tag hi">强</span></td><td>AI teams 三层框架；<q>单写，并行读和想，分开上下文单独判断</q>；<q>评审可以加一个角色，限制输入上下文</q></td><td>Agent 工程方向只推差量和高难题，不推入门</td></tr>
+<tr><td>质疑和追问</td><td><span class="tag hi">强</span></td><td>常问“为什么不行”“怎么保障效果”“结论可信吗”</td><td>批判者不用教你追问，而是逼你回答自己的追问</td></tr>
+<tr><td>作答的完整度</td><td><span class="tag mid">中</span></td><td>点评里反复出现：没给出结论、没说为什么、没量化、没说怎么验证、没举例子。比如 <q>不能作为最终置信答案</q> 方向对，但缺机制和数字</td><td>思考稿和作答强制四段：结论 → 为什么 → 数字 → 怎么验证</td></tr>
+<tr><td>定量和细节</td><td><span class="tag lo">弱</span></td><td>KV 选 FP4 偏激进；PPO 的 clip 理解有偏；算出了 Chinchilla 点却没比较损失；没算中训练成本</td><td>每个深度主题必带一道“给预算、做决定”的定量题</td></tr>
+<tr><td>算法基础术语</td><td><span class="tag lo">弱</span></td><td><q>策略的含义是什么</q>；<q>优势就是奖励吗</q>；<q>没懂，通俗一点解释</q></td><td>基座机制的材料先给“通俗版 + 数字例子 + 对比表”，再给原文</td></tr>
+<tr><td>增长运营的方法</td><td><span class="tag lo">弱，但兴趣最高</span></td><td>问 onboarding 是什么；增长 Case 反复看</td><td>增长每天 1 张，先猜再揭晓，并配一个每周动手实验</td></tr>
+<tr><td>把观点变成可检验的预测</td><td><span class="tag lo">弱</span></td><td>153 条判断里观点 113、预测 2；<q>肯定能</q> 百倍千倍提效、3–5 年格局判断，没有里程碑</td><td>每个大判断拆出 2–3 个带日期的里程碑预测，进台账</td></tr>
+</table></div>
+
+<h3>你偏好的呈现方式（从你的要求里收集）</h3>
+<ul class="tight">
+  <li>先结论，要精炼（<q>能更精炼一点吗</q>）；看不懂时要通俗版（出现多次的 <q>通俗一点</q>）。</li>
+  <li>喜欢对比表，并希望把关键数字放进表里（<q>表格总结很好，把每种算法对应的 1M 大小、计算复杂度加入</q>）。</li>
+  <li>要能落地的经验（<q>这些原则可以展开介绍，算经验</q>、<q>收藏，要落地</q>、<q>记录经验</q>）。</li>
+  <li>每件事都问“对我有什么用”：对你的产品的借鉴、有没有自建必要、能不能做成产品。</li>
+</ul>
+<p>这些全部落进卡片和材料包的固定版式（见第 5、6 节）。</p>
+
+<h3>画像会随学习变化：怎么更新</h3>
+<p>画像不是一次定死的，它是一份在知识库里按版本保存的文档：每个动机写清“背后想要什么、证据、各领域当前等级、到下一级的标志、对内容的影响”。</p>
+<div class="flow">
+  <div><b>每周日自动算信号</b>按领域统计提问类型的变化（概念 → 机制 → 决策 → 落地）、测试三个维度、思考稿各项分、应用题分、落地数、预测和机会的命中</div>
+  <div><b>Agent 提出调整</b>哪个领域该升级或降级，附证据；有没有动机变弱（相关行为 3 周没有了），或者冒出新的动机（新的问题反复出现）</div>
+  <div><b>你一键确认</b>同意、改动，或者说“这个动机不对”</div>
+  <div><b>内容跟着变</b>等级一变，卡片、材料包和练习的难度和形式自动换档</div>
+</div>
+<div class="tbl"><table>
+<tr><th>领域</th><th>升级的标志（举例）</th><th>升级后内容怎么变</th></tr>
+<tr><td>基座 L2 → L3</td><td>概念类提问占比降到 20% 以下；章末测试“判断”维度 ≥ 80</td><td>通俗版退场，直接给原文和对比题；每周一道“该选哪种方案”的判断题</td></tr>
+<tr><td>增长 L2 → L3</td><td>增长 Case 先猜命中率 &gt; 50%；能说清一个打法在什么条件下不灵</td><td>从“看案例”转为“在自己产品上跑实验”，案例只推和实验相关的</td></tr>
+<tr><td>Agent L3 → L4</td><td>开源落地 ≥ 4 个且 30 天后还在用；应用题 ≥ 60</td><td>只推落地任务和“强模型下还要不要”的取舍题；思考稿改为写设计文档</td></tr>
+<tr><td>机会 L3 → L4</td><td>机会台账里有 ≥ 3 个机会做过最小验证</td><td>机会卡从“找空白”转为“设计验证实验”，每月做一次</td></tr>
+<tr><td>任意领域 L4 → L5</td><td>这个领域的预测有 ≥ 30 条到期，Brier 分好于 Agent 盲猜</td><td>减少输入，增加预判题；可以开始当这个领域的“出题人”</td></tr>
+</table></div>
+<p>每月第一个周日生成一份“画像对比”：这个月和上个月各领域的等级、提问类型分布、关键分数各变了多少。它本身就是“看得到提升”的证据。</p>
+
+<h2>2. 现状：什么好用，什么没用起来</h2>
+<div class="tbl"><table>
+<tr><th>内容</th><th>使用证据</th><th>判断</th></tr>
+<tr><td>增长 Case</td><td>Revid 看了 12 次、ElevenLabs 10 次、Simply 7 次，打 4–5 星；批注里问到具体平台、丑素材、onboarding</td><td><span class="tag hi">当工具在用</span></td></tr>
+<tr><td>学习计划章节</td><td>“基座三问”一章 26 条批注；该计划 52 次学习记录；章节和测试是你作答最多的地方</td><td><span class="tag hi">深度学习的主力</span></td></tr>
+<tr><td>深读</td><td>64 篇文章点开 53 篇、26 篇在读；3 篇 5 星</td><td><span class="tag hi">好用</span></td></tr>
+<tr><td>讨论</td><td>21 次会话，各板块最多</td><td><span class="tag hi">想事情时的入口</span></td></tr>
+<tr><td>产品雷达解读卡</td><td>读 44 次；S/A 级平均约 3,400 字，事实带来源和日期</td><td><span class="tag hi">质量稳定</span></td></tr>
+<tr><td>信息推荐列表</td><td>读 91 次涉及 86 条；点赞 2 次；前列在榜 5–12 天</td><td><span class="tag mid">只是扫一眼</span></td></tr>
+<tr><td>吸收、名人、产品需求、X 长文</td><td>吸收 16 张卡表态 1 张；产品需求 385 个未读；名人近 7 天 703 条 X 大多是吐槽和宣传</td><td><span class="tag lo">没用起来</span></td></tr>
+<tr><td>判断台账</td><td>153 条，复查 0，预测 2</td><td><span class="tag lo">没有对答案</span></td></tr>
+<tr><td>动手</td><td>产品体验记录 1 条；22 个 GitHub 深读里只有 2 个跑过实验</td><td><span class="tag lo">几乎没有</span></td></tr>
+</table></div>
+
+<h2>3. 设计原则</h2>
+<ol class="tight">
+  <li><b>从你的问题出发</b>：深度主题、动手选品、回忆题，优先来自你自己问过还没解决的问题。</li>
+  <li><b>复用优先</b>：能用现成的卡、章节、深读，就不重新生成。</li>
+  <li><b>补短板</b>：每天至少一道“给场景、做决定、说怎么验证”的应用题。</li>
+  <li><b>一个入口，有上限，看完即止</b>：每天 3 张精读 + 约 5 张速览，张数按数据调，不凑数。</li>
+  <li><b>先结论，固定版式</b>：30 秒能决定要不要往下看。</li>
+  <li><b>宁缺毋滥</b>：没有合格内容就空着，生成失败的内容不进新 TAB。</li>
+  <li><b>质量要能计分</b>：每个目标对应一个每周能算的数。</li>
+  <li><b>量力而行</b>：大模型任务有每日预算，按优先级排队。</li>
+</ol>
+
+<h2>4. 一天 180 分钟怎么过（上午为主）</h2>
+<p>比例：<b>扫 15% · 学 20% · 想 35% · 做 30%</b>。<b>工作日 180 分钟全部放在上午 8:00–11:00</b>，11:00 硬停，下午和晚上不再安排学习。原来上午的专注时间窗 10:00–11:40 里，前一小时并入学习，剩下的 11:00–11:40 这 40 分钟留给其他重度工作（平台设置已改为 11:00–11:40 和 13:30–16:50）。</p>
+<h3>工作日</h3>
+<div class="tbl"><table>
+<tr><th>时段</th><th>时长</th><th>做什么</th></tr>
+<tr><td>08:00–08:30</td><td>30 分钟</td><td><b>扫</b>：先开奖（今天到期的判断，5 分钟），再看 3 张精读 + 约 5 张速览；值得深挖的点“深入”，值得上手的点“试用 / 上手”，不当场展开</td></tr>
+<tr><td>08:30–09:30</td><td>60 分钟，受保护</td><td><b>想</b>：本周深度主题，读 → 写 → 辩 → 记；材料包前一晚已配好。放在精力最好、最不容易被打断的时候</td></tr>
+<tr><td>09:30–10:20</td><td>50 分钟</td><td><b>做</b>：周一 / 三 / 五亲测 2 个产品；周二开源跑通 + 改一处，周四接进自己的项目并写结论。环境和任务单是 Agent 前一晚准备好的，坐下就能开始</td></tr>
+<tr><td>10:20–11:00</td><td>40 分钟</td><td><b>学</b>：补弱项（基座机制或增长），一章 + 一道应用题；11:00 准时停，进入专注时段</td></tr>
+</table></div>
+<h3>周末</h3>
+<div class="tbl"><table>
+<tr><th>时段</th><th>时长</th><th>做什么</th></tr>
+<tr><td>周六上午</td><td>20 + 100 + 60 分钟</td><td>扫（只看 S 级和开奖）；<b>做</b>长段：第 2 个开源项目或补完练习 3；周复盘：成绩单、漏报、3 道审美题、机会台账 15 分钟</td></tr>
+<tr><td>周日上午</td><td>20 + 100 + 60 分钟</td><td>扫；<b>想</b>长段：深度主题收尾，合成议题卡，写 2–3 个到期预测，选下周主题；<b>写</b> 30 分钟：Agent 把本周最好的思考稿或机会卡改成内容初稿（脚本和要点），你改观点、录制或用自己的产品生成，然后发布；<b>学</b> 30 分钟：自由补课（每月第一个周日改为基准题体检、砍低贡献来源、回看 30 天前的采用结论）</td></tr>
+</table></div>
+<h3>一周留下什么</h3>
+<div class="big">
+  <div><b>5–6 篇</b><span>思考稿，加 1 张议题卡</span></div>
+  <div><b>约 6 个</b><span>产品亲测（至少 4 个），3 组成对对比</span></div>
+  <div><b>2 个</b><span>开源上手，各有采用结论</span></div>
+  <div><b>5–7 道</b><span>应用题（给场景、做决定、说怎么验证）</span></div>
+  <div><b>约 20 条</b><span>能自动判定的预测，加深度主题的 5–10 条预测</span></div>
+  <div><b>1 条</b><span>对外发布的内容，带你自己的判断，用自己的产品做</span></div>
+</div>
+
+<h3>内容怎么分配（每周约 21 小时）</h3>
+<div class="tbl"><table>
+<tr><th>块</th><th>每周分钟</th><th>内容分配</th></tr>
+<tr><td>扫</td><td>190</td><td>精读每天 3 张：产品或机会 1、技术 1（Agent 和基座轮换）、增长 1。速览：产品 2、论文 1–2、工程 1–2、你问过的问题有新进展（有就放）；每周另有高人观点 3 张、趋势 2 张，混在速览里</td></tr>
+<tr><td>想</td><td>400</td><td>每周一个主题，约 10 周一轮：大模型和 Agent 系统学习 4 周、AI teams 和你平台的工程 3 周、产品和增长 3 周。周一到周四读和写；周五前 30 分钟合成并做一道定量应用题，后 30 分钟固定写透 1–2 张机会卡（不管主题是什么）；周日 100 分钟收尾成议题卡、写预测、选下周主题</td></tr>
+<tr><td>做</td><td>350</td><td>周一 / 三 / 五产品亲测共约 6 个：竞品 2（服务 M1）、本周主题相关 2、机会验证或 Product Hunt 新品 2（服务 M0）。周二 / 四开源 1 个，优先本周主题的配套实现。周六 100 分钟单双周轮换：单周第 2 个开源项目（优先你平台能用上的，服务 M3），双周在自己产品上跑 1 个增长小实验（服务 M1，3 个月约 6 个）</td></tr>
+<tr><td>学</td><td>230</td><td>周一 / 三 / 五基座机制，约 60%：接着学“AI 专业人士学习体系”，每章带定量应用题。周二 / 四增长基础，约 30%：新建的“增长基础”学习计划（商业与增长学法，三轮：案例和算账 → 策略分歧 → 在自己产品上做实验）。周日 30 分钟自由补课，约 10%</td></tr>
+<tr><td>复盘和写</td><td>90</td><td>周六复盘 60：成绩单 20、成对审美题 15、机会台账 15、漏报 10。周日写内容 30：从本周思考稿或机会卡改一篇，用自己的产品做</td></tr>
+</table></div>
+<div class="tbl"><table>
+<tr><th>动机</th><th>每周占比（约）</th><th>主要落在哪</th></tr>
+<tr><td>M2 系统学大模型和 Agent</td><td>35%</td><td>学（基座）、想（4/10 的主题）、开源、技术精读卡</td></tr>
+<tr><td>M1 让自己的产品跑起来</td><td>25%</td><td>增长 Case、增长学习计划、竞品亲测、增长实验</td></tr>
+<tr><td>M0 发现机会</td><td>15% 直接时间</td><td>周五机会卡、验证型亲测、机会台账；另外每张卡都有“这里有机会吗”。它靠看得多、想得透、做过验证，这些已分布在每一块里，单独给很多时间反而没有原料</td></tr>
+<tr><td>M3 AI teams</td><td>15%</td><td>想（3/10 的主题）、单周的开源项目</td></tr>
+<tr><td>M4 自己的判断</td><td>5% 直接时间</td><td>开奖和复盘；主要嵌在精读判断和思考稿里</td></tr>
+<tr><td>M5 个人品牌和内容</td><td>3%</td><td>周日写内容；用自己的产品做，也算 M1 的真实使用</td></tr>
+</table></div>
+<p><b>比例随等级变</b>，每月按画像调一次：基座到 L3，“学”里基座从 60% 降到 30%，腾给增长或机会验证；增长到 L3，增长实验从双周改为每周，增长 Case 只推和实验相关的；某领域连续 3 周有增量比例低，就减它在“扫”里的配额，时间转给“想”或“做”。</p>
+
+<h2>5. 扫：3 张精读 + 约 5 张速览</h2>
+<p>不再固定 12 张。25 分钟看 12 张，每张只够点一下按钮，练的是“知道”，练不到你最缺的应用和量化；你自己有收获的方式也是少数几条反复用。而且每天稳定的合格供给平均只有 8–10 张。所以分两层：</p>
+<div class="tbl"><table>
+<tr><th>层</th><th>张数</th><th>做什么</th><th>时间</th></tr>
+<tr><td><b>精读</b></td><td>3 张：产品或机会 1、技术 1（Agent 和基座轮换）、增长 1</td><td>从当天卡里挑最能检验、最贴近你项目的 3 张；写判断（概率 + 一句理由），回答“这里有机会吗”</td><td>每张约 5 分钟，共 15</td></tr>
+<tr><td><b>速览</b></td><td>约 5 张，上限 9</td><td>一句话结论 + 为什么跟你有关，不用操作；想深挖点“深入 / 试用”。S 级事件一定出现</td><td>共约 5</td></tr>
+<tr><td><b>开奖</b></td><td>—</td><td>今天到期的判断</td><td>5</td></tr>
+</table></div>
+<p>一周约 15 条认真写的判断，加上产品事件里能自动判定的预测。“扫”只占 15% 的时间，衡量它的不是看了多少，而是四个数：漏报率 ≤ 10%、速览转“深入 / 试用”的比例、每周新增机会卡数、有增量的比例 ≥ 60%。<b>先跑两周按数据调张数</b>：有增量比例高且用时有富余，就加精读；低于 50%，就减速览、改成每周汇总。</p>
+
+<h3>候选从哪来（精读和速览共用一个候选池）</h3>
+<div class="tbl"><table>
+<tr><th>类别</th><th>每天候选</th><th>来源（全部复用现有产物）</th><th>供给够吗</th><th>判断题</th></tr>
+<tr><td>产品事件</td><td>3</td><td>产品雷达 S/A 级的解读卡</td><td>够：近 7 天 43 个 S/A 级</td><td>30 天内谁会跟进、会不会降价（雷达能自动判定）</td></tr>
+<tr><td>论文</td><td>2</td><td>1 篇 Agent 方向（只推差量）+ 1 篇基座机制（配通俗版）</td><td>够</td><td>“为什么不 XX”（已有两层核验）</td></tr>
+<tr><td>工程实践</td><td>2</td><td>HN 精读；X 长文质量 ≥ 4 的“可迁移”结论；重点仓库发版</td><td>够</td><td>我会不会用、用在哪</td></tr>
+<tr><td>增长 Case</td><td>1</td><td>增长 Case 原卡，把数字挖空</td><td>够：每天约 1 个，另有 10 个合格候选</td><td>哪个动作起了主要作用；数字在哪个区间</td></tr>
+<tr><td>你的问题有新进展</td><td>1</td><td>你批注里问过、没解决的问题，本周出现了相关新材料</td><td>视情况，没有就空</td><td>你原来的看法要不要改</td></tr>
+<tr><td>高人观点</td><td>每周 3 张</td><td>长访谈、播客、博客和“高人方法”，不用日常推文</td><td>每天撑不起，每周够</td><td>同意 / 反对 + 理由</td></tr>
+<tr><td>趋势</td><td>每周 2 张</td><td>视野指标更新时；群体预测（如果接入）</td><td>每天撑不起，每周够</td><td>下一期会到多少（程序对账）</td></tr>
+<tr><td>开奖</td><td>不占名额</td><td>今天到期的判断</td><td>—</td><td>仍成立 / 修正 / 推翻</td></tr>
+</table></div>
+
+<h3>卡片版式（按你的阅读偏好定）</h3>
+<div class="mock-row">
+  <div class="mock">
+    <div class="cap">一张卡：判断前</div>
+    <div class="why">产品事件 · S 级 · 3 个来源</div>
+    <div class="ttl">某视频平台上线“动效工作室”，开始做讲解视频</div>
+    <span class="lbl">对你的产品</span>
+    <div class="why">直接进入你的赛道；对应你的问题线“AI 产品如何与大厂竞争”</div>
+    <span class="lbl">先判断</span>
+    <div class="btns"><span>威胁大</span><span class="on">一般</span><span>不相关</span></div>
+    <div class="why" style="margin-top:6px">90 天内它会推出知识类讲解模板的概率：60%</div>
+    <div class="btns"><span>🎤 说一句理由</span><span>试用</span><span>跳过</span></div>
+  </div>
+  <div class="mock">
+    <div class="cap">同一张卡：揭晓后</div>
+    <span class="lbl">一句话结论</span>
+    <div class="why">（解读卡的“变了什么”，25 字以内）</div>
+    <span class="lbl">对比表</span>
+    <div class="why">它 vs 你的产品 vs 另一个对标：讲解质量 / 速度 / 价格 / 定制</div>
+    <span class="lbl">机制，通俗版</span>
+    <div class="why">两三句话加一个数字例子；原文折叠</div>
+    <span class="lbl">可借鉴 / 要不要自建</span>
+    <div class="why">一条能落地的经验；你上次在这条问题线上的立场</div>
+    <div class="btns"><span>深入</span><span>试用</span><span>记经验</span><span>下一张</span></div>
+  </div>
+</div>
+<p>固定 8 段：一句话结论 → 对你的项目（点名是你的产品、学习平台还是 AI teams）→ 先判断 → 揭晓（对比表 + 通俗机制 + 关键数字）→ 可借鉴的经验 / 要不要自建 → <b>这里有机会吗</b>（有就记机会卡）→ 证据（折叠，带来源和日期）→ 深入 / 试用 / 记经验。</p>
+
+<h2>6. 想：深度主题（每天 60 分钟，每周一个主题）</h2>
+<h3>主题从哪来</h3>
+<p>周日自动提 3 个候选，你选 1 个。候选优先从<b>你自己没解决的问题</b>里来，其次是今日卡上点“深入”最多的、最弱的领域和判断错过的问题。从你的批注里能直接列出的候选：</p>
+<ul class="tight">
+  <li><b>Agent 工程</b>：工具和 skill 多了，怎么做到加载准、轮次少、token 省（你问过 tool search、Uber 的 700 个 skill）；记忆的 Q 值在检索噪音下怎么更新；在 Opus 5.5 这种强模型下，代码评审和哪些 skill 还有存在的必要。</li>
+  <li><b>基座机制</b>：Loop Transformer 和直接加深层的区别，为什么能缩短输出；多教师蒸馏（MOPD）为什么不会把参数训坏；线性注意力家族（MLA、KDA、GDN、CSA、HCA）的整体路线。</li>
+  <li><b>产品与增长</b>：讲解视频在速度和成本被抹平后，差异点在哪；榜单和 Reddit 带来的 AI 搜索流量（Revid 的三个平台）能不能做成产品。</li>
+  <li><b>效率度量</b>：AI teams 的“百倍提效”拆成哪些可以每季度检验的里程碑。</li>
+</ul>
+
+<h3>材料包（复用为主，Agent 前一晚配好）</h3>
+<div class="tbl"><table>
+<tr><th>材料</th><th>复用什么</th><th>要新补的</th></tr>
+<tr><td>核心材料 1 篇</td><td>已有的学习章节或深读（含 TL;DR、追问清单、练习题）</td><td>没有就新建深读</td></tr>
+<tr><td>通俗版和对比表</td><td>章节里已有的表格</td><td>按你的习惯补“关键数字 + 复杂度”列，以及一个数字例子</td></tr>
+<tr><td>正反观点</td><td>吸收的 know-how 地图和“有争议”卡；HN 精读的评论</td><td>—</td></tr>
+<tr><td>配套开源项目</td><td>已有的 GitHub 深读</td><td>只有本周主题需要时才跑完整 Deep Dive（每月最多 2 个）</td></tr>
+<tr><td>你过去的看法</td><td>判断台账里这条问题线上你的立场，以及你在这个话题上的批注提问</td><td>—</td></tr>
+</table></div>
+
+<h3>60 分钟：读 → 写 → 辩 → 记</h3>
+<div class="flow">
+  <div><b>读 25 分钟</b>通俗版 → 对比表 → 原文关键段；划线提问，回答就地挂在旁边</div>
+  <div><b>写 20 分钟</b>合上材料，按四段写：结论 → 为什么（机制）→ 数字（至少一个量化）→ 怎么验证；另加一段“对我的项目”</div>
+  <div><b>辩 10 分钟</b>批判者专门追问你的老毛病：结论在哪？数字呢？怎么验证？反例是什么？</div>
+  <div><b>记 5 分钟</b>拆 1–2 个带概率、到期日、判定标准的预测进台账；有能落地的经验就进“常用手册”</div>
+</div>
+<p>周一到周四读和写，周五把四篇合成一份，加一道定量应用题（像“给预算选 FP8 还是 NVFP4”那种），周日收尾成议题卡。</p>
+
+<h3>思考稿评分（针对你的短板加权）</h3>
+<div class="tbl"><table>
+<tr><th>维度</th><th>权重</th><th>满分标准</th></tr>
+<tr><td>结论先行</td><td>15%</td><td>第一句就是结论，不绕</td></tr>
+<tr><td>机制</td><td>20%</td><td>讲清为什么这样设计，而不只是它做了什么</td></tr>
+<tr><td>量化</td><td>20%</td><td>至少一个数字推算或对比</td></tr>
+<tr><td>验证方法</td><td>20%</td><td>写清用什么实验或数据能证明或推翻</td></tr>
+<tr><td>反方</td><td>10%</td><td>写出最强反方，以及为什么仍坚持或因此修正</td></tr>
+<tr><td>迁移</td><td>15%</td><td>能不能用到你的项目、用在哪、边界在哪</td></tr>
+</table></div>
+
+<h3>机会卡和机会台账（服务 M0 发现机会）</h3>
+<p>看技术和产品时，最终要回答的是“这里有没有值得我做的机会”。做法：</p>
+<ul class="tight">
+  <li><b>卡片层</b>：每张技术或产品卡揭晓后都多一问“这里有机会吗”，三选一：有，记一张机会卡 / 没有 / 不确定。</li>
+  <li><b>思考层</b>：每周五的深度时段，挑本周最好的 1–2 张机会卡写透。</li>
+  <li><b>动手层</b>：值得的机会进入产品亲测或开源上手去验证。</li>
+</ul>
+<div class="tbl"><table>
+<tr><th>机会卡字段</th><th>要回答什么</th><th>复用哪里的数据</th></tr>
+<tr><td>变化</td><td>什么技术或产品变化让它成为可能（之前做不到，现在能做）</td><td>产品雷达事件、论文、开源发版</td></tr>
+<tr><td>谁的痛点</td><td>具体人群、具体场景，现在凑合的办法是什么</td><td>产品需求聚类（场景 × 痛点 × 已有产品数）、HN 和 Reddit 讨论</td></tr>
+<tr><td>谁在做</td><td>已有产品、收入和增长信号，空白在哪</td><td>TrustMRR 收入、PH 日榜、产品雷达的创业公司</td></tr>
+<tr><td>为什么是现在</td><td>成本、能力或渠道上的哪个拐点</td><td>视野指标（模型能力、价格）</td></tr>
+<tr><td>你适不适合</td><td>和你的产品、平台、能力的契合度，你的不公平优势</td><td>画像</td></tr>
+<tr><td>最小验证</td><td>用 2 小时到 2 天能做的实验，以及看什么指标</td><td>增长 Case 里的打法</td></tr>
+<tr><td>预判</td><td>6 个月内会不会有人做成（融资、收入、明显增长），概率</td><td>到期由雷达、TrustMRR、PH 自动对账</td></tr>
+</table></div>
+<p><b>机会台账</b>：所有机会卡存在一起，按“想到 → 写透 → 做过验证 → 放弃 / 推进”的状态流转。别人后来把它做成了，算你“提前看到”；你放弃的后来被验证是大机会，也记下来复盘。这是 M0 唯一能量化的眼光指标。每周六的复盘里花 15 分钟看台账。</p>
+
+<h2>7. 做：产品亲测和开源上手（每天 50 分钟）</h2>
+<p>你在批注里反复问“有没有必要自建”“能省多少 token”“优势怎么实现”“是免费的吗”，这些只有亲手用才能回答。选品优先来自这些问题。</p>
+<h3>选什么</h3>
+<div class="tbl"><table>
+<tr><th>类型</th><th>候选从哪来</th><th>从你的问题里能直接列出的</th></tr>
+<tr><td>产品</td><td>今日卡点“试用”的；雷达 S/A 级的新产品；PH 前列；深度主题的对标；产品需求聚类里某个场景的 2 个同类产品</td><td>大厂的讲解视频新功能 vs 你的产品；Revid 提到的 Outrank / Squad / Bazzly；ChatGPT 的销售插件（你关心数据授权的安全问题）</td></tr>
+<tr><td>开源</td><td>今日卡点“上手”的；重点机构新仓库和发版；深度主题的配套实现</td><td>chrome-devtools-mcp（对比 Claude Code 自己操作浏览器）；OpenCodeReview（强模型下还要不要评审）；claude-mem（能省多少 token）；ag-ui（对 Agent 平台交互有没有帮助）</td></tr>
+</table></div>
+
+<h3>产品亲测（每个 25 分钟）</h3>
+<ul class="tight">
+  <li><b>Agent 前一晚出任务单</b>：3 个任务（从空白到第一个有用结果并计时、做一遍它宣传的卖点、做一个你自己工作里的难任务），外加从解读卡里抽出的“要验证的说法”。</li>
+  <li><b>用之前先猜</b>：会不会留下来用；对你的产品是威胁还是可借鉴。</li>
+  <li><b>用完口述记录</b>：最好的和最差的设计各 1 个（截图），和对标产品比选哪个，为什么。</li>
+  <li><b>对答案</b>：30 天后你还在不在用；HN、Reddit 上的用户口碑；有收入数据的（TrustMRR）用数据对。</li>
+</ul>
+
+<h3>开源上手（每个约 100 分钟，分两天）</h3>
+<div class="tbl"><table>
+<tr><th>步骤</th><th>谁做</th><th>做什么</th></tr>
+<tr><td>准备（前一晚）</td><td>Agent</td><td>在隔离目录里克隆、装依赖、跑通示例，记下踩坑，出 3 个递进练习；不跑完整 Deep Dive</td></tr>
+<tr><td>先猜</td><td>你</td><td>它的核心设计为什么这样做；换成朴素做法会差多少；你的项目里要不要自建</td></tr>
+<tr><td>练习 1–2（周二）</td><td>你</td><td>跑通；改一处关键参数或换一个组件，和先猜的对照</td></tr>
+<tr><td>练习 3 + 结论（周四）</td><td>你，或交给 Agent</td><td>在你的项目里解决一个真实的小问题（单独 worktree）；写采用 / 不采用 / 只借鉴，以及理由</td></tr>
+<tr><td>回看（30 天后）</td><td>平台</td><td>还在用吗；有没有提交引用到它</td></tr>
+</table></div>
+<p class="warn">安全：陌生仓库只由 Agent 在隔离目录里安装和运行，不碰你的密钥和主项目目录。</p>
+
+<h2>8. 复用对照：现有产物用在哪里</h2>
+<div class="tbl"><table>
+<tr><th>现有产物</th><th>质量</th><th>用在哪</th><th>只需新增</th></tr>
+<tr><td>增长 Case 卡</td><td><span class="tag hi">高</span>：区分自述和核实数字，写利益关系</td><td>增长槽；“常用手册·增长打法”；周末增长实验的题目</td><td>把数字挖空的先猜题</td></tr>
+<tr><td>产品雷达解读卡</td><td><span class="tag hi">高</span>（S/A 级）</td><td>产品槽卡面和揭晓区；产品亲测任务单里的“要验证的说法”</td><td>“对你的产品”一行；对比表</td></tr>
+<tr><td>学习计划章节和章末测试</td><td><span class="tag hi">高</span>：你批注最多</td><td>深度材料包核心；学的时段；测试题进回忆题库</td><td>通俗版和数字例子；应用题</td></tr>
+<tr><td>深读（论文 / 项目 / 文章）</td><td><span class="tag hi">高</span></td><td>论文槽；材料包；追问清单当思考稿题目；“最小上手实验”当开源练习</td><td>—</td></tr>
+<tr><td>你的批注提问（119 条）</td><td>你最真实的问题</td><td>深度主题候选；“你的问题有新进展”槽；7 天回忆题；动手选品</td><td>标记已解决 / 未解决</td></tr>
+<tr><td>判断台账的 26 条问题线</td><td>有立场，没检验</td><td>深度主题的“你过去的看法”；开奖</td><td>拆出带日期的里程碑预测</td></tr>
+<tr><td>讨论议题卡和 18 张判断卡框架</td><td><span class="tag hi">高</span></td><td>批判者的提问模板；周日议题卡</td><td>按你的短板加权的追问</td></tr>
+<tr><td>吸收 know-how 地图</td><td><span class="tag mid">中</span>：多数结论“证据少”</td><td>正反观点；3 天冲刺第 2 天；“有争议”卡当判断题</td><td>只当地图用，不当结论用</td></tr>
+<tr><td>X 长文的“可迁移”结论</td><td><span class="tag mid">中</span>，版式好</td><td>工程实践槽（质量 ≥ 4）</td><td>—</td></tr>
+<tr><td>产品需求聚类</td><td><span class="tag mid">中</span></td><td>产品亲测选品；每周一道“哪个场景会长出大产品”</td><td>—</td></tr>
+<tr><td>视野 AI 指标</td><td><span class="tag hi">高</span>，但月度更新</td><td>每周趋势卡；可自动对账的预测</td><td>—</td></tr>
+<tr><td>名人发声</td><td><span class="tag lo">日常推文低</span></td><td>只用长访谈和“高人方法”，每周 3 张</td><td>立场和可检验点</td></tr>
+</table></div>
+<h3>新增“常用手册”</h3>
+<p>你把 Revid 那张卡看了 12 次，说明在当工具用。把 5 星卡、批注最多的章节和你标了“记录经验 / 要落地”的内容，按场景汇编成几本手册，打开时显示你上次的批注：</p>
+<ul class="tight">
+  <li><b>增长打法</b>：Revid、ElevenLabs、Simply、Solid Starts 的做法；</li>
+  <li><b>Agent 工程经验</b>：单写并行读、验收证据、人工等待、规则固化；</li>
+  <li><b>评测方法</b>：先错误分析、pass^k、κ、错误成本；</li>
+  <li><b>推理部署速查</b>：量化、KV、投机解码的选型。</li>
+</ul>
+
+<h2>9. 新 TAB：现有栏目一律不改，只读复用</h2>
+<p>原则：<b>现有栏目、TAB、页面和数据流一律不动</b>。新做一个独立板块（暂名“今日”，名字待你定），把这份设计里所有新东西都放进去：它从现有栏目<b>只读</b>取内容，需要记录的东西存在它自己的表里，或者通过现有接口写进判断台账、产品体验等原有功能。平台的板块是自动发现的，新增一个板块不需要改其他栏目的代码。</p>
+
+<h3>新 TAB 里的子页</h3>
+<div class="tbl"><table>
+<tr><th>子页</th><th>对应时段</th><th>内容</th><th>从哪些现有栏目读</th><th>写到哪里</th></tr>
+<tr><td>今日</td><td>扫 8:00</td><td>开奖 + 3 张精读 + 约 5 张速览 + 当天进度</td><td>产品雷达解读卡、增长 Case、信息推荐（论文、HN 精读）、知识库 X 长文、视野、名人</td><td>判断写进现有判断台账（用它已有的接口）；“没增量”反馈存新 TAB 自己的表</td></tr>
+<tr><td>深度</td><td>想 8:30</td><td>本周主题、材料包、思考稿（读 → 写 → 辩 → 记）、批判者、评分</td><td>学习章节、深读、吸收、判断台账问题线、你的批注提问</td><td>思考稿存新 TAB；预测写进判断台账</td></tr>
+<tr><td>动手</td><td>做 9:30</td><td>产品任务单、开源上手包、记录和采用结论</td><td>产品雷达、PH、产品需求、信息推荐的项目、GitHub 深读</td><td>产品记录也写进调研的“产品体验”（用它已有的接口）</td></tr>
+<tr><td>学</td><td>学 10:20</td><td>今天要学的一章和应用题</td><td>深度学习的学习计划和章节，直接跳过去学</td><td>测试和作答仍记在原学习计划里</td></tr>
+<tr><td>台账</td><td>周复盘</td><td>判断开奖、机会卡和机会台账、周成绩单</td><td>判断台账、雷达、TrustMRR、视野（用来对账）</td><td>机会台账存新 TAB</td></tr>
+<tr><td>画像</td><td>周日</td><td>6 个动机、各领域等级、证据、本周建议的调整</td><td>批注、测试、作答、判断、阅读记录</td><td>画像版本存新 TAB</td></tr>
+<tr><td>手册</td><td>随时</td><td>增长打法、Agent 工程经验、评测方法、推理部署速查</td><td>5 星卡、批注最多的章节、你标了“要落地”的内容</td><td>只做汇编，原内容不动</td></tr>
+<tr><td>内容</td><td>周日</td><td>本周内容初稿、发布记录和数据</td><td>思考稿、机会卡</td><td>存新 TAB</td></tr>
+</table></div>
+
+<h3>现有栏目在新 TAB 里怎么被复用（栏目本身不改）</h3>
+<div class="tbl"><table>
+<tr><th>现有栏目 · TAB</th><th>价值</th><th>新 TAB 怎么用它</th></tr>
+<tr><td>产品雷达 · 变化流</td><td><span class="tag hi">高</span></td><td>产品槽，每天最多 3 张；读取时自动跳过生成失败的卡</td></tr>
+<tr><td>产品雷达 · 增长 Case</td><td><span class="tag hi">高</span></td><td>增长槽；手册里的增长打法</td></tr>
+<tr><td>产品雷达 · 创业公司 / 赛道 / PH 日榜</td><td><span class="tag mid">中</span></td><td>机会卡的“谁在做”和收入信号；产品亲测选品</td></tr>
+<tr><td>产品雷达 · 总览 / 公司</td><td><span class="tag mid">中</span></td><td>漏报回测时找出 0 事件的盲区，在周成绩单里提示</td></tr>
+<tr><td>信息推荐 · 全部和各类型</td><td><span class="tag mid">中</span></td><td>论文和项目的候选池，新 TAB 自己重新排序</td></tr>
+<tr><td>信息推荐 · HN 精读</td><td><span class="tag hi">高</span></td><td>工程实践槽</td></tr>
+<tr><td>信息推荐 · 名人</td><td><span class="tag mid">中</span></td><td>只取长访谈和高人方法，每周 3 张观点卡</td></tr>
+<tr><td>吸收 · 各页</td><td><span class="tag hi">高</span>（当地图）</td><td>材料包的正反观点；3 天冲刺第 2 天；“有争议”卡当判断题</td></tr>
+<tr><td>视野 · AI 指标</td><td><span class="tag hi">高</span></td><td>每周趋势卡；预测对账</td></tr>
+<tr><td>知识库 · 判断</td><td><span class="tag hi">高（核心）</span></td><td>开奖和问题线都基于它；新预测用它已有的“记判断”接口写入</td></tr>
+<tr><td>知识库 · X 长文 / 论文脉络 / GitHub 项目 / 产品需求 / 来源库</td><td><span class="tag mid">中</span></td><td>检索素材；冲刺第 1 天画地图；产品需求用来找空白和选品</td></tr>
+<tr><td>深度学习 · 学习计划 / 章节 / 深读 / 读书</td><td><span class="tag hi">高</span></td><td>“学”和“深度”的主材料；新 TAB 只挑 2 个计划排进每天，其余计划原样保留</td></tr>
+<tr><td>调研</td><td><span class="tag hi">高</span></td><td>冲刺第 0 天自动发起调研；产品亲测记录写进产品体验</td></tr>
+<tr><td>讨论</td><td><span class="tag hi">高</span></td><td>批判者和“想一想”跳到讨论里继续</td></tr>
+<tr><td>规划 / 复盘</td><td><span class="tag hi">高</span></td><td>不改；新 TAB 的当天进度可以在规划里作为一个事项出现（可选）</td></tr>
+</table></div>
+<p class="warn">“现有栏目不改”的两个边界：① 产品雷达里有 10 张生成失败的垃圾卡，新 TAB 在读取时过滤掉，不去改雷达本身；修雷达的生成逻辑是一个独立的 bug 修复，要做时再单独确认。② 第 10 节的补源（修 Reddit、加订阅）属于现有设置里的配置，不改栏目，也要单独确认后再做。</p>
+
+<h2>10. 素材来源和补缺</h2>
+<div class="tbl"><table>
+<tr><th>领域</th><th>现有来源</th><th>缺口</th><th>建议补（先试跑一周）</th></tr>
+<tr><td>算法</td><td>HF Papers、AlphaXiv、arXiv 9 个分类；论文库 10 万篇；实验室博客（OpenAI、Anthropic、DeepMind、Google Research、Meta、Microsoft、Apple、NVIDIA、BAIR、Seed、DeepSeek、Kimi、MiniMax、Qwen、Thinking Machines）；Lilian Weng、Raschka、Interconnects、Import AI</td><td>缺同行评价和复现信号；缺通俗讲解</td><td>OpenReview 评审；论文 30 天后的引用和仓库星数；技术报告的中文解读（机器之心等已在）</td></tr>
+<tr><td>工程</td><td>GitHub Trending 和 9 个重点机构；HN 精读；Reddit 8 个版块；Simon Willison、Latent Space、Hamel、Eugene Yan、Chip Huyen、Boris Cherny；40 多个 YouTube 技术频道</td><td><b>Reddit 近 7 天 0 条，已停更</b>；关键框架发版靠运气撞上</td><td>修好 Reddit；重点仓库的 GitHub Releases</td></tr>
+<tr><td>产品</td><td>雷达 241 家、29 个官方源；Product Hunt、Launch YC、TrustMRR、a16z</td><td>国内产品和生产力类大量 0 事件；你赛道里的视频和讲解类产品要重点盯</td><td>每家至少一个能抓的源；把你的竞品清单单独列为重点关注</td></tr>
+<tr><td>增长运营</td><td>RevenueCat、Sub Club、Lenny、Elena Verna、Andrew Chen、Aakash Gupta、人人都是产品经理；14 个 build in public 的 X 账号</td><td>偏消费订阅类，缺内容创作者工具和 B2B</td><td>候选：Kyle Poyar 的 Growth Unhinged；国内增长拆解</td></tr>
+<tr><td>观点</td><td>110 人的 X、YouTube、播客、arXiv、新闻、B 站；高人方法</td><td>日常推文噪音大</td><td>只用长内容</td></tr>
+<tr><td>趋势和基准</td><td>视野 30 个 AI 指标；Last Week in AI、Import AI、The Decoder、TestingCatalog</td><td>没有群体预测当对照</td><td>Metaculus / Manifold 只读（待你定）；周报类用作漏报回测的标准答案</td></tr>
+</table></div>
+
+<h2>11. 筛选和提炼</h2>
+<div class="flow">
+  <div><b>L0 采集</b>约 3,500 条 / 周</div>
+  <div><b>L1 规则</b>去重、72 小时新鲜度；空描述、纯励志、纯宣传丢掉</div>
+  <div><b>L2 打分</b>沿用现有打分，加“信息密度”：有没有数字、是不是一手、能不能检验</div>
+  <div><b>L3 按你分流</b>和你的问题线、批注话题、领域强弱匹配；强项只留差量</div>
+  <div><b>L4 出卡</b>优先复用现成卡，只生成“先判断”和“对你的项目”两段</div>
+  <div><b>L5 质检</b>不过就不上，槽位空着</div>
+</div>
+<p>排序：<code>优先级 = 重要度 × 和你的问题相关 × 能不能检验 × 新颖度</code>。“和你的问题相关”首先看是否命中你的开放问题、问题线和项目，兴趣词和点赞只是次要信号（目前反馈太少）。</p>
+
+<h2>12. 内容质量门和产能预算</h2>
+<h3>质量门</h3>
+<ul class="tight">
+  <li><b>把增长 Case 的标准推广到所有卡</b>：每条事实带来源和日期；自述数字和核实数字分开；推测标出来；写利益关系；没读到的写“未读到”。</li>
+  <li><b>生成失败的不进新 TAB</b>（读取时过滤，不改原栏目）：检查章节是否齐全、长度是否够、有没有报错或 Agent 闲聊。现状：产品雷达 332 张卡里有 10 张是垃圾（一张是 Agent 解释它没改某个配置文件，一张是“已达到周额度”报错），另有 25 张不完整。</li>
+  <li><b>宁缺毋滥</b>：槽位没有合格内容就空着。</li>
+  <li><b>按你的反馈自动调配额</b>：卡上一键“没增量”；某类卡有增量的比例低于 50% 就减配额。</li>
+  <li><b>人抽检</b>：周成绩单附 3 张被拒的卡，你只看拒得对不对。</li>
+</ul>
+<h3>产能预算</h3>
+<p>产品雷达里出现过“已达到周额度”的报错卡，说明 Claude 订阅的周额度已经撞到过。按每日预算排队，额度不够时按这个顺序保：</p>
+<div class="tbl"><table>
+<tr><th>优先级</th><th>任务</th><th>每天 / 每周的量</th><th>为什么轻或重</th></tr>
+<tr><td>1</td><td>深度材料包</td><td>每周 1 个主题，每天补一点</td><td>大部分复用章节和深读</td></tr>
+<tr><td>2</td><td>今日卡</td><td>每天 3 张精读 + 约 5 张速览</td><td>复用现成卡，只生成两小段，用轻量模型</td></tr>
+<tr><td>3</td><td>产品任务单、开源准备</td><td>每周约 6 个 + 2 个</td><td>任务单轻；开源只跑通加出练习</td></tr>
+<tr><td>4</td><td>预测核验</td><td>程序对账不限；联网核验每周 ≤ 5 条</td><td>联网核验是一个完整调研任务</td></tr>
+<tr><td>5</td><td>完整 Deep Dive</td><td>每月 ≤ 2 个</td><td>四阶段带实验，最重</td></tr>
+</table></div>
+
+<h2>13. 指标：每个提升项怎么量</h2>
+<div class="tbl"><table>
+<tr><th>提升项</th><th>指标</th><th>3 个月目标</th></tr>
+<tr><td>不漏</td><td>S/A 级漏报率（对照 3 份周报的头条）</td><td>补源后 ≤ 10%</td></tr>
+<tr><td>吸收</td><td>7 天回忆正确率（题目来自你的提问和章末测试）</td><td>≥ 70%</td></tr>
+<tr><td>基本盘</td><td>弱项学习计划的章节完成数和测试分</td><td>基座机制和增长各完成一轮（约 15 章）</td></tr>
+<tr><td><b>应用（你的最大短板）</b></td><td>章末测试“应用”维度得分；每周应用题得分</td><td>从 31 提到 ≥ 60</td></tr>
+<tr><td>作答完整度</td><td>思考稿评分里“结论、量化、验证”三项</td><td>各项 ≥ 70%，“停一下” ≥ 65%</td></tr>
+<tr><td>判断力</td><td>可检验预测数；Brier 分（越低越准）和校准曲线；和 Agent 盲猜比</td><td>累计 ≥ 250 条；看清自己偏乐观还是偏保守；至少一个领域赢过 Agent 盲猜</td></tr>
+<tr><td>产品审美</td><td>产品亲测数；成对比较命中率；30 天后还在用的比例</td><td>≥ 50 个；命中率 &gt; 60%</td></tr>
+<tr><td>运营经验</td><td>增长 Case 先猜命中率；周末增长实验数</td><td>命中率 &gt; 50%；跑过 ≥ 6 个小实验</td></tr>
+<tr><td>工程判断</td><td>开源上手数；落地数（有提交为证、30 天后还在用）</td><td>≥ 20 个；落地 ≥ 8 个</td></tr>
+<tr><td>发现机会</td><td>机会卡数；写透的数；做过最小验证的数；“提前看到”的次数</td><td>机会卡 ≥ 40 张，写透 ≥ 12，验证 ≥ 3</td></tr>
+<tr><td>个人品牌和内容</td><td>发布数；每条的播放、互动和新增关注；哪类选题表现好；用自己产品做的比例</td><td>发布 ≥ 12 条；找出 1–2 类稳定表现好的选题</td></tr>
+<tr><td>画像等级</td><td>各领域五级尺子上的等级变化；提问类型分布的变化</td><td>基座从 L2 到 L3；增长从 L1–L2 到 L3</td></tr>
+<tr><td>卡片质量</td><td>有增量的比例；被拒卡比例</td><td>有增量 ≥ 60%</td></tr>
+</table></div>
+
+<h2>14. 反思：真这么做能达到吗</h2>
+<div class="tbl"><table>
+<tr><th>目标</th><th>能不能达到</th><th>卡点和前提</th></tr>
+<tr><td>跟紧实时、不漏</td><td><span class="tag hi">能</span></td><td>前提是先补雷达盲区，尤其是你赛道里的竞品；不补，回测会一直报漏</td></tr>
+<tr><td>吸收、扎实基本盘</td><td><span class="tag hi">能</span></td><td>章节加测试这种形式已经被证明有效；前提是新 TAB 每天只排 2 个计划（其余计划原样保留，只是不排进日程）</td></tr>
+<tr><td>应用能力</td><td><span class="tag mid">能，但最慢</span></td><td>从 31 分起步；每天一道应用题加每周动手，3 个月到 60 分是合理目标</td></tr>
+<tr><td>判断力计分</td><td><span class="tag mid">部分</span></td><td>能自动判定的预测（雷达、星数、收入、指标）才稳定计分；3 个月能看出偏差，准确度真正提升要半年</td></tr>
+<tr><td>产品审美、运营经验</td><td><span class="tag hi">能</span></td><td>素材够（雷达、增长 Case）；关键在每周亲测真的做了</td></tr>
+<tr><td>每个领域都有自己的判断</td><td><span class="tag mid">只覆盖你关心的领域</span></td><td>3 小时一天只够深耕 Agent 工程、基座机制、产品增长三块；其他领域只能做到“知道”</td></tr>
+<tr><td>3 天学透一个领域</td><td><span class="tag lo">know-how 层达不到</span></td><td>从吸收的结果看，冷门领域的一线经验在公开渠道里很少。改为：3 天能画地图、知道核心难题和主流解法、有初步判断；know-how 靠之后 4 周的动手积累</td></tr>
+</table></div>
+<p class="warn"><b>最大的风险是内容质量。</b>只要卡片变成“看完也没收获”，人就会停。所以质量门、宁缺毋滥和“没增量”反馈排在最前面做；第一周先只上产品、增长、论文三类卡，质量过关再加。</p>
+
+<h2>15. 3 天冲刺（目标改为“能判断”）</h2>
+<p>3 天每天 180 分钟：今日卡压到 10 分钟，其余 170 分钟全给冲刺，约 8.5 小时。Agent 在第 0 天晚上预先消化材料，你只读压缩版、做判断、动手。</p>
+<div class="tbl"><table>
+<tr><th>天</th><th>平台准备</th><th>你要交的</th></tr>
+<tr><td>第 0 天晚上</td><td>调研、按领域捞论文和项目、跑一个吸收选题、装好 1 个开源项目</td><td>无</td></tr>
+<tr><td>第 1 天：地图</td><td>综述或经典书导读、分类树、“难题 × 解法 × 取舍”表（带关键数字）、关键人物立场</td><td>不看资料画分类树，口述 5 个难题</td></tr>
+<tr><td>第 2 天：机制和经验</td><td>1 个主干机制（通俗版 + 原文）；吸收 know-how 地图；HN 和 X 的实战经验</td><td>3 条反直觉经验（带来源）；1 道定量应用题</td></tr>
+<tr><td>第 3 天：上手和判断</td><td>开源练习；对标产品任务单</td><td>2 个带概率的判断；1 条产品亲测；验收考试 ≥ 70 分</td></tr>
+<tr><td>之后 4 周</td><td>这个领域进入深度主题和动手的候选池</td><td>know-how 在动手中积累，30 天后复测</td></tr>
+</table></div>
+
+<h2>16. 落地顺序</h2>
+<div class="tbl"><table>
+<tr><th>阶段</th><th>做什么</th><th>完成标准</th></tr>
+<tr><td>P0 新 TAB 骨架和质量过滤（约 3 天）</td><td>新建独立板块（新增 <code>app/modules/</code> 和 <code>web/modules/</code> 下各一个文件，不改其他板块）；只读接入现有内容；读取时过滤生成失败的卡；“没增量”按钮；批注问题标“已解决 / 未解决”（存新 TAB 自己的表）</td><td>新 TAB 能看到各栏目的内容，垃圾卡不出现；现有栏目代码零改动</td></tr>
+<tr><td>P1 今日卡（约 1 周）</td><td>先只上产品、增长、论文三类，复用现成卡，加“先判断”“对你的项目”“这里有机会吗”；判断通过现有接口进台账；开奖</td><td>连续 7 天出卡，有增量 ≥ 60%</td></tr>
+<tr><td>P2 想和学（约 1 周）</td><td>画像页（动机、等级、证据，周日自动提调整、你一键确认）；机会卡和机会台账；深度主题候选（来自你的开放问题）；材料包；思考稿页（四段 + 批判者 + 评分）；应用题；常用手册第一版（增长打法）</td><td>第一周 5 篇思考稿，应用题有得分</td></tr>
+<tr><td>P3 做（约 1 周）</td><td>产品任务单和结构化记录；开源上手包（隔离目录跑通 + 3 个练习）</td><td>一周 4 个产品亲测、2 个开源结论</td></tr>
+<tr><td>P4 补全</td><td>工程槽、问题新进展槽、高人观点和趋势周卡；漏报回测；周成绩单；内容子页；（可选，单独确认）修雷达生成逻辑、补源</td><td>第一份能算出漏报率和 Brier 分的周成绩单</td></tr>
+</table></div>
+
+<h2>17. 需要你定的</h2>
+<ol class="tight">
+  <li><b>内容发在哪</b>：M5 每周 1 条内容的主要发布平台（决定内容的形式和长度）。</li>
+  <li><b>新 TAB 的名字</b>：暂名“今日”，备选“修炼”“日课”“晨读”，或者你起一个。</li>
+  <li><b>要不要接群体预测</b>：Metaculus / Manifold 只读，作为判断准度的对照。</li>
+  <li><b>竞品重点名单</b>：你赛道里要重点盯的产品，由你给，还是让 Agent 先拟一份你来改。</li>
+</ol>
+
+<footer><span>每日学习系统设计稿 v2</span><span>数据截至 2026-11-25，来自本地 data/app.db、批注、学习记录和运行中的平台页面</span></footer>
+</div>
+</body>
+</html>
