@@ -1,11 +1,26 @@
 // 今日：开奖 → 3 张精读（先判断再揭晓）→ 速览。只读复用产品雷达、增长 Case、论文、HN、X 长文；
 // 判断写进判断台账，“没增量”和机会卡存本板块。设计稿 docs/designs/2026-11-25-daily-learning-system.html
+import { renderDeep, renderHands, renderLearn, renderLedger, renderProfile } from './_today_tabs.js';
+
 const PROB_DEFAULT = 60;
+const SUBS = [['', '今日', '扫 30 分钟：开奖 + 精读 + 速览'], ['deep', '深度', '想 60 分钟：本周一个主题，读 → 写 → 辩 → 记'],
+  ['hands', '动手', '做 50 分钟：产品亲测和开源上手'], ['learn', '学', '学 40 分钟：补弱项，一章 + 一道应用题'],
+  ['ledger', '台账', '开奖、机会台账和本周统计'], ['profile', '画像', '你的动机、等级和信号']];
+const RENDER = { deep: renderDeep, hands: renderHands, learn: renderLearn, ledger: renderLedger, profile: renderProfile };
 const OPEN_FIRST = { product: ['所以呢'], growth: ['一句话', '我能怎么用'] };
 
 export default {
-  async render(el, { api, h, md, toast, ui }) {
+  async render(el, ctx) {
+    const { api, h, md, toast, ui, sub } = ctx;
     injectStyle();
+    const cur = SUBS.some(([id]) => id === (sub?.[0] || '')) ? (sub?.[0] || '') : '';
+    const tabs = h('div.tabs', {}, SUBS.map(([id, name]) => h('button' + (id === cur ? '.active' : ''), { onclick: () => { location.hash = id ? '#today/' + id : '#today'; } }, name)));
+    if (cur) {
+      const page = h('div');
+      el.append(ui.pageHead('今日 · ' + SUBS.find(([id]) => id === cur)[1], SUBS.find(([id]) => id === cur)[2]), tabs, page);
+      try { await RENDER[cur](page, ctx); } catch (e) { page.append(ui.empty('没加载出来', e.message)); }
+      return;
+    }
     const body = h('div');
     let data = null;
 
@@ -158,7 +173,7 @@ export default {
     }
 
     el.append(ui.pageHead('今日', '每天 3 张精读 + 速览 + 开奖；内容复用产品雷达、增长 Case、论文、HN 和 X 长文',
-      [h('button.outline', { title: '重新挑今天的卡（已做的记录保留）', onclick: () => load({ refresh: true }) }, [ui.icon('refresh'), '重选'])]), body);
+      [h('button.outline', { title: '重新挑今天的卡（已做的记录保留）', onclick: () => load({ refresh: true }) }, [ui.icon('refresh'), '重选'])]), tabs, body);
     await load();
   },
 };
@@ -184,6 +199,20 @@ function injectStyle() {
 .td-card.track { border-color: var(--accent); }
 .td-read { font-size: 13px; }
 .td-readbtn { font-size: 13px; padding: 3px 10px; }
+.td-cand { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.td-cand:first-of-type { border-top: 0; }
+.td-cand > button { white-space: nowrap; flex: none; }
+.td-mat { padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.td-memo { display: grid; gap: 4px; margin: 8px 0; }
+.td-memo textarea, .td-cand + .row input, .card .row > input, .card > textarea, .td-pred textarea, .td-opp-row input { font: inherit; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); color: var(--text); box-sizing: border-box; }
+.td-memo textarea, .card > textarea { width: 100%; }
+.td-memo-done { border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 4px; font-size: 14px; }
+.td-dims { display: flex; flex-wrap: wrap; gap: 4px; }
+.td-follow { color: var(--accent); }
+.td-task { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; }
+.td-opp-row { border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 4px; }
+.td-sig { font-size: 14px; margin: 4px 0; }
+.td-go { font-weight: 600; }
 .td-why { font-size: 14px; margin: 4px 0; }
 .td-hit { font-size: 13px; color: var(--muted); margin: 2px 0 8px; border-left: 3px solid var(--accent-soft); padding-left: 8px; }
 .td-prob { font-size: 14px; }

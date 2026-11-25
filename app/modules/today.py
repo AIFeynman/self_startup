@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import db, kb_judge
+from . import _today_tabs
 
 TITLE = "今日"
 ORDER = 6
@@ -41,7 +42,9 @@ CREATE TABLE IF NOT EXISTS today_opps (           -- 机会卡：想到 → 写�
     status TEXT DEFAULT 'idea', note TEXT DEFAULT '', created_at TEXT, updated_at TEXT
 );
 """
+SCHEMA += _today_tabs.SCHEMA
 router = APIRouter()
+router.include_router(_today_tabs.router)
 
 DEEP_N, QUICK_MAX, WINDOW_DAYS = 3, 9, 3
 QUICK_QUOTA = {"product": 1, "new": 2, "tech": 2, "eng": 2}
