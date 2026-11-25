@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS today_feedback (
     value TEXT NOT NULL,                        -- no_gain / useful
     created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS today_scores (         -- 值不值得深想：按条目缓存，一条只打一次分
+    key TEXT PRIMARY KEY, score INTEGER, why TEXT DEFAULT '', question TEXT DEFAULT '', hit TEXT DEFAULT '', src TEXT DEFAULT '', at TEXT
+);
 CREATE TABLE IF NOT EXISTS today_opps (           -- 机会卡：想到 → 写透 → 验证过 → 放弃 / 推进
     id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT DEFAULT '', day TEXT DEFAULT '',
     title TEXT NOT NULL, change TEXT DEFAULT '', pain TEXT DEFAULT '', who TEXT DEFAULT '',
@@ -54,6 +57,74 @@ RELATES = [
 ]
 QUICK_S_MAX = 5
 TECH_HINT = re.compile(r"agent|harness|memory|eval|benchmark|reasoning|\brl\b|reinforcement|attention|moe|distill|coding|tool", re.I)
+DEEP_MIN = 6
+NEWS_TYPES = {"pricing", "packaging", "revenue", "funding", "partnership", "deprecation", "people"}
+SCORE_POOL = {"product": 12, "tech": 8, "growth": 3}
+PROFILE = """用户画像（2026-11-25 确认，会随学习更新）：
+- M0 发现机会（统领）：看技术和产品是为了找值得自己做的机会：什么之前做不到现在能做，谁有痛点，空白在哪。
+- M1 让自己的 AI 知识讲解视频产品跑起来：要能执行、能验证的增长打法和差异化定位。增长方法基础弱。
+- M2 系统深入学大模型和 Agent：Agent 工程已到“会判断”，基座机制还在“懂机制”入门；最大短板是应用（给场景做决定、量化、设计验证）。
+- M3 用 AI teams（多 Agent 协作、Harness、验收、记忆）把个人产出放大，并在自己的学习平台上落地。
+- M4 有自己的判断：会质疑，但常缺结论、数字和验证方法。
+- M5 个人品牌和知识内容。"""
+SCORE_SYSTEM = """你在为一位用户挑选“今天值得花 5 分钟深想”的 3 条内容。读者画像和他最近亲口问过、还没解决的问题在 profile / open_questions 里。
+对 items 里每一条打 0–10 分的“深想价值”，标准：
+1. 有东西可想：新的机制、取舍、打法、分歧或反常识的结果，而不只是“发生了什么”。纯新闻（版本号升级、定价调整、套餐变化、融资、人事、合作公告）一律 ≤ 3 分，除非它直接回答了用户的某个开放问题。
+2. 和用户的动机或开放问题直接相关（能点名是哪一条）。
+3. 想完能落到可检验的判断，或能动手验证。
+每条输出：score；why（一句话，说清对这位用户为什么值得想，点名动机或问题，≤40 字，不值得就留空）；
+question（给他的一个深想问题，要求给场景、要他做决定并说怎么验证，≤60 字；不值得就留空）；
+hit（命中的 open_questions 原文，没有就留空）。
+输出 JSON：{"items": [{"key": "原样返回", "score": 0, "why": "", "question": "", "hit": ""}]}"""
+
+
+def _llm(system: str, payload: dict) -> dict:
+    from ._intel_snap import _deepseek
+    return _deepseek(system, payload, max_tokens=4000, module="today")
+
+
+def _open_questions(limit: int = 40) -> list[str]:
+    if not _has("annotation_msgs"):
+        return []
+    rows = db.rows("SELECT content FROM annotation_msgs WHERE role='user' ORDER BY id DESC LIMIT ?", [limit * 2])
+    out = []
+    for r in rows:
+        q = re.sub(r"\s+", " ", r["content"] or "").strip()
+        if len(q) >= 8 and q not in out:
+            out.append(q[:120])
+    return out[:limit]
+
+
+def _fallback_score(c: dict) -> int:
+    if c["kind"] == "product":
+        return 2 if c.get("type") in NEWS_TYPES else DEEP_MIN
+    if c["kind"] == "growth":
+        return DEEP_MIN + 1
+    return DEEP_MIN if TECH_HINT.search(f"{c['title']} {c.get('summary', '')}") else DEEP_MIN - 2
+
+
+def _scores(cards: list[dict]) -> dict:
+    keys = [c["key"] for c in cards]
+    have = {r["key"]: r for r in db.rows(f"SELECT * FROM today_scores WHERE key IN ({','.join('?' * len(keys))})", keys)} if keys else {}
+    todo = [c for c in cards if c["key"] not in have or have[c["key"]]["src"] != "llm"]
+    if todo:
+        items = [{"key": c["key"], "kind": c["kind"], "type": c.get("type", ""), "title": c["title"], "summary": c.get("summary", ""),
+                  "detail": _plain(" ".join((c.get("reveal") or {}).values()), 500)} for c in todo]
+        try:
+            got = {str(x.get("key")): x for x in _llm(SCORE_SYSTEM, {"profile": PROFILE, "open_questions": _open_questions(),
+                                                                      "items": items}).get("items", []) if isinstance(x, dict)}
+            src = "llm"
+        except Exception:  # noqa: BLE001  打分失败时按规则：纯新闻不进精读，其余照常
+            got, src = {}, "rule"
+        for c in todo:
+            x = got.get(c["key"])
+            row = {"key": c["key"], "score": int(x.get("score") or 0) if x else _fallback_score(c),
+                   "why": str((x or {}).get("why") or "")[:80], "question": str((x or {}).get("question") or "")[:120],
+                   "hit": str((x or {}).get("hit") or "")[:160], "src": src if x or src == "rule" else "rule", "at": db.now()}
+            db.execute("INSERT OR REPLACE INTO today_scores (key, score, why, question, hit, src, at) VALUES (?,?,?,?,?,?,?)",
+                       [row[k] for k in ("key", "score", "why", "question", "hit", "src", "at")])
+            have[c["key"]] = row
+    return have
 
 
 def _has(table: str) -> bool:
@@ -110,7 +181,7 @@ def _products(day: str) -> list[dict]:
         return []
     since = (date.fromisoformat(day) - timedelta(days=WINDOW_DAYS)).isoformat()
     rows = db.rows(
-        "SELECT e.id, e.title, e.level, e.date, c.name company, a.content, a.sections, a.complete FROM intel_event e "
+        "SELECT e.id, e.title, e.level, e.type, e.date, c.name company, a.content, a.sections, a.complete FROM intel_event e "
         "JOIN intel_analysis a ON a.id=(SELECT MAX(id) FROM intel_analysis WHERE event_id=e.id) "
         "LEFT JOIN intel_company c ON c.id=e.company_id "
         "WHERE e.level IN ('S','A') AND e.merged_into IS NULL AND e.date>=? AND e.date<=? "
@@ -127,7 +198,7 @@ def _products(day: str) -> list[dict]:
         due = (DATE.search(pred).group(0) if pred and DATE.search(pred) else
                (date.fromisoformat(day) + timedelta(days=90)).isoformat())
         out.append({
-            "key": f"intel:{r['id']}", "kind": "product", "label": f"产品 · {r['level']} 级", "level": r["level"],
+            "key": f"intel:{r['id']}", "kind": "product", "label": f"产品 · {r['level']} 级", "level": r["level"], "type": r["type"] or "",
             "title": r["title"], "company": r["company"] or "", "date": r["date"],
             "summary": _first_bullet(sec.get("变了什么", "")), "prediction": pred, "due": due,
             "question": "这条预测会兑现吗？" if pred else "这件事对你重要吗？30 天内会有别家跟进吗？",
@@ -222,7 +293,21 @@ def pick(day: str) -> dict:
     seen = _seen_before(day)
     pools = {k: [c for c in f(day) if c["key"] not in seen] for k, f in
              (("product", _products), ("growth", _growth), ("tech", _papers), ("eng", _engineering))}
-    deep = [pools[k].pop(0) for k in ("product", "tech", "growth") if pools[k]][:DEEP_N]
+    cand = [c for k, n in SCORE_POOL.items() for c in pools[k][:n]]
+    sc = _scores(cand)
+    for c in cand:
+        s = sc[c["key"]]
+        c.update(depth=s["score"], why=s["why"], hit=s["hit"])
+        if s["question"]:
+            c["question"] = s["question"]
+    ranked = sorted((c for c in cand if c["depth"] >= DEEP_MIN), key=lambda c: -c["depth"])
+    deep = []
+    for limit in (1, 2):            # 先每类一张，保证不全是同一类；不够再按分数补，每类最多两张
+        for c in ranked:
+            if len(deep) < DEEP_N and c not in deep and sum(d["kind"] == c["kind"] for d in deep) < limit:
+                deep.append(c)
+    for c in deep:
+        pools[c["kind"]].remove(c)
     s_level = [c for c in pools["product"] if c["level"] == "S"][:QUICK_S_MAX]
     others = pools["tech"][:QUICK_QUOTA["tech"]] + pools["eng"][:QUICK_QUOTA["eng"]]
     a_level = [c for c in pools["product"] if c["level"] != "S"][:QUICK_QUOTA["product"]]

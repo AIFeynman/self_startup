@@ -33,9 +33,9 @@ def _company(name="某视频平台"):
     return db.insert("intel_company", {"slug": name, "name": name})
 
 
-def _event(level="S", title="某视频平台上线动效工作室", day=TODAY, content=None, sections=None, complete=1):
+def _event(level="S", title="某视频平台上线动效工作室", day=TODAY, content=None, sections=None, complete=1, type_="launch"):
     eid = db.insert("intel_event", {"company_id": _company(title), "title": title, "level": level, "date": day,
-                                    "card_status": "done"})
+                                    "card_status": "done", "type": type_})
     db.insert("intel_analysis", {"event_id": eid, "content": content if content is not None else "## 变了什么\n" + "x" * 800,
                                  "sections": json.dumps(sections if sections is not None else PRODUCT_SECTIONS, ensure_ascii=False),
                                  "complete": complete})
@@ -54,8 +54,13 @@ def _paper(pid="hf:1", title="Agent memory that learns", day=TODAY, pop=50):
 
 
 @pytest.fixture(autouse=True)
-def _clean(client):
+def _clean(client, monkeypatch):
     from app import kb_judge
+    from app.modules import today
+
+    def offline(system, payload):
+        raise RuntimeError("no llm in tests")
+    monkeypatch.setattr(today, "_llm", offline)
     kb_judge._init()
     for t in ("intel_analysis", "intel_event", "intel_company", "intel_growth_case", "intel_growth_item",
               "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "kb_judgments"):
@@ -77,6 +82,46 @@ def test_deep_cards_cover_product_tech_growth(client):
     growth = next(c for c in d["deep"] if c["kind"] == "growth")
     assert "10 周翻倍" in growth["reveal"]["一句话"]
     assert growth["link"].startswith("#intel/g/")
+
+
+def test_pure_news_goes_to_quick_not_deep(client):
+    _event(level="S", title="某助手套餐升级到新模型", type_="pricing")
+    d = client.get("/api/today").json()
+    assert all(c["title"] != "某助手套餐升级到新模型" for c in d["deep"])
+    assert any(c["title"] == "某助手套餐升级到新模型" for c in d["quick"])
+
+
+def test_deep_slots_follow_depth_score_and_personal_questions(client, monkeypatch):
+    from app.modules import today
+    _event(level="S", title="某助手套餐升级到新模型", type_="pricing")
+    _event(level="S", title="连接器与技能合并为插件", type_="packaging")
+    seen = {}
+
+    def fake(system, payload):
+        seen["payload"] = payload
+        out = []
+        for it in payload["items"]:
+            deep = "插件" in it["title"]
+            out.append({"key": it["key"], "score": 8 if deep else 2, "why": "技能怎么组织是你一直在问的" if deep else "",
+                        "question": "合并后 skill 该怎么组织才能少 token 加载？" if deep else "", "hit": "这么多 skill 怎么组织" if deep else ""})
+        return {"items": out}
+    monkeypatch.setattr(today, "_llm", fake)
+    db.insert("annotations", {"doc": "learn:item:1", "title": "Uber skills", "quote": "700 个 skill", "created_at": db.now()})
+    aid = db.row("SELECT MAX(id) id FROM annotations")["id"]
+    db.insert("annotation_msgs", {"annotation_id": aid, "role": "user", "content": "这么多 skill 怎么组织能准确且少 token 地加载", "created_at": db.now()})
+    d = client.get("/api/today").json()
+    deep = [c for c in d["deep"] if c["kind"] == "product"]
+    assert [c["title"] for c in deep] == ["连接器与技能合并为插件"]
+    assert deep[0]["why"] and deep[0]["hit"] and deep[0]["question"].startswith("合并后")
+    assert any("skill" in q for q in seen["payload"]["open_questions"])
+
+
+def test_deep_is_left_short_when_nothing_is_worth_it(client, monkeypatch):
+    from app.modules import today
+    _event(level="S", title="只是一条新闻", type_="launch")
+    monkeypatch.setattr(today, "_llm", lambda s, p: {"items": [{"key": it["key"], "score": 3} for it in p["items"]]})
+    d = client.get("/api/today").json()
+    assert d["deep"] == [] and d["quick"]
 
 
 def test_broken_cards_are_filtered_out(client):

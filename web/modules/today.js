@@ -85,7 +85,8 @@ export default {
         h('div.row.between', {}, [h('span.card-label', {}, c.label), h('span.muted', {}, [c.company, c.date].filter(Boolean).join(' · '))]),
         h('h3', {}, c.title),
         c.summary ? h('p.td-sum', {}, c.summary) : null,
-        relates(c),
+        c.why ? h('div.td-why', {}, ['为什么值得你想：', c.why]) : relates(c),
+        c.hit ? h('div.td-hit', {}, ['你问过：', c.hit]) : null,
         c.done ? h('div', {}, [c.guess ? h('div.td-guess', {}, ['你的猜测：', c.guess]) : null, reveal(c)]) : judgeForm(c),
       ]);
     }
@@ -151,6 +152,8 @@ function injectStyle() {
 .td-judge textarea, .td-judge input, .td-opp input { width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); color: var(--text); }
 .td-judge input[type=range] { flex: 1; min-width: 120px; padding: 0; border: 0; }
 .td-q { font-weight: 600; }
+.td-why { font-size: 14px; margin: 4px 0; }
+.td-hit { font-size: 13px; color: var(--muted); margin: 2px 0 8px; border-left: 3px solid var(--accent-soft); padding-left: 8px; }
 .td-prob { font-size: 14px; }
 .td-prob-v { font-weight: 700; color: var(--accent); min-width: 3em; }
 .td-sec { font-size: 12px; color: var(--accent); font-weight: 700; margin-top: 10px; }
