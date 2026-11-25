@@ -19,6 +19,15 @@ export default {
       try { await api.post(url, { ...payload, day: data.day }); if (msg) toast(msg); await load({ due: false }); } catch (e) { toast('没保存上：' + e.message); }
     };
     const link = (c, text = '看原卡') => h('a', c.link.startsWith('#') ? { href: c.link } : { href: c.link, target: '_blank', rel: 'noopener' }, text);
+    const READ_STATE = { queued: '深读排队中', running: '深读生成中', done: '打开深读笔记', failed: '深读失败，去看看' };
+    function deepBtn(c, url = '', label = '深读') {
+      const mine = (c.deepreads || []).find((x) => x.url === (url || c.src_url));
+      if (mine) return h('a.td-read', { href: mine.link, title: '在深度学习里打开，已记进深读历史' }, READ_STATE[mine.status] || '打开深读');
+      if (!url && !c.src_url) return null;
+      return h('button.td-readbtn', { title: '送去深度学习做深读，会记进深读历史', onclick: async () => {
+        try { const r = await api.post('/api/today/deepread', { key: c.key, url, day: data.day }); toast('已送去深读，生成好后在深度学习里能看到'); await load({ due: false }); if (r.status === 'done') location.hash = r.link; }
+        catch (e) { toast('没送上：' + e.message); } } }, label);
+    }
     const relates = (c) => (c.relates?.length ? h('div.td-rel', {}, ['和你有关：', ...c.relates.map((r) => h('span.tag', {}, r))]) : null);
 
     function feedbackRow(c) {
@@ -50,9 +59,6 @@ export default {
         ...shown.map(([k, v]) => h('div', {}, [h('div.td-sec', {}, k), md(v)])),
         ...folded.map(([k, v]) => h('details.td-more', {}, [h('summary', {}, k), md(v)])),
         angles(c),
-        c.kind === 'tech' ? h('div.row', {}, [
-          h('button', { onclick: async () => { try { await api.post('/api/learn/items', { url: c.url, reuse: true }); toast('已送去深读'); } catch (e) { toast(e.message); } } }, '送去深读'),
-        ]) : null,
         feedbackRow(c),
       ]);
     }
@@ -63,11 +69,13 @@ export default {
       if (!list.length) return null;
       return h('div.td-angles', {}, [h('div.td-sec', {}, '不同角度'), ...list.map((a) => {
         if (a.kind === 'hn') {
+          // HN 讨论本身就在卡片里展开了，原帖链接点进去看
           return h('div.td-angle', {}, [h('div.td-al', {}, [a.label, ' · ', ext(a.url, `${a.title}（${a.points} 分）`)]),
             a.tldr ? h('div', {}, a.tldr) : null,
             ...(a.opinions || []).map((o) => h('div.td-op', {}, [h('span.tag.gray', {}, o.stance || '观点'), o.claim, o.by ? h('span.muted', {}, ' — ' + o.by) : null]))]);
         }
-        return h('div.td-angle', {}, [h('div.td-al', {}, [a.label, ' · ', a.who || '', a.date ? ` · ${a.date}` : '']),
+        return h('div.td-angle', {}, [h('div.td-al', {}, [a.label, ' · ', a.who || '', a.date ? ` · ${a.date}` : '',
+          a.url?.startsWith('http') ? h('span', {}, [' · ', deepBtn(c, a.url, '深读这篇')]) : null]),
           h('div', {}, ext(a.url, a.title)), a.summary ? h('div.muted', {}, a.summary) : null,
           a.takeaway ? h('div.td-take', {}, ['可迁移：', a.takeaway]) : null]);
       })]);
@@ -98,8 +106,8 @@ export default {
     }
 
     function deepCard(c) {
-      return h('div.card.td-card' + (c.done ? '.done' : ''), {}, [
-        h('div.row.between', {}, [h('span.card-label', {}, c.label), h('span.muted', {}, [c.company, c.date].filter(Boolean).join(' · '))]),
+      return h('div.card.td-card' + (c.done ? '.done' : '') + (c.slot === 'track' ? '.track' : ''), {}, [
+        h('div.row.between', {}, [h('span.card-label', {}, c.label), h('span.row', {}, [h('span.muted', {}, [c.company, c.date].filter(Boolean).join(' · ')), deepBtn(c)])]),
         h('h3', {}, c.title),
         c.summary ? h('p.td-sum', {}, c.summary) : null,
         c.why ? h('div.td-why', {}, ['为什么值得你想：', c.why]) : relates(c),
@@ -115,7 +123,7 @@ export default {
         c.summary ? h('div.muted', {}, c.summary) : null,
         c.takeaway ? h('div.td-take', {}, ['可迁移：', c.takeaway]) : null,
         relates(c),
-        h('div.row.td-fb', {}, [link(c, c.link.startsWith('#') ? '深入' : '看原文'),
+        h('div.row.td-fb', {}, [link(c, c.link.startsWith('#') ? '深入' : '看原文'), deepBtn(c),
           h('button' + (c.feedback === 'no_gain' ? '.on' : ''), { onclick: () => post('/api/today/feedback', { key: c.key, value: 'no_gain' }, '记下了：没增量') }, '没增量')]),
       ]);
     }
@@ -137,7 +145,7 @@ export default {
       const pct = p.deep_total ? Math.round((p.deep_done / p.deep_total) * 100) : 0;
       body.replaceChildren(
         h('div.card.flat.td-head', {}, [
-          h('div.row.between', {}, [h('b', {}, `精读 ${p.deep_done}/${p.deep_total}`), h('span.muted', {}, `速览 ${p.quick_total} · 机会卡 ${p.opps} · 没增量 ${p.no_gain}`)]),
+          h('div.row.between', {}, [h('b', {}, `精读 ${p.deep_done}/${p.deep_total}`), h('span.muted', {}, `速览 ${p.quick_total} · 深读 ${data.all.filter((c) => c.deepread).length} · 机会卡 ${p.opps} · 没增量 ${p.no_gain}`)]),
           ui.progress(pct),
           p.deep_total && p.deep_done >= p.deep_total ? h('div.td-end', {}, '今天的精读做完了，到此为止。') : null,
         ]),
@@ -173,6 +181,9 @@ function injectStyle() {
 .td-angle { border-top: 1px solid var(--line); padding: 8px 0; font-size: 14px; display: grid; gap: 3px; }
 .td-al { font-size: 12px; color: var(--accent); }
 .td-op { font-size: 13px; }
+.td-card.track { border-color: var(--accent); }
+.td-read { font-size: 13px; }
+.td-readbtn { font-size: 13px; padding: 3px 10px; }
 .td-why { font-size: 14px; margin: 4px 0; }
 .td-hit { font-size: 13px; color: var(--muted); margin: 2px 0 8px; border-left: 3px solid var(--accent-soft); padding-left: 8px; }
 .td-prob { font-size: 14px; }

@@ -59,6 +59,9 @@ RELATES = [
 QUICK_S_MAX = 3
 TECH_HINT = re.compile(r"agent|harness|memory|eval|benchmark|reasoning|\brl\b|reinforcement|attention|moe|distill|coding|tool", re.I)
 DEEP_MIN = 6
+TRACK_MIN = 6
+SCORE_SRC = "llm2"          # 打分口径变了就改版本号，旧缓存会重打
+TRACK_KINDS = ("product", "new", "growth")
 NEWS_TYPES = {"pricing", "packaging", "revenue", "funding", "partnership", "deprecation", "people"}
 SCORE_POOL = {"product": 12, "new": 8, "tech": 8, "growth": 3}
 ANGLE_DAYS = 14
@@ -78,8 +81,10 @@ SCORE_SYSTEM = """你在为一位用户挑选“今天值得花 5 分钟深想�
 每条输出：score；why（一句话，说清对这位用户为什么值得想，点名动机或问题，≤40 字，不值得就留空）；
 question（给他的一个深想问题，要求给场景、要他做决定并说怎么验证，≤60 字；不值得就留空）；
 hit（命中的 open_questions 原文，没有就留空）；
-terms（2–4 个用来在名人发言、HN、X 上找相关讨论的检索词：产品名、公司名、论文或技术的专有名词，中英文都可，不要泛词）。
-输出 JSON：{"items": [{"key": "原样返回", "score": 0, "why": "", "question": "", "hit": "", "terms": []}]}"""
+terms（2–4 个用来在名人发言、HN、X 上找相关讨论的检索词：产品名、公司名、论文或技术的专有名词，中英文都可，不要泛词）；
+track（0–10：和用户自己产品赛道的相关度。用户在做 AI 知识讲解视频产品：同赛道竞品、相邻赛道（AI 视频生成、教育、知识内容和创作者工具）、能直接借鉴到他产品的增长打法给高分，其余给低分）；
+track_question（track ≥ 6 时，给一个针对他产品的问题：是威胁还是可借鉴、它的增长靠什么、他该怎么差异化，≤60 字）。
+输出 JSON：{"items": [{"key": "原样返回", "score": 0, "why": "", "question": "", "hit": "", "terms": [], "track": 0, "track_question": ""}]}"""
 
 
 def _llm(system: str, payload: dict) -> dict:
@@ -113,31 +118,36 @@ def _scores(cards: list[dict]) -> dict:
     _ensure_cols()
     keys = [c["key"] for c in cards]
     have = {r["key"]: r for r in db.rows(f"SELECT * FROM today_scores WHERE key IN ({','.join('?' * len(keys))})", keys)} if keys else {}
-    todo = [c for c in cards if c["key"] not in have or have[c["key"]]["src"] != "llm" or have[c["key"]].get("terms") in (None, "", "[]")]
+    todo = [c for c in cards if c["key"] not in have or have[c["key"]]["src"] != SCORE_SRC]
     if todo:
         items = [{"key": c["key"], "kind": c["kind"], "type": c.get("type", ""), "title": c["title"], "summary": c.get("summary", ""),
                   "detail": _plain(" ".join((c.get("reveal") or {}).values()), 500)} for c in todo]
         try:
             got = {str(x.get("key")): x for x in _llm(SCORE_SYSTEM, {"profile": PROFILE, "open_questions": _open_questions(),
                                                                       "items": items}).get("items", []) if isinstance(x, dict)}
-            src = "llm"
+            src = SCORE_SRC
         except Exception:  # noqa: BLE001  打分失败时按规则：纯新闻不进精读，其余照常
             got, src = {}, "rule"
         for c in todo:
             x = got.get(c["key"])
             terms = [str(t).strip() for t in (x or {}).get("terms") or [] if len(str(t).strip()) >= 3][:4] or _fallback_terms(c)
             row = {"key": c["key"], "score": int(x.get("score") or 0) if x else _fallback_score(c), "terms": json.dumps(terms, ensure_ascii=False),
+                   "track": int(x.get("track") or 0) if x else (TRACK_MIN + 1 if "你的讲解视频产品" in c.get("relates", []) else 0),
+                   "track_q": str((x or {}).get("track_question") or "")[:120],
                    "why": str((x or {}).get("why") or "")[:80], "question": str((x or {}).get("question") or "")[:120],
                    "hit": str((x or {}).get("hit") or "")[:160], "src": src if x or src == "rule" else "rule", "at": db.now()}
-            db.execute("INSERT OR REPLACE INTO today_scores (key, score, why, question, hit, src, at, terms) VALUES (?,?,?,?,?,?,?,?)",
-                       [row[k] for k in ("key", "score", "why", "question", "hit", "src", "at", "terms")])
+            db.execute("INSERT OR REPLACE INTO today_scores (key, score, why, question, hit, src, at, terms, track, track_q) "
+                       "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       [row[k] for k in ("key", "score", "why", "question", "hit", "src", "at", "terms", "track", "track_q")])
             have[c["key"]] = row
     return have
 
 
 def _ensure_cols() -> None:
-    if "terms" not in {r["name"] for r in db.rows("PRAGMA table_info(today_scores)")}:   # 老库补列
-        db.execute("ALTER TABLE today_scores ADD COLUMN terms TEXT DEFAULT '[]'")
+    have = {r["name"] for r in db.rows("PRAGMA table_info(today_scores)")}   # 老库补列
+    for col, ddl in (("terms", "TEXT DEFAULT '[]'"), ("track", "INTEGER DEFAULT 0"), ("track_q", "TEXT DEFAULT ''")):
+        if col not in have:
+            db.execute(f"ALTER TABLE today_scores ADD COLUMN {col} {ddl}")
 
 
 def _fallback_terms(c: dict) -> list[str]:
@@ -216,7 +226,7 @@ def _new_products(day: str) -> list[dict]:
         return {"key": key, "kind": "new", "label": label, "title": title, "company": name, "date": d, "summary": summary,
                 "prediction": f"{name} 半年内会有明显起色（融资、收入或持续上榜）", "due": due,
                 "question": "它切的是谁的什么痛点？为什么现在才能做？半年后还在吗？", "reveal": {},
-                "relates": _relates(title, summary), "link": url}
+                "relates": _relates(title, summary), "link": url, "src_url": url}
     if _has("intel_ph_day"):
         for r in db.rows("SELECT date, items FROM intel_ph_day WHERE date>=? AND date<=? ORDER BY date DESC", [since, day]):
             for it in json.loads(r["items"] or "[]")[:5]:
@@ -239,6 +249,15 @@ def _plain(text: str, limit: int = 0) -> str:
     t = LINK.sub(r"\1", text or "")
     t = re.sub(r"\*\*【推测】\*\*|\*\*", "", t).strip()
     return t if not limit or len(t) <= limit else t[: limit - 1].rstrip() + "…"
+
+
+def _src_url(sources: str) -> str:
+    try:
+        src = [x for x in json.loads(sources or "[]") if isinstance(x, dict) and x.get("url")]
+    except ValueError:
+        return ""
+    src.sort(key=lambda x: not x.get("official"))
+    return src[0]["url"] if src else ""
 
 
 def _first_bullet(text: str) -> str:
@@ -285,7 +304,7 @@ def _products(day: str) -> list[dict]:
         return []
     since = (date.fromisoformat(day) - timedelta(days=WINDOW_DAYS)).isoformat()
     rows = db.rows(
-        "SELECT e.id, e.title, e.level, e.type, e.date, c.name company, a.content, a.sections, a.complete FROM intel_event e "
+        "SELECT e.id, e.title, e.level, e.type, e.date, e.sources, c.name company, a.content, a.sections, a.complete FROM intel_event e "
         "JOIN intel_analysis a ON a.id=(SELECT MAX(id) FROM intel_analysis WHERE event_id=e.id) "
         "LEFT JOIN intel_company c ON c.id=e.company_id "
         "WHERE e.level IN ('S','A') AND e.merged_into IS NULL AND e.date>=? AND e.date<=? "
@@ -308,7 +327,7 @@ def _products(day: str) -> list[dict]:
             "question": "这条预测会兑现吗？" if pred else "这件事对你重要吗？30 天内会有别家跟进吗？",
             "reveal": {k: _plain(sec[k], 900) for k in ("用户问题", "产品逻辑", "商业逻辑", "所以呢") if sec.get(k)},
             "relates": _relates(r["title"], sec.get("变了什么", ""), sec.get("用户问题", "")),
-            "link": f"#intel/e/{r['id']}",
+            "link": f"#intel/e/{r['id']}", "src_url": _src_url(r["sources"]),
         })
     return out
 
@@ -317,7 +336,7 @@ def _growth(day: str) -> list[dict]:
     if not _has("intel_growth_case"):
         return []
     rows = db.rows(
-        "SELECT c.id, c.item_id, c.day, c.company, c.content, i.title FROM intel_growth_case c "
+        "SELECT c.id, c.item_id, c.day, c.company, c.content, i.title, i.url FROM intel_growth_case c "
         "LEFT JOIN intel_growth_item i ON i.id=c.item_id "
         "WHERE c.status='done' AND c.complete=1 AND c.day<=? AND c.id=(SELECT MAX(id) FROM intel_growth_case WHERE item_id=c.item_id) "
         "ORDER BY c.day DESC, c.id DESC LIMIT 30", [day])
@@ -332,7 +351,7 @@ def _growth(day: str) -> list[dict]:
             "question": "先猜：它主要靠哪个动作起效？大概做到了什么量级？",
             "reveal": {k: _plain(sec[k], 900) for k in ("一句话", "背景与数字", "触达动作", "我能怎么用") if sec.get(k)},
             "relates": _uniq(["增长"] + _relates(r["title"] or "", sec.get("一句话", ""))),
-            "link": f"#intel/g/{r['id']}",
+            "link": f"#intel/g/{r['id']}", "src_url": r["url"] or "",
         })
     return out
 
@@ -355,7 +374,7 @@ def _papers(day: str) -> list[dict]:
             "key": f"feed:{r['id']}", "kind": "tech", "label": "论文", "title": r["title"], "date": (r["date"] or "")[:10],
             "summary": gist or _plain(r["summary"], 160), "score": score, "url": r["url"],
             "question": "值得深读吗？如果是你，会换成什么做法（为什么不 XX）？",
-            "reveal": {}, "relates": _relates(r["title"], r["summary"], gist), "link": r["url"],
+            "reveal": {}, "relates": _relates(r["title"], r["summary"], gist), "link": r["url"], "src_url": r["url"],
         })
     out.sort(key=lambda c: -c["score"])
     return out
@@ -369,7 +388,8 @@ def _engineering(day: str) -> list[dict]:
                          "ORDER BY q DESC, views DESC LIMIT 20", [since, day]):
             out.append({"key": f"xart:{r['id']}", "kind": "eng", "label": "工程实践 · X 长文", "title": r["title"] or r["summary"][:60],
                         "date": r["day"], "summary": _plain(r["summary"], 160), "takeaway": _plain(r["take"], 160),
-                        "reveal": {}, "relates": _relates(r["title"], r["summary"], r["take"]), "link": "#kb/xart"})
+                        "reveal": {}, "relates": _relates(r["title"], r["summary"], r["take"]), "link": "#kb/xart",
+                        "src_url": f"https://x.com/{r['user']}/status/{r['id']}"})
     if _has("feed_items"):
         for r in db.rows("SELECT id, title, url, date, popularity, extra FROM feed_items WHERE source='hn' AND popularity>=100 "
                          "AND substr(date,1,10)>=? AND substr(date,1,10)<=? ORDER BY popularity DESC LIMIT 20", [since, day]):
@@ -377,7 +397,7 @@ def _engineering(day: str) -> list[dict]:
             if gist:
                 out.append({"key": f"feed:{r['id']}", "kind": "eng", "label": "工程实践 · HN", "title": r["title"],
                             "date": (r["date"] or "")[:10], "summary": gist, "reveal": {}, "relates": _relates(r["title"], gist),
-                            "link": r["url"]})
+                            "link": r["url"], "src_url": r["url"]})
     return out
 
 
@@ -401,7 +421,8 @@ def pick(day: str) -> dict:
     sc = _scores(cand)
     for c in cand:
         s = sc[c["key"]]
-        c.update(depth=s["score"], why=s["why"], hit=s["hit"], terms=json.loads(s.get("terms") or "[]"))
+        c.update(depth=s["score"], why=s["why"], hit=s["hit"], terms=json.loads(s.get("terms") or "[]"),
+                 track=s.get("track") or 0, track_q=s.get("track_q") or "")
         if s["question"]:
             c["question"] = s["question"]
     ranked = sorted((c for c in cand if c["depth"] >= DEEP_MIN), key=lambda c: -c["depth"])
@@ -410,6 +431,15 @@ def pick(day: str) -> dict:
         for c in ranked:
             if len(deep) < DEEP_N and c not in deep and sum(d["kind"] == c["kind"] for d in deep) < limit:
                 deep.append(c)
+    track = sorted((c for c in cand if c["kind"] in TRACK_KINDS and c["track"] >= TRACK_MIN and (c["depth"] >= 4 or c["track"] >= 8)),
+                   key=lambda c: (-c["track"], -c["depth"]))
+    if track:                       # 你的赛道：每天固定 1 张同赛道 / 相邻赛道的产品或增长做法；已在精读里就直接标出来
+        t = track[0]
+        t.update(slot="track", label="你的赛道 · " + t["label"])
+        if t["track_q"]:
+            t["question"] = t["track_q"]
+        if t not in deep:
+            deep.append(t)
     for c in deep:
         pools[c["kind"]].remove(c)
         c["angles"] = _angles(c.get("terms") or [], day)
@@ -459,9 +489,13 @@ def _due() -> list[dict]:
 def today(day: str = "", refresh: int = 0, due: int = 1):
     day = (day or db.today())[:10]
     p = _payload(day, bool(refresh))
-    marks = {r["key"]: r for r in db.rows("SELECT key, action, note FROM today_marks WHERE day=? ORDER BY id", [day])}
+    marks = {r["key"]: r for r in db.rows("SELECT key, action, note FROM today_marks WHERE day=? AND action!='deepread' ORDER BY id", [day])}
     fb = {r["key"]: r["value"] for r in db.rows("SELECT key, value FROM today_feedback WHERE day=? ORDER BY id", [day])}
+    reads = _deepreads([c["key"] for c in p["deep"] + p["quick"]])
     for c in p["deep"] + p["quick"]:
+        rs = reads.get(c["key"], [])
+        c["deepreads"] = rs
+        c["deepread"] = next((x for x in rs if x["url"] == c.get("src_url")), rs[-1] if rs else None)
         m = marks.get(c["key"])
         c["done"] = bool(m)
         c["guess"] = m["note"] if m and m["action"] == "guess" else ""
@@ -571,3 +605,42 @@ def agent_context(ref: str) -> str:
     except Exception:  # noqa: BLE001
         return ""
     return "今日精读：" + "；".join(c["title"] for c in p["deep"]) + "。速览：" + "；".join(c["title"] for c in p["quick"])
+
+
+# ---------- 深读：送进深度学习，记进它的深读历史 ----------
+
+def _deepreads(keys: list[str]) -> dict:
+    if not keys:
+        return {}
+    out: dict = {}
+    rows = db.rows(f"SELECT key, note FROM today_marks WHERE action='deepread' AND key IN ({','.join('?' * len(keys))}) ORDER BY id", keys)
+    ids = [int(r["note"].split("|", 1)[0]) for r in rows if r["note"].split("|", 1)[0].isdigit()]
+    st = {r["id"]: r for r in db.rows(f"SELECT id, status, title FROM learn_items WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
+    for r in rows:
+        iid, _, url = r["note"].partition("|")
+        if iid.isdigit() and int(iid) in st:
+            it = st[int(iid)]
+            out.setdefault(r["key"], []).append({"id": it["id"], "status": it["status"], "title": it["title"] or "",
+                                                 "url": url, "link": f"#learn/item/{it['id']}"})
+    return out
+
+
+class DeepReadIn(BaseModel):
+    key: str
+    url: str = ""
+    day: str = ""
+
+
+@router.post("/deepread")
+def deepread(body: DeepReadIn):
+    from . import learn
+    c = _card(body.key)
+    url = (body.url or c.get("src_url") or (c["link"] if c["link"].startswith("http") else "")).strip()
+    if not url:
+        raise HTTPException(400, "这张卡没有可深读的原文链接")
+    focus = "；".join(x for x in (f"今日卡「{c['title']}」", f"为什么值得想：{c['why']}" if c.get("why") else "",
+                                  f"想回答：{c['question']}" if c.get("question") else "") if x)
+    it = learn.create_item(learn.ItemIn(url=url, focus=focus, reuse=True))
+    db.insert("today_marks", {"key": body.key, "day": (body.day or db.today())[:10], "action": "deepread",
+                              "note": f"{it['id']}|{url}", "created_at": db.now()})
+    return {"ok": True, "id": it["id"], "status": it["status"], "link": f"#learn/item/{it['id']}"}

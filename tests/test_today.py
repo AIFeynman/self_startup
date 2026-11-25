@@ -35,7 +35,9 @@ def _company(name="某视频平台"):
 
 def _event(level="S", title="某视频平台上线动效工作室", day=TODAY, content=None, sections=None, complete=1, type_="launch"):
     eid = db.insert("intel_event", {"company_id": _company(title), "title": title, "level": level, "date": day,
-                                    "card_status": "done", "type": type_})
+                                    "card_status": "done", "type": type_,
+                                    "sources": json.dumps([{"label": "媒体", "url": "https://news.example.com/a"},
+                                                           {"label": "官方", "url": "https://official.example.com/post", "official": True}])})
     db.insert("intel_analysis", {"event_id": eid, "content": content if content is not None else "## 变了什么\n" + "x" * 800,
                                  "sections": json.dumps(sections if sections is not None else PRODUCT_SECTIONS, ensure_ascii=False),
                                  "complete": complete})
@@ -63,7 +65,7 @@ def _clean(client, monkeypatch):
     monkeypatch.setattr(today, "_llm", offline)
     kb_judge._init()
     for t in ("intel_analysis", "intel_event", "intel_company", "intel_growth_case", "intel_growth_item",
-              "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "today_scores", "kb_judgments", "intel_ph_day"):
+              "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "today_scores", "kb_judgments", "intel_ph_day", "learn_items"):
         db.execute(f"DELETE FROM {t}")
     yield
 
@@ -161,6 +163,50 @@ def test_deep_cards_carry_other_angles(client, monkeypatch):
     assert hn["tldr"] == "多数人担心审批被自动化" and hn["opinions"][0]["claim"] == "自动审批会放过回归"
 
 
+def test_deepread_sends_card_to_learn_history_once(client):
+    _event()
+    card = next(c for c in client.get("/api/today").json()["deep"] if c["kind"] == "product")
+    assert card["src_url"] == "https://official.example.com/post"
+    r = client.post("/api/today/deepread", json={"key": card["key"]}).json()
+    again = client.post("/api/today/deepread", json={"key": card["key"]}).json()
+    assert r["id"] == again["id"]
+    rows = db.rows("SELECT * FROM learn_items WHERE url=?", [card["src_url"]])
+    assert len(rows) == 1 and card["question"][:10] in rows[0]["focus"]
+    c = next(c for c in client.get("/api/today").json()["deep"] if c["key"] == card["key"])
+    assert c["deepread"]["id"] == r["id"] and c["deepread"]["status"] in ("queued", "running", "done")
+    assert c["deepread"]["link"] == f"#learn/item/{r['id']}"
+
+
+def test_deepread_an_angle_by_its_own_url(client):
+    _event()
+    card = client.get("/api/today").json()["deep"][0]
+    r = client.post("/api/today/deepread", json={"key": card["key"], "url": "https://simonwillison.net/post"}).json()
+    assert db.row("SELECT url FROM learn_items WHERE id=?", [r["id"]])["url"].startswith("https://simonwillison.net/post")
+
+
+def test_your_track_gets_its_own_card(client, monkeypatch):
+    from app.modules import today
+    _event(level="A", title="某 AI 讲解视频工具上线知识模板", type_="launch")
+    _event(level="S", title="某大模型发布新推理能力", type_="model")
+
+    def fake(system, payload):
+        return {"items": [{"key": it["key"], "score": 7, "why": "w", "question": "q",
+                           "track": 9 if "讲解视频" in it["title"] else 1,
+                           "track_question": "它对你的产品是威胁还是可借鉴？" if "讲解视频" in it["title"] else ""} for it in payload["items"]]}
+    monkeypatch.setattr(today, "_llm", fake)
+    d = client.get("/api/today").json()
+    track = [c for c in d["deep"] if c.get("slot") == "track"]
+    assert len(track) == 1 and "讲解视频" in track[0]["title"]
+    assert track[0]["label"].startswith("你的赛道") and track[0]["question"] == "它对你的产品是威胁还是可借鉴？"
+    assert len(d["deep"]) <= 4
+
+
+def test_your_track_falls_back_to_keywords(client):
+    _event(level="A", title="某 AI 讲解视频工具上线知识模板", type_="launch")
+    d = client.get("/api/today").json()
+    assert any(c.get("slot") == "track" for c in d["deep"])
+
+
 def test_broken_cards_are_filtered_out(client):
     _event(title="正常的卡")
     _event(title="额度报错的卡", content="You've hit your weekly limit · resets 5pm", sections={})
@@ -177,7 +223,7 @@ def test_quick_cards_keep_some_s_level_and_respect_cap(client):
     for i in range(10):
         _paper(pid=f"hf:{i}", title=f"论文 {i}")
     d = client.get("/api/today").json()
-    assert len(d["deep"]) <= 3
+    assert len(d["deep"]) <= 4
     assert len(d["quick"]) <= 9
     quick_s = [c for c in d["quick"] if c.get("level") == "S"]
     assert 1 <= len(quick_s) <= 3
