@@ -212,14 +212,57 @@ def upsert(items: list[dict]) -> int:
     return _upsert(items)[0]
 
 
+OFFICIAL_PAPER = re.compile(r"arxiv:\d{4}\.\d{4,5}")
+
+
+def _title_key(title: str) -> str:
+    k = re.sub(r"[^0-9a-z]+", "", (title or "").lower())
+    return k if len(k) >= 20 else ""
+
+
+def _official_papers(items: list[dict]) -> dict[str, str]:
+    idx: dict[str, str] = {}
+    for r in db.rows("SELECT id, title FROM feed_items WHERE source='arxiv'") + items:
+        if OFFICIAL_PAPER.fullmatch(r.get("id") or "") and (k := _title_key(r.get("title") or "")):
+            idx.setdefault(k, r["id"])
+    return idx
+
+
+def _to_official(it: dict, idx: dict[str, str]) -> dict:
+    if it.get("source") != "arxiv" or OFFICIAL_PAPER.fullmatch(it["id"]) or not (oid := idx.get(_title_key(it["title"]))):
+        return it
+    return {**it, "id": oid, "url": f"https://arxiv.org/abs/{oid.split(':', 1)[1]}"}
+
+
+def _fold_provisional(idx: dict[str, str]) -> None:
+    for p in db.rows("SELECT * FROM feed_items WHERE source='arxiv'"):
+        oid = idx.get(_title_key(p["title"]))
+        if OFFICIAL_PAPER.fullmatch(p["id"]) or not oid or not (o := db.row("SELECT * FROM feed_items WHERE id=?", [oid])):
+            continue
+        pe, oe = _extra(p), _extra(o)
+        extra = {**pe, **{k: v for k, v in oe.items() if v not in ("", None, [], {})}}
+        if seen := [x for x in (pe.get("first_seen"), oe.get("first_seen")) if x]:
+            extra["first_seen"] = min(seen)
+        db.execute("UPDATE feed_items SET popularity=?, extra=? WHERE id=?",
+                   [max(float(p["popularity"] or 0), float(o["popularity"] or 0)), json.dumps(extra, ensure_ascii=False), oid])
+        for t in ("feed_feedback", "feed_picks"):
+            db.execute(f"UPDATE OR IGNORE {t} SET item_id=? WHERE item_id=?", [oid, p["id"]])
+            db.execute(f"DELETE FROM {t} WHERE item_id=?", [p["id"]])
+        db.execute("UPDATE feed_vote_log SET item_id=? WHERE item_id=?", [oid, p["id"]])
+        db.execute("DELETE FROM feed_items WHERE id=?", [p["id"]])
+
+
 def _upsert(items: list[dict]) -> tuple[int, int]:
     """写入/合并：新值非空才覆盖；extra 合并（保留旧条目已有的字段）。同一条（id 相同）再抓到只更新不重复入库。
-    返回 (写入条数, 其中新增条数)。"""
+    AlphaXiv 先给的临时编号（arxiv:2611.harness-cg）按标题并到正式编号那条。返回 (写入条数, 其中新增条数)。"""
     n = new = 0
     ts = db.now()
+    papers = any(it.get("source") == "arxiv" for it in items)
+    idx = _official_papers(items) if papers else {}
     for it in items:
         if not it.get("id") or not it.get("title"):
             continue
+        it = _to_official(it, idx)
         old = db.row("SELECT * FROM feed_items WHERE id=?", [it["id"]])
         it = {**it, "date": norm_date(it.get("date") or "")}
         extra = dict(it.get("extra") or {})
@@ -247,6 +290,8 @@ def _upsert(items: list[dict]) -> tuple[int, int]:
                                      "extra": extra, "fetched_at": ts})
             new += 1
         n += 1
+    if papers:
+        _fold_provisional(_official_papers([]))
     return n, new
 
 

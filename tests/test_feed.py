@@ -1241,3 +1241,51 @@ def test_web_items_routes_youtube_and_skips_tweets():
                          {"url": "https://example.com/post?utm=1", "title": "Managed Agents guide", "date": "2026-11-21"}], "q")
     assert [(x["source"], x["type"]) for x in got] == [("youtube", "video"), ("web", "blog")]
     assert got[0]["id"] == "youtube:19HDQ9HppOA" and got[1]["id"].startswith("web:")
+
+
+# ---------- AlphaXiv 临时编号并到 arXiv 正式编号 ----------
+
+def _xiv(id_, title, *, pop=0, first_seen="", url="", extra=None):
+    ex = {"github_url": "https://github.com/a/harness-cg", **({"first_seen": first_seen} if first_seen else {}), **(extra or {})}
+    return {"id": id_, "source": "arxiv", "type": "paper", "title": title, "summary": "s", "date": "2026-11-20",
+            "url": url or f"https://www.alphaxiv.org/abs/{id_.split(':', 1)[1]}", "popularity": pop, "extra": ex}
+
+
+def test_provisional_folds_into_official_when_official_arrives(client):
+    from app import db
+    from app.modules import feed
+    db.execute("DELETE FROM feed_items")
+    feed.upsert([_xiv("arxiv:2611.harness-cg", "Language Model Harnesses Can Be Compositional Generalizers",
+                        pop=535, first_seen="2026-11-20T09:01:36+00:00")])
+    db.insert("feed_feedback", {"item_id": "arxiv:2611.harness-cg", "vote": 1, "saved": 1, "hidden": 0, "updated_at": "x"})
+    feed.upsert([_xiv("arxiv:2611.28298", "Language Model Harnesses can be Compositional Generalizers", pop=42,
+                        url="https://arxiv.org/abs/2611.28298")])
+    rows = db.rows("SELECT id, url, popularity, extra FROM feed_items WHERE source='arxiv'")
+    assert [r["id"] for r in rows] == ["arxiv:2611.28298"]
+    r = rows[0]
+    assert r["url"] == "https://arxiv.org/abs/2611.28298" and r["popularity"] == 535
+    assert json.loads(r["extra"])["first_seen"] == "2026-11-20T09:01:36+00:00"
+    assert db.row("SELECT vote, saved FROM feed_feedback WHERE item_id='arxiv:2611.28298'") == {"vote": 1, "saved": 1}
+    assert not db.row("SELECT 1 FROM feed_feedback WHERE item_id='arxiv:2611.harness-cg'")
+
+
+def test_provisional_after_official_updates_official(client):
+    from app import db
+    from app.modules import feed
+    db.execute("DELETE FROM feed_items")
+    feed.upsert([_xiv("arxiv:2611.28298", "Language Model Harnesses can be Compositional Generalizers", pop=42,
+                        url="https://arxiv.org/abs/2611.28298")])
+    feed.upsert([_xiv("arxiv:2611.harness-cg", "Language Model Harnesses Can Be Compositional Generalizers", pop=535)])
+    rows = db.rows("SELECT id, url, popularity FROM feed_items WHERE source='arxiv'")
+    assert rows == [{"id": "arxiv:2611.28298", "url": "https://arxiv.org/abs/2611.28298", "popularity": 535}]
+
+
+def test_provisional_without_official_twin_stays(client):
+    from app import db
+    from app.modules import feed
+    db.execute("DELETE FROM feed_items")
+    feed.upsert([_xiv("arxiv:2611.28298", "Language Model Harnesses can be Compositional Generalizers"),
+                 _xiv("arxiv:2611.mistral-large-4", "Mistral Large 4", extra={"github_url": ""}),
+                 _xiv("arxiv:2611.other", "A Completely Different Paper About Agents", extra={"github_url": ""})])
+    assert {r["id"] for r in db.rows("SELECT id FROM feed_items")} == \
+        {"arxiv:2611.28298", "arxiv:2611.mistral-large-4", "arxiv:2611.other"}
