@@ -111,3 +111,32 @@ def test_doc_rating_on_deepread_item_updates_item(client):
     iid = db.insert("learn_items", {"kind": "article", "url": "https://ex.com/a", "title": "A", "status": "done"})
     client.put("/api/annotations/rating", json={"doc": f"learn:item:{iid}", "title": "A", "link": f"#learn/item/{iid}", "stars": 5})
     assert db.row("SELECT rating FROM learn_items WHERE id=?", [iid])["rating"] == 5
+
+
+def test_at_most_three_asks_run_at_once_rest_queue(client, monkeypatch):
+    import threading
+    gate = threading.Event()
+    running, peak = [0], [0]
+    lock = threading.Lock()
+
+    def slow(prompt, **kw):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        gate.wait(5)
+        with lock:
+            running[0] -= 1
+        yield {"type": "done", "text": "好了", "engine": "claude"}
+    monkeypatch.setattr(agent, "run_stream", slow)
+    ids = [client.post("/api/annotations", json={"doc": "research:9:synth", "quote": f"q{i}", "ask": True}).json()["id"] for i in range(5)]
+    end = time.time() + 3
+    while time.time() < end and running[0] < 3:
+        time.sleep(0.02)
+    time.sleep(0.2)
+    assert running[0] == 3
+    logs = [db.row("SELECT log FROM annotation_msgs WHERE annotation_id=? AND role='assistant'", [i])["log"] or "" for i in ids]
+    assert sum("排队" in x for x in logs) == 2 and any("前面还有 1 个" in x for x in logs)
+    gate.set()
+    for i in ids:
+        assert _wait_answer(client, i)["msgs"][-1]["content"] == "好了"
+    assert peak[0] == 3 and annotations.active == 0

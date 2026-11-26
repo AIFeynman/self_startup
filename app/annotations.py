@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/annotations", tags=["annotations"])
 active = 0  # 正在回答的提问数；自动重启会等它归零（和对话一起算）
 _lock = threading.Lock()
+MAX_PARALLEL = 3
+_slots = threading.Condition()
+_running = 0
+_queue: list[int] = []
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS annotations (
@@ -267,11 +271,37 @@ def _prompt(a: dict, question: str, source: str) -> str:
                              question=question)
 
 
+def _enter(mid: int) -> None:
+    global _running
+    shown = -1
+    with _slots:
+        _queue.append(mid)
+        while _queue[0] != mid or _running >= MAX_PARALLEL:
+            ahead = _queue.index(mid)
+            if ahead != shown:
+                shown = ahead
+                db.update("annotation_msgs", mid, {"log": f"排队中：同时最多 {MAX_PARALLEL} 个问 Claude，前面还有 {ahead} 个"})
+            _slots.wait(1)
+        _queue.pop(0)
+        _running += 1
+        _slots.notify_all()
+    if shown >= 0:
+        db.update("annotation_msgs", mid, {"log": ""})
+
+
+def _leave() -> None:
+    global _running
+    with _slots:
+        _running -= 1
+        _slots.notify_all()
+
+
 def _answer(aid: int, mid: int, question: str, source: str) -> None:
     global active
     with _lock:
         active += 1
     texts, tools, errors, session, final, status = [], [], [], "", "", "failed"
+    _enter(mid)
     try:
         a = db.row("SELECT * FROM annotations WHERE id=?", [aid])
         engine = settings.get("engines.default", "claude")
@@ -303,5 +333,6 @@ def _answer(aid: int, mid: int, question: str, source: str) -> None:
             patch_["engine_session"] = session
         db.update("annotations", aid, patch_)
         kb.schedule_sync()
+        _leave()
         with _lock:
             active -= 1
