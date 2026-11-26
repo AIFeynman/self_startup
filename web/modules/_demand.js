@@ -60,6 +60,8 @@ const CSS = `
 .dm-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
 .dm-seg button { border: none; border-radius: 0; padding: 3px 10px; font-size: 12.5px; background: var(--panel); color: var(--muted); cursor: pointer; }
 .dm-seg button.on { background: var(--accent-soft); color: var(--accent); }
+.dm-tier b { padding: 3px 8px; font-size: 12.5px; color: var(--muted); font-weight: 500; border-right: 1px solid var(--line-2); }
+.dm-tier button.on { font-weight: 600; }
 .dm-flt .ghost { border: none; background: none; color: var(--accent); font-size: 12.5px; cursor: pointer; padding: 3px 6px; }
 @container (max-width: 900px) { .dm-3 { grid-template-columns: 210px minmax(0, 1fr); } .dm-3 > div:nth-child(3) { grid-column: 1 / -1; max-height: none; } }
 @container (max-width: 560px) { .dm-3 { grid-template-columns: 1fr; } .dm-3 > div { max-height: none; } }
@@ -181,8 +183,8 @@ export async function demandTab(host, ctx, q0 = '') {
     const total = filtering() ? Object.keys(D.cards).filter(fit).length : 0;
     const sel = (f, opts, cur) => `<select data-f="${f}">${opts.map(([v, t]) => `<option value="${E(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${E(t)}</option>`).join('')}</select>`;
     return `<div class="dm-flt"><span class="dm-seg"><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button></span>
+<span class="dm-seg dm-tier" title="按公司规模看：同样的痛点，小团队、中型创业公司、大厂各怎么打"><b>规模</b>${[['', '全部'], ...Object.entries(TIER)].map(([x, t]) => `<button data-size="${x}" class="${size === x ? 'on' : ''}" title="${x ? E(TIER_NOTE[x]) : '不限规模'}">${t}${x ? ` ${n((c) => c.tier === x)}` : ''}</button>`).join('')}</span>
 ${sel('added', ADDED, added)}
-${sel('size', [['', '全部规模'], ...Object.entries(TIER).map(([x, t]) => [x, `${t}（${TIER_NOTE[x]}）(${n((c) => c.tier === x)})`])], size)}
 ${sel('src', [['', '全部来源'], ...Object.keys(SRC).map((x) => [x, `${x} (${n((c) => c.sources.includes(x))})`])], src)}
 ${sel('tac', [['', '全部增长手段'], ...D.graph.tactics.map((t) => [t, `${t} (${n((c) => c.tactics.includes(t))})`])], tac)}
 ${sel('bm', [['', '全部商业模式'], ...(D.graph.models || []).map((t) => [t, `${t} (${n((c) => c.bm_type === t)})`])], bm)}
@@ -297,7 +299,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     paint();
   });
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-size],[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
     if (ds.rate) {
@@ -315,6 +317,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       return;
     }
     if (ds.clearq) { q = ''; qs = null; paint(); return; }
+    if (ds.size !== undefined) { size = ds.size; paint(); return; }
     if (ds.clear) { tac = src = bm = size = day = added = ''; minStar = 0; window.__starPick.demand = 0; paint(); return; }
     if (ds.star !== undefined) { minStar = +ds.star; window.__starPick.demand = minStar; paint(); return; }
     if (ds.jump) { document.getElementById('dm-c-' + ds.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
