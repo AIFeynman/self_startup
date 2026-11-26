@@ -1,4 +1,4 @@
-// 今日：开奖 → 3 张精读（先判断再揭晓）→ 速览。只读复用产品雷达、增长 Case、论文、HN、X 长文；
+// 今日：开奖 → 3 张精读（先看解读，判断可选）→ 速览。只读复用产品雷达、增长 Case、论文、HN、X 长文；
 // 判断写进判断台账，“没增量”和机会卡存本板块。设计稿 docs/designs/2026-11-25-daily-learning-system.html
 import { renderDeep, renderHands, renderLearn, renderLedger, renderProfile } from './_today_tabs.js';
 
@@ -7,7 +7,7 @@ const SUBS = [['', '今日', '扫 30 分钟：开奖 + 精读 + 速览'], ['deep
   ['hands', '动手', '做 50 分钟：产品亲测和开源上手'], ['learn', '学', '学 40 分钟：补弱项，一章 + 一道应用题'],
   ['ledger', '台账', '开奖、机会台账和本周统计'], ['profile', '画像', '你的动机、等级和信号']];
 const RENDER = { deep: renderDeep, hands: renderHands, learn: renderLearn, ledger: renderLedger, profile: renderProfile };
-const OPEN_FIRST = { product: ['所以呢'], growth: ['一句话', '我能怎么用'] };
+const FOLDED = { growth: ['背景与数字', '触达动作'] };
 
 export default {
   async render(el, ctx) {
@@ -24,11 +24,13 @@ export default {
     const body = h('div');
     let data = null;
 
+    let polls = 0;
     const load = async ({ refresh = false, due = true } = {}) => {
       const prevDue = data?.due || [];
       data = await api.get(`/api/today?refresh=${refresh ? 1 : 0}&due=${due ? 1 : 0}`);
       if (!due) data.due = prevDue;
       paint();
+      if (data.deep.some((c) => c.reading) && polls++ < 12 && el.isConnected) setTimeout(() => load({ due: false }), 8000);
     };
     const post = async (url, payload, msg) => {
       try { await api.post(url, { ...payload, day: data.day }); if (msg) toast(msg); await load({ due: false }); } catch (e) { toast('没保存上：' + e.message); }
@@ -47,7 +49,9 @@ export default {
 
     function feedbackRow(c) {
       const noGain = h('button' + (c.feedback === 'no_gain' ? '.on' : ''), { onclick: () => post('/api/today/feedback', { key: c.key, value: 'no_gain' }, '记下了：没增量') }, '没增量');
-      return h('div.row.td-fb', {}, [noGain, oppButton(c), link(c)]);
+      const read = c.done ? h('span.td-donemark', {}, '✓ 看完了')
+        : h('button', { onclick: () => post('/api/today/guess', { key: c.key, action: 'read', text: '' }, '记下了：看完了') }, '看完了');
+      return h('div.row.td-fb', {}, [read, noGain, oppButton(c), link(c)]);
     }
 
     function oppButton(c) {
@@ -67,14 +71,14 @@ export default {
 
     function reveal(c) {
       const parts = Object.entries(c.reveal || {});
-      const open = OPEN_FIRST[c.kind] || [];
-      const shown = parts.filter(([k]) => open.includes(k));
-      const folded = parts.filter(([k]) => !open.includes(k));
+      const fold = FOLDED[c.kind] || [];
+      const shown = parts.filter(([k]) => !fold.includes(k));
+      const folded = parts.filter(([k]) => fold.includes(k));
       return h('div.td-reveal', {}, [
+        c.reading ? h('div.muted.td-reading', {}, '深度解读生成中，先看原文摘要，好了会自动换上…') : null,
         ...shown.map(([k, v]) => h('div', {}, [h('div.td-sec', {}, k), md(v)])),
         ...folded.map(([k, v]) => h('details.td-more', {}, [h('summary', {}, k), md(v)])),
         angles(c),
-        feedbackRow(c),
       ]);
     }
 
@@ -100,7 +104,7 @@ export default {
       if (c.kind === 'growth') {
         const t = h('textarea', { rows: 2, placeholder: '比如：靠 SEO 榜单拉新，几个月翻倍', 'aria-label': '你的猜测' });
         return h('div.td-judge', {}, [h('div.td-q', {}, c.question), t,
-          h('button.primary', { onclick: () => { if (!t.value.trim()) return toast('先写下你的猜测'); post('/api/today/guess', { key: c.key, text: t.value }); } }, '记下猜测，揭晓')]);
+          h('button.primary', { onclick: () => { if (!t.value.trim()) return toast('先写下你的猜测'); post('/api/today/guess', { key: c.key, text: t.value }); } }, '记下猜测')]);
       }
       const text = h('textarea', { rows: 2, 'aria-label': '判断' });
       text.value = c.prediction || '';
@@ -114,8 +118,7 @@ export default {
         withProb ? h('div.row.td-prob', {}, ['兑现概率', prob, out, h('span.muted', {}, '到期 ' + c.due)]) : null,
         reason,
         h('div.row', {}, [
-          h('button.primary', { onclick: () => { if (!text.value.trim()) return toast('先写一句判断'); post('/api/today/judge', { key: c.key, text: text.value, prob: withProb ? +prob.value : null, reason: reason.value, due: withProb ? c.due : '' }, '已记进判断台账'); } }, '记下判断，揭晓'),
-          h('button', { onclick: () => post('/api/today/guess', { key: c.key, action: 'read', text: '' }) }, '不判断，直接看'),
+          h('button.primary', { onclick: () => { if (!text.value.trim()) return toast('先写一句判断'); post('/api/today/judge', { key: c.key, text: text.value, prob: withProb ? +prob.value : null, reason: reason.value, due: withProb ? c.due : '' }, '已记进判断台账'); } }, '记下判断'),
         ]),
       ]);
     }
@@ -127,7 +130,10 @@ export default {
         c.summary ? h('p.td-sum', {}, c.summary) : null,
         c.why ? h('div.td-why', {}, ['为什么值得你想：', c.why]) : relates(c),
         c.hit ? h('div.td-hit', {}, ['你问过：', c.hit]) : null,
-        c.done ? h('div', {}, [c.guess ? h('div.td-guess', {}, ['你的猜测：', c.guess]) : null, reveal(c)]) : judgeForm(c),
+        c.guess ? h('div.td-guess', {}, ['你的猜测：', c.guess]) : null,
+        reveal(c),
+        c.done ? null : h('details.td-judge-box', {}, [h('summary', {}, '有想法？记一条判断（可选）'), judgeForm(c)]),
+        feedbackRow(c),
       ]);
     }
 
@@ -165,7 +171,7 @@ export default {
           p.deep_total && p.deep_done >= p.deep_total ? h('div.td-end', {}, '今天的精读做完了，到此为止。') : null,
         ]),
         dueList() || h('span'),
-        ui.section('精读', '先判断，再揭晓'),
+        ui.section('精读', '先看解读，有想法再记判断'),
         ...(data.deep.length ? data.deep.map(deepCard) : [ui.empty('今天没有合格的精读卡', '宁缺毋滥：来源里没有新的合格内容')]),
         ui.section('速览', '知道一下，想深挖就点进去'),
         data.quick.length ? h('div.td-quick-list', {}, data.quick.map(quickCard)) : ui.empty('今天没有速览'),
@@ -219,6 +225,10 @@ function injectStyle() {
 .td-prob-v { font-weight: 700; color: var(--accent); min-width: 3em; }
 .td-sec { font-size: 12px; color: var(--accent); font-weight: 700; margin-top: 10px; }
 .td-more { margin-top: 8px; } .td-more summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.td-judge-box { margin-top: 10px; }
+.td-judge-box > summary { cursor: pointer; color: var(--text-2); font-size: 14px; }
+.td-donemark { color: var(--text-2); font-size: 14px; }
+.td-reading { font-size: 13px; margin: 4px 0; }
 .td-guess { font-size: 14px; background: var(--bg-2); padding: 6px 10px; border-radius: 8px; margin: 6px 0; }
 .td-fb { margin-top: 10px; }
 .td-fb button.on { border-color: var(--accent); color: var(--accent); }

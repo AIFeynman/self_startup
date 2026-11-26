@@ -65,7 +65,7 @@ def _clean(client, monkeypatch):
     monkeypatch.setattr(today, "_llm", offline)
     kb_judge._init()
     for t in ("intel_analysis", "intel_event", "intel_company", "intel_growth_case", "intel_growth_item",
-              "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "today_scores", "kb_judgments", "intel_ph_day", "learn_items"):
+              "feed_items", "today_marks", "today_feedback", "today_opps", "today_days", "today_scores", "kb_judgments", "intel_ph_day", "learn_items", "today_reads"):
         db.execute(f"DELETE FROM {t}")
     yield
 
@@ -304,3 +304,52 @@ def test_due_judgments_come_from_ledger(client):
     db.insert("kb_judgments", {"text": "到期的预测", "type": "预测", "due": YDAY, "created_at": db.now()})
     due = client.get("/api/today").json()["due"]
     assert any(j["claim"] == "到期的预测" or j.get("title") == "到期的预测" for j in due)
+
+
+# ---------- 没有现成解读的卡：补一份深度解读，先看内容再判断 ----------
+
+READ = {"核心问题": "Agent 记忆怎么按价值更新", "怎么做的": ["给每条记忆打价值分", "低分的淘汰"], "关键结果": "- 长任务成功率提升",
+        "局限与争议": "· 只在两个基准上测\n· 没比纯 RL", "对你意味着": "- 讲解视频的素材库也可以按价值淘汰"}
+
+
+def _paper_only(monkeypatch, llm):
+    from app.modules import _today_read, today
+    monkeypatch.setattr(_today_read, "BACKGROUND", False)
+    monkeypatch.setattr(today, "_llm", llm)
+    _paper()
+
+
+def test_paper_card_gets_deep_read_and_caches(client, monkeypatch):
+    calls = []
+
+    def llm(system, payload):
+        calls.append(system[:10])
+        if "items" in payload:
+            raise RuntimeError("score offline")
+        return dict(READ)
+    _paper_only(monkeypatch, llm)
+    c = client.get("/api/today").json()["deep"][0]
+    assert list(c["reveal"]) == list(READ) and not c["reading"]
+    assert c["reveal"]["怎么做的"] == "- 给每条记忆打价值分\n- 低分的淘汰"
+    assert c["reveal"]["局限与争议"] == "- 只在两个基准上测\n- 没比纯 RL"
+    assert c["reveal"]["核心问题"] == "Agent 记忆怎么按价值更新"
+    n = len(calls)
+    c2 = client.get("/api/today").json()["deep"][0]
+    assert c2["reveal"] == c["reveal"] and len(calls) == n
+
+
+def test_deep_read_falls_back_to_source_text_when_llm_fails(client, monkeypatch):
+    def llm(system, payload):
+        raise RuntimeError("offline")
+    _paper_only(monkeypatch, llm)
+    c = client.get("/api/today").json()["deep"][0]
+    assert c["reveal"] == {"原文摘要": "让 Agent 记忆按价值更新"} and not c["reading"]
+    assert not db.rows("SELECT 1 FROM today_reads")
+
+
+def test_cards_with_existing_reveal_skip_deep_read(client, monkeypatch):
+    from app.modules import _today_read
+    monkeypatch.setattr(_today_read, "BACKGROUND", False)
+    _event()
+    c = next(x for x in client.get("/api/today").json()["deep"] if x["kind"] == "product")
+    assert "所以呢" in c["reveal"] and not db.rows("SELECT 1 FROM today_reads")

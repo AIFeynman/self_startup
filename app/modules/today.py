@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import db, kb_judge
-from . import _today_tabs
+from . import _today_read, _today_tabs
 
 TITLE = "今日"
 ORDER = 6
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS today_opps (           -- 机会卡：想到 → 写�
     status TEXT DEFAULT 'idea', note TEXT DEFAULT '', created_at TEXT, updated_at TEXT
 );
 """
-SCHEMA += _today_tabs.SCHEMA
+SCHEMA += _today_tabs.SCHEMA + _today_read.SCHEMA
 router = APIRouter()
 router.include_router(_today_tabs.router)
 
@@ -503,6 +503,8 @@ def today(day: str = "", refresh: int = 0, due: int = 1):
         c["done"] = bool(m)
         c["guess"] = m["note"] if m and m["action"] == "guess" else ""
         c["feedback"] = fb.get(c["key"], "")
+        c["reading"] = False
+    _today_read.fill(p["deep"])
     due = _due() if due else None   # 开奖要算整本台账（约 1.5 秒），卡片上的操作刷新时不重算
     return {
         "day": day, "deep": p["deep"], "quick": p["quick"], "all": p["deep"] + p["quick"], "due": due,
