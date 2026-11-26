@@ -1,4 +1,4 @@
-import { loadRatings } from './_annotate.js';
+import { annotate, loadRatings } from './_annotate.js';
 // 产品需求（原需求图谱）：知识库的子标签，由 kb.js 在 #kb/demand 路由下调用 demandTab(body, ctx, 查询)；顶部主搜索框的输入走返回的 search。
 // 数据是产品雷达里的创业公司 / PH 日榜 / 增长 Case，逐产品拆成「目标用户 · 场景 · 痛点 · 产品 · 商业模式 · 增长手段」。
 // 三栏下钻：领域 / 场景 → 痛点 → 公司知识卡（字号固定，不用缩放拖动）；另有「打法矩阵」：场景 × 增长手段 / 商业模式。
@@ -201,7 +201,7 @@ ${q.trim() ? `<button class="ghost" data-clearq="1">清除「${E(q)}」</button>
     const c = D.cards[k], nw = fresh.has(k) || isNew(k);
     const v = star(k);
     const rate = `<span class="dm-rate" title="给这家打分（再点一次取消），之后可按星级筛选">${[1, 2, 3, 4, 5].map((i) => `<button data-rate="${i}" data-k="${E(k)}" aria-label="${i} 星" class="${i <= v ? 'on' : ''}">${starSvg}</button>`).join('')}</span>`;
-    return `<div class="dm-co" id="dm-c-${E(k)}">${rate}<h4>${E(c.name)}${nw ? '<b class="dm-dot">新</b>' : ''}</h4><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}${c.date ? ' · 出现于 ' + E(c.date) : ''}</div>
+    return `<div class="dm-co" id="dm-c-${E(k)}" data-k="${E(k)}">${rate}<h4>${E(c.name)}${nw ? '<b class="dm-dot">新</b>' : ''}</h4><div class="dm-m">${c.sources.map(E).join(' · ')}${c.track ? ' · ' + E(c.track) : ''}${c.date ? ' · 出现于 ' + E(c.date) : ''}</div>
 <dl><dt>目标用户</dt><dd>${E(c.user)}</dd><dt>场景</dt><dd>「${E(c.scene)}」</dd><dt>痛点</dt><dd>${E(c.pain)}</dd><dt>产品</dt><dd>${E(c.product)}</dd>
 ${c.arr ? `<dt>收入规模</dt><dd>${E(c.arr)}<div class="dm-tg"><span class="b">${c.arr_grade === 'verified' ? '支付渠道验证' : '自述 / 报道，未验证'}</span></div></dd>` : ''}${c.funding ? `<dt>融资</dt><dd>${E(c.funding)}</dd>` : ''}<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span class="b">${E(c.bm_type)}</span></div>` : ''}</dd>
 <dt>增长核心手段</dt><dd>${c.growth ? E(c.growth) : '<span class="dm-m">材料里没讲增长</span>'}${c.tactics.length ? `<div class="dm-tg">${c.tactics.map((t) => `<span>${E(t)}</span>`).join('')}</div>` : ''}</dd>
@@ -245,6 +245,13 @@ ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}
 ${rows.map((r) => `<tr><td>${E(r.sc.name)}</td><td>${r.ks.length}</td>${r.cnt.map((x, i) => `<td class="c" data-cell="${E(T[i])}" style="background:rgba(120,90,200,${(x.length / mx * 0.7).toFixed(2)})">${x.length || ''}</td>`).join('')}</tr>`).join('')}</table></div>`;
   };
 
+  const notes = (co) => {
+    const c = D.cards[co.dataset.k];
+    const at = document.createComment('');
+    co.replaceWith(at);
+    at.replaceWith(annotate(ctx, co, { doc: 'demand:' + co.dataset.k, title: `${c.name} · 产品需求`,
+      link: `#kb/demand/${encodeURIComponent(c.name)}`, source: co.innerText, compact: true }));
+  };
   const paint = () => {
     if (!D.graph) {
       const s = D.status;
@@ -256,6 +263,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     }
     const wy = window.scrollY;
     body.innerHTML = notice() + bar() + days() + (view === 'graph' ? graph() : matrix());
+    body.querySelectorAll('.dm-co').forEach(notes);
     window.scrollTo(0, wy);
   };
   const load = async () => {
