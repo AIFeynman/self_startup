@@ -60,6 +60,9 @@ const CSS = `
 .dm-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
 .dm-seg button { border: none; border-radius: 0; padding: 3px 10px; font-size: 12.5px; background: var(--panel); color: var(--muted); cursor: pointer; }
 .dm-seg button.on { background: var(--accent-soft); color: var(--accent); }
+.dm-watch { margin: 8px 0; font-size: 13px; border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 12px; }
+.dm-watch summary { cursor: pointer; } .dm-wl { padding: 6px 0; border-top: 1px dashed var(--line); } .dm-wl a, .dm-watch a { cursor: pointer; }
+.dm-watch small { margin-left: 3px; color: var(--muted); }
 .dm-tier b { padding: 3px 8px; font-size: 12.5px; color: var(--muted); font-weight: 500; border-right: 1px solid var(--line-2); }
 .dm-tier button.on { font-weight: 600; }
 .dm-flt .ghost { border: none; background: none; color: var(--accent); font-size: 12.5px; cursor: pointer; padding: 3px 6px; }
@@ -259,6 +262,15 @@ ${rows.map((r) => `<tr><td>${E(r.sc.name)}</td><td>${r.ks.length}</td>${r.cnt.ma
     at.replaceWith(annotate(ctx, co, { doc: 'demand:' + co.dataset.k, title: `${c.name} · 产品需求`,
       link: `#kb/demand/${encodeURIComponent(c.name)}`, source: co.innerText, compact: true }));
   };
+  const watchBox = () => {
+    const w = D.watch || { logs: [], sources: [] }, last = w.logs.at(-1);
+    const head = last ? `上次 ${E(last.date)}：新增 <b>${last.new.length}</b> 家中型公司 · 新来源 ${last.new_sources.length} 个 · 查漏 ${last.gaps.length} 个场景 · 融资新闻线索 ${last.leads} 条 · 花费 $${last.cost ?? 0}${last.stopped === 'budget' ? '（到预算停）' : ''}`
+      : '还没跑过：每周自动跑一次，找新来源、按融资新闻和薄弱场景查漏、重跑过期检索';
+    const row = (l) => `<div class="dm-wl"><b>${E(l.date)}</b> 新增 ${l.new.length} 家${l.new.length ? '：' + l.new.slice(0, 30).map((x) => `<a data-findname="${E(x)}">${E(x)}</a>`).join('、') + (l.new.length > 30 ? ' 等' : '') : ''}
+${l.gaps.length ? `<div class="dm-m">查漏场景：${l.gaps.map(E).join('、')}</div>` : ''}${l.queries.length ? `<div class="dm-m">重跑检索 ${l.queries.length} 个</div>` : ''}</div>`;
+    const src = w.sources.length ? `<div class="dm-m" style="margin-top:6px">自动找到的新来源（${w.sources.length}）：${w.sources.map((x) => `<a href="${E(x.url)}" target="_blank" rel="noopener">${E(x.name)}</a>${x.kind ? `<small>${E(x.kind)}</small>` : ''}`).join(' · ')}</div>` : '';
+    return `<details class="dm-watch"><summary><b>持续更新</b> · ${head}</summary>${[...w.logs].reverse().map(row).join('')}${src}</details>`;
+  };
   const paint = () => {
     if (!D.graph) {
       const s = D.status;
@@ -269,7 +281,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       return;
     }
     const wy = window.scrollY;
-    body.innerHTML = notice() + bar() + days() + (view === 'graph' ? graph() : matrix());
+    body.innerHTML = notice() + bar() + days() + watchBox() + (view === 'graph' ? graph() : matrix());
     body.querySelectorAll('.dm-co').forEach(notes);
     window.scrollTo(0, wy);
   };
@@ -299,7 +311,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     paint();
   });
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-size],[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-findname],[data-size],[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
     if (ds.rate) {
@@ -318,6 +330,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     }
     if (ds.clearq) { q = ''; qs = null; paint(); return; }
     if (ds.size !== undefined) { size = ds.size; paint(); return; }
+    if (ds.findname) { q = ds.findname; computeQ(); paint(); return; }
     if (ds.clear) { tac = src = bm = size = day = added = ''; minStar = 0; window.__starPick.demand = 0; paint(); return; }
     if (ds.star !== undefined) { minStar = +ds.star; window.__starPick.demand = minStar; paint(); return; }
     if (ds.jump) { document.getElementById('dm-c-' + ds.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }

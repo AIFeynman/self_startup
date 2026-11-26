@@ -91,11 +91,16 @@ def _is_mid(o: dict) -> bool:
 
 
 def discover(ctx, queries: list[str], known: dict) -> dict:
+    return discover_asks(ctx, [(q, P_DISCOVER, {"检索方向": q}) for q in queries], known)
+
+
+def discover_asks(ctx, asks: list[tuple[str, str, dict]], known: dict) -> dict:
+    """asks：[(标签, 提示词, 输入)]，都要求返回 {"companies": [...]}；并行问，按顺序合并进 mid.json。"""
     found = dr._load("mid.json", {})
-    ask = lambda q: ctx.call(ctx.light, P_DISCOVER, json.dumps({"检索方向": q}, ensure_ascii=False), web=True)  # noqa: E731
+    ask = lambda a: ctx.call(ctx.light, a[1], json.dumps(a[2], ensure_ascii=False), web=True)  # noqa: E731
     with ThreadPoolExecutor(4) as ex:
-        answers = list(ex.map(ask, queries))
-    for q, o in zip(queries, answers):
+        answers = list(ex.map(ask, asks))
+    for (label, _, _), o in zip(asks, answers):
         for x in (o or {}).get("companies") or []:
             if not isinstance(x, dict) or not (name := str(x.get("name") or "").strip()) or dr.ANON.search(name):
                 continue
@@ -106,8 +111,8 @@ def discover(ctx, queries: list[str], known: dict) -> dict:
             rec.update({f: str(x[f]).strip()[:160] for f in FIELDS if str(x.get(f) or "").strip()})
             if (u := str(x.get("source_url") or "").strip()) and u not in rec["sources"]:
                 rec["sources"].append(u)
-            if q not in rec["queries"]:
-                rec["queries"].append(q)
+            if label not in rec["queries"]:
+                rec["queries"].append(label)
         dr._save("mid.json", found)
     return found
 

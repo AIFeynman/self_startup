@@ -119,3 +119,82 @@ def test_thin_mid_candidates_get_profiled_before_cards(monkeypatch, tmp_path):
     rec = dr._load("mid.json", {})["fal"]
     assert len(asked) == 1 and '"fal"' in asked[0]
     assert rec["pain"] == "自己部署 GPU 推理慢又贵" and rec["arr"] == "约 $40M" and rec["sources"] == ["https://fal.ai/blog"]
+
+
+# ---------- 持续更新：老检索过期重跑、找新来源、按薄弱场景查漏、融资新闻线索、预算上限 ----------
+
+def test_stale_queries_rerun_oldest_first():
+    from datetime import date
+    from app.modules import _demand_watch as w
+    runs = {"a": "2026-11-20", "b": "2026-10-01", "c": "2026-11-01"}
+    assert w.stale(["a", "b", "c", "d"], runs, date(2026, 11, 26), days=14, k=3) == ["d", "b", "c"]
+
+
+def test_funding_headlines_skip_known_companies():
+    from app.modules import _demand_watch as w
+    titles = ["Lovable raises $200M Series A", "Acme AI raises $30M Series B to build voice agents",
+              "How Revolut thinks about hiring", "某某智能完成 B 轮融资 2 亿元", "OpenAI raises $11B"]
+    got = w.leads(titles, {"lovable", "openai"})
+    assert got == ["Acme AI raises $30M Series B to build voice agents", "某某智能完成 B 轮融资 2 亿元"]
+
+
+def test_thin_scenes_listed_with_known_names():
+    from app.modules import _demand_watch as w
+    graph = {"scenes": [{"name": "视频", "subs": [{"products": ["a", "b"]}]}, {"name": "编程", "subs": [{"products": ["c"] + [f"m{i}" for i in range(5)]}]}]}
+    cards = {"a": {"name": "A", "arr_v": 2e6}, "b": {"name": "B", "arr_v": 1e3}, "c": {"name": "C", "arr_v": 2e8},
+             **{f"m{i}": {"name": f"M{i}", "arr_v": 5e6} for i in range(5)}}
+    got = w.thin(graph, cards, k=4, min_mid=5)
+    assert [g["scene"] for g in got] == ["视频"] and got[0]["known"] == ["A", "B"]
+
+
+def test_new_sources_dedup_by_domain():
+    from app.modules import _demand_watch as w
+    store = {"sacra.com": {"name": "Sacra"}}
+    got = [{"name": "Sacra again", "url": "https://www.sacra.com/x"}, {"name": "ARR Club", "url": "https://arr.club/list", "query": "ARR Club AI startups"},
+           {"name": "no url"}]
+    assert w.merge_sources(store, got, "2026-11-26") == ["arr.club"]
+    assert store["arr.club"]["query"] == "ARR Club AI startups" and w.query_pool(store)[-1] == "ARR Club AI startups"
+
+
+def test_watch_runs_all_steps_stops_at_budget_and_logs(monkeypatch, tmp_path):
+    from app.modules import _demand_mid as mid, _demand_watch as w
+    monkeypatch.setattr(dr, "BASE", tmp_path)
+    dr._save("graph.json", {"scenes": [{"name": "视频", "subs": [{"products": []}]}]})
+    monkeypatch.setattr(w, "_headlines", lambda: ["Acme AI raises $30M Series B"])
+    monkeypatch.setattr(w, "process", lambda ctx, keys: None)
+    calls = []
+
+    class Fake:
+        light = strong = "m"
+        cost = 0.0
+
+        def call(self, model, system, user, web=False):
+            calls.append(system[:12])
+            self.cost += 1
+            if system == w.P_SOURCES:
+                return {"sources": [{"name": "ARR Club", "url": "https://arr.club", "query": "ARR Club AI startups"}]}
+            return {"companies": [{"name": f"Co{abs(hash(user)) % 10**8}", "stage": "Series A", "one_liner": "x", "source_url": "https://s"}]}
+    ctx = Fake()
+    log = w.run_watch(ctx, budget=4)
+    assert log["new_sources"] == ["arr.club"] and log["stopped"] == "budget"
+    assert len(calls) == 5 and log["leads"] == 1 and log["gaps"] == ["视频"]
+    assert len(log["new"]) == 4 and dr._load("watch_log.json", [])[-1]["date"] == log["date"]
+    runs = dr._load("mid_queries.json", {})
+    assert len(runs) == 2 and all(q in mid.QUERIES for q in runs)
+
+
+def test_demand_sync_adds_weekly_watch(client, monkeypatch):
+    from app import db
+    from app.modules import demand as dm
+    intel.seed()
+    got = {}
+    monkeypatch.setattr(dm, "start", lambda **kw: got.update(kw) or True)
+    intel._set_state("startup_day", db.today())
+    intel._set_state("demand_day", "")
+    intel._set_state("demand_watch_day", "")
+    intel.demand_sync()
+    assert got["watch"] == intel.CFG_DEFAULTS["demand_watch_budget"] > 0
+    got.clear()
+    intel._set_state("demand_day", "")
+    intel.demand_sync()
+    assert not got.get("watch")

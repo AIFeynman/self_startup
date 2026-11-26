@@ -21,7 +21,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from hashlib import sha1
 
 from fastapi import APIRouter, HTTPException
@@ -222,6 +222,8 @@ CFG_DEFAULTS = {
     "demand": True,            # 需求图谱：每天把新收录的产品抽成需求卡并归入图谱
     "demand_max_new": 150,
     "demand_enrich": 30,        # 需求卡联网补收入 / 融资 / 增长：头部和高收入创业公司每天最多补多少个
+    "demand_watch": True,        # 产品需求持续更新：每周找新来源、按融资新闻和薄弱场景查漏、重跑过期检索
+    "demand_watch_budget": 5,    # 每周这一步最多花多少美元（Claude 联网检索）
     "head_sync": True,          # 每周读 AICPB 榜单，把新进榜的 AI 产品入库     # 每天最多新抽几个产品（按出现时间从新到旧）
     "growth": True,            # 每日增长 Case
     "growth_collect_hours": 12,  # 增长素材多久采一次（X 名单每次每个账号约 $0.001）
@@ -1177,9 +1179,13 @@ def demand_sync() -> dict:
     if not cfg("demand") or _state("demand_day") == day or _state("startup_day") != day:
         return {"skipped": True}
     from . import demand as dm
-    started = dm.start(max_new=int(cfg("demand_max_new") or 0), enrich=int(cfg("demand_enrich") or 0))
+    last = _state("demand_watch_day") or ""
+    watch = float(cfg("demand_watch_budget") or 0) if cfg("demand_watch") and (not last or last <= (date.fromisoformat(day) - timedelta(days=7)).isoformat()) else 0
+    started = dm.start(max_new=int(cfg("demand_max_new") or 0), enrich=int(cfg("demand_enrich") or 0), watch=watch)
     if started:
         _set_state("demand_day", day)
+        if watch:
+            _set_state("demand_watch_day", day)
     return {"started": started}
 
 

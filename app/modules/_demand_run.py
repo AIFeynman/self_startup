@@ -16,6 +16,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 
 from .. import agent, settings, usage
 from ..db import DATA_DIR, DB_PATH
@@ -466,17 +467,23 @@ def group_domains(ctx: Ctx, graph: dict) -> None:
 
 
 def run_mid(ctx: Ctx, n: int) -> None:
+    from . import _demand_mid as mid, _demand_watch as watch
+    runs = _load("mid_queries.json", {})
+    qs = watch.stale(watch.query_pool(_load("sources.json", {})), runs, date.today(), k=n)
+    status(ctx, "discover", 0, len(qs))
+    found = mid.discover(ctx, qs, _load("cards.json", {})) if qs else _load("mid.json", {})
+    _save("mid_queries.json", {**runs, **{q: time.strftime("%Y-%m-%d") for q in qs}})
+    process_mid(ctx, list(found))
+
+
+def process_mid(ctx: Ctx, keys: list[str]) -> None:
+    """中型公司候选 → 补画像 → 出卡 → 补商业模式和收入 → 联网补全 → 归进图谱。"""
     from . import _demand_mid as mid
     cards = _load("cards.json", {})
-    ran = _load("mid_runs.json", [])
-    qs = [q for q in mid.QUERIES if q not in ran][:n]
-    status(ctx, "discover", 0, len(qs))
-    found = mid.discover(ctx, qs, cards) if qs else _load("mid.json", {})
-    _save("mid_runs.json", ran + qs)
-    status(ctx, "profile", 0, len(found))
-    mid.fill_profiles(ctx, [k for k in found if k not in cards or cards[k].get("skip")])
+    status(ctx, "profile", 0, len(keys))
+    mid.fill_profiles(ctx, [k for k in keys if k not in cards or cards[k].get("skip")])
     P = collect()
-    keys = [k for k in found if k in P]
+    keys = [k for k in keys if k in P]
     cards = _load("cards.json", {})
     for k in keys:
         if cards.get(k, {}).get("skip") and len(P[k]["text"]) > cards[k].get("tl", 0):
@@ -502,6 +509,7 @@ def main() -> None:
     ap.add_argument("--max-new", type=int, default=0)
     ap.add_argument("--enrich", type=int, default=0)
     ap.add_argument("--mid", type=int, default=0, help="跑几个还没跑过的中型 AI 创业公司检索方向")
+    ap.add_argument("--watch", type=float, default=0, help="每周持续更新：找新来源、融资新闻线索、查漏、重跑过期检索，值是本次预算（美元）")
     a = ap.parse_args()
     ctx = Ctx()
     status(ctx, "start", pid=os.getpid(), error="", finished=False)
@@ -530,6 +538,10 @@ def main() -> None:
                 build_graph(ctx, cards)
             else:
                 add_new(ctx, g, cards)
+        if a.watch:
+            from . import _demand_watch
+            status(ctx, "watch", 0, 0)
+            _demand_watch.run_watch(ctx, a.watch)
         status(ctx, "done", finished=True)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
