@@ -24,7 +24,7 @@ BASE = DATA_DIR / "demand"
 TACTICS = ["内容 / SEO", "付费投放", "创作者 / 达人", "社区 / UGC", "病毒 / 分享机制", "免费增值 / PLG", "嵌入现有产品 / 集成", "渠道 / 联盟合作", "发布平台 / 媒体", "线下 / 活动", "定价 / 订阅机制"]
 MODELS = ["订阅制", "按量付费", "一次性买断", "交易抽佣", "广告变现", "免费增值", "企业销售", "联盟分成", "开源+托管", "未披露"]
 HIGH_MRR = 10000
-SOURCES = ("创业公司", "PH 日榜", "增长 Case", "大公司 / AI native")
+SOURCES = ("创业公司", "PH 日榜", "增长 Case", "大公司 / AI native", "中型 AI 创业公司")
 ANON = re.compile(r"confidential|anonymous|stealth|unnamed|undisclosed", re.I)
 MAT_CHARS = 2600
 STATUS = BASE / "status.json"
@@ -124,6 +124,8 @@ def collect() -> dict[str, dict]:
         p = get(it["name"])
         add(p, "PH 日榜", f"【PH {it['day']} 第 {it.get('rank')} 名，{it.get('votes')} 票】\n{it.get('title', '')}\n解读：{it.get('why', '')}\n话题：{'、'.join(it.get('topics') or [])}",
             ("Product Hunt", it.get("url", "")) if it.get("url") else None, it.get("track", ""), it["day"])
+    from . import _demand_mid
+    _demand_mid.add_to(P, norm)
     rev: dict[str, dict] = {}
     for r in c.execute("SELECT c.name, m.metric, m.value, m.grade, m.date FROM intel_metric m JOIN intel_company c ON c.id=m.company_id WHERE m.metric IN ('arr','mrr') ORDER BY m.date"):
         rev.setdefault(norm(r["name"]), {})[r["metric"]] = (r["value"], r["grade"], r["date"])
@@ -275,9 +277,9 @@ def _enrich_todo(P: dict, cards: dict) -> list[str]:
     return heads + sorted(big, key=lambda k: -(cards[k].get("arr_v") or 0))
 
 
-def enrich_web(ctx: Ctx, P: dict, cards: dict, limit: int) -> None:
+def enrich_web(ctx: Ctx, P: dict, cards: dict, limit: int, keys: list[str] | None = None) -> None:
     """联网补：头部和高收入创业公司的收入规模、融资、增长做法、商业模式。只补卡里还空着的字段，已有的（支付渠道验证的收入、材料里抽到的）不覆盖。"""
-    todo = _enrich_todo(P, cards)[:limit]
+    todo = (keys if keys is not None else _enrich_todo(P, cards))[:limit]
     done = [0]
     system = P_ENRICH.replace("{tactics}", "、".join(TACTICS)).replace("{models}", "、".join(MODELS))
 
@@ -463,6 +465,33 @@ def group_domains(ctx: Ctx, graph: dict) -> None:
     graph["domains"] = doms
 
 
+def run_mid(ctx: Ctx, n: int) -> None:
+    from . import _demand_mid as mid
+    cards = _load("cards.json", {})
+    ran = _load("mid_runs.json", [])
+    qs = [q for q in mid.QUERIES if q not in ran][:n]
+    status(ctx, "discover", 0, len(qs))
+    found = mid.discover(ctx, qs, cards) if qs else _load("mid.json", {})
+    _save("mid_runs.json", ran + qs)
+    status(ctx, "profile", 0, len(found))
+    mid.fill_profiles(ctx, [k for k in found if k not in cards or cards[k].get("skip")])
+    P = collect()
+    keys = [k for k in found if k in P]
+    cards = _load("cards.json", {})
+    for k in keys:
+        if cards.get(k, {}).get("skip") and len(P[k]["text"]) > cards[k].get("tl", 0):
+            del cards[k]
+    _save("cards.json", cards)
+    cards = extract(ctx, P, keys)
+    fill_model(ctx, P, cards)
+    fill_arr(ctx, P, cards)
+    todo = [k for k in keys if k in cards and not cards[k].get("skip") and not cards[k].get("enriched")]
+    enrich_web(ctx, P, cards, len(todo), todo)
+    g = _load("graph.json", None)
+    if g:
+        add_new(ctx, g, cards)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
@@ -472,10 +501,14 @@ def main() -> None:
     ap.add_argument("--rebuild", action="store_true")
     ap.add_argument("--max-new", type=int, default=0)
     ap.add_argument("--enrich", type=int, default=0)
+    ap.add_argument("--mid", type=int, default=0, help="跑几个还没跑过的中型 AI 创业公司检索方向")
     a = ap.parse_args()
     ctx = Ctx()
     status(ctx, "start", pid=os.getpid(), error="", finished=False)
     try:
+        if a.mid:
+            run_mid(ctx, a.mid)
+            return status(ctx, "done", finished=True)
         if a.domains_only:
             g = _load("graph.json", {})
             group_domains(ctx, g)

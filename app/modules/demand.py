@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import agent
 from ..db import ROOT
-from . import _demand_run as dr
+from . import _demand_mid, _demand_run as dr
 
 TITLE = "产品需求"
 PAGE = "kb/demand"  # 没有自己的侧边栏入口，是知识库里的一个标签页
@@ -35,7 +35,7 @@ def graph():
     running = not st.get("finished", True) and _alive(st.get("pid"))
     pending = len([k for k in dr.collect() if k not in cards]) if g else 0
     return {"pending": pending, "status": {**st, "running": running, "error": "" if running else st.get("error", "")}, "graph": g,
-            "cards": {k: v for k, v in cards.items() if not v.get("skip")} if g else {}, "n_cards": sum(not v.get("skip") for v in cards.values())}
+            "cards": {k: {**v, "tier": _demand_mid.tier(v)} for k, v in cards.items() if not v.get("skip")} if g else {}, "n_cards": sum(not v.get("skip") for v in cards.values())}
 
 
 def start(graph_only: bool = False, max_new: int = 0, enrich: int = 0) -> bool:
