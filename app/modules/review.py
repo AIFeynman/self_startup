@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import agent, chat, db, jobs, settings, tasks
-from . import _human_time as human, _read_log, _review_sessions as rs, _session_score as score, _utilization as util
+from . import _human_time as human, _quiz, _read_log, _review_sessions as rs, _session_score as score, _utilization as util
 
 TITLE = "复盘"
 ORDER = 10
@@ -74,7 +74,9 @@ CREATE TABLE IF NOT EXISTS review_time_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_review_time_entries_date ON review_time_entries(date);
 """
+SCHEMA += _quiz.SCHEMA
 router = APIRouter()
+router.include_router(_quiz.router)
 
 NOTE_KINDS = ("problem", "lesson", "insight", "idea")  # 系统记录用这几种
 KIND_LABEL = {"spark": "灵感", "feeling": "感想", "idea": "想法", "problem": "问题", "lesson": "经验", "insight": "洞察", "review": "复盘", "deep": "深度"}  # 便签的内置类型
