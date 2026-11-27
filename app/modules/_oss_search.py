@@ -188,6 +188,34 @@ def _lstar(d: dict) -> float:
 
 # ---------- 对外 ----------
 
+_REPO_REF = re.compile(r"^\s*(?:(?:https?://)?(?:www\.)?github\.com/)?([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/?#].*)?\s*$", re.I)
+_NAME_TOKEN = re.compile(r"[a-z0-9][a-z0-9._-]{2,}", re.I)
+NAME_MAX_HITS = 20
+
+
+def repo_ref(q: str) -> str:
+    """GitHub 链接或 owner/repo → 小写 owner/repo；不是就返回空串。"""
+    m = _REPO_REF.match(q or "")
+    return f"{m[1]}/{m[2]}".lower() if m and ("github.com" in q.lower() or " " not in q.strip()) else ""
+
+
+def name_pins(q: str, it: dict) -> tuple[dict[int, float], list[str]]:
+    """改写丢掉的英文词多半是模型不认识的项目名：仓库名正好是它 → 2 分，仓库名包含它（命中不多时）→ 1 分。
+    返回 ({rowid: 置顶分}, 被丢掉的词)。"""
+    kept = " ".join(it["must"] + it["should"] + (it.get("not") or [])).lower()
+    words = _NAME_TOKEN.findall(q.lower())
+    lost = [w for w in words if w not in kept or len(words) == 1]
+    pins: dict[int, float] = {}
+    for w in lost:
+        rows = db.rows("SELECT id, lower(substr(name, instr(name,'/')+1)) AS repo FROM oss_repos "
+                       "WHERE status='ok' AND lower(name) LIKE ? LIMIT ?", [f"%{w}%", NAME_MAX_HITS + 1])
+        for r in rows:
+            if r["repo"] == w or len(rows) <= NAME_MAX_HITS:
+                pins[r["id"]] = max(pins.get(r["id"], 0), 2.0 if r["repo"] == w else 1.0)
+    return pins, [w for w in lost if w not in kept]
+
+
+
 def _cached(key: str) -> dict | None:
     r = db.row("SELECT * FROM oss_query_cache WHERE key=?", [key])
     if not r:
@@ -200,6 +228,13 @@ def _cached(key: str) -> dict | None:
 def search(q: str, by: str = "rel", kind: str = "", domain: str = "", lang: str = "", active_days: int = 0,
            k: int = 30, chat=None, use_cache: bool = True) -> dict:
     """返回 {intent, results:[...], reranked, errors}。results 每项带 name/stars/s/t/d/k/ai/score/why。"""
+    ref = repo_ref(q)
+    if ref:
+        r = db.row("SELECT id FROM oss_repos WHERE lower(name)=?", [ref])
+        hit = list(_docs({r["id"]}).values()) if r else []
+        it = {"must": [ref], "should": [], "not": [], "domains": [], "kinds": []}
+        return {"intent": it, "results": [public(d) for d in hit], "reranked": False,
+                "errors": [] if hit else [f"库里没有 {ref}：可能 star 不到 1000、还没采集或还没标注"]}
     key = norm(q)
     errors: list[str] = []
     c = _cached(key) if use_cache else None
@@ -212,8 +247,15 @@ def search(q: str, by: str = "rel", kind: str = "", domain: str = "", lang: str 
             it = fallback_intent(q)
             errors.append(f"改写失败，按原文检索：{type(e).__name__}: {str(e)[:80]}")
         scores = None
-    cands = recall(it)
-    cands.sort(key=lambda d: -(d["rel"] + 0.12 * _lstar(d)))
+    pins, lost = name_pins(q, it)
+    cands = recall({**it, "must": it["must"] + lost})
+    have = {d["id"] for d in cands}
+    for i, d in _docs(set(pins) - have).items():
+        d["rel"] = 0.0
+        cands.append(d)
+    for d in cands:
+        d["pin"] = pins.get(d["id"], 0)
+    cands.sort(key=lambda d: -(d["pin"] * 10 + d["rel"] + 0.12 * _lstar(d)))
     if scores is None:
         scores = {}
         top = cands[:RERANK_TOP]
@@ -229,14 +271,14 @@ def search(q: str, by: str = "rel", kind: str = "", domain: str = "", lang: str 
     for d in cands:
         sc, why = scores.get(d["name"], [None, ""])
         d["rr"], d["why"] = sc, why
-        d["score"] = round((sc if sc is not None else 0) + 0.3 * d["rel"] + 0.12 * _lstar(d), 3) if reranked \
-            else round(d["rel"] + 0.12 * _lstar(d), 3)
+        d["score"] = round(d["pin"] * 10 + ((sc if sc is not None else 0) + 0.3 * d["rel"] + 0.12 * _lstar(d) if reranked
+                                            else d["rel"] + 0.12 * _lstar(d)), 3)
     if reranked:   # 精排过的只留前 40 里的（后面的没被模型看过，混进来会冲淡结果）
-        cands = [d for d in cands if d["rr"] is not None]
+        cands = [d for d in cands if d["rr"] is not None or d["pin"]]
     cands = filt(cands, kind, domain, lang, active_days)
     if by == "stars":
-        cands = [d for d in cands if (d["rr"] or 0) >= 2] if reranked else [d for d in cands if d["rel"] >= 1.0]
-        cands.sort(key=lambda d: -d["stars"])
+        cands = [d for d in cands if d["pin"] or ((d["rr"] or 0) >= 2 if reranked else d["rel"] >= 1.0)]
+        cands.sort(key=lambda d: (-d["pin"], -d["stars"]))
     else:
         cands.sort(key=lambda d: -d["score"])
     return {"intent": it, "results": [public(d) for d in cands[:k]], "reranked": reranked, "errors": errors}
