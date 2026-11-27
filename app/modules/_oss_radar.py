@@ -145,7 +145,14 @@ def oss_taxonomy():
 
 @router.get("/oss/search")
 def oss_search(q: str = "", by: str = "rel", kind: str = "", domain: str = "", lang: str = "", active: int = 0,
-               offset: int = 0, k: int = 30, added: int = 0, order: str = "stars"):
+               offset: int = 0, k: int = 30, added: int = 0, order: str = "stars", learn: str = ""):
+    if learn and not q.strip():
+        return {"mode": "browse", **srch.learn_browse(learn, domain, lang, active, offset, k, added, order)}
+    if learn:
+        r = srch.search(q, by, kind, domain, lang, active, k)
+        lts = {x["name"]: srch.learn_type(x) for x in r["results"]}
+        r["results"] = [{**x, "lt": lts[x["name"]]} for x in r["results"] if lts[x["name"]] and learn in ("all", lts[x["name"]])]
+        return {"mode": "search", **r}
     if not q.strip():
         return {"mode": "browse", **srch.browse(domain, kind, lang, active, offset, k, added, order)}
     return {"mode": "search", **srch.search(q, by, kind, domain, lang, active, k)}

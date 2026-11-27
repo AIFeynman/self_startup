@@ -345,3 +345,44 @@ def test_recall_spacing_variant_primary_domain_and_generic_atoms(monkeypatch):
     assert "a/pdfx" in {d["name"] for d in srch.recall(it)}       # 两个词都命中 → 召回
     monkeypatch.setattr(srch, "ATOM_MAX_HITS", 0)                 # 两个词都超过上限，当泛词
     assert "a/pdfx" not in {d["name"] for d in srch.recall(it)}
+
+
+def _learn_lib():
+    rows = [("x/minimind", 69000, "tutorial", "llm", "两小时从零训练 64M 小语言模型的完整开源教程"),
+            ("x/course", 9000, "tutorial", "llm", "LLM 入门课程，配套 Notebook"),
+            ("x/awesome-llm-survey", 5000, "awesome", "llm", "大模型综述论文清单"),
+            ("x/llm-list", 3000, "awesome", "llm", "大模型工具与资源合集"),
+            ("x/d2l", 80000, "book", "classic_ml", "动手学深度学习开源书"),
+            ("x/interview", 20000, "tutorial", "career", "后端面试八股与学习路线"),
+            ("x/llama.c", 20000, "research", "llm", "约 700 行纯 C 极简教学向推理实现"),
+            ("x/yi", 7000, "model", "llm", "从零训练的开源双语大模型权重"),
+            ("x/pdfx", 5000, "library", "doc_parsing", "把 PDF 解析成 Markdown")]
+    col.upsert([raw(n, s) for n, s, *_ in rows], "slice")
+    for n, _, k, d, s in rows:
+        db.execute("INSERT INTO oss_labels (name, k, d, ai, t, s) VALUES (?,?,?,?,?,?)", [n, k, d, "none", "[]", s])
+
+
+def test_learn_browse_classifies_learning_repos_and_sorts_by_stars(client):
+    _learn_lib()
+    b = client.get("/api/intel/oss/search", params={"learn": "all"}).json()
+    got = {x["name"]: x["lt"] for x in b["results"]}
+    assert got == {"x/minimind": "scratch", "x/course": "course", "x/awesome-llm-survey": "survey", "x/llm-list": "list",
+                   "x/d2l": "book", "x/interview": "road", "x/llama.c": "scratch"}
+    assert [x["name"] for x in b["results"]][:2] == ["x/d2l", "x/minimind"] and b["total"] == 7
+    assert b["learn_counts"] == {"survey": 1, "course": 1, "scratch": 2, "book": 1, "road": 1, "list": 1}
+    assert b["learn_domains"]["llm"] == 5
+    one = client.get("/api/intel/oss/search", params={"learn": "scratch", "domain": "llm", "k": 1}).json()
+    assert [x["name"] for x in one["results"]] == ["x/minimind"] and one["total"] == 2
+    assert one["learn_counts"]["survey"] == 1   # 分类计数不受当前分类影响，切换时还能看到别的类有多少
+    nxt = client.get("/api/intel/oss/search", params={"learn": "scratch", "k": 1, "offset": 1}).json()
+    assert [x["name"] for x in nxt["results"]] == ["x/llama.c"]
+
+
+def test_learn_search_keeps_only_learning_hits(client, monkeypatch):
+    _learn_lib()
+    hits = [{"name": n, "k": k, "d": "llm", "s": s, "t": []} for n, k, s in
+            [("x/minimind", "tutorial", "从零训练小模型教程"), ("x/pdfx", "library", "PDF 解析"), ("x/llm-list", "awesome", "资源合集")]]
+    monkeypatch.setattr(srch, "search", lambda *a, **k: {"intent": {}, "results": hits, "reranked": True, "errors": []})
+    got = lambda learn: [(x["name"], x["lt"]) for x in client.get("/api/intel/oss/search", params={"q": "训练小模型", "learn": learn}).json()["results"]]
+    assert got("all") == [("x/minimind", "scratch"), ("x/llm-list", "list")]
+    assert got("scratch") == [("x/minimind", "scratch")]

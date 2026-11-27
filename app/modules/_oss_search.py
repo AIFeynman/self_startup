@@ -259,6 +259,76 @@ def public(d: dict) -> dict:
                                         "rel", "rr", "why", "score")}
 
 
+LEARN = {"survey": "综述 / 论文", "course": "教程 / 课程", "scratch": "代码学习 / 从零实现", "book": "书籍 / 讲义",
+         "road": "学习路线 / 面试", "list": "资源清单"}
+_SURVEY_N = re.compile(r"survey|papers|paper-?list|paper-?reading|reading-?list", re.I)
+_SURVEY_S = re.compile(r"综述|论文(清单|列表|合集|汇总|集合|导读|精选|阅读|精读|笔记)|必读论文|survey", re.I)
+_ROAD = re.compile(r"roadmap|路线|学习路径|自学|面试|interview|八股|cheat ?sheet|速查", re.I)
+_SCRATCH = re.compile(r"from[ -]scratch|从零|从头|手写|手搓|zero[ -]to[ -]hero|build[ -]your[ -]own|逐行|动手实现|复刻", re.I)
+_MINI = re.compile(r"极简|\d+ ?行|minimal|nano|tiny", re.I)
+_TEACH = re.compile(r"教学|教程|学习|讲解|可读|易读|课程|educational|learn", re.I)
+_LEARN_K = ("tutorial", "book", "awesome")
+_LT_CACHE: dict = {}
+
+
+def learn_type(r: dict) -> str:
+    """学习类细分：靠已有的形态标注 + 名称 / 简介里的关键词，不另调模型。不是学习类返回空串。"""
+    k, name, s = r["k"], r["name"], r.get("s") or ""
+    x = " ".join([name, r.get("descr") or "", s, r.get("t") if isinstance(r.get("t"), str) else " ".join(r.get("t") or [])])
+    if k in _LEARN_K + ("research",) and (_SURVEY_N.search(name) or (_SURVEY_S.search(s) and (k != "research" or _TEACH.search(x)))):
+        return "survey"
+    if k in _LEARN_K and (r.get("d") == "career" or _ROAD.search(x)):
+        return "road"
+    if (k in ("tutorial", "book") and _SCRATCH.search(x)) or (k == "research" and (_SCRATCH.search(x) or _MINI.search(x)) and _TEACH.search(x)) \
+            or (k in ("model", "framework") and _SCRATCH.search(x) and _TEACH.search(x)):
+        return "scratch"
+    return {"book": "book", "tutorial": "course", "awesome": "list"}.get(k, "")
+
+
+def learn_browse(learn: str, domain: str = "", lang: str = "", active_days: int = 0, offset: int = 0, k: int = 30,
+                 added_days: int = 0, order: str = "stars") -> dict:
+    """学习类浏览：learn=all 看全部学习类，或某个细分 code；分类计数和领域计数按其余筛选算，方便切换。"""
+    where, args = ["r.status='ok'", "r.stars>=900", "l.k IN ('tutorial','book','awesome','research','model','framework')"], []
+    if lang:
+        where.append("lower(r.lang)=lower(?)")
+        args.append(lang)
+    if active_days:
+        where.append("substr(r.pushed,1,10)>=? AND r.archived=0")
+        args.append((datetime.now() - timedelta(days=active_days)).strftime("%Y-%m-%d"))
+    if added_days:
+        where.append("substr(r.first_seen,1,10)>=?")
+        args.append((datetime.now() - timedelta(days=added_days - 1)).strftime("%Y-%m-%d"))
+    rows = db.rows("SELECT r.name, r.stars, r.lang, r.pushed, substr(r.first_seen,1,10) AS added, r.first_seen, r.archived, r.descr, "
+                   "l.k, l.d, l.d2, l.ai, l.t, l.s FROM oss_repos r JOIN oss_labels l ON l.name=r.name WHERE " + " AND ".join(where), args)
+    sig = tuple(db.row("SELECT count(*) AS n, max(labeled_at) AS m FROM oss_labels").values())
+    if _LT_CACHE.get("sig") != sig:
+        _LT_CACHE.clear()
+        _LT_CACHE["sig"] = sig
+    pool = []
+    for r in rows:
+        lt = _LT_CACHE.get(r["name"])
+        if lt is None:
+            lt = _LT_CACHE[r["name"]] = learn_type(r)
+        if lt:
+            r["lt"] = lt
+            pool.append(r)
+    in_dom = lambda r: not domain or r["d"] == domain or f'"{domain}"' in (r["d2"] or "")  # noqa: E731
+    counts = {c: 0 for c in LEARN}
+    doms: dict[str, int] = {}
+    for r in pool:
+        if in_dom(r):
+            counts[r["lt"]] += 1
+        if learn in ("all", r["lt"]):
+            doms[r["d"]] = doms.get(r["d"], 0) + 1
+    hit = [r for r in pool if in_dom(r) and learn in ("all", r["lt"])]
+    hit.sort(key=(lambda r: (r["first_seen"] or "", r["stars"])) if order == "time" else (lambda r: r["stars"]), reverse=True)
+    page = hit[offset:offset + k]
+    for r in page:
+        r.pop("first_seen", None)
+        r["t"], r["d2"] = json.loads(r["t"] or "[]"), json.loads(r["d2"] or "[]")
+    return {"total": len(hit), "results": page, "learn_counts": counts, "learn_domains": doms}
+
+
 def browse(domain: str = "", kind: str = "", lang: str = "", active_days: int = 0, offset: int = 0, k: int = 30,
            added_days: int = 0, order: str = "stars") -> dict:
     """没输入时按领域浏览：默认 star 倒序；order=time 按入库时间倒序；added_days=N 只看最近 N 天（1=今天）入库的。"""
