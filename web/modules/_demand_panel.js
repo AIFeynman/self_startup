@@ -8,7 +8,7 @@ export const PANEL_CSS = `
 .pn-sum b { font-variant-numeric: tabular-nums; } .pn-bar { flex: 1; min-width: 120px; max-width: 260px; height: 6px; background: var(--bg-2); border-radius: 3px; overflow: hidden; }
 .pn-bar i { display: block; height: 100%; background: var(--accent); }
 .pn-lg { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
-.pn-grid { display: grid; grid-template-columns: minmax(150px, 220px) repeat(var(--cols), minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.pn-grid { display: grid; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .pn-grid > div { padding: 6px 8px; border-top: 1px solid var(--line); min-width: 0; }
 .pn-grid > .pn-h { position: sticky; top: 0; z-index: 2; background: var(--panel); font-weight: 700; font-size: 13px; border-top: none; }
 .pn-grid > .pn-sc { grid-column: 1 / -1; background: var(--bg-2); font-weight: 700; font-size: 13.5px; }
@@ -32,7 +32,7 @@ export const PANEL_CSS = `
 .pn-th q { display: block; color: var(--muted); quotes: '「' '」'; }
 .pn-th .u { font-weight: 600; } .pn-th .a { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 @container (max-width: 640px) {
-  .pn-grid { grid-template-columns: 1fr; }
+  .pn-grid { grid-template-columns: 1fr !important; }
   .pn-grid > .pn-h { display: none; }
   .pn-grid > .pn-cell { border-top: none; padding-top: 0; }
   .pn-cell > .pn-t { display: inline; font-size: 11.5px; color: var(--muted); margin-right: 2px; }
@@ -90,7 +90,7 @@ export function panelHtml(D, A, o) {
 <span class="dm-m">星级、规模、来源等筛选沿用上面那排</span></div>
 <div class="pn-sum"><span>共 <b>${ks.length}</b> 家</span><span>看过 <b>${ns}</b></span><span class="pn-bar"><i style="width:${ks.length ? Math.round(ns / ks.length * 100) : 0}%"></i></span><span>评过星 <b>${nr}</b></span><span>有评论 / 讨论 <b>${nn}</b></span>
 <span class="pn-lg"><span>✓ 看过</span><span>★ 你的星级</span><span><span class="pn-c" style="border:none;padding:0;background:none"><u>2</u></span> 评论 / 讨论条数</span><span>每格按星级、收入排</span></span></div>
-${ks.length ? `<div class="pn-grid" style="--cols:${cols.length}"><div class="pn-h">赛道（痛点）</div>${cols.map(([, l]) => `<div class="pn-h">${l}公司</div>`).join('')}${body}</div>` : '<div class="dm-m">没有符合筛选的公司</div>'}`;
+${ks.length ? `<div class="pn-grid" style="grid-template-columns:minmax(150px, 220px) ${cols.map(([t]) => ({ small: '1.7fr', mid: '1.2fr', large: '1fr' })[t]).join(' ')}"><div class="pn-h">赛道（痛点）</div>${cols.map(([, l]) => `<div class="pn-h">${l}公司</div>`).join('')}${body}</div>` : '<div class="dm-m">没有符合筛选的公司</div>'}`;
 }
 
 export function popHtml(D, A, k, star, threads, starSvg) {
