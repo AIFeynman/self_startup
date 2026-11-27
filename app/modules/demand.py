@@ -6,14 +6,18 @@ import subprocess
 import sys
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-from .. import agent
+from .. import agent, db
 from ..db import ROOT
-from . import _demand_mid, _demand_run as dr
+from . import _demand_mid, _demand_run as dr, _read_log
 
 TITLE = "产品需求"
 PAGE = "kb/demand"  # 没有自己的侧边栏入口，是知识库里的一个标签页
 router = APIRouter()
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS demand_seen (k TEXT PRIMARY KEY, name TEXT DEFAULT '', at TEXT NOT NULL);
+"""
 PROC: list[subprocess.Popen] = []
 
 
@@ -67,3 +71,32 @@ def agent_context(ref: str) -> str:
     cards = dr._load("cards.json", {})
     return json.dumps([{"大场景": sc["name"], "总结": sc["summary"], "子场景": [{"name": sb["name"], "痛点": sb["pain"], "产品": [
         {k: cards[p].get(k) for k in ("name", "user", "scene", "pain", "growth", "tactics")} for p in sb["products"]]} for sb in sc["subs"]]} for sc in g["scenes"]], ensure_ascii=False)[:60000]
+
+
+class SeenIn(BaseModel):
+    seen: bool
+    name: str = ""
+
+
+@router.put("/seen/{k}")
+def mark_seen(k: str, body: SeenIn):
+    """全貌面板里标「看过」；第一次标时记一条已读（进复盘时间线）。取消只删标记，已读历史保留。"""
+    if not body.seen:
+        db.execute("DELETE FROM demand_seen WHERE k=?", [k])
+        return {"ok": True}
+    if not db.row("SELECT 1 FROM demand_seen WHERE k=?", [k]):
+        db.execute("INSERT INTO demand_seen (k, name, at) VALUES (?, ?, ?)", [k, body.name, db.now()])
+        _read_log.log("demand", k, body.name, f"#kb/demand/{body.name}", "产品需求")
+    return {"ok": True}
+
+
+@router.get("/activity")
+def activity():
+    """每家公司的看过时间，和评论 / 问 Claude 的记录数（批注 doc = demand:<key>）。"""
+    seen = {r["k"]: r["at"] for r in db.rows("SELECT k, at FROM demand_seen")}
+    notes = {}
+    for r in db.rows("SELECT a.doc, count(DISTINCT a.id) threads, max(a.updated_at) last, "
+                     "(SELECT count(*) FROM annotation_msgs m JOIN annotations b ON b.id=m.annotation_id WHERE b.doc=a.doc AND m.role='assistant') asks "
+                     "FROM annotations a WHERE a.doc LIKE 'demand:%' GROUP BY a.doc"):
+        notes[r["doc"].removeprefix("demand:")] = {"threads": r["threads"], "asks": r["asks"], "last": r["last"]}
+    return {"seen": seen, "notes": notes}

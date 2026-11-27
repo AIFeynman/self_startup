@@ -1,4 +1,5 @@
 import { annotate, loadRatings } from './_annotate.js';
+import { PANEL_CSS, panelHtml, popHtml } from './_demand_panel.js';
 // 产品需求（原需求图谱）：知识库的子标签，由 kb.js 在 #kb/demand 路由下调用 demandTab(body, ctx, 查询)；顶部主搜索框的输入走返回的 search。
 // 数据是产品雷达里的创业公司 / PH 日榜 / 增长 Case，逐产品拆成「目标用户 · 场景 · 痛点 · 产品 · 商业模式 · 增长手段」。
 // 三栏下钻：领域 / 场景 → 痛点 → 公司知识卡（字号固定，不用缩放拖动）；另有「打法矩阵」：场景 × 增长手段 / 商业模式。
@@ -97,6 +98,8 @@ export async function demandTab(host, ctx, q0 = '') {
   let minStar = (window.__starPick ||= {}).demand || 0;
   let D, view = 'graph', tac = '', src = '', bm = '', size = '', mat = 'tac', S = '', P = '', sortBy = 'def', timer;
   let q = q0, day = '', added = '', qs = null, idx = new Map();
+  let A = { seen: {}, notes: {} }, pf = { mrr: '', st: '', dom: '' }, cur = '';
+  const TH = new Map();
   const low = (s) => String(s || '').toLowerCase();
   const bigrams = (s) => { const a = low(s).replace(/[\s\-_.·/]/g, ''), r = new Set(); for (let i = 0; i < a.length - 1; i++) r.add(a.slice(i, i + 2)); return r; };
   const subseq = (t, s) => { let i = 0; for (const ch of s) if (ch === t[i] && ++i === t.length) return true; return false; };
@@ -144,7 +147,7 @@ export async function demandTab(host, ctx, q0 = '') {
   const newN = (keys) => keys.filter(isNew).length;
   const dot = (n) => (n ? `<b class="dm-dot" title="${n} 个新项目">${n}</b>` : '');
   const body = h('div.dm-cq');
-  host.append(h('style', {}, CSS), body);
+  host.append(h('style', {}, CSS + PANEL_CSS), body);
   const el = host;
 
   const ADDED = [['', '全部时间'], ['1', '今天新增'], ['3', '近 3 天新增'], ['7', '近 7 天新增'], ['30', '近 30 天新增']];
@@ -196,7 +199,7 @@ export async function demandTab(host, ctx, q0 = '') {
     const nStar = (m) => Object.keys(D.cards).filter((k) => (m ? star(k) >= m : true)).length;
     const total = filtering() ? Object.keys(D.cards).filter(fit).length : 0;
     const sel = (f, opts, cur) => `<select data-f="${f}">${opts.map(([v, t]) => `<option value="${E(v)}" ${String(cur) === String(v) ? 'selected' : ''}>${E(t)}</option>`).join('')}</select>`;
-    return `<div class="dm-flt"><span class="dm-seg"><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button></span>
+    return `<div class="dm-flt"><span class="dm-seg"><button data-v="graph" class="${view === 'graph' ? 'on' : ''}">图谱</button><button data-v="mat" class="${view === 'mat' ? 'on' : ''}">打法矩阵</button><button data-v="all" class="${view === 'all' ? 'on' : ''}" title="所有赛道 × 公司规模，一眼看全：哪些看过、评过星、有评论">全貌</button></span>
 <span class="dm-seg dm-tier" title="按公司规模看：同样的痛点，小团队、中型创业公司、大厂各怎么打"><b>规模</b>${[['', '全部'], ...Object.entries(TIER)].map(([x, t]) => `<button data-size="${x}" class="${size === x ? 'on' : ''}" title="${x ? E(TIER_NOTE[x]) : '不限规模'}">${t}${x ? ` ${n((c) => c.tier === x)}` : ''}</button>`).join('')}</span>
 ${sel('added', ADDED, added)}
 ${sel('src', [['', '全部来源'], ...Object.keys(SRC).map((x) => [x, `${x} (${n((c) => c.sources.includes(x))})`])], src)}
@@ -319,14 +322,17 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       return;
     }
     const wy = window.scrollY;
-    body.innerHTML = notice() + bar() + days() + watchBox() + (view === 'graph' ? graph() : matrix());
+    body.innerHTML = view === 'all'
+      ? notice() + bar() + panelHtml(D, A, { star, fit, size, ...pf, cur }) + (cur && D.cards[cur] ? `<div class="pn-pop">${popHtml(D, A, cur, star, TH.get(cur), starSvg)}</div>` : '')
+      : notice() + bar() + days() + watchBox() + (view === 'graph' ? graph() : matrix());
     body.querySelectorAll('.dm-co').forEach(notes);
     window.scrollTo(0, wy);
   };
   const load = async () => {
     if (!el.isConnected) return;
-    const [d, rt] = await Promise.all([api.get('/api/demand/graph'), loadRatings(api, 'demand:')]);
+    const [d, rt, act] = await Promise.all([api.get('/api/demand/graph'), loadRatings(api, 'demand:'), api.get('/api/demand/activity').catch(() => A)]);
     D = d;
+    A = act;
     buildIdx();
     computeQ();
     R.clear();
@@ -342,6 +348,8 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
   };
 
   body.addEventListener('change', (e) => {
+    const pfk = e.target.dataset?.pf;
+    if (pfk) { pf[pfk] = e.target.value; paint(); return; }
     const f = e.target.dataset?.f;
     if (!f) return;
     const v = e.target.value;
@@ -349,9 +357,23 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     paint();
   });
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-findname],[data-size],[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-pk],[data-pclose],[data-pseen],[data-pout],[data-findname],[data-size],[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
+    const markSeen = async (k, on) => {
+      const prev = A.seen[k];
+      if (on) A.seen[k] = prev || new Date().toISOString(); else delete A.seen[k];
+      try { await api.put('/api/demand/seen/' + encodeURIComponent(k), { seen: on, name: D.cards[k]?.name || '' }); } catch (err) { if (prev) A.seen[k] = prev; else delete A.seen[k]; toast('没存上：' + err.message, true); }
+    };
+    if (ds.pk) {
+      cur = cur === ds.pk ? '' : ds.pk;
+      paint();
+      if (cur && !TH.has(cur)) { const k = cur; TH.set(k, (await api.get('/api/annotations?doc=' + encodeURIComponent('demand:' + k)).catch(() => [])) || []); if (cur === k && view === 'all') paint(); }
+      return;
+    }
+    if (ds.pclose) { cur = ''; paint(); return; }
+    if (ds.pseen) { await markSeen(ds.pseen, !A.seen[ds.pseen]); paint(); return; }
+    if (ds.pout) { if (!A.seen[ds.pout]) markSeen(ds.pout, true).then(() => view === 'all' && paint()); return; }
     if (ds.rate) {
       const k = ds.k, doc = 'demand:' + k, prev = star(k), v = +ds.rate === prev ? 0 : +ds.rate;
       const set = (x) => (x ? R.set(doc, x) : R.delete(doc));
@@ -361,6 +383,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       return;
     }
     if (ds.go) {
+      if (view === 'all') { view = 'graph'; cur = ''; if (!A.seen[ds.go]) markSeen(ds.go, true); }
       for (const sc of D.graph.scenes) for (const sb of sc.subs) if (sb.products.includes(ds.go)) { S = sc.id; pick(sb); }
       paint();
       document.getElementById('dm-c-' + ds.go)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
