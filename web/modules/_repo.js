@@ -2,14 +2,13 @@
 // 由 kb.js 在 #kb/repo 路由下调用 repoTab(body, ctx, 查询)；顶部主搜索框的输入走返回的 search。
 // 有输入：改写 + 多路召回 + 精排，可切「相关性 | star」；没输入：按领域浏览（star 倒序）。
 // 路由：#kb/repo/<查询>（信息推荐卡片的「同类项目」跳这里）。
-const TASKS = { collect: '全量采集', label: '标注', daily: '每日新增', weekly: '每周刷新' };
 const ADDED = [['1', '今天入库'], ['3', '近 3 天入库'], ['7', '近 7 天入库'], ['30', '近 30 天入库'], ['0', '全部时间']];
 const ACTIVE = [['0', '不限活跃'], ['30', '30 天内有更新'], ['180', '半年内有更新'], ['365', '一年内有更新']];
 const AI_NAME = { core: 'AI 本身', for_ai: '给 AI 用', ai_powered: 'AI 应用', none: '' };
 const LEARN = [['survey', '综述 / 论文'], ['course', '教程 / 课程'], ['scratch', '代码学习 / 从零实现'], ['book', '书籍 / 讲义'], ['road', '学习路线 / 面试'], ['list', '资源清单']];
 const LNAME = Object.fromEntries(LEARN);
 const st = { q: '', by: 'rel', kind: '', domain: '', lang: '', active: '0', offset: 0, added: '1', order: 'time', learn: '' };
-const saved = { added: '0', order: 'stars' };
+const saved = { added: '7', order: 'time' };
 let lc = null;
 const fmtStars = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
 
@@ -24,8 +23,6 @@ const CSS = `
 .os-item .acts { display: flex; gap: 4px; margin-left: auto; }
 .os-item .acts button { padding: 2px 10px; font-size: 12px; }
 .os-intent { font-size: 12.5px; color: var(--muted); margin: -6px 0 10px; }
-.os-run { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
-.os-run .progress { flex: 1; min-width: 120px; }
 .os-mode { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
 .os-mode .os-seg button { font-size: 13.5px; padding: 4px 14px; }
 .os-lt { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
@@ -44,42 +41,11 @@ export async function repoTab(body, ctx, q0 = '') {
   st.q = q0;
   const setHash = (q) => history.replaceState(null, '', q ? '#kb/repo/' + encodeURIComponent(q) : '#kb/repo');   // 改 hash 会整页重绘，这里只记地址
 
-  const runBox = h('div.card.flat');
   const bar = h('div.os-bar');
   const modeBox = h('div');
   const intentBox = h('div');
   const listBox = h('div');
-  let timer = null;
 
-  // ---------- 后台任务 ----------
-  const drawRun = (s) => {
-    const r = s.running;
-    const p = r ? JSON.parse(r.progress || '{}') : {};
-    const la = p.label_at;   // [已处理, 总数, {labeled, cost}]
-    const line = r ? [h('span.tag', {}, `${TASKS[r.task] || r.task}进行中`),
-      la ? ui.progress((la[0] / Math.max(la[1], 1)) * 100) : h('span.muted', {}, p.page ? `已拉 ${p.page[0]}（${p.page[1]} 个）` : p.refresh_at ? `刷新 ${p.refresh_at[0]}/${p.refresh_at[1]}` : '准备中…'),
-      la ? h('span.muted', {}, `${la[0]}/${la[1]} · 已标 ${la[2].labeled} · ≈$${la[2].cost}`) : null,
-      h('button.ghost', { onclick: async () => { await api.post(`/api/intel/oss/runs/${r.id}/stop`); toast('当前批次做完后停'); } }, '停止')]
-      : [h('span.muted', {}, s.runs[0] ? `上次：${TASKS[s.runs[0].task]} ${s.runs[0].status === 'done' ? '完成' : s.runs[0].status === 'failed' ? '失败' : '已停'} · ${(s.runs[0].finished || s.runs[0].started || '').slice(5, 16).replace('T', ' ')}` : '还没跑过'),
-        ...Object.entries(TASKS).map(([t, n]) => h('button.outline', { onclick: () => start(t, n, s) }, n))];
-    runBox.replaceChildren(...[h('div.os-run', {}, line),
-      s.runs[0]?.status === 'failed' ? h('div.muted', { style: { color: 'var(--err)' } }, (s.runs[0].log || '').split('\n')[0]) : null].filter(Boolean));
-    clearTimeout(timer);
-    if (r) timer = setTimeout(async () => { if (runBox.isConnected) drawAll(await api.get('/api/intel/oss/status')); }, 5000);
-  };
-  const start = async (task, name, s) => {
-    let limit = 0;
-    if (task === 'label') {
-      const v = prompt(`待标注 ${s.todo} 个（订阅 Haiku，每 50 个一次调用，4 路并行）。这次标多少个？0 = 全部`, String(Math.min(s.todo, 500)));
-      if (v === null) return;
-      limit = parseInt(v, 10) || 0;
-    } else if (task === 'collect' && !confirm('全量采集 stars ≥ 1000 的仓库（约 6.6 万个，受 GitHub 搜索限流约 20-40 分钟，只调 GitHub 不调模型）。开始？')) return;
-    try { await api.post('/api/intel/oss/runs', { task, limit }); toast(`${name}已开始`); drawAll(await api.get('/api/intel/oss/status')); } catch (e) { toast(e.message, true); }
-  };
-  const drawAll = (s) => {
-    head.textContent = sub(s);
-    drawRun(s);
-  };
   const sub = (s) => `${s.repos} 个仓库 · 已标注 ${s.labeled} · 待标注 ${s.todo} · 分类体系 ${s.tax_ver}`;
 
   // ---------- 检索 / 浏览 ----------
@@ -137,12 +103,18 @@ export async function repoTab(body, ctx, q0 = '') {
   };
   const go = (q) => { st.q = q; setHash(q); st.offset = 0; drawBar(); load(); };
 
+  let loadSeq = 0;
   async function load(more = false) {
+    const seq = ++loadSeq;
     if (!more) st.offset = 0;
-    const p = new URLSearchParams({ q: st.q, by: st.by, kind: st.kind, domain: st.domain, lang: st.lang, active: st.active, added: st.added, order: st.order, offset: st.offset, k: st.q ? 30 : 40, learn: st.learn });
-    if (!more) listBox.replaceChildren(h('div.muted', {}, st.q ? '检索中（改写需求 → 召回 → 精排，首次约几秒）…' : '加载中…'));
+    const p = new URLSearchParams({ q: st.q, by: st.by, kind: st.kind, domain: st.domain, lang: st.lang, active: st.active, added: st.added, order: st.order, offset: st.offset, k: st.q || st.learn ? 30 : 40, learn: st.learn });
+    if (!more) {
+      if (st.q || !listBox.querySelector('.list')) listBox.replaceChildren(h('div.muted', {}, st.q ? '检索中（改写需求 → 召回 → 精排，首次约几秒）…' : '加载中…'));
+      else listBox.style.opacity = 0.5;
+    }
     let r;
-    try { r = await api.get('/api/intel/oss/search?' + p); } catch (e) { listBox.replaceChildren(ui.empty('检索失败', e.message)); return; }
+    try { r = await api.get('/api/intel/oss/search?' + p); } catch (e) { if (seq !== loadSeq) return; listBox.replaceChildren(ui.empty('检索失败', e.message)); return; } finally { if (seq === loadSeq) listBox.style.opacity = ''; }
+    if (seq !== loadSeq) return;
     intentBox.replaceChildren(r.mode === 'search' ? h('div.os-intent', {}, [
       '理解为：', (r.intent.must || []).join(' / '),
       r.intent.domains?.length ? ` · 领域 ${r.intent.domains.map((d) => dname[d] || d).join('、')}` : '',
@@ -157,7 +129,7 @@ export async function repoTab(body, ctx, q0 = '') {
       const title = (st.learn ? `学习类 · ${st.learn === 'all' ? '全部' : LNAME[st.learn]} · ` : '') + (r.mode === 'search' ? `「${st.q}」` : (st.domain ? dname[st.domain] : '全部领域') + (st.order === 'time' ? ' · 按入库时间' : ' · 按 star'));
       listBox.replaceChildren(ui.section(title, r.mode === 'search' ? `${r.results.length} 个` : `共 ${r.total} 个`),
         items.length ? h('div.card', {}, h('div.list', {}, items))
-          : ui.empty(status0.labeled ? '没找到' : '库还是空的', status0.labeled ? (st.added !== '0' ? '这段时间没有新入库的项目，可以放宽入库时间' : '换个说法，或去掉筛选') : '先点上面的「全量采集」，再点「标注」'));
+          : ui.empty(status0.labeled ? '没找到' : '库还是空的', status0.labeled ? (st.added !== '0' ? '这段时间没有新入库的项目，可以放宽入库时间' : '换个说法，或去掉筛选') : '后台还没采集和标注'));
     }
     listBox.querySelector('.os-more')?.remove();
     if (r.mode === 'browse' && st.offset + r.results.length < r.total) {
@@ -166,8 +138,7 @@ export async function repoTab(body, ctx, q0 = '') {
   }
 
   const head = h('div.muted', { style: { margin: '0 0 10px' } }, sub(status0));
-  body.append(h('style', {}, CSS), head, runBox, modeBox, bar, intentBox, listBox);
-  drawRun(status0);
+  body.append(h('style', {}, CSS), head, modeBox, bar, intentBox, listBox);
   drawMode();
   drawBar();
   load();

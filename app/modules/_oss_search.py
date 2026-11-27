@@ -14,6 +14,7 @@ import math
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timedelta
 
 import httpx
@@ -298,20 +299,25 @@ def learn_browse(learn: str, domain: str = "", lang: str = "", active_days: int 
     if added_days:
         where.append("substr(r.first_seen,1,10)>=?")
         args.append((datetime.now() - timedelta(days=added_days - 1)).strftime("%Y-%m-%d"))
-    rows = db.rows("SELECT r.name, r.stars, r.lang, r.pushed, substr(r.first_seen,1,10) AS added, r.first_seen, r.archived, r.descr, "
-                   "l.k, l.d, l.d2, l.ai, l.t, l.s FROM oss_repos r JOIN oss_labels l ON l.name=r.name WHERE " + " AND ".join(where), args)
-    sig = tuple(db.row("SELECT count(*) AS n, max(labeled_at) AS m FROM oss_labels").values())
+    sig = (*db.row("SELECT count(*) AS n, max(labeled_at) AS m FROM oss_labels").values(),
+           *db.row("SELECT count(*) AS n, max(rowid) AS m FROM oss_repos").values(), int(time.time() // 600))
     if _LT_CACHE.get("sig") != sig:
         _LT_CACHE.clear()
         _LT_CACHE["sig"] = sig
-    pool = []
-    for r in rows:
-        lt = _LT_CACHE.get(r["name"])
-        if lt is None:
-            lt = _LT_CACHE[r["name"]] = learn_type(r)
-        if lt:
-            r["lt"] = lt
-            pool.append(r)
+    key = ("pool", tuple(where), tuple(args))
+    pool = _LT_CACHE.get(key)
+    if pool is None:
+        rows = db.rows("SELECT r.name, r.stars, r.lang, r.pushed, substr(r.first_seen,1,10) AS added, r.first_seen, r.archived, r.descr, "
+                       "l.k, l.d, l.d2, l.ai, l.t, l.s FROM oss_repos r JOIN oss_labels l ON l.name=r.name WHERE " + " AND ".join(where), args)
+        pool = []
+        for r in rows:
+            lt = _LT_CACHE.get(r["name"])
+            if lt is None:
+                lt = _LT_CACHE[r["name"]] = learn_type(r)
+            if lt:
+                r["lt"] = lt
+                pool.append(r)
+        _LT_CACHE[key] = pool
     in_dom = lambda r: not domain or r["d"] == domain or f'"{domain}"' in (r["d2"] or "")  # noqa: E731
     counts = {c: 0 for c in LEARN}
     doms: dict[str, int] = {}
@@ -322,10 +328,9 @@ def learn_browse(learn: str, domain: str = "", lang: str = "", active_days: int 
             doms[r["d"]] = doms.get(r["d"], 0) + 1
     hit = [r for r in pool if in_dom(r) and learn in ("all", r["lt"])]
     hit.sort(key=(lambda r: (r["first_seen"] or "", r["stars"])) if order == "time" else (lambda r: r["stars"]), reverse=True)
-    page = hit[offset:offset + k]
+    page = [{**r, "t": json.loads(r["t"] or "[]"), "d2": json.loads(r["d2"] or "[]")} for r in hit[offset:offset + k]]
     for r in page:
-        r.pop("first_seen", None)
-        r["t"], r["d2"] = json.loads(r["t"] or "[]"), json.loads(r["d2"] or "[]")
+        r.pop("first_seen")
     return {"total": len(hit), "results": page, "learn_counts": counts, "learn_domains": doms}
 
 
