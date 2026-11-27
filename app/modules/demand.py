@@ -44,12 +44,12 @@ def graph():
             "cards": {k: {**v, "tier": _demand_mid.tier(v)} for k, v in cards.items() if not v.get("skip")} if g else {}, "n_cards": sum(not v.get("skip") for v in cards.values())}
 
 
-def start(graph_only: bool = False, max_new: int = 0, enrich: int = 0, watch: float = 0) -> bool:
+def start(graph_only: bool = False, max_new: int = 0, enrich: int = 0, watch: float = 0, deep: float = 0) -> bool:
     st = dr._load("status.json", {})
     if not st.get("finished", True) and _alive(st.get("pid")):
         return False
     dr.BASE.mkdir(parents=True, exist_ok=True)
-    args = (["--graph-only"] if graph_only else []) + (["--max-new", str(max_new)] if max_new else []) + (["--enrich", str(enrich)] if enrich else []) + (["--watch", str(watch)] if watch else [])
+    args = (["--graph-only"] if graph_only else []) + (["--max-new", str(max_new)] if max_new else []) + (["--enrich", str(enrich)] if enrich else []) + (["--watch", str(watch)] if watch else []) + (["--deep", str(deep)] if deep else [])
     with open(dr.BASE / "run.log", "a") as log:
         p = subprocess.Popen([sys.executable, "-m", "app.modules._demand_run", *args], cwd=str(ROOT), env=agent.clean_env(), stdout=log, stderr=log, start_new_session=True)
     PROC[:] = [p]

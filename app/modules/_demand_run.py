@@ -540,7 +540,7 @@ def main() -> None:
     ap.add_argument("--max-new", type=int, default=0)
     ap.add_argument("--enrich", type=int, default=0)
     ap.add_argument("--mid", type=int, default=0, help="跑几个还没跑过的中型 AI 创业公司检索方向")
-    ap.add_argument("--deep", type=float, default=0, help="给中型和大公司补深度解读，值是本次预算（美元）")
+    ap.add_argument("--deep", type=float, default=0, help="给还没有深度解读的中型和大公司补（每天同步时补新增的），值是本次预算（美元）")
     ap.add_argument("--chain", type=float, default=0, help="关键链路体检：查全部场景的缺口环节和缺的场景，联网补公司，值是本次预算（美元）")
     ap.add_argument("--watch", type=float, default=0, help="每周持续更新：找新来源、融资新闻线索、查漏、重跑过期检索，值是本次预算（美元）")
     a = ap.parse_args()
@@ -552,11 +552,6 @@ def main() -> None:
             return status(ctx, "done", finished=True)
         if a.chain:
             run_chain(ctx, a.chain)
-            return status(ctx, "done", finished=True)
-        if a.deep:
-            from . import _demand_deep as deep
-            cards = _load("cards.json", {})
-            deep.fill(ctx, cards, deep.todo(cards), budget=a.deep)
             return status(ctx, "done", finished=True)
         if a.domains_only:
             g = _load("graph.json", {})
@@ -579,6 +574,10 @@ def main() -> None:
                 build_graph(ctx, cards)
             else:
                 add_new(ctx, g, cards)
+        if a.deep:
+            from . import _demand_deep as deep
+            cards = _load("cards.json", {})
+            deep.fill(ctx, cards, deep.todo(cards), budget=a.deep)
         if a.watch:
             from . import _demand_watch
             status(ctx, "watch", 0, 0)

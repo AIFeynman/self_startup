@@ -194,6 +194,7 @@ def test_demand_sync_adds_weekly_watch(client, monkeypatch):
     intel._set_state("demand_watch_day", "")
     intel.demand_sync()
     assert got["watch"] == intel.CFG_DEFAULTS["demand_watch_budget"] > 0
+    assert got["deep"] == intel.CFG_DEFAULTS["demand_deep_budget"] > 0
     got.clear()
     intel._set_state("demand_day", "")
     intel.demand_sync()

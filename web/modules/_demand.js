@@ -99,6 +99,7 @@ export async function demandTab(host, ctx, q0 = '') {
   let D, view = 'graph', tac = '', src = '', bm = '', size = '', mat = 'tac', S = '', P = '', sortBy = 'def', timer;
   let q = q0, day = '', added = '', qs = null, idx = new Map();
   let A = { seen: {}, notes: {} }, pf = { mrr: '', st: '', dom: '' }, cur = '';
+  const open = new Set();
   const TH = new Map();
   const low = (s) => String(s || '').toLowerCase();
   const bigrams = (s) => { const a = low(s).replace(/[\s\-_.·/]/g, ''), r = new Set(); for (let i = 0; i < a.length - 1; i++) r.add(a.slice(i, i + 2)); return r; };
@@ -323,7 +324,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     }
     const wy = window.scrollY;
     body.innerHTML = view === 'all'
-      ? notice() + bar() + panelHtml(D, A, { star, fit, size, ...pf, cur }) + (cur && D.cards[cur] ? `<div class="pn-pop">${popHtml(D, A, cur, star, TH.get(cur), starSvg)}</div>` : '')
+      ? notice() + bar() + panelHtml(D, A, { star, fit, size, ...pf, cur, open, added }) + (cur && D.cards[cur] ? `<div class="pn-pop">${popHtml(D, A, cur, star, TH.get(cur), starSvg)}</div>` : '')
       : notice() + bar() + days() + watchBox() + (view === 'graph' ? graph() : matrix());
     body.querySelectorAll('.dm-co').forEach(notes);
     window.scrollTo(0, wy);
@@ -357,7 +358,7 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
     paint();
   });
   body.onclick = async (e) => {
-    const d = e.target.closest('[data-pk],[data-pclose],[data-pseen],[data-pout],[data-findname],[data-size],[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
+    const d = e.target.closest('[data-pmore],[data-padded],[data-pk],[data-pclose],[data-pseen],[data-pout],[data-findname],[data-size],[data-clearq],[data-day],[data-go],[data-clear],[data-rate],[data-star],[data-jump],[data-sort],[data-seen],[data-v],[data-s],[data-t],[data-b],[data-mat],[data-cell],[data-run],[data-sc],[data-sb]');
     if (!d) return;
     const ds = d.dataset;
     const markSeen = async (k, on) => {
@@ -372,6 +373,8 @@ ${s.running ? '' : '<p><button data-run="all" class="primary">生成（读产品
       return;
     }
     if (ds.pclose) { cur = ''; paint(); return; }
+    if (ds.pmore) { if (open.has(ds.pmore)) open.delete(ds.pmore); else open.add(ds.pmore); paint(); return; }
+    if (ds.padded) { added = added === ds.padded ? '' : ds.padded; day = ''; paint(); return; }
     if (ds.pseen) { await markSeen(ds.pseen, !A.seen[ds.pseen]); paint(); return; }
     if (ds.pout) { if (!A.seen[ds.pout]) markSeen(ds.pout, true).then(() => view === 'all' && paint()); return; }
     if (ds.rate) {

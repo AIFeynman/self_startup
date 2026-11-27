@@ -18,7 +18,10 @@ export const PANEL_CSS = `
 .pn-cell > .pn-t { display: none; }
 .pn-c { font-size: 12.5px; line-height: 1.5; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; cursor: pointer; color: var(--text); background: var(--bg); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .pn-c:hover { border-color: var(--accent); }
-.pn-c.seen { background: var(--bg-2); color: var(--muted); }
+.pn-c.seen { background: color-mix(in srgb, var(--accent) 13%, var(--bg)); border-color: color-mix(in srgb, var(--accent) 55%, var(--bg)); }
+.pn-c.nw b { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #d64545; margin: 0 4px 1px 0; vertical-align: middle; }
+.pn-more { font-size: 12px; border: 1px dashed var(--line); border-radius: 6px; padding: 0 6px; cursor: pointer; color: var(--muted); background: none; }
+.pn-new button { font-size: 12.5px; }
 .pn-c.seen::before { content: '✓ '; color: var(--accent); }
 .pn-c i { font-style: normal; color: var(--accent); margin-left: 3px; font-size: 11.5px; }
 .pn-c u { text-decoration: none; margin-left: 3px; font-size: 11px; color: var(--bg); background: var(--accent); border-radius: 4px; padding: 0 3px; }
@@ -49,7 +52,9 @@ export function panelState(D, A, star) {
 }
 
 export function panelHtml(D, A, o) {
-  const { star, fit, size, mrr, st, dom, cur } = o;
+  const { star, fit, size, mrr, st, dom, cur, open, added } = o;
+  const FOLD = 12, today = new Date(), dstr = (n) => { const d = new Date(today); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const wk = dstr(6), td = dstr(0), isNw = (k) => (D.cards[k].date || '') >= wk;
   const { seen, noted, touched } = panelState(D, A, star);
   const mrrOk = (c) => !mrr || (mrr === 'has' ? (c.arr_v || 0) > 0 : (c.arr_v || 0) / 12 >= +mrr);
   const stOk = (k) => !st || (st === 'unseen' ? !seen(k) : st === 'seen' ? seen(k) : st === 'rated' ? star(k) > 0 : st === 'noted' ? noted(k) : touched(k));
@@ -61,7 +66,11 @@ export function panelHtml(D, A, o) {
   const chip = (k) => {
     const c = D.cards[k], n = A.notes[k];
     const tip = [c.name, c.arr_v ? `MRR ≈ ${money(c.arr_v / 12)}` : '', seen(k) ? '看过' : '没看过', n ? `评论 ${n.threads} 条 · 问 Claude ${n.asks} 次` : ''].filter(Boolean).join(' · ');
-    return `<a class="pn-c${seen(k) ? ' seen' : ''}${cur === k ? ' on' : ''}" data-pk="${E(k)}" title="${E(tip)}">${E(c.name)}${star(k) ? `<i>★${star(k)}</i>` : ''}${n ? `<u>${n.threads}</u>` : ''}</a>`;
+    return `<a class="pn-c${seen(k) ? ' seen' : ''}${isNw(k) ? ' nw' : ''}${cur === k ? ' on' : ''}" data-pk="${E(k)}" title="${E(tip + (isNw(k) ? ` · ${c.date} 新增` : ''))}">${isNw(k) ? '<b></b>' : ''}${E(c.name)}${star(k) ? `<i>★${star(k)}</i>` : ''}${n ? `<u>${n.threads}</u>` : ''}</a>`;
+  };
+  const cell = (id, t, lab, ks) => {
+    const x = order(ks.filter((k) => D.cards[k].tier === t)), key = `${id}|${t}`, full = open.has(key) || x.length <= FOLD + 2;
+    return `<div class="pn-cell${x.length ? '' : ' none'}">${x.length ? `<span class="pn-t">${lab}</span>` : ''}${(full ? x : x.slice(0, FOLD)).map(chip).join('')}${x.length > FOLD + 2 ? `<button class="pn-more" data-pmore="${E(key)}">${full ? '收起' : `+${x.length - FOLD} 家`}</button>` : ''}</div>`;
   };
   const all = new Set();
   let body = '';
@@ -75,21 +84,23 @@ export function panelHtml(D, A, o) {
       sk.forEach((k) => all.add(k));
       body += `<div class="pn-sc">${E(d.name)} · ${E(sc.name)}<small>${sk.length} 家 · 看过 ${sk.filter(seen).length}</small></div>`;
       body += rows.map(({ sb, ks }) => `<div class="pn-sb">${E(sb.name)}<small>${ks.filter(seen).length}/${ks.length}</small><span class="p">${E(sb.pain || '')}</span></div>`
-        + cols.map(([t, lab]) => { const x = order(ks.filter((k) => D.cards[k].tier === t)); return `<div class="pn-cell${x.length ? '' : ' none'}">${x.length ? `<span class="pn-t">${lab}</span>` : ''}${x.map(chip).join('')}</div>`; }).join('')).join('');
+        + cols.map(([t, lab]) => cell(sb.id, t, lab, ks)).join('')).join('');
     }
   }
   const un = dom ? [] : [...new Set(D.graph.unplaced || [])].filter((k) => ok(k) && !all.has(k));
   if (un.length) {
     un.forEach((k) => all.add(k));
     body += `<div class="pn-sc">未归类<small>${un.length} 家 · 看过 ${un.filter(seen).length}</small></div><div class="pn-sb">还没归到痛点的公司<small>${un.filter(seen).length}/${un.length}</small></div>`
-      + cols.map(([t, lab]) => { const x = order(un.filter((k) => D.cards[k].tier === t)); return `<div class="pn-cell${x.length ? '' : ' none'}">${x.length ? `<span class="pn-t">${lab}</span>` : ''}${x.map(chip).join('')}</div>`; }).join('');
+      + cols.map(([t, lab]) => cell('_un', t, lab, un)).join('');
   }
+  const nT = Object.values(D.cards).filter((c) => (c.date || '').slice(0, 10) === td).length, nW = Object.values(D.cards).filter((c) => (c.date || '') >= wk).length;
   const ks = [...all], ns = ks.filter(seen).length, nr = ks.filter((k) => star(k) > 0).length, nn = ks.filter(noted).length;
   const sel = (f, opts, v) => `<select data-pf="${f}">${opts.map(([x, t]) => `<option value="${E(x)}" ${v === x ? 'selected' : ''}>${E(t)}</option>`).join('')}</select>`;
   return `<div class="dm-flt">${sel('dom', [['', '全部领域'], ...(D.graph.domains || []).map((d) => [d.id, d.name])], dom)}${sel('mrr', MRR, mrr)}${sel('st', ST, st)}
+<span class="pn-new dm-seg"><button data-padded="1" class="${added === '1' ? 'on' : ''}">今天新增 ${nT}</button><button data-padded="7" class="${added === '7' ? 'on' : ''}">近 7 天 ${nW}</button></span>
 <span class="dm-m">星级、规模、来源等筛选沿用上面那排</span></div>
 <div class="pn-sum"><span>共 <b>${ks.length}</b> 家</span><span>看过 <b>${ns}</b></span><span class="pn-bar"><i style="width:${ks.length ? Math.round(ns / ks.length * 100) : 0}%"></i></span><span>评过星 <b>${nr}</b></span><span>有评论 / 讨论 <b>${nn}</b></span>
-<span class="pn-lg"><span>✓ 看过</span><span>★ 你的星级</span><span><span class="pn-c" style="border:none;padding:0;background:none"><u>2</u></span> 评论 / 讨论条数</span><span>每格按星级、收入排</span></span></div>
+<span class="pn-lg"><span><span class="pn-c seen" style="cursor:default">看过</span></span><span><span class="pn-c nw" style="cursor:default"><b></b>近 7 天新增</span></span><span>★ 你的星级</span><span><span class="pn-c" style="border:none;padding:0;background:none"><u>2</u></span> 评论 / 讨论条数</span><span>每格按星级、收入排</span></span></div>
 ${ks.length ? `<div class="pn-grid" style="grid-template-columns:minmax(150px, 220px) ${cols.map(([t]) => ({ small: '1.7fr', mid: '1.2fr', large: '1fr' })[t]).join(' ')}"><div class="pn-h">赛道（痛点）</div>${cols.map(([, l]) => `<div class="pn-h">${l}公司</div>`).join('')}${body}</div>` : '<div class="dm-m">没有符合筛选的公司</div>'}`;
 }
 
