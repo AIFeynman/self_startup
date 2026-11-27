@@ -382,8 +382,10 @@ def src(path: str, find: str = "", lines: int = 40, title: str = "") -> ss.View:
     """显示课程仓库（dsh 源码）里一个文件的片段：从第一处包含 find 的行开始。"""
     text = Path(path).read_text(encoding="utf-8").splitlines()
     i = next((k for k, l in enumerate(text) if find in l), 0) if find else 0
-    rows = [[k + 1, l] for k, l in enumerate(text[i:i + lines], start=i)]
-    return ss.table(rows, ["行", "代码"], title or f"{path}" + (f"（从「{find}」开始）" if find else ""))
+    ext = Path(path).suffix.lstrip(".")
+    lang = {"py": "python", "ts": "ts", "tsx": "ts", "js": "js", "mjs": "js", "yaml": "yaml", "yml": "yaml", "json": "json", "sh": "bash"}.get(ext, "")
+    head = f"{path} · 第 {i + 1}–{min(len(text), i + lines)} 行"
+    return ss.code("\n".join(text[i:i + lines]), lang, f"{title} · {head}" if title else head, start=i + 1, mark=[i + 1] if find else [])
 
 
 def steer(h, session: str, text: str):

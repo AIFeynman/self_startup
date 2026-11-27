@@ -73,3 +73,15 @@ def test_editing_tests_is_caught(lab):
     _apply(ws, FIX["chunks-tail"], changelog=True)
     (ws / "tests" / "test_core.py").write_text("")
     assert lab.grade(task, ws) == (False, "改了 tests/ 里的测试")
+
+
+def test_src_shows_numbered_highlighted_slice_marking_found_line(lab, tmp_path, monkeypatch):
+    shown = []
+    monkeypatch.setattr(lab.ss, "View", lambda kind, data: shown.append({"kind": kind, **data}))
+    f = tmp_path / "agent.ts"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 21)) + "\n  private async kick() {\n  }\n", encoding="utf-8")
+    lab.src(str(f), "private async kick", 2, "kick")
+    v = shown[-1]
+    assert (v["kind"], v["lang"], v["start"], v["mark"]) == ("code", "ts", 21, [21])
+    assert v["code"] == "  private async kick() {\n  }"
+    assert "第 21–22 行" in v["title"]

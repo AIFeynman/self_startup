@@ -88,6 +88,11 @@ def trace(steps: list, title: str = "Agent 运行轨迹") -> View:
     return View("trace", {"title": title, "steps": steps})
 
 
+def code(text: str, lang: str = "python", title: str = "", start: int = 1, mark=()) -> View:
+    """带行号和高亮的代码块；start 是第一行的行号，mark 里的行号会标亮。lang: python / ts / js / yaml / json / bash。"""
+    return View("code", {"title": title, "code": str(text), "lang": lang, "start": int(start), "mark": [int(x) for x in mark]})
+
+
 def note(text: str, level: str = "info") -> View:
     return View("note", {"text": text, "level": level})
 

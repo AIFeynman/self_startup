@@ -42,7 +42,7 @@
 
 - `## ` 分步，每步建议「讲解 → 一个短代码格 → 一个思考题」。
 - 同一门课的所有代码格共享一个内核（变量跨课保留），开头已执行 `import ss`，当前目录是仓库根目录。
-- 可视化用 `ss`：`ss.kv / table / bars / tokens / topk / heat / compare / line / trace / note / train_live / env_info / device`。
+- 可视化用 `ss`：`ss.kv / table / bars / tokens / topk / heat / compare / line / trace / code / note / train_live / env_info / device`（`ss.code(text, lang, title, start, mark)` 显示带行号、高亮的代码）。
 - 调大模型用 `ss.llm(prompt, system)`，走本机 Claude，不需要 API key。
 - 取数据用 `ss.fetch_head(modelscope 数据集, 文件, 行数, 存放路径)`，只下前 N 行。
 

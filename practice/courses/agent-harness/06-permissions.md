@@ -13,7 +13,7 @@
 ```python
 import harness_lab as lab, json, time
 for i in ("sandbox-policy", "approval", "permission"):
-    print(lab.entry("sdk", i))
+    ss.code(lab.entry("sdk", i), "yaml", f"sdk 预设里的 {i}")
 ```
 
 读要点：默认 `workspace-write` + `ask`；只有设成 `danger-full-access` 时审批才变成 `never`（不问直接放）。沙箱和审批是两道独立的门：沙箱拦不住的，审批也许能；审批放行的，沙箱仍可能不让。

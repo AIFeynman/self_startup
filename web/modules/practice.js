@@ -2,8 +2,22 @@
 // 代码在运行环境里执行（阿里云 GPU 用时才开机 / 本机），输出由后端收集、这里轮询；ss 库的可视化在这里原生渲染。
 // 每一步包一层批注组件：可以问本机 Claude（带上讲解 + 代码 + 最新输出 / 报错），讨论会保存、同步进知识库。
 import { annotate } from './_annotate.js';
+import { codeEditor, codeView, enhanceMd, langOf, CODE_CSS } from './_code.js';
 
 const VIZ = 'application/vnd.ssviz+json';
+const CELL_ASKS = [
+  ['举个例子', '换一个更贴近日常的小例子说明这段代码在做什么，给出可以直接替换进这一格运行的改写版。'],
+  ['模拟执行过程', '不真跑，按执行顺序一步步模拟这段代码：每一步调用了什么、关键变量和中间结果是什么、最后会输出什么。还没运行就预测输出；已经运行过就对照真实输出说明哪里一致。'],
+  ['逐行解释', '逐行（或按小段）解释这段代码，每段写它对应课程里的哪个概念，容易误解的地方单独点出来。'],
+  ['改一改试试', '给 2–3 个值得动手改的点（改哪一行、改成什么、预期会看到什么变化、说明了什么），按「改动 → 预期 → 说明」列出。'],
+  ['常见报错', '这段代码最容易在哪些地方出错（环境、参数、网络、权限等），每条写现象和怎么修。'],
+];
+const STEP_ASKS = [
+  ['讲透这一步', '用通俗的话把这一步讲透：它要解决什么问题、核心机制是什么、和上一步是什么关系。'],
+  ['举个例子', '给这一步的概念举 2 个具体例子：一个生活化类比，一个真实工程里的场景。'],
+  ['模拟执行过程', '把这一步的代码按时间顺序模拟一遍执行过程（不真跑）：画出调用链和每一步的数据，预测输出。'],
+  ['出道小测', '针对这一步出 3 道小测（选择或简答），先只给题目，我答完再给答案和解析。'],
+];
 const RT_NAME = { cloud: '阿里云 GPU', local: '本机 Mac' };
 const ST_NAME = { stopped: '未开机', starting: '开机中', ready: '已就绪', stopping: '释放中', failed: '出错' };
 
@@ -34,8 +48,13 @@ const CSS = `
 .pr-cell .bar { display: flex; gap: 8px; align-items: center; padding: 4px 8px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .pr-cell .bar button { padding: 1px 10px; font-size: 12px; }
 .pr-cell .bar .st.run { color: var(--warn); } .pr-cell .bar .st.ok { color: var(--ok); } .pr-cell .bar .st.err { color: var(--err); }
-.pr-code { display: block; width: 100%; box-sizing: border-box; border: 0; border-radius: 0; resize: vertical; padding: 10px 12px; margin: 0;
-  font: 13px/1.55 var(--mono); background: #23211e; color: #f1ece4; tab-size: 4; white-space: pre; overflow-x: auto; }
+.pr-cell .cv { border-radius: 0; max-height: 640px; overflow-y: auto; }
+.pr-cell .bar .hint { font-size: 11.5px; }
+.pr-quick { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 5px 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.pr-quick button, .pr-stepq button { border: 1px solid var(--line-2); background: var(--panel); border-radius: 999px; padding: 1px 10px; font-size: 12px; color: var(--text); }
+.pr-quick button:hover, .pr-stepq button:hover { border-color: var(--accent); color: var(--accent); }
+.pr-stepq { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; font-size: 12px; color: var(--muted); }
+.vz-code .cv { max-height: 520px; overflow-y: auto; }
 .pr-out { padding: 6px 12px 10px; font-size: 13px; }
 .pr-out:empty { display: none; }
 .pr-out pre { margin: 6px 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 var(--mono); max-height: 360px; overflow: auto; }
@@ -86,7 +105,7 @@ const PALETTE = ['#b8432f', '#2f7a4a', '#c9a96e', '#4a6fa5', '#8a5aa8', '#3a9a9a
 export default {
   async render(el, ctx) {
     const { h } = ctx;
-    el.append(h('style', {}, CSS));
+    el.append(h('style', {}, CSS + CODE_CSS));
     const [cid, lid] = ctx.sub || [];
     if (cid && lid) return lessonPage(el, ctx, cid, lid);
     if (cid) return coursePage(el, ctx, cid);
@@ -130,6 +149,8 @@ function viz(ctx, d) {
     case 'trace':
       return box('vz-trace', d.steps.map((s) => h('div.' + (s.role || 'user'), {}, [h('small', {}, { user: '任务', thought: '决定调用', tool: '工具返回', assistant: '最终答案' }[s.role] || s.role),
         s.name ? h('small', {}, s.name) : null, s.text])));
+    case 'code':
+      return box('vz-code', [codeView(d.code, { lang: d.lang || langOf(d.title || ''), start: d.start || 1, mark: d.mark || [] })]);
     case 'note':
       return h('div.vz.vz-note' + (d.level === 'warn' ? '.warn' : ''), {}, d.text);
     default:
@@ -314,7 +335,7 @@ async function lessonPage(el, ctx, cid, lid) {
       rs.length ? h('div', {}, [h('div.muted', { style: { margin: '4px 0' } }, '知识库里相关的：'), ...rs.map((d) => h('a', { href: d.type === 'concept' ? '#kb/c/' + enc(d.title) : '#kb/doc/' + enc(d.path) }, `${d.title}${d.summary ? ' · ' + d.summary.slice(0, 60) : ''}`))])
         : h('div.muted', {}, '知识库里还没有这个概念，可以先让 Claude 讲，讨论会自动存进知识库。')]));
   };
-  const introBody = h('div', {}, [h('h1', { style: { margin: '0 0 4px', fontSize: '24px' } }, L.title), L.intro ? md(L.intro) : null,
+  const introBody = h('div', {}, [h('h1', { style: { margin: '0 0 4px', fontSize: '24px' } }, L.title), L.intro ? enhanceMd(md(L.intro)) : null,
     know.length ? h('div.pr-know', {}, [h('span.muted', {}, '相关知识：'), ...know.map((k) => { const b = h('button', { onclick: () => openKnow(k, b) }, k); return b; })]) : null, kpop]);
   introWrap = annotate(ctx, introBody, { doc: `practice:${cid}:${lid}:intro`, title: `${c.title} · ${L.title}`, link: `#practice/${cid}/${lid}`,
     source: () => `课程：${c.title}\n本课：${L.title}\n${L.intro}`, compact: true });
@@ -374,13 +395,13 @@ async function lessonPage(el, ctx, cid, lid) {
     const body = h('div.pr-step', {}, [h('h3', {}, s.title)]);
     let wrap = null;
     for (const p of s.parts) {
-      if (p.type === 'md') body.append(md(p.text));
+      if (p.type === 'md') body.append(enhanceMd(md(p.text)));
       else if (p.type === 'ask') body.append(h('div.pr-ask', {}, [h('b', {}, '思考'), h('span', {}, p.text),
         h('button.sm.ghost', { onclick: () => wrap._ask(`思考题：${p.text}\n我的想法：`) }, '和 Claude 对答案')]));
       else {
         const saved = L.cells[String(p.n)];
-        const ta = h('textarea.pr-code', { spellcheck: 'false', rows: Math.min(28, (saved?.code || p.code).split('\n').length + 1) });
-        ta.value = saved?.code || p.code;
+        const ed = codeEditor(saved?.code || p.code);
+        const ta = ed.ta;
         const out = h('div.pr-out');
         const st = h('span.st');
         const cl = { n: p.n, ta, out, st, kind: p.cloud ? 'cloud' : 'local', outputs: saved?.outputs || [], ok: saved?.status === 'done' || p.optional };
@@ -388,20 +409,24 @@ async function lessonPage(el, ctx, cid, lid) {
         cl.fix = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => wrap._ask('这一格运行出错了，帮我看看原因，并给出改好的代码。') }, '让 Claude 看报错');
         ta.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); runCell(cl); }
-          if (e.key === 'Tab') { e.preventDefault(); const a = ta.selectionStart; ta.setRangeText('    ', a, ta.selectionEnd, 'end'); }
+          if (e.key === 'Tab') { e.preventDefault(); const a = ta.selectionStart; ta.setRangeText('    ', a, ta.selectionEnd, 'end'); ed.refresh(); }
         });
+        const tag = `代码格 [${p.n + 1}]`;
+        const quick = h('div.pr-quick', {}, [h('span', {}, '问 Claude：'), ...CELL_ASKS.map(([label, q]) => h('button', { title: q, onclick: () => wrap._askNow(`关于${tag}：${q}`, tag) }, label))]);
         body.append(h('div.pr-cell', {}, [
           h('div.bar', {}, [h('button.sm.primary', { title: 'Shift+Enter', onclick: () => runCell(cl) }, '▶ 运行'), cl.stop, h('span', {}, `[${p.n + 1}]`),
             p.cloud ? h('span.tag', { title: '本机跑太慢的全量训练，放到阿里云 GPU 上跑（会先弹窗报价）' }, '云端 GPU · 可选') : h('span.muted', {}, p.optional ? '本机 · 可选' : '本机'),
             p.long ? h('span.tag.line', {}, '要跑几分钟') : null, st, h('span.grow'), cl.fix,
-            h('button.sm.ghost', { title: '恢复成课程里的原始代码', onclick: () => { ta.value = p.code; } }, '还原')]),
-          ta, out]));
+            h('span.muted.hint', {}, '可直接改代码 · Shift+Enter 运行'),
+            h('button.sm.ghost', { title: '恢复成课程里的原始代码', onclick: () => { ta.value = p.code; ed.refresh(); } }, '还原')]),
+          ed.el, quick, out]));
         if (saved) { renderOutputs(ctx, out, saved.outputs); setSt(cl, saved.status, saved.secs); }
         if (L.live[String(p.n)]) follow(cl, L.live[String(p.n)]);
         cells[p.n] = cl;
       }
     }
-    body.append(h('div.row', { style: { justifyContent: 'flex-end' } }, h('button.sm.ghost', { onclick: () => wrap._ask('') }, [ctx.ui.icon('spark'), '问 Claude 这一步'])));
+    body.append(h('div.pr-stepq', {}, [h('span', {}, '这一步：'), ...STEP_ASKS.map(([label, q]) => h('button', { title: q, onclick: () => wrap._askNow(q) }, label)),
+      h('button.sm.ghost', { onclick: () => wrap._ask('') }, [ctx.ui.icon('spark'), '自己问'])]));
     wrap = annotate(ctx, body, { doc: `practice:${cid}:${lid}:${i}`, title: `${c.title} · ${L.title} · ${s.title}`, link: `#practice/${cid}/${lid}`,
       source: () => stepText(i), compact: true });
     main.append(wrap);

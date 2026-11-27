@@ -14,6 +14,14 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   wrap._src = { doc, title, link }; // ⌘K 快记时带上出处
   const src = () => (typeof source === 'function' ? source() : source);   // 函数：提问那一刻再取（实践课要带上最新输出 / 报错）
   wrap._ask = (text = '') => startNew({ quote: '', prefix: '', suffix: '', ask: true, text });
+  wrap._askNow = async (text, quote = '') => {   // 快捷指令：不经过输入框，直接问
+    try {
+      await api.post('/api/annotations', { doc, title, link, quote, prefix: '', suffix: '', text, ask: true, source: src() });
+      if (railOff) setRail(false);
+      load();
+      toast('已发给 Claude，回答会出现在旁边的批注里');
+    } catch (e) { toast(e.message, true); }
+  };
   let threads = [];
   let showResolved = false;
   let composer = null; // 正在写的新批注 {quote, prefix, suffix, ask}
