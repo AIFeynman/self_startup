@@ -268,3 +268,16 @@ def test_sync_updates_fulltext_index_incrementally(client):
     assert "不变的笔记" in titles and "会删的笔记" not in titles
     assert [h["title"] for h in kb.search("新写的正文", "note")] == ["会改的笔记"]
     assert not kb.search("旧的正文", "note")
+
+
+def test_search_mixed_sentence_matches_by_terms(client):
+    kb._sync_fts([
+        {"path": "research/a.md", "type": "research", "title": "Hugging Face 评测指南", "tags": [], "summary": "LLM 评测怎么做", "body": "evaluation guidebook", "date": "2026-11-01"},
+        {"path": "research/b.md", "type": "research", "title": "Hugging Face 产品时间线", "tags": [], "summary": "", "body": "Hub 和模型托管", "date": "2026-11-02"},
+        {"path": "notes/c.md", "type": "note", "title": "评测方法笔记", "tags": [], "summary": "", "body": "benchmark", "date": "2026-11-03"},
+    ])
+    hits = [h["path"] for h in client.get("/api/kb/search", params={"q": "hugging face的评测课"}).json()]
+    assert hits[0] == "research/a.md"
+    assert "notes/c.md" not in hits
+    assert [h["path"] for h in kb.search("Hugging Face 的评测")] == ["research/a.md"]
+    assert {h["path"] for h in kb.search("评测课")} == {"research/a.md", "notes/c.md"}

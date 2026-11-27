@@ -720,25 +720,57 @@ def _safe_sync() -> None:
         log.exception("kb sync failed")
 
 
+_STOP = re.compile(r"有没有|关于|有关|相关|一下|怎么|如何|什么|哪些|这个|那个|[的了吗呢吧啊和与及或]")
+_COLS = "path,type,title,tags,summary,date"
+
+
+def _terms(q: str) -> list[str]:
+    out: list[str] = []
+    for w in re.findall(r"[\u4e00-\u9fff]+|[^\s\u4e00-\u9fff]+", q):
+        out += [t for t in _STOP.split(w)] if re.match(r"[\u4e00-\u9fff]", w) else [w]
+    return list(dict.fromkeys(t for t in out if t))
+
+
+def _units(terms: list[str]) -> list[str]:
+    out: list[str] = []
+    for t in terms:
+        cjk = re.fullmatch(r"[\u4e00-\u9fff]{3,}", t)
+        out += [t[i:i + 2] for i in range(len(t) - 1)] if cjk else [t]
+    return list(dict.fromkeys(out))
+
+
+def _scored(units: list[str], need: int, where: str, args: list, limit: int) -> list[dict]:
+    hit = "(title LIKE ? OR tags LIKE ? OR summary LIKE ? OR body LIKE ?)"
+    score = " + ".join(f"(CASE WHEN {hit} THEN 1 ELSE 0 END)" for _ in units)
+    head = " + ".join("(CASE WHEN title LIKE ? THEN 1 ELSE 0 END)" for _ in units)
+    likes = [f"%{u}%" for u in units]
+    sql = (f"SELECT * FROM (SELECT {_COLS}, substr(body,1,120) AS snippet, ({score}) AS n, ({head}) AS nt FROM kb_fts WHERE 1=1{where}) "
+           f"WHERE n >= ? ORDER BY n DESC, nt DESC, date DESC LIMIT ?")
+    rows = db.rows(sql, [*[x for u in likes for x in (u, u, u, u)], *likes, *args, need, limit])
+    return [{k: r[k] for k in r if k not in ("n", "nt")} for r in rows]
+
+
 def search(q: str, type_: str = "", limit: int = 20) -> list[dict]:
     db.init([FTS_SCHEMA])
-    q = (q or "").strip()
-    if not q:
+    terms = _terms((q or "").strip())
+    if not terms:
         return []
     where, args = "", []
     if type_:
         where, args = " AND type=?", [type_]
-    if len(q) >= 3:  # trigram 至少 3 个字符
-        terms = " AND ".join('"' + t.replace('"', '') + '"' for t in q.split() if len(t) >= 3) or '"' + q.replace('"', '') + '"'
+    if all(len(t) >= 3 for t in terms):  # trigram 至少 3 个字符
+        match = " AND ".join('"' + t.replace('"', '') + '"' for t in terms)
         try:
-            return db.rows(f"SELECT path,type,title,tags,summary,date,snippet(kb_fts,5,'«','»','…',16) AS snippet "
-                           f"FROM kb_fts WHERE kb_fts MATCH ?{where} ORDER BY rank LIMIT ?", [terms, *args, limit])
+            rows = db.rows(f"SELECT {_COLS},snippet(kb_fts,5,'«','»','…',16) AS snippet "
+                           f"FROM kb_fts WHERE kb_fts MATCH ?{where} ORDER BY rank LIMIT ?", [match, *args, limit])
         except Exception:  # noqa: BLE001 —— 语法问题回退到 LIKE
-            pass
-    like = f"%{q}%"
-    return db.rows(f"SELECT path,type,title,tags,summary,date,substr(body,1,120) AS snippet FROM kb_fts "
-                   f"WHERE (title LIKE ? OR tags LIKE ? OR summary LIKE ? OR body LIKE ?){where} LIMIT ?",
-                   [like, like, like, like, *args, limit])
+            rows = []
+    else:
+        rows = _scored(terms, len(terms), where, args, limit)
+    if rows:
+        return rows
+    units = _units(terms)
+    return _scored(units, 1 if len(terms) == 1 else -(-len(units) * 3 // 5), where, args, limit)
 
 
 def read(rel: str) -> str:
