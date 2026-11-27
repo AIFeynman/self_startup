@@ -285,3 +285,249 @@ def from_cloud(path: str) -> str:
     if r.status_code != 200:
         raise RuntimeError(r.json().get("detail", r.text))
     return r.json()["path"]
+
+
+# ---------- DeepSeek Harness（dsh）：跑一次 Agent，实时轨迹 + 计费 + 上限 ----------
+# 价格：USD / 百万 token（缓存命中、未命中、输出），取高峰价，宁可多记
+PRICE = {"deepseek-v4-flash": (0.014, 0.44, 1.32), "deepseek-v4-pro": (0.044, 1.32, 3.96)}
+USD_CNY = 7.2
+CELL_CAP, COURSE_CAP = 2.0, 60.0
+WORK = Path(os.environ.get("SS_WORK", ".")).resolve()
+DSH = WORK / "dsh"
+LEDGER = DSH / "cost.json"
+
+
+class OverBudget(RuntimeError):
+    pass
+
+
+def cost_of(usage: dict, model: str = "deepseek-v4-flash") -> float:
+    """一次模型调用的花费（元）。dsh 的 inputTokens 不含缓存命中部分。"""
+    hit, miss, out = PRICE.get(model, PRICE["deepseek-v4-pro"])
+    usd = (usage.get("cacheReadTokens", 0) * hit + (usage.get("inputTokens", 0) + usage.get("cacheWriteTokens", 0)) * miss
+           + usage.get("outputTokens", 0) * out) / 1e6
+    return usd * USD_CNY
+
+
+def _cell() -> int:
+    try:
+        return get_ipython().execution_count   # noqa: F821
+    except NameError:
+        return 0
+
+
+def ledger() -> dict:
+    try:
+        return json.loads(LEDGER.read_text())
+    except (FileNotFoundError, ValueError):
+        return {"total": 0.0, "cells": {}}
+
+
+def _charge(yuan: float) -> tuple[float, float]:
+    d = ledger()
+    key = f"{os.getpid()}:{_cell()}"
+    d["total"] = d.get("total", 0.0) + yuan
+    d["cells"][key] = d["cells"].get(key, 0.0) + yuan
+    DSH.mkdir(parents=True, exist_ok=True)
+    LEDGER.write_text(json.dumps(d))
+    return d["cells"][key], d["total"]
+
+
+def spent() -> View:
+    d = ledger()
+    return kv({"整门课已花": f"{d.get('total', 0):.3f} 元 / 上限 {COURSE_CAP:.0f} 元", "跑过的格子": len(d.get("cells", {}))}, "DeepSeek 花费")
+
+
+def workspace(name: str, files: dict | None = None, fresh: bool = True) -> Path:
+    """建一个练习用的工作目录（在课程仓库外），files={相对路径: 内容}。fresh=True 先清空。"""
+    import shutil
+    p = DSH / "ws" / name
+    if fresh and p.exists():
+        shutil.rmtree(p)
+    p.mkdir(parents=True, exist_ok=True)
+    for rel, text in (files or {}).items():
+        f = p / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    if not (p / ".git").exists():         # 自成项目根，dsh 不会往上读到外层仓库的 AGENTS.md
+        subprocess.run(["git", "init", "-q", str(p)], capture_output=True)
+    return p
+
+
+def tree(path, title: str = "") -> View:
+    p = Path(path)
+    rows = [[str(f.relative_to(p)), f.stat().st_size] for f in sorted(p.rglob("*")) if f.is_file() and ".git" not in f.parts]
+    return table(rows, ["文件", "字节"], title or f"{p.name}/")
+
+
+def _text(content) -> str:
+    return "".join(c.get("text", "") for c in content or [] if c.get("type") == "text")
+
+
+class Run:
+    """一次 Agent 运行的结果：final / reason / events / tools / steps / usage / cost / session / seconds。"""
+    def __init__(self, session, model):
+        self.session, self.model = session, model
+        self.final, self.reason, self.events, self.steps, self.calls = "", None, [], [], []
+        self.usage, self.cost, self.seconds, self.approvals, self.sub_usage = [], 0.0, 0.0, [], []
+
+    @property
+    def tools(self) -> list:
+        return [c["name"] for c in self.calls]
+
+    def tokens(self) -> dict:
+        keys = ("inputTokens", "cacheReadTokens", "outputTokens")
+        return {k: sum(u.get(k, 0) for u in self.usage) for k in keys}
+
+    def of(self, *types) -> list:
+        return [e for e in self.events if e["type"] in types]
+
+    def summary(self) -> View:
+        t = self.tokens()
+        hit = t["cacheReadTokens"] / max(1, t["cacheReadTokens"] + t["inputTokens"])
+        return kv({"结束原因": self.reason, "模型调用": len(self.usage), "工具调用": " → ".join(self.tools) or "无",
+                   "输入（未命中缓存）": t["inputTokens"], "输入（命中缓存）": t["cacheReadTokens"], "缓存命中率": f"{hit:.0%}",
+                   "输出": t["outputTokens"], "花费": f"{self.cost:.4f} 元", "耗时": f"{self.seconds:.1f} 秒"}, "这次运行")
+
+    def _ipython_display_(self):
+        pass
+
+
+def _short(s: str, n: int = 600) -> str:
+    s = s.strip()
+    return s if len(s) <= n else s[:n] + f" …（共 {len(s)} 字）"
+
+
+def harness(ws=None, profile: str = "sdk", patches=(), env: dict | None = None, model: str = "deepseek-v4-flash",
+            home: str | None = None, approve=None, **kw):
+    """起一个 dsh 运行时（DeepSeekHarness）。home 默认按 profile 分开（不同 profile 的会话存储格式不同）。
+    approve(tool_name, reason) -> bool：给了就开启审批请求，每次需要批准时调用它。"""
+    from deepseek_harness import DeepSeekHarness
+    env = dict(env or {})
+    if "DSH_AGENTS_HOME" not in env:      # 不读你本机 ~/.agents 里的全局指令和 skill
+        (DSH / "agents-home").mkdir(parents=True, exist_ok=True)
+        env["DSH_AGENTS_HOME"] = str(DSH / "agents-home")
+    h = DeepSeekHarness(dsh_home=str(home or DSH / f"home-{profile}"), cwd=str(ws or WORK), profile=profile,
+                        patches=tuple(str(p) for p in patches), env=env, model=model,
+                        approval_requests=approve is not None, **kw)
+    h._ss_approve = approve
+    return h
+
+
+def _approver(h):
+    import threading
+
+    def loop():
+        while True:
+            try:
+                req = h.client.next_request()
+            except BaseException:
+                return
+            if req.method != "approval/request":
+                h.client.respond_error(req.id, -32601, "unsupported")
+                continue
+            p = req.payload
+            ok = bool(h._ss_approve(p.get("toolName"), p.get("reason") or ""))
+            h._ss_run.approvals.append({"tool": p.get("toolName"), "reason": p.get("reason") or "", "allowed": ok})
+            h.client.respond(req.id, {"outcome": "allowed-once" if ok else "rejected"})
+    threading.Thread(target=loop, daemon=True).start()
+
+
+def agent(prompt: str, ws=None, h=None, session: str | None = None, resume: bool = False, title: str = "",
+          show: bool = True, quiet_tools: bool = False, on_event=None, **hkw) -> Run:
+    """让 dsh 跑一轮：边跑边在格子里画轨迹，按真实 usage 记账，单格超 CELL_CAP 或整门超 COURSE_CAP 就中止。
+    h：复用已起的 harness（同一会话多轮、resume 时用）；不给就临时起一个，跑完关掉。
+    on_event(event, run, h)：每个会话事件都回调一次（例如跑到第几步时插一句话）。"""
+    if os.environ.get("SS_DSH_FAKE"):
+        return _fake_run(prompt, session, show, title)
+    own = h is None
+    h = h or harness(ws, **hkw)
+    model = h.config.model
+    sid = session or f"s{int(time.time() * 1000)}"
+    run = Run(sid, model)
+    steps = [{"role": "user", "text": prompt}]
+    view = trace(steps, title or "dsh 运行轨迹") if show else None
+    names = {}
+    t0 = time.time()
+
+    def charge(u):
+        c = cost_of(u, model)
+        run.cost += c
+        cell, total = _charge(c)
+        if cell > CELL_CAP or total > COURSE_CAP:
+            raise OverBudget(f"超出上限：本格 {cell:.2f} 元（上限 {CELL_CAP}）、整门 {total:.2f} 元（上限 {COURSE_CAP}）")
+
+    def on(n):
+        if n.method != "session.event":
+            return
+        e = n.payload.get("event") or {}
+        if n.payload.get("sessionId") != sid:      # 子 Agent 的会话：只记账，不画进主轨迹
+            u = (e.get("data") or {}).get("usage") if e.get("type") == "assistant/message" else None
+            if u:
+                run.sub_usage.append(u)
+                charge(u)
+            return
+        run.events.append(e)
+        typ, d = e.get("type"), e.get("data") or {}
+        if typ == "assistant/message":
+            msg = d.get("message") or {}
+            if d.get("usage"):
+                run.usage.append(d["usage"])
+                charge(d["usage"])
+            txt = _text(msg.get("content"))
+            has_call = any(c.get("type") == "tool-call" for c in msg.get("content") or [])
+            if txt.strip():
+                steps.append({"role": "thought" if has_call else "assistant", "text": _short(txt, 1200)})
+        elif typ == "tool/call":
+            run.calls.append({"name": d.get("name"), "arguments": d.get("arguments"), "id": d.get("callId")})
+            names[d.get("callId")] = d.get("name")
+            steps.append({"role": "thought", "name": d.get("name"), "text": f"调用 {d.get('name')}  {_short(str(d.get('arguments')), 400)}"})
+        elif typ == "tool/result" and not quiet_tools:
+            msg = d.get("message") or {}
+            steps.append({"role": "tool", "text": f"{names.get(msg.get('toolCallId'), '')} → {_short(_text(msg.get('content')), 500)}"})
+        elif typ in ("compaction/end", "context/compacted", "agent/compacted"):
+            steps.append({"role": "thought", "text": f"[{typ}]"})
+        elif typ == "user/message" and run.calls:
+            steps.append({"role": "user", "text": "插话：" + _short(_text((d.get("message") or {}).get("content")), 300)})
+        if on_event:
+            on_event(e, run, h)
+        if view:
+            view.update(title=f"{title or 'dsh 运行轨迹'} · {len(run.usage)} 次调用 · {run.cost:.4f} 元", steps=steps)
+
+    try:
+        h._ss_run = run
+        if h._ss_approve is not None and not getattr(h, "_ss_approver", False):
+            h.start()
+            _approver(h)
+            h._ss_approver = True
+        s = h.resume_session(sid) if resume else h.start_session(sid)
+        r = s.run(prompt, on_notification=on)
+        run.final, run.reason = r.final_response, r.finish_reason
+    except OverBudget as e:
+        run.reason = "over-budget"
+        note(str(e), "warn")
+        own = True
+    finally:
+        run.seconds = time.time() - t0
+        if own:
+            h.close()
+    if view:
+        view.update(title=f"{title or 'dsh 运行轨迹'} · {run.reason} · {len(run.usage)} 次调用 · {run.cost:.4f} 元 · {run.seconds:.0f} 秒", steps=steps)
+    return run
+
+
+def _fake_run(prompt, session, show, title) -> Run:
+    """只给平台自测用：不起 dsh、不调模型，返回一份形状和真运行一样的合成结果。"""
+    run = Run(session or "fake", "deepseek-v4-flash")
+    u = {"inputTokens": 900, "outputTokens": 40, "cacheReadTokens": 16000, "cacheWriteTokens": 0, "totalTokens": 16940}
+    tool = {"name": "bash", "inputSchema": {}}
+    run.events = [{"type": "request/header", "data": {"header": {"tools": [tool]}}},
+                  {"type": "system/message", "data": {"message": {"content": [{"type": "text", "text": "You are a coding agent."}]}}},
+                  {"type": "assistant/message", "data": {"usage": u, "message": {"content": [{"type": "text", "text": "（假运行）"}]}}},
+                  {"type": "tool/call", "data": {"name": "bash", "arguments": "{}", "callId": "c1"}},
+                  {"type": "turn/end", "data": {"reason": {"kind": "completed"}}}]
+    run.usage, run.calls = [u], [{"name": "bash", "arguments": "{}", "id": "c1"}]
+    run.cost, run.final, run.reason, run.seconds = cost_of(u), "（假运行，没有调用模型）", "completed", 0.1
+    if show:
+        trace([{"role": "user", "text": prompt}, {"role": "assistant", "text": run.final}], (title or "dsh 运行轨迹") + " · 假运行")
+    return run

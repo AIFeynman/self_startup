@@ -17,7 +17,7 @@
 }
 ```
 
-- `repo`：要学的仓库，平台在本机 clone，运行时工作目录就是仓库根目录；没有仓库就省略。
+- `repo`：要学的仓库，平台在本机 clone，运行时工作目录就是仓库根目录；没有仓库就省略。`ref` 可选，固定到某个 tag 或分支（课里引用的源码行号才对得上）。
 - `runtime`：`cloud` = 阿里云 GPU（用时才开机，按小时计费），`local` = 本机（CPU / Apple GPU）。
 - `pip`：课程额外依赖。`torch` 由运行环境自带，不要写。
 - `know`：这门课涉及的关键概念，页面上可以点开查知识库或让 Claude 讲解。
@@ -45,3 +45,14 @@
 - 可视化用 `ss`：`ss.kv / table / bars / tokens / topk / heat / compare / line / trace / note / train_live / env_info / device`。
 - 调大模型用 `ss.llm(prompt, system)`，走本机 Claude，不需要 API key。
 - 取数据用 `ss.fetch_head(modelscope 数据集, 文件, 行数, 存放路径)`，只下前 N 行。
+
+## 课程自带模块（lib/）
+
+课程目录下 `lib/*.py` 会在每次起内核时拷进运行目录，格子里直接 `import`。多课共用的练习任务、判分器、辅助函数放这里，别塞进代码格。例：`agent-harness/lib/harness_lab.py`。
+
+## 调 DeepSeek Harness（dsh）跑真实 Agent
+
+- `ss.agent(prompt, 工作区, profile="sdk", patches=[...], env={...}, approve=fn)`：跑一轮，格子里实时画轨迹；返回 `Run`（`final / reason / events / tools / usage / sub_usage / cost / approvals`）。
+- `ss.harness(...)` 起一个可复用的运行时（同一会话多轮、`resume=True` 恢复）；`ss.workspace(名字, {路径: 内容})` 建练习目录（会 `git init`，并隔离本机 `~/.agents`）。
+- 按真实 usage 记账：单格超 `ss.CELL_CAP`（2 元）、整门超 `ss.COURSE_CAP`（60 元）自动中止；`ss.spent()` 看已花。
+- 平台自测时设环境变量 `SS_DSH_FAKE=1`：`ss.agent` 不起 dsh、不调模型，返回形状相同的合成结果，用来把格子从头到尾跑通而不花钱。

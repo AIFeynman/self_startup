@@ -160,6 +160,8 @@ def bundle(course: dict) -> Path:
                     continue
                 tf.add(p, arcname=f"{course['id']}/{p.name}", filter=lambda ti: None if ti.isfile() and ti.size > 5_000_000 else ti)
         tf.add(ASSETS / "ss.py", arcname="ss.py")
+        for f in sorted((Path(course["dir"]) / "lib").glob("*.py")) if course.get("dir") else []:
+            tf.add(f, arcname=f.name)
     return out
 
 

@@ -1,0 +1,11 @@
+{
+  "title": "Agent Harness 实践：拆开 DeepSeek Harness，再让它自己变好",
+  "topic": "Agents",
+  "summary": "以 DeepSeek Harness（dsh）为主线，逐个环节动手：循环、工具、上下文与缓存、压缩、记忆、权限、钩子、规划、子 Agent、续跑、观测；再搭评测、归因、写回和进化外循环，让 harness 用自己的失败改进自己。",
+  "level": "进阶",
+  "repo": "https://github.com/deepseek-ai/deepseek-harness",
+  "ref": "dsh-v0.2.2-rc.2",
+  "runtime": "local",
+  "pip": ["deepseek-harness-sdk==0.2.2rc2", "zstandard"],
+  "know": ["Agent Harness", "Agent 循环", "工具调用", "Prompt 缓存", "上下文压缩", "MCP", "Hooks", "沙箱与审批", "子 Agent", "Agent 评测", "Harness 进化"]
+}

@@ -209,7 +209,9 @@ def _kernel_for(c: dict, kind: str) -> tuple[K.Server, str]:
     if r and s.kernel_alive(r["kernel"]):
         return s, r["kernel"]
     if kind == "local":
-        shutil.copy(RT.ASSETS / "ss.py", RT.Local().work / "ss.py")   # 课程工具库更新后，新内核拿到的是最新版
+        work = RT.Local().work
+        for f in [RT.ASSETS / "ss.py", *sorted((c["dir"] / "lib").glob("*.py"))]:   # 工具库和课程自带模块更新后，新内核拿到最新版
+            shutil.copy(f, work / f.name)
     kid = s.new_kernel()
     boot = K.execute(f"{c['id']}:_boot:0", BOOT.format(cid=c["id"]), lambda: K.ws_transport(s, kid))
     for _ in range(600):
@@ -356,7 +358,7 @@ def generate(body: GenIn):
     MINE.mkdir(parents=True, exist_ok=True)
     jid = jobs.submit("practice", GEN_PROMPT.format(
         topic=body.topic, repo_line=f"，围绕仓库 {body.repo}" if body.repo else "", fmt=RT.ASSETS / "COURSE_FORMAT.md",
-        example=BUILTIN / "agents-basics", out=MINE, runtime=body.runtime), ref=f"practice:gen", add_dirs=[str(RT.ASSETS), str(MINE)])
+        example=BUILTIN / "minimind", out=MINE, runtime=body.runtime), ref=f"practice:gen", add_dirs=[str(RT.ASSETS), str(MINE)])
     return {"job": jid}
 
 

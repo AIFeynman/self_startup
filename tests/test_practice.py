@@ -53,7 +53,7 @@ def test_parse_lesson_steps_cells_and_asks():
 
 def test_builtin_courses_parse_and_have_cells():
     got = {c["id"]: c for c in P.courses()["courses"]}
-    assert got["minimind"]["runtime"] == "local" and got["agents-basics"]["runtime"] == "local"   # 默认都在本机跑
+    assert got["minimind"]["runtime"] == "local" and got["agent-harness"]["runtime"] == "local"   # 默认都在本机跑
     for cid in got:
         c = P.load_course(cid)
         assert c["lessons"] and all(x["cells"] > 0 for x in c["lessons"])
@@ -205,18 +205,18 @@ def test_boot_failure_releases_instance(client, cloud, monkeypatch):
 
 
 def test_api_lesson_run_guard_and_progress(client, monkeypatch):
-    L = client.get("/api/practice/courses/agents-basics/lessons/00-loop").json()
+    L = client.get("/api/practice/courses/agent-harness/lessons/00-profiles").json()
     assert L["steps"] and L["cells"] == {} and not L["done"]
-    r = client.post("/api/practice/run", json={"course": "agents-basics", "lesson": "00-loop", "cell": 0, "code": "1"})
+    r = client.post("/api/practice/run", json={"course": "agent-harness", "lesson": "00-profiles", "cell": 0, "code": "1"})
     assert r.status_code == 409                                 # 运行环境没开
     assert client.get("/api/practice/for", params={"url": "https://github.com/jingyaogong/minimind/"}).json()["id"] == "minimind"
-    n = P.load_course("agents-basics")["lessons"][0]["cells"]
+    n = P.load_course("agent-harness")["lessons"][0]["cells"]
     for i in range(n):
         db.execute("INSERT INTO practice_cells (k, course, lesson, cell, status) VALUES (?,?,?,?, 'done')",
-                   [f"agents-basics:00-loop:{i}", "agents-basics", "00-loop", str(i)])
-    P._maybe_done("agents-basics:00-loop:0")
-    assert client.get("/api/practice/courses/agents-basics").json()["done"]["00-loop"]
-    assert db.row("SELECT * FROM read_log WHERE kind='practice'")["url"] == "#practice/agents-basics/00-loop"
+                   [f"agent-harness:00-profiles:{i}", "agent-harness", "00-profiles", str(i)])
+    P._maybe_done("agent-harness:00-profiles:0")
+    assert client.get("/api/practice/courses/agent-harness").json()["done"]["00-profiles"]
+    assert db.row("SELECT * FROM read_log WHERE kind='practice'")["url"] == "#practice/agent-harness/00-profiles"
 
 
 def test_lesson_done_needs_only_local_cells(client, tmp_path, monkeypatch):
