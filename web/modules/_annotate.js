@@ -4,7 +4,8 @@
 //   el.append(annotate(ctx, md(text), { doc: 'research:3:synth', title, link: '#research/r/3', source: text }))
 //   compact: true —— 小段落（学习计划的步骤）：讨论串放在下方，没有批注时不占位置。
 //   actions: [{ icon, label, onPick(quote) }] —— 划线工具条上额外的按钮（如学习章节的「没懂」「展开讲」）
-export function annotate(ctx, body, { doc, title = '', link = '', source = '', compact = false, actions = [] }) {
+//   codeAction: { label, onPick(code) } —— Claude 回答里每个代码块下面加的按钮（如实践课的「放进实验区」）
+export function annotate(ctx, body, { doc, title = '', link = '', source = '', compact = false, actions = [], codeAction = null }) {
   const { api, h, md, toast, ui } = ctx;
   injectStyle();
   if (!doc.startsWith('review:')) window.__markReading?.(title || doc);
@@ -21,6 +22,10 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
       load();
       toast('已发给 Claude，回答会出现在旁边的批注里');
     } catch (e) { toast(e.message, true); }
+  };
+  const withCodeAction = (el) => {
+    if (codeAction) el.querySelectorAll('pre > code').forEach((c) => c.parentElement.after(h('button.sm.ghost.an-code-act', { onclick: () => codeAction.onPick(c.textContent) }, codeAction.label)));
+    return el;
   };
   let threads = [];
   let showResolved = false;
@@ -205,7 +210,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
       ? h('div.an-msg.me', {}, m.content)
       : ui.noteZone(h('div.an-msg.ai' + (m.status === 'pending' ? '.pending' : m.status === 'failed' ? '.failed' : ''), {}, [
         h('span.an-who', {}, [ui.icon('spark'), 'Claude']),
-        m.content ? md(m.content) : null,
+        m.content ? withCodeAction(md(m.content)) : null,
         m.status === 'pending' ? h('div.an-step', {}, ((x) => (x ? (x.startsWith('排队中') ? x : '正在：' + x) : '正在读材料…'))((m.log || '').split('\n').filter(Boolean).slice(-1)[0])) : null,
       ]), { ...wrap._src, annotation_id: t.id }));
     const el = h('div.an-card' + (t.status === 'resolved' ? '.resolved' : ''), { 'data-aid': t.id }, [

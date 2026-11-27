@@ -13,7 +13,7 @@ RealCloud = RT.Cloud
 
 @pytest.fixture(autouse=True)
 def _clean(client):
-    for t in ("practice_runtime", "practice_cells", "practice_kernels", "practice_done"):
+    for t in ("practice_runtime", "practice_cells", "practice_kernels", "practice_done", "practice_lab"):
         db.execute(f"DELETE FROM {t}")
     K.EXECS.clear()
 
@@ -307,3 +307,39 @@ def test_kernel_crash_ends_execution():
     e = K.execute("minimind:00-env:3", "big()", fake_transport(replies))
     wait(e)
     assert e.status == "error" and e.outputs[-1]["ename"] == "内核崩溃"
+
+
+def test_claude_writes_lab_cell_then_rewrites_it_and_lab_runs_dont_count_for_done(client, monkeypatch):
+    asks = []
+    replies = iter(["标题：batch 对比\n```python\nss.kv({'b': 8})\n```", "好的\n```python\nss.kv({'b': 4})\n```"])
+    monkeypatch.setattr(P.agent, "run_once", lambda prompt, **kw: asks.append(prompt) or {"text": next(replies)})
+    base = {"course": "agent-harness", "lesson": "00-profiles"}
+    x = client.post("/api/practice/lab/write", json={**base, "step": 2, "ask": "把 batch 改成 8", "context": "这一步讲 profile"}).json()
+    assert (x["title"], x["code"], x["step"]) == ("batch 对比", "ss.kv({'b': 8})\n", 2)
+    assert "这一步讲 profile" in asks[0] and "把 batch 改成 8" in asks[0]
+    db.execute("INSERT INTO practice_cells (k, course, lesson, cell, outputs, status) VALUES (?,?,?,?,?, 'done')",
+               [f"agent-harness:00-profiles:{x['id']}", "agent-harness", "00-profiles", x["id"], '[{"type": "stream", "text": "b=8"}]'])
+    y = client.post("/api/practice/lab/write", json={**base, "ask": "改成 4", "lab_id": x["id"]}).json()
+    assert (y["id"], y["title"], y["code"]) == (x["id"], "batch 对比", "ss.kv({'b': 4})\n")
+    assert "ss.kv({'b': 8})" in asks[1] and "b=8" in asks[1]                 # 改写时带上原代码和上次输出
+    lab = client.get("/api/practice/courses/agent-harness/lessons/00-profiles").json()["lab"]
+    assert [(r["id"], r["step"], r["code"]) for r in lab] == [(x["id"], 2, "ss.kv({'b': 4})\n")]
+    P._maybe_done(f"agent-harness:00-profiles:{x['id']}")
+    assert not db.row("SELECT 1 FROM practice_done")                           # 实验格跑通不算学完这一课
+    client.patch(f"/api/practice/lab/{x['id']}", json={"title": "新名字", "code": "1\n"})
+    assert db.row("SELECT title, code FROM practice_lab")["title"] == "新名字"
+    assert client.delete(f"/api/practice/lab/{x['id']}").json()["ok"]
+    assert not db.row("SELECT 1 FROM practice_lab") and not db.row("SELECT 1 FROM practice_cells")
+
+
+def test_lab_write_without_code_block_is_an_error(client, monkeypatch):
+    monkeypatch.setattr(P.agent, "run_once", lambda prompt, **kw: {"text": "我觉得不用做实验"})
+    r = client.post("/api/practice/lab/write", json={"course": "agent-harness", "lesson": "00-profiles", "ask": "x"})
+    assert r.status_code == 502 and not db.row("SELECT 1 FROM practice_lab")
+
+
+def test_run_lab_cell_needs_existing_lab(client, monkeypatch):
+    monkeypatch.setattr(P.RT, "server", lambda kind: object())
+    monkeypatch.setattr(P.RT, "touch", lambda kind: None)
+    r = client.post("/api/practice/run", json={"course": "agent-harness", "lesson": "00-profiles", "cell": "xdeadbeef", "code": "1"})
+    assert r.status_code == 404

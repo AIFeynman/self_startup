@@ -55,6 +55,17 @@ const CSS = `
 .pr-quick button:hover, .pr-stepq button:hover { border-color: var(--accent); color: var(--accent); }
 .pr-stepq { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; font-size: 12px; color: var(--muted); }
 .vz-code .cv { max-height: 520px; overflow-y: auto; }
+.pr-lab { border: 1px dashed var(--line-2); border-radius: 10px; padding: 8px 10px; margin: 12px 0 8px; background: var(--bg-2); }
+.pr-lab-hd { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.pr-lab-hd .muted { font-size: 12px; }
+.pr-lab-ask { display: grid; gap: 6px; margin-top: 6px; }
+.pr-lab-ask textarea { width: 100%; box-sizing: border-box; font-size: 13.5px; }
+.pr-lab-ask .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pr-lab-title { border: 0; border-bottom: 1px dashed var(--line-2); background: transparent; font-size: 12.5px; padding: 0 2px; min-width: 0; width: 14em; color: var(--text); }
+.pr-labfix { display: flex; gap: 6px; padding: 5px 8px; border-top: 1px solid var(--line); }
+.pr-labfix input { flex: 1; min-width: 0; font-size: 12.5px; }
+.an-code-act { margin: 2px 0 8px; border: 1px solid var(--accent) !important; color: var(--accent) !important; background: var(--panel) !important; }
+.an-code-act::before { content: '▶ '; }
 .pr-out { padding: 6px 12px 10px; font-size: 13px; }
 .pr-out:empty { display: none; }
 .pr-out pre { margin: 6px 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 var(--mono); max-height: 360px; overflow: auto; }
@@ -348,7 +359,8 @@ async function lessonPage(el, ctx, cid, lid) {
       if (p.type === 'ask') return `思考题：${p.text}`;
       const cl = cells[p.n];
       return `代码格 [${p.n + 1}]：\n\`\`\`python\n${cl?.ta.value || p.code}\n\`\`\`\n${cl?.outputs.length ? '运行输出：\n' + outText(cl.outputs) : '（还没运行）'}`;
-    })].join('\n\n');
+    }), ...(labs[i] || []).map((cl) => `${cl.tag}（学员的实验）：\n\`\`\`python\n${cl.ta.value}\n\`\`\`\n${cl.outputs.length ? '运行输出：\n' + outText(cl.outputs) : '（还没运行）'}`),
+    '（页面说明：每一步下面有「实验区」，回答里给出的 ```python 代码块，学员能一键放进实验格、在课程内核里直接运行并保存结果。需要动手验证时直接给完整可运行的代码块，不要让学员去改课程文件。）'].join('\n\n');
   };
 
   const setSt = (cl, st, secs) => {
@@ -391,6 +403,85 @@ async function lessonPage(el, ctx, cid, lid) {
     if (cc.done[lid]) { c.done[lid] = cc.done[lid]; toc.querySelectorAll('a').forEach((a) => { if (a.getAttribute('href').endsWith('/' + lid)) a.classList.add('done'); }); toast('这一课完成了，已记进学习进度和复盘'); }
   };
 
+  // 一个可编辑、可运行的代码格：课程格和实验格共用
+  const makeCell = ({ n, code, orig = null, tag, kind = 'local', optional = false, getWrap, head = [], extra = [], below = null }) => {
+    const saved = L.cells[String(n)];
+    const ed = codeEditor(saved?.code || code);
+    const ta = ed.ta;
+    const out = h('div.pr-out');
+    const st = h('span.st');
+    const cl = { n, ta, ed, out, st, kind, tag, outputs: saved?.outputs || [], ok: saved?.status === 'done' || optional };
+    cl.stop = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => api.post('/api/practice/interrupt', { course: cid, kind: cl.kind }) }, '■ 中断');
+    cl.fix = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => getWrap()._ask(`${cl.tag}运行出错了，帮我看看原因，并给出改好的代码。`) }, '让 Claude 看报错');
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); runCell(cl); }
+      if (e.key === 'Tab') { e.preventDefault(); const a = ta.selectionStart; ta.setRangeText('    ', a, ta.selectionEnd, 'end'); ed.refresh(); }
+    });
+    const quick = h('div.pr-quick', {}, [h('span', {}, '问 Claude：'), ...CELL_ASKS.map(([label, q]) => h('button', { title: q, onclick: () => getWrap()._askNow(`关于${cl.tag}：${q}`, cl.tag) }, label))]);
+    const el = h('div.pr-cell', {}, [
+      h('div.bar', {}, [h('button.sm.primary', { title: 'Shift+Enter', onclick: () => runCell(cl) }, '▶ 运行'), cl.stop, ...head, st, h('span.grow'), cl.fix,
+        h('span.muted.hint', {}, '可直接改代码 · Shift+Enter 运行'),
+        orig != null ? h('button.sm.ghost', { title: '恢复成课程里的原始代码', onclick: () => { ta.value = orig; ed.refresh(); } }, '还原') : null, ...extra]),
+      ed.el, below, quick, out]);
+    cl.el = el;
+    if (saved) { renderOutputs(ctx, out, saved.outputs); setSt(cl, saved.status, saved.secs); }
+    if (L.live[String(n)]) follow(cl, L.live[String(n)]);
+    return { el, cl };
+  };
+
+  // 实验区：每一步下面，学员说想验证什么 → 本机 Claude 写代码 → 直接运行，代码和输出都存着
+  const labs = L.steps.map(() => []);
+  const labArea = (i, getWrap) => {
+    const list = h('div');
+    const addLab = (x, { run = false, focus = false } = {}) => {
+      const title = h('input.pr-lab-title', { value: x.title, title: '实验名，可改' });
+      title.onchange = () => api.patch(`/api/practice/lab/${x.id}`, { title: title.value });
+      const fixIn = h('input', { placeholder: '让 Claude 改这一格：例如「把 B 改成 4 再比一次」' });
+      const { el, cl } = makeCell({ n: x.id, code: x.code, tag: `实验格「${x.title}」`, getWrap, head: [h('span.tag', {}, '实验'), title],
+        extra: [h('button.sm.ghost', { title: '删除这个实验格（代码和输出一起删）', onclick: async () => {
+          if (!confirm(`删除实验格「${title.value}」？代码和输出都会删掉。`)) return;
+          await api.del(`/api/practice/lab/${x.id}`); el.remove(); labs[i] = labs[i].filter((y) => y !== cl);
+        } }, '删除')],
+        below: h('div.pr-labfix', {}, [fixIn, h('button.sm.ghost', { onclick: () => write(fixIn.value, cl, fixIn) }, '让 Claude 改')]) });
+      cl.title = title;
+      cl.ta.addEventListener('change', () => api.patch(`/api/practice/lab/${x.id}`, { code: cl.ta.value }));
+      fixIn.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) write(fixIn.value, cl, fixIn); };
+      labs[i].push(cl);
+      list.append(el);
+      if (focus) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (run) runCell(cl);
+      return cl;
+    };
+    const askIn = h('textarea', { rows: 2, placeholder: '想验证什么？例如：把 batch 从 8 改成 4，对比每步耗时和显存 —— Claude 会写好代码放进实验格' });
+    const auto = h('input', { type: 'checkbox', checked: true });
+    const busy = h('div.muted', { style: { display: 'none' } });
+    const write = async (ask, target = null, input = askIn) => {
+      ask = (ask || '').trim();
+      if (!ask) { input.focus(); return toast('先写想做的实验', true); }
+      input.disabled = true;
+      busy.style.display = ''; busy.textContent = target ? `Claude 正在改「${target.title.value}」…` : 'Claude 正在写实验代码…（本机 Claude，通常半分钟到一分钟）';
+      try {
+        const x = await api.post('/api/practice/lab/write', { course: cid, lesson: lid, step: i, ask, context: stepText(i), lab_id: target ? target.n : '' });
+        input.value = '';
+        if (target) { target.ta.value = x.code; target.ed.refresh(); target.title.value = x.title; target.el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); if (auto.checked) runCell(target); }
+        else addLab(x, { run: auto.checked, focus: true });
+      } catch (e) { toast(e.message, true); } finally { input.disabled = false; busy.style.display = 'none'; }
+    };
+    labAdders[i] = (code, title) => api.post('/api/practice/lab', { course: cid, lesson: lid, step: i, title, code }).then((x) => addLab(x, { focus: true }));
+    (L.lab || []).filter((x) => x.step === i).forEach((x) => addLab(x));
+    askIn.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) write(askIn.value); };
+    return h('div.pr-lab', {}, [
+      h('div.pr-lab-hd', {}, [h('b', {}, '实验区'), h('span.muted', {}, '说想验证什么，Claude 写代码、直接运行；代码和结果都保存在这一步，可以继续改')]),
+      list,
+      h('div.pr-lab-ask', {}, [askIn, h('div.row', {}, [
+        h('button.sm.primary', { onclick: () => write(askIn.value) }, [ctx.ui.icon('spark'), 'Claude 写实验']),
+        h('label.muted', { style: { fontSize: '12.5px' } }, [auto, ' 写完直接运行']),
+        h('span.grow'),
+        h('button.sm.ghost', { onclick: () => labAdders[i]('# 在这里写实验代码，Shift+Enter 运行\n', '我的实验') }, '+ 空白实验格')]), busy]),
+    ]);
+  };
+  const labAdders = [];
+
   L.steps.forEach((s, i) => {
     const body = h('div.pr-step', {}, [h('h3', {}, s.title)]);
     let wrap = null;
@@ -399,36 +490,19 @@ async function lessonPage(el, ctx, cid, lid) {
       else if (p.type === 'ask') body.append(h('div.pr-ask', {}, [h('b', {}, '思考'), h('span', {}, p.text),
         h('button.sm.ghost', { onclick: () => wrap._ask(`思考题：${p.text}\n我的想法：`) }, '和 Claude 对答案')]));
       else {
-        const saved = L.cells[String(p.n)];
-        const ed = codeEditor(saved?.code || p.code);
-        const ta = ed.ta;
-        const out = h('div.pr-out');
-        const st = h('span.st');
-        const cl = { n: p.n, ta, out, st, kind: p.cloud ? 'cloud' : 'local', outputs: saved?.outputs || [], ok: saved?.status === 'done' || p.optional };
-        cl.stop = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => api.post('/api/practice/interrupt', { course: cid, kind: cl.kind }) }, '■ 中断');
-        cl.fix = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => wrap._ask('这一格运行出错了，帮我看看原因，并给出改好的代码。') }, '让 Claude 看报错');
-        ta.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); runCell(cl); }
-          if (e.key === 'Tab') { e.preventDefault(); const a = ta.selectionStart; ta.setRangeText('    ', a, ta.selectionEnd, 'end'); ed.refresh(); }
-        });
-        const tag = `代码格 [${p.n + 1}]`;
-        const quick = h('div.pr-quick', {}, [h('span', {}, '问 Claude：'), ...CELL_ASKS.map(([label, q]) => h('button', { title: q, onclick: () => wrap._askNow(`关于${tag}：${q}`, tag) }, label))]);
-        body.append(h('div.pr-cell', {}, [
-          h('div.bar', {}, [h('button.sm.primary', { title: 'Shift+Enter', onclick: () => runCell(cl) }, '▶ 运行'), cl.stop, h('span', {}, `[${p.n + 1}]`),
+        const { el: cellEl, cl } = makeCell({ n: p.n, code: p.code, orig: p.code, tag: `代码格 [${p.n + 1}]`, kind: p.cloud ? 'cloud' : 'local', optional: p.optional,
+          getWrap: () => wrap, head: [h('span', {}, `[${p.n + 1}]`),
             p.cloud ? h('span.tag', { title: '本机跑太慢的全量训练，放到阿里云 GPU 上跑（会先弹窗报价）' }, '云端 GPU · 可选') : h('span.muted', {}, p.optional ? '本机 · 可选' : '本机'),
-            p.long ? h('span.tag.line', {}, '要跑几分钟') : null, st, h('span.grow'), cl.fix,
-            h('span.muted.hint', {}, '可直接改代码 · Shift+Enter 运行'),
-            h('button.sm.ghost', { title: '恢复成课程里的原始代码', onclick: () => { ta.value = p.code; ed.refresh(); } }, '还原')]),
-          ed.el, quick, out]));
-        if (saved) { renderOutputs(ctx, out, saved.outputs); setSt(cl, saved.status, saved.secs); }
-        if (L.live[String(p.n)]) follow(cl, L.live[String(p.n)]);
+            p.long ? h('span.tag.line', {}, '要跑几分钟') : null] });
+        body.append(cellEl);
         cells[p.n] = cl;
       }
     }
+    body.append(labArea(i, () => wrap));
     body.append(h('div.pr-stepq', {}, [h('span', {}, '这一步：'), ...STEP_ASKS.map(([label, q]) => h('button', { title: q, onclick: () => wrap._askNow(q) }, label)),
       h('button.sm.ghost', { onclick: () => wrap._ask('') }, [ctx.ui.icon('spark'), '自己问'])]));
     wrap = annotate(ctx, body, { doc: `practice:${cid}:${lid}:${i}`, title: `${c.title} · ${L.title} · ${s.title}`, link: `#practice/${cid}/${lid}`,
-      source: () => stepText(i), compact: true });
+      source: () => stepText(i), compact: true, codeAction: { label: '放进实验区', onPick: (code) => labAdders[i](code, 'Claude 给的实验') } });
     main.append(wrap);
   });
 

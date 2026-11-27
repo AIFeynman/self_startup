@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS practice_cells (k TEXT PRIMARY KEY, course TEXT, less
   status TEXT, secs REAL, at TEXT);
 CREATE TABLE IF NOT EXISTS practice_kernels (course TEXT, kind TEXT, kernel TEXT, PRIMARY KEY (course, kind));
 CREATE TABLE IF NOT EXISTS practice_done (course TEXT, lesson TEXT, at TEXT, PRIMARY KEY (course, lesson));
+CREATE TABLE IF NOT EXISTS practice_lab (id TEXT PRIMARY KEY, course TEXT, lesson TEXT, step INTEGER, title TEXT, code TEXT, at TEXT);
 """
 router = APIRouter()
 
@@ -145,7 +146,8 @@ def lesson(cid: str, lid: str):
     cells = {r["cell"]: {"code": r["code"], "outputs": json.loads(r["outputs"] or "[]"), "status": r["status"], "secs": r["secs"], "at": r["at"]}
              for r in db.rows("SELECT * FROM practice_cells WHERE course=? AND lesson=?", [cid, lid])}
     live = {e.key.split(":")[2]: e.id for e in K.running() if e.key.startswith(f"{cid}:{lid}:")}
-    return L | {"id": lid, "course": cid, "cells": cells, "live": live,
+    lab = db.rows("SELECT id, step, title, code, at FROM practice_lab WHERE course=? AND lesson=? ORDER BY at, id", [cid, lid])
+    return L | {"id": lid, "course": cid, "cells": cells, "live": live, "lab": lab,
                 "done": bool(db.row("SELECT 1 FROM practice_done WHERE course=? AND lesson=?", [cid, lid]))}
 
 
@@ -183,7 +185,7 @@ def runtime_stop(body: StartIn):
 class RunIn(BaseModel):
     course: str
     lesson: str
-    cell: int
+    cell: int | str
     code: str
     kind: str = ""
 
@@ -237,6 +239,9 @@ def run(body: RunIn):
     def transport():
         s, kid = kernel_for(c, kind)   # 首次要装课程依赖，可能几分钟：放在执行线程里，接口立即返回
         return K.ws_transport(s, kid)
+    if isinstance(body.cell, str):
+        if not db.execute("UPDATE practice_lab SET code=? WHERE id=? AND course=? AND lesson=?", [body.code, body.cell, body.course, body.lesson]):
+            raise HTTPException(404, "没有这个实验格")
     e = K.execute(f"{body.course}:{body.lesson}:{body.cell}", body.code, transport, on_activity=lambda: RT.touch(kind))
     return e.view()
 
@@ -310,11 +315,109 @@ def _maybe_done(key: str) -> None:
         meta = next(x for x in c["lessons"] if x["id"] == lid)
     except (HTTPException, StopIteration):
         return
-    ok = db.row("SELECT count(*) AS n FROM practice_cells WHERE course=? AND lesson=? AND status='done'", [cid, lid])["n"]
+    ok = db.row("SELECT count(*) AS n FROM practice_cells WHERE course=? AND lesson=? AND status='done' AND cell GLOB '[0-9]*'", [cid, lid])["n"]
     if meta["cells"] and ok >= meta["cells"] - meta["optional"]:   # 云端全量 / 可选格子不算，必做的本机格子都跑通就算学完
         db.execute("INSERT OR IGNORE INTO practice_done (course, lesson, at) VALUES (?,?,?)", [cid, lid, db.now()])
         from . import _read_log
         _read_log.log("practice", f"{cid}/{lid}", f"{c['title']} · {meta['title']}", f"#practice/{cid}/{lid}", "实践")
+
+
+# ---------- 实验格：学员（或 Claude 给的代码）在某一步下自己加的格子，代码和输出都存着 ----------
+
+class LabIn(BaseModel):
+    course: str
+    lesson: str
+    step: int = 0
+    title: str = ""
+    code: str = ""
+
+
+class LabPatch(BaseModel):
+    title: str | None = None
+    code: str | None = None
+
+
+@router.post("/lab")
+def lab_add(body: LabIn):
+    lesson_path(load_course(body.course), body.lesson)
+    import secrets
+    lab_id = "x" + secrets.token_hex(4)
+    row = {"id": lab_id, "step": body.step, "title": body.title.strip()[:80] or "我的实验", "code": body.code, "at": db.now()}
+    db.execute("INSERT INTO practice_lab (id, course, lesson, step, title, code, at) VALUES (?,?,?,?,?,?,?)",
+               [lab_id, body.course, body.lesson, row["step"], row["title"], row["code"], row["at"]])
+    return row
+
+
+@router.patch("/lab/{lab_id}")
+def lab_edit(lab_id: str, body: LabPatch):
+    r = db.row("SELECT * FROM practice_lab WHERE id=?", [lab_id])
+    if not r:
+        raise HTTPException(404, "没有这个实验格")
+    db.execute("UPDATE practice_lab SET title=?, code=? WHERE id=?",
+               [(body.title if body.title is not None else r["title"]).strip()[:80] or r["title"], r["code"] if body.code is None else body.code, lab_id])
+    return {"ok": True}
+
+
+@router.delete("/lab/{lab_id}")
+def lab_del(lab_id: str):
+    r = db.row("SELECT course, lesson FROM practice_lab WHERE id=?", [lab_id])
+    if not r:
+        raise HTTPException(404, "没有这个实验格")
+    db.execute("DELETE FROM practice_lab WHERE id=?", [lab_id])
+    db.execute("DELETE FROM practice_cells WHERE k=?", [f"{r['course']}:{r['lesson']}:{lab_id}"])
+    return {"ok": True}
+
+
+class LabWriteIn(BaseModel):
+    course: str
+    lesson: str
+    step: int = 0
+    ask: str
+    context: str = ""
+    lab_id: str = ""
+
+
+LAB_PROMPT = """你在给实践课页面的「实验区」写一个代码格，学员会直接在页面里运行它。
+
+## 课程上下文（这一步的讲解、课程代码格和最近的输出）
+{context}
+{current}
+## 学员想做的实验
+{ask}
+
+## 要求
+- 只输出两部分：第一行「标题：<不超过 20 字>」，然后一个 ```python 代码块，别的都不要。
+- 代码在这门课的同一个 Jupyter 内核里执行：前面格子定义的变量可能还在，但别依赖，需要的 import 和数据自己准备。
+- 结果用 ss 库展示：ss.kv / table / bars / line / compare / code / note，也可以 print。读结果的要点用 ss.note 写一两句。
+- 控制在 1 分钟内跑完；要调大模型用 ss.llm(prompt, system)；不访问外网、不读写课程目录以外的文件。
+- 不要使用任何工具，直接给代码。"""
+
+
+def _split_lab_reply(text: str) -> tuple[str, str]:
+    m = re.search(r"```(?:python|py)?\n(.*?)```", text, re.S)
+    if not m:
+        raise HTTPException(502, "Claude 没给出代码块：" + text[:200])
+    t = re.search(r"标题[:：]\s*(.+)", text)
+    return (t[1].strip().strip("「」*")[:40] if t else ""), m[1].rstrip() + "\n"
+
+
+@router.post("/lab/write")
+def lab_write(body: LabWriteIn):
+    """让本机 Claude 按学员的想法写（或改写）一个实验格，写好存进实验区。"""
+    cur = db.row("SELECT * FROM practice_lab WHERE id=? AND course=? AND lesson=?", [body.lab_id, body.course, body.lesson]) if body.lab_id else None
+    if body.lab_id and not cur:
+        raise HTTPException(404, "没有这个实验格")
+    current = ""
+    if cur:
+        out = db.row("SELECT outputs FROM practice_cells WHERE k=?", [f"{body.course}:{body.lesson}:{body.lab_id}"])
+        last = out["outputs"][:3000] if out else "（还没运行）"
+        current = f"\n## 要改的实验格（现在的代码）\n```python\n{cur['code']}\n```\n上次运行输出：{last}\n"
+    r = agent.run_once(LAB_PROMPT.format(context=body.context[-12000:], current=current, ask=body.ask), module="practice", readonly=True)
+    title, code = _split_lab_reply(r.get("text") or "")
+    if cur:
+        db.execute("UPDATE practice_lab SET code=?, title=? WHERE id=?", [code, title or cur["title"], cur["id"]])
+        return {**{k: cur[k] for k in ("id", "step", "at")}, "title": title or cur["title"], "code": code}
+    return lab_add(LabIn(course=body.course, lesson=body.lesson, step=body.step, title=title or body.ask[:30], code=code))
 
 
 # ---------- 课程里 ss.llm() 用的本机 Claude ----------
