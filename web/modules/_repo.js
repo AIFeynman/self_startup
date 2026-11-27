@@ -7,8 +7,8 @@ const ACTIVE = [['0', '不限活跃'], ['30', '30 天内有更新'], ['180', '�
 const AI_NAME = { core: 'AI 本身', for_ai: '给 AI 用', ai_powered: 'AI 应用', none: '' };
 const LEARN = [['survey', '综述 / 论文'], ['course', '教程 / 课程'], ['scratch', '代码学习 / 从零实现'], ['book', '书籍 / 讲义'], ['road', '学习路线 / 面试'], ['list', '资源清单']];
 const LNAME = Object.fromEntries(LEARN);
-const st = { q: '', by: 'rel', kind: '', domain: '', lang: '', active: '0', offset: 0, added: '1', order: 'time', learn: '' };
-const saved = { added: '7', order: 'time' };
+const st = { q: '', by: 'rel', kind: '', domain: '', lang: '', active: '0', offset: 0, added: '30', order: 'time', learn: '' };
+const saved = { added: '30', order: 'time' };
 let lc = null;
 const fmtStars = (n) => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
 
