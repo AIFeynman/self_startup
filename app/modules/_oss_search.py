@@ -200,19 +200,21 @@ def repo_ref(q: str) -> str:
 
 
 def name_pins(q: str, it: dict) -> tuple[dict[int, float], list[str]]:
-    """改写丢掉的英文词多半是模型不认识的项目名：仓库名正好是它 → 2 分，仓库名包含它（命中不多时）→ 1 分。
-    返回 ({rowid: 置顶分}, 被丢掉的词)。"""
+    """模型不认识的项目名常被改写丢掉，或只留在整句里召回不到。英文词满足其一就按仓库名找：
+    改写丢了它 / 整个输入就是它（仓库名正好是它 → 2 分，包含它且命中不多 → 1 分）；
+    改写留着它但仓库名里少见（命中不超过 NAME_MAX_HITS，说明不是 agent、pdf 这种泛词）。
+    返回 ({rowid: 置顶分}, 改写丢掉的词)。"""
     kept = " ".join(it["must"] + it["should"] + (it.get("not") or [])).lower()
-    words = _NAME_TOKEN.findall(q.lower())
-    lost = [w for w in words if w not in kept or len(words) == 1]
+    lost = [w for w in _NAME_TOKEN.findall(q.lower()) if w not in kept]
     pins: dict[int, float] = {}
-    for w in lost:
+    for w in _NAME_TOKEN.findall(q.lower()):
         rows = db.rows("SELECT id, lower(substr(name, instr(name,'/')+1)) AS repo FROM oss_repos "
                        "WHERE status='ok' AND lower(name) LIKE ? LIMIT ?", [f"%{w}%", NAME_MAX_HITS + 1])
+        rare = len(rows) <= NAME_MAX_HITS
         for r in rows:
-            if r["repo"] == w or len(rows) <= NAME_MAX_HITS:
+            if rare or (r["repo"] == w and (w in lost or w == norm(q))):
                 pins[r["id"]] = max(pins.get(r["id"], 0), 2.0 if r["repo"] == w else 1.0)
-    return pins, [w for w in lost if w not in kept]
+    return pins, lost
 
 
 
@@ -233,7 +235,7 @@ def search(q: str, by: str = "rel", kind: str = "", domain: str = "", lang: str 
         r = db.row("SELECT id FROM oss_repos WHERE lower(name)=?", [ref])
         hit = list(_docs({r["id"]}).values()) if r else []
         it = {"must": [ref], "should": [], "not": [], "domains": [], "kinds": []}
-        return {"intent": it, "results": [public(d) for d in hit], "reranked": False,
+        return {"intent": it, "results": [public(d) for d in hit], "reranked": False, "ref": ref,
                 "errors": [] if hit else [f"库里没有 {ref}：可能 star 不到 1000、还没采集或还没标注"]}
     key = norm(q)
     errors: list[str] = []
@@ -281,7 +283,8 @@ def search(q: str, by: str = "rel", kind: str = "", domain: str = "", lang: str 
         cands.sort(key=lambda d: (-d["pin"], -d["stars"]))
     else:
         cands.sort(key=lambda d: -d["score"])
-    return {"intent": it, "results": [public(d) for d in cands[:k]], "reranked": reranked, "errors": errors}
+    named = sorted({w for w in _NAME_TOKEN.findall(q.lower()) for d in cands[:k] if d["pin"] and w in d["name"].lower()})
+    return {"intent": it, "results": [public(d) for d in cands[:k]], "reranked": reranked, "names": named, "errors": errors}
 
 
 def filt(cands: list[dict], kind: str = "", domain: str = "", lang: str = "", active_days: int = 0) -> list[dict]:

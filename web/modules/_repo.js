@@ -115,11 +115,11 @@ export async function repoTab(body, ctx, q0 = '') {
     let r;
     try { r = await api.get('/api/intel/oss/search?' + p); } catch (e) { if (seq !== loadSeq) return; listBox.replaceChildren(ui.empty('检索失败', e.message)); return; } finally { if (seq === loadSeq) listBox.style.opacity = ''; }
     if (seq !== loadSeq) return;
-    intentBox.replaceChildren(r.mode === 'search' ? h('div.os-intent', {}, [
-      '理解为：', (r.intent.must || []).join(' / '),
+    intentBox.replaceChildren(r.mode !== 'search' ? '' : r.ref ? h('div.os-intent', {}, ['直接定位：', r.ref, ...(r.errors || []).map((e) => h('div', { style: { color: 'var(--warn)' } }, e))]) : h('div.os-intent', {}, [
+      r.names?.length ? `按项目名找到：${r.names.join('、')} · 其余按：` : '理解为：', (r.intent.must || []).join(' / '),
       r.intent.domains?.length ? ` · 领域 ${r.intent.domains.map((d) => dname[d] || d).join('、')}` : '',
       r.intent.not?.length ? ` · 排除 ${r.intent.not.join('、')}` : '',
-      r.reranked ? '' : ' · 未精排', ...(r.errors || []).map((e) => h('div', { style: { color: 'var(--warn)' } }, e))]) : '');
+      r.reranked ? '' : ' · 未精排', ...(r.errors || []).map((e) => h('div', { style: { color: 'var(--warn)' } }, e))]));
     if (r.learn_counts) {
       lc = { counts: r.learn_counts, doms: r.learn_domains };
       if (!more) { drawMode(); drawBar(); }

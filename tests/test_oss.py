@@ -165,13 +165,25 @@ def test_search_without_llm_falls_back():
     assert db.row("SELECT count(*) AS n FROM oss_query_cache")["n"] == 0   # 失败的结果不缓存
 
 
-def test_search_keeps_project_names_the_rewriter_drops():
+def test_search_keeps_project_names_the_rewriter_drops(monkeypatch):
     _setup()
     chat = fake_chat({"a/pdfx": [3, "直接解析 PDF"]})                    # 改写永远给 PDF 解析，模拟模型不认识项目名
-    assert srch.search("ocrkit", chat=chat)["results"][0]["name"] == "b/ocrkit"
+    r = srch.search("ocrkit", chat=chat)
+    assert r["results"][0]["name"] == "b/ocrkit" and r["names"] == ["ocrkit"]
     assert srch.search("caveman 怎么用", chat=chat)["results"][0]["name"] == "d/caveman"
     assert srch.search("caveman 怎么用", by="stars", chat=chat)["results"][0]["name"] == "d/caveman"
-    assert srch.search("我想做PDF解析", chat=chat)["results"][0]["name"] == "a/pdfx"   # 普通需求不受影响
+
+    def phrase_only(system, user, max_tokens=2000, client=None):     # 改写留着项目名，但只在整句里，召回不到
+        if "改写" in system:
+            return {"must": ["ocrkit 怎么用", "ocrkit 教程"], "should": [], "not": [], "domains": [], "kinds": ["tutorial"]}
+        return {}
+    r = srch.search("ocrkit 怎么用", chat=phrase_only, use_cache=False)
+    assert r["results"][0]["name"] == "b/ocrkit" and r["names"] == ["ocrkit"]
+    monkeypatch.setattr(srch, "NAME_MAX_HITS", 0)                    # 小库里样样少见，这里把 pdf 当泛词
+    r = srch.search("我想做PDF解析", chat=chat)
+    assert r["results"][0]["name"] == "a/pdfx" and r["names"] == []   # 普通需求不受影响
+    r = srch.search("pdf parse 怎么用", chat=chat)                    # 改写留着的常见词不置顶
+    assert r["names"] == []
 
 
 def test_search_by_repo_link_or_full_name_skips_llm():
@@ -179,7 +191,7 @@ def test_search_by_repo_link_or_full_name_skips_llm():
     chat = fake_chat()
     for q in ("https://github.com/b/ocrkit", "github.com/B/OCRKit/tree/main", "b/ocrkit"):
         r = srch.search(q, chat=chat)
-        assert [x["name"] for x in r["results"]] == ["b/ocrkit"] and not r["errors"]
+        assert [x["name"] for x in r["results"]] == ["b/ocrkit"] and r["ref"] == "b/ocrkit" and not r["errors"]
     assert chat.calls == []
     r = srch.search("https://github.com/x/nope", chat=chat)
     assert r["results"] == [] and "x/nope" in r["errors"][0] and chat.calls == []
