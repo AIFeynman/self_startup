@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>矩阵号定位与商业模式</title>
+<style>
+:root{--bg:#f6f3ee;--fg:#22201c;--mute:#6b665d;--line:#ddd6ca;--acc:#b8432f;--card:#fffdf9}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1b19;--fg:#ece8e1;--mute:#a39d92;--line:#3a3732;--acc:#e07a63;--card:#252320}}
+body{background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,"PingFang SC",sans-serif;margin:0;padding:24px max(16px,env(safe-area-inset-left))}
+main{max-width:900px;margin:0 auto}h1{font-size:24px;margin:0 0 8px}h2{font-size:19px;margin:32px 0 8px;border-top:1px solid var(--line);padding-top:16px}
+h3{font-size:16px;margin:22px 0 6px}h4{font-size:15px;margin:16px 0 4px}a{color:var(--acc)}
+table{border-collapse:collapse;width:100%;font-size:14px;background:var(--card)}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}th{color:var(--mute);white-space:nowrap}
+.wrap{overflow-x:auto;margin:8px 0}code{font-size:13px;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:0 4px;overflow-wrap:anywhere}
+blockquote{margin:12px 0;padding:4px 14px;border-left:3px solid var(--acc);background:var(--card)}
+img{max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:6px}
+li{margin:4px 0}.src{color:var(--mute);font-size:13px}
+</style></head><body><main>
+<h1>小开物 · UnfoldX 矩阵号全领域定位与商业模式衔接方案（v1，2026-11-24）</h1>
+<p class="src">原文：<a target="_blank" rel="noopener" href="https://unfoldx-ai.feishu.cn/wiki/HIYKwbUrEiu6qqkOqR3cpxP7nXg">飞书知识库</a>（revision 20，2026-11-24 08:33 修改）</p>
+<blockquote>
+<p>版本：v2（2026-11-24，全面融入《抖音账号矩阵规划（讨论稿）》全品类细则与《官方讲解号变现回路》）</p>
+<p>适用范围：小开物（国内）与 UnfoldX（海外）官方主号、全垂类矩阵副号、B 端/渠道试点与商业化团队</p>
+<p>上游依据：<a target="_blank" rel="noopener" href="https://unfoldx-ai.feishu.cn/wiki/EeuCw8qIFivoTlk8OkVczyGUnah">小开物 · UnfoldX 品牌规范（v1）</a> · <a target="_blank" rel="noopener" href="https://unfoldx-ai.feishu.cn/wiki/O6m0wsGm0ibLu7koao2cQXQXnvq">抖音账号矩阵规划（讨论稿）</a> · <a target="_blank" rel="noopener" href="https://unfoldx-ai.feishu.cn/wiki/OknxwtxDJiJvS4kenMccMuLHncP">会议分析：账号矩阵与数据驱动选题（2026-11-23）</a> · <a target="_blank" rel="noopener" href="https://unfoldx-ai.feishu.cn/wiki/OHrmwAaEpidvdukMpx6c5uvjnzb">UnfoldX 讲解短视频反馈归因（19 条）</a> · <a target="_blank" rel="noopener" href="https://unfoldx-ai.feishu.cn/docx/ScVBdRHSsooavIxntpTcWbwxnFR">开物冷知识归因（18 条）</a> · 仓库分析稿 <code>2026-11-23-unfoldx-account-monetization-loop.html</code>、<code>2026-11-22-scenario-commercial-value-ip-path.html</code>、<code>2026-11-22-result-delivery-business-feasibility.html</code></p>
+</blockquote>
+<hr />
+<h2>一、顶层原则与统一品牌硬约束</h2>
+<h3>1.1 定号四条硬原则</h3>
+<ol>
+<li><strong>播放量不是商业价值的近似</strong>：内部抖音研究（2,719 条视频、86,846 条评论）显示，线索率与播放量相关系数仅为 -0.20 至 0.03。每个号发第一条前必须先定死四个商业问题：<strong>观众是谁、要什么可计数商业动作（含合格标准）、观众卡在哪类门槛问题、信任从哪来</strong>。</li>
+<li><strong>先选不依赖真人 IP、有明确付费方的赛道</strong>：综合四条筛人标尺——流量空间大、观众为信息与结构付费而非为个人颜值/人设付费、有已验证买方或清晰号内变现、发布者无需个人执业资质。</li>
+<li><strong>普通视频和商业视频是同一人群决策链的前后两段</strong>：普通视频拿量、筛人、攒信任、喂选题；商业视频遵循<strong>“给一半价值 + 数字/资格锚点”</strong>收割可计数动作，甚至在样片型账号上<strong>普通视频和商业视频就是同一条片</strong>（如观众投稿论文出片）。</li>
+<li><strong>用数据决定产品排期，不凭直觉先开发</strong>：能力缺口按“可开发”处理；场景未进产品前，<strong>严禁写“小开物一键生成”</strong>，统一改为「此类视频生成功能内测中，评论“同款”申请」，由真实申请数与 4 周门禁决定是否排入研发。</li>
+</ol>
+<h3>1.2 全矩阵统一品牌规范（执行《品牌规范 v1》）</h3>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>规范项</th>
+<th>统一标准</th>
+<th>说明与红线</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>主号名称</strong></td>
+<td>国内 <strong>小开物 UnfoldX</strong>；海外 <strong>UnfoldX</strong></td>
+<td>英文固定大小写 <code>UnfoldX</code>；国内不使用“开物”（商标/搜索冲突）</td>
+</tr>
+<tr>
+<td><strong>矩阵副号名</strong></td>
+<td><strong>小开物·栏目名</strong>（栏目名 2–4 字，一号一栏目）</td>
+<td>形成品牌连锁认知，所有新号按此起名；老号平滑改名不返工旧片</td>
+</tr>
+<tr>
+<td><strong>头像</strong></td>
+<td>全部统一 <strong>X 标</strong>，浅色底，不加任何文字</td>
+<td>保持形状与配色（黄/橙/蓝/绿）不变</td>
+</tr>
+<tr>
+<td><strong>简介三段式</strong></td>
+<td>第一行：<code>小开物｜把复杂资料讲成视频</code>（英文号 UnfoldX | Complex things, unfolded.）；第二行：本号栏目定位与内容边界；第三行：官网或承接说明</td>
+<td>画面里<strong>绝不放域名</strong>（防平台判导流）；能放链接的平台在简介放官网</td>
+</tr>
+<tr>
+<td><strong>角标与片尾</strong></td>
+<td>角标：竖屏右上（距右短边 4%、距顶高 9.5%），横屏右下（距右 24px、距底 20px），X 在上名字在下；片尾：统一 1.5 秒末帧虚化 + 字标 + 口号「复杂的事，展开讲清楚」+ 声音标识</td>
+<td>Pro/付费档亦默认带水印（有自己资产可手动关闭/替换）；<strong>口播里不说“本视频由小开物制作”</strong>，纯靠角标、片尾与声音标识传达</td>
+</tr>
+<tr>
+<td><strong>归因基建</strong></td>
+<td>每条视频置顶评论挂<strong>单视频专属口令</strong>（如 <code>T08</code>、<code>E03</code>、<code>K12</code>），领取页复用分享页与一屏简报</td>
+<td>解决当前“0 转化归因”的最大缺口，区分每类内容的真实行动意向率</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>二、商业模式底座、角色分工与互带机制</h2>
+<h3>2.1 四种平台商业模式 + 号内直接变现（绝不混用承诺）</h3>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>商业模式</th>
+<th>谁付钱</th>
+<th>买什么</th>
+<th>价格锚点（参考）</th>
+<th>矩阵账号角色</th>
+<th>核心归因方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>M1 创作者订阅</strong></td>
+<td>个人图文/知识作者、研究者（ICP-A）</td>
+<td>省时间 + 稳定出片 + 涨粉方法</td>
+<td>¥99/月（Pro）、¥199/月（Ultra）；待测 ¥169 / ¥399 档</td>
+<td><strong>转化中枢（主号）+ 转化号</strong></td>
+<td>水印环、评论“同款”口令、主页访问→7 天内生成下载首条</td>
+</tr>
+<tr>
+<td><strong>M2 转化工具 / 发布解读</strong></td>
+<td>AI 公司/实验室/开源团队、教培机构、知识付费作者、B2B 市场部</td>
+<td>可核对的资料领取/留资，或“发布解读/产品演示”交付成片与数据</td>
+<td>团队版 ¥1,999/月、高用量 ¥4,999/月，或按条发布解读报价</td>
+<td><strong>样板号 + 转化号</strong></td>
+<td>托管领取页、每条视频独立 UTM 短链（外链平台）、抖音口令/企业号组件</td>
+</tr>
+<tr>
+<td><strong>M3 按合格线索计费</strong></td>
+<td>本地高客单服务商（财税代办、装修、保险理赔等）</td>
+<td>符合地域与门槛的合格咨询线索</td>
+<td>工具费 + 按合格线索分成（<strong>经代运营/MCN 渠道</strong>，不自营抢客）</td>
+<td><strong>渠道合作试点（不入自营主矩阵）</strong></td>
+<td>企业号后台来源视频 + 评论意向判读 + 成交回传校准</td>
+</tr>
+<tr>
+<td><strong>M4 企业内训 / 客户教育</strong></td>
+<td>企业培训部、客服与产品团队</td>
+<td>员工完课率、测验正确率、工单减少</td>
+<td>小团队 3k–30k 元/年；中大型 3 万–20 万元/年</td>
+<td><strong>B 端设计合作试点（不靠公域起号）</strong></td>
+<td>分享页内嵌测验 + 客户 LMS 数据</td>
+</tr>
+<tr>
+<td><strong>号内直接变现</strong></td>
+<td>品牌广告主（星图/蒲公英）、出版商与购书者、自学习用户</td>
+<td>3D 产品商单、图书带货佣金、资料包/课程分销</td>
+<td>商单（渠道 KPI 参照 CPM 小于 50 元）、图书佣金、低价资料包→体验课</td>
+<td><strong>变现号 + 样板号</strong>（赚现金流 + 产出硬案例反哺主号）</td>
+<td>商单结案报告、商品卡后台来源视频、私域领取与成交</td>
+</tr>
+</tbody>
+</table></div>
+<h3>2.2 账号三大角色与衡量口径（沿用《矩阵规划》）</h3>
+<ul>
+<li><strong>转化号</strong>：观众本身会用小开物（创作者、老师、市场人员、研究者）→ 看<strong>主页访问→试用注册数、评论/私信“同款”数</strong>。</li>
+<li><strong>样板号</strong>：向 B 端买方证明某类视频能做好（AI 公司、厂商、考培机构、律所、政务、文旅）→ 看<strong>机构询价数、投稿数、付费访谈/设计合作数</strong>。</li>
+<li><strong>变现号</strong>：账号自身产生收入（商单、带货、资料/课程）→ 看<strong>商单金额、带货 GMV 与退货率、私域资料领取→付费转化</strong>。</li>
+</ul>
+<h3>2.3 普通视频 ↔ 商业视频的双向互带回路（全矩阵共用骨架）</h3>
+<ol>
+<li>
+<p><strong>选题立项双检查</strong>（发每条前必问）：</p>
+<ul>
+<li><em>流量检查</em>：能不能写出一句「观众认识的具体对象 + 做了什么 + 可量化结果/看得见的变化」？写不出来就是低播放谈资题。</li>
+<li>
+<p><em>商业检查</em>：<strong>这个结果的“对象”背后，有没有一个会想要同款视频的人或机构？（原论文/工具作者、家电/汽车品牌方、教培机构、出版社）。有，就是潜在商业样片，发布后由专人主动把成片和数据发给对方</strong>；没有，就按普通拿量视频做，不硬挂钩子。
+2. <strong>普通视频 → 商业视频（4 条拉动路径）</strong>：</p>
+</li>
+<li>
+<p><strong>高收藏/高追问题 → 下一个商业对象</strong>：收藏/点赞 ≥ 0.9 或评论狂问“有 link 吗 / 书名是什么 / 多少钱”的片子，直接锁定该论文作者、品牌方、书籍或同题型资料包作为商业标的。</p>
+</li>
+<li><strong>评论追问 → 口令领取意向率</strong>：把白白流失的评论追问统一换成置顶口令领取，每条片的口令回复率直接用于排下一轮高商业价值选题。</li>
+<li><strong>固定栏目粉丝 → 商业片兜底起量</strong>：带期号的固定栏目（如“Agent 工程拆解 第 N 期”）把涨粉/收藏从 0.08 提到 0.2 以上，给推荐可能偏弱的委托片/商业片兜底首批播放。</li>
+<li>
+<p><strong>数据归因 knowhow → B 端说服材料</strong>：“陈述可得收益比问句播放差 7 倍”“3D 机械拆解中位播放 6,919”这类实证结论，是客户愿意付费外包或买单工具的最硬理由。
+3. <strong>商业视频 → 普通视频与产品（4 条反哺路径）</strong>：</p>
+</li>
+<li>
+<p><strong>投稿/委托/客户问题 → 真实选题池</strong>：客户和观众主动送来的题目自带真实需求证据。</p>
+</li>
+<li><strong>委托方转发 → 精准新买方</strong>：实验室、开源项目、品牌方转发成片，拉来的是同类从业者，正好是下一批买方。</li>
+<li><strong>转化数据回流 → 校准普通选题</strong>：自助评论多的题降级为普通视频，高客单/高领取题拆出前置认知系列给商业片导人。</li>
+<li><strong>knowhow → 写进小开物生成器</strong>：首句反转、2–5 秒具体对象、前 15–30 秒给答案、出片前核数字写入写稿与审片规则 → 用户成片变好 → 案例变多 → 主号揭秘素材源源不断。</li>
+</ul>
+</li>
+</ol>
+<hr />
+<h2>三、现有 3 个分散老号的整合与定位裁决</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>原账号</th>
+<th>现状与核心矛盾</th>
+<th>收编后正式名（建议）</th>
+<th>新定位与改造要点</th>
+<th>商业模式衔接</th>
+<th>负责人</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AI 费曼</strong>（讲科技）</td>
+<td>19 条作品证明观众是开发者/研究者（问 link、代码、finetune），不是泛图文创作者；拿它当主号卖 ¥99 工具会严重错配</td>
+<td><strong>小开物·科技</strong>（备选：小开物·论文）</td>
+<td>剥离主号职责，专注 AI 前沿论文、开源项目、Agent 工程（可操作 × 陈述收益）；不做泛谈资，单独新起主号 <code>小开物 UnfoldX</code> 面向创作者</td>
+<td><strong>主线 M2（B2B 发布解读委托）</strong> + 副线 M1（研究者订阅）；开「投稿论文出片」栏目</td>
+<td>BL</td>
+</tr>
+<tr>
+<td><strong>开物-冷知识科普</strong>（AI 冷知识）</td>
+<td>18 条作品证明“手边天天用的物件 + 3D 机械拆解”中位播放 9,569 且吃 23% 搜索长尾；抽象冷知识播放低（1,904）且无买方；不能与普法混号</td>
+<td><strong>小开物·拆解</strong>（备选：小开物·原理）</td>
+<td>转型期<strong>新旧内容穿插</strong>防标签断层；保留“日常冷知识钩子”，内容全面升级为<strong>手边物件与消费品 3D 原理拆解</strong>，砍掉大脑/减肥类抽象谈资</td>
+<td><strong>家电/汽车/数码厂商 3D 商单（星图/蒲公英）+ B 端产品拆解样板</strong> + 搜索长尾实用好物带货</td>
+<td>xudong</td>
+</tr>
+<tr>
+<td><strong>AI 财经</strong></td>
+<td>金融 Agent 涨粉好（0.64%），但无金融执业资质，荐股/收益承诺触碰强监管红线，无法挂商业钩子</td>
+<td><strong>小开物·商业</strong>（备选：小开物·商研 / ·财报）</td>
+<td><strong>【已拍板按方案 A 转型】</strong>彻底剥离股票买卖建议与收益承诺；转向<strong>公司商业模式、财报可视化、行业研报解读</strong></td>
+<td><strong>M1/M2（研报/PPT 视频化转化）+ B 端财报/品牌商业解读定制</strong> + 经管/企服商单</td>
+<td>qinlin</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>四、全领域矩阵总表（覆盖全部 17 个方向）</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>层级</th>
+<th>#</th>
+<th>账号 / 业务线名</th>
+<th>来源 / 负责人</th>
+<th>角色</th>
+<th>核心商业模式</th>
+<th>互带结构</th>
+<th>场景就绪度（✅已有 / 🆕待开发）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>第 0 层：主号</strong></td>
+<td>0</td>
+<td><strong>小开物 UnfoldX</strong>（海外 <code>UnfoldX</code>）</td>
+<td>新起官号（BL，对应原 #6 爆款拆解）</td>
+<td>转化中枢</td>
+<td><strong>M1 创作者订阅 + M2/B 端定制总入口</strong></td>
+<td>C（价值阶梯）</td>
+<td>✅ 全部路线；🆕 爆款结构复刻</td>
+</tr>
+<tr>
+<td><strong>第一梯队：首批 5 个副号</strong></td>
+<td>1</td>
+<td><strong>小开物·科技</strong>（或 <code>·论文</code>）</td>
+<td>复用 AI 费曼（BL，对应原 #5）</td>
+<td>样板号 + 转化号</td>
+<td><strong>M2 发布解读委托（主）+ M1 研究者订阅（副）</strong></td>
+<td>B（内容即样片）</td>
+<td>✅ 论文解读、<code>tech-short</code>、<code>dark-keynote</code>、<code>drafting</code></td>
+</tr>
+<tr>
+<td></td>
+<td>2</td>
+<td><strong>小开物·拆解</strong>（或 <code>·原理</code>）</td>
+<td>复用 AI 冷知识（xudong，对应原 #7 + #1 生活常识）</td>
+<td>变现号 + 样板号</td>
+<td><strong>厂商 3D 商单 + B 端拆解样板 + 搜索带货</strong></td>
+<td>B（样片直售）</td>
+<td>✅ <code>exploded-view</code>、<code>teardown</code>、<code>flat-cutaway</code>、<code>life-short</code></td>
+</tr>
+<tr>
+<td></td>
+<td>3</td>
+<td><strong>小开物·商业</strong>（或 <code>·商研</code>）</td>
+<td>转型 AI 财经（qinlin）</td>
+<td>样板号 + 转化号</td>
+<td><strong>M1/M2 研报与 PPT 视频化 + B 端财报定制/商单</strong></td>
+<td>B + C</td>
+<td>✅ <code>dataviz</code>、<code>pptx_video</code>、<code>infographic</code></td>
+</tr>
+<tr>
+<td></td>
+<td>4</td>
+<td><strong>小开物·讲题</strong>（或 <code>·考培</code>）</td>
+<td>新开第一批（BL，对应原 #2 教学讲解）</td>
+<td>转化号 + 样板号</td>
+<td><strong>M2 首选验证主线（考培机构/老师）+ 资料私域</strong></td>
+<td>C（价值阶梯）</td>
+<td>✅ <code>problem</code>、<code>concept</code>、<code>pptx_video</code></td>
+</tr>
+<tr>
+<td></td>
+<td>5</td>
+<td><strong>小开物·英语</strong></td>
+<td>新开第一/二批（xudong，对应原 #3 成人英语）</td>
+<td>变现号 + 样板号</td>
+<td><strong>号内课程/资料包变现 + M2 语言机构转化</strong></td>
+<td>C（价值阶梯）</td>
+<td>✅ <code>英语词块</code>、<code>whiteboard</code>；🆕 卡通情景对话</td>
+</tr>
+<tr>
+<td><strong>第二梯队：跑顺后启动 4 个副号</strong></td>
+<td>6</td>
+<td><strong>小开物·讲书</strong></td>
+<td>二批新开（xudong，对应原 #4 讲书）</td>
+<td>变现号 + 样板号</td>
+<td><strong>图书带货佣金 + 出版社/讲书团队 M2</strong></td>
+<td>B（内容即货架）</td>
+<td>✅ <code>插画讲书</code>、书籍讲解</td>
+</tr>
+<tr>
+<td></td>
+<td>7</td>
+<td><strong>小开物·普法</strong></td>
+<td>二批新开（BL，原 #1 拆分独立）</td>
+<td>样板号（B 端）</td>
+<td><strong>政务/公益普法采购 + 律所定制</strong>（不接案源分成）</td>
+<td>B（机构样板）</td>
+<td>✅ <code>life-short</code>；🆕 普法情景动画</td>
+</tr>
+<tr>
+<td></td>
+<td>8</td>
+<td><strong>小开物·职场</strong></td>
+<td>先做主号子栏目，跑通拆号（xudong，对应原 #9）</td>
+<td>转化号 + 变现号</td>
+<td><strong>M1/M2 职场与企业市场部自用 + 模板/课</strong></td>
+<td>C（价值阶梯）</td>
+<td>✅ <code>pptx_video</code>、<code>infographic</code>、报告解读</td>
+</tr>
+<tr>
+<td></td>
+<td>9</td>
+<td><strong>小开物·史图</strong></td>
+<td>有线索/节点启动（xudong，对应原 #8 地图文旅）</td>
+<td>样板号（B 端）</td>
+<td><strong>文旅局、景区宣传采购（政府+品牌预算）</strong></td>
+<td>B（项目样板）</td>
+<td>✅ <code>地图游记</code>；🆕 文旅宣传模板</td>
+</tr>
+<tr>
+<td><strong>第三梯队：非自营公域线（4 条）</strong></td>
+<td>10</td>
+<td><strong>B2B / SaaS 产品宣传与 Demo</strong></td>
+<td>不开抖音号；主号栏目 + B 端销售/海外（xudong，原 #12）</td>
+<td>M2 销售主线</td>
+<td><strong>M2 转化工具（¥1,999 档）+ 官网/出海短链归因</strong></td>
+<td>C（证言+预约）</td>
+<td>✅ 产品宣传、功能 Demo、web hero；🆕 招聘/活动</td>
+</tr>
+<tr>
+<td></td>
+<td>11</td>
+<td><strong>本地高线索服务（财税/装修/保险理赔）</strong></td>
+<td>不自营抢客；走代运营/MCN 渠道试点</td>
+<td>M3 渠道合作</td>
+<td><strong>M3 工具费 + 按合格线索分成</strong></td>
+<td>A（同题分档）</td>
+<td>✅ 评论意向判读器；🆕 领域卡与企业号回流</td>
+</tr>
+<tr>
+<td></td>
+<td>12</td>
+<td><strong>企业内训与客户教育</strong></td>
+<td>不靠公域起号；3–5 家设计合作试点</td>
+<td>M4 试点</td>
+<td><strong>M4 年度合同（3k–20 万/年）</strong></td>
+<td>—（完课+测验）</td>
+<td>✅ <code>pptx_video</code>、分享页；🆕 看完即测与私密权限</td>
+</tr>
+<tr>
+<td></td>
+<td>13</td>
+<td><strong>视频剪辑服务（闲鱼测试）</strong></td>
+<td>不开矩阵号；闲鱼一次性服务验证（原 #10）</td>
+<td>服务付费测试</td>
+<td><strong>闲鱼一次性交付订单</strong></td>
+<td>—</td>
+<td>🆕 素材剪辑、授权影视/游戏解说</td>
+</tr>
+<tr>
+<td><strong>第四梯队：明确不做（红线/排除）</strong></td>
+<td>—</td>
+<td><strong>抽象冷知识 / 荐股财经 / 医疗健康 / 少儿英语与 K12 个人变现 / 口腔与留学 / 宠物科普（原 #11 暂缓）</strong></td>
+<td>全部移出当前排期</td>
+<td>—</td>
+<td>触碰执业资质/合规红线、线索污染严重或偏离核心心智</td>
+<td>—</td>
+<td>—</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>五、全矩阵逐号规格卡（定位、账号描述、内容范围、商业模式与互带回路）</h2>
+<blockquote>
+<p>以下所有账号均默认套用第一章统一视觉规范（X 标浅色头像、竖屏右上/横屏右下角标、1.5 秒虚化片尾、默认水印、口播不提品牌）。</p>
+</blockquote>
+<hr />
+<h3>第 0 层：官方主号</h3>
+<h4>0. <code>小开物 UnfoldX</code>（海外：<code>UnfoldX</code>）｜官方营销与转化中枢</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第 0 层（本周启动）｜ BL（承接原讨论稿 #6「爆款拆解」）</li>
+<li><strong>定位与观众</strong>：面向<strong>知识博主、图文作者、老师、企业市场部与内容团队</strong>的品牌官号，对标 Higgsfield / HeyGen 官号，核心任务是「揭秘创作能力、营销自己」，把全矩阵副号的爆款流量翻译成产品注册与 B 端询价。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>揭秘爆款知识视频怎么一键做出来 · 拆结构、晒过程、送同款工作流</code></li>
+<li>第 3 行：官网链接（中文站；海外号写 <code>UnfoldX | Complex things, unfolded.</code> + 英文站）</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么（4 个固定栏目）</strong>：① <strong>副号爆款揭秘</strong>（任意副号跑出高播放/高领取，48 小时内做一条“一篇资料/一句话 → 成片用了几分钟、花了多少钱”全过程）；② <strong>爆款可量化结构拆解</strong>（镜头时长、前 2/5 秒钩子、旁白占比、“不露脸做知识号”方法论）；③ <strong>同结构同款复刻</strong>（把一篇热门文章/PPT/官网做成同一结构视频前后对照）；④ <strong>产品宣传案例与新风格发布</strong>（承接原 #12 产品宣传 B 端案例展示 + <code>职场办公</code> 试水栏目）。</p>
+</li>
+<li><strong>不做什么</strong>：不做纯功能罗列广告片（knowhow 显示粉丝占比高的纯广告推不出去）；未上线风格不写“一键生成”，一律写「此类视频生成功能内测中，评论“同款”申请」。</li>
+<li>
+<p><strong>商业模式与四问</strong>：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>M1 创作者订阅主入口（¥99/¥199/月）+ M2/B 端定制总收口</strong>。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：① 注册并在 7 天内生成下载首条视频（激活）；② 评论“同款”领工作流/内测申请；③ B 端市场部私信询价定制。</li>
+<li><strong>门槛问题</strong>：“我只有文章/PPT/产品文档、不想露脸，能做出这种质量吗？”“出一条要多久、多少钱？”</li>
+<li><strong>信任来源</strong>：真实输入→成片全流程透明展示 + 副号真实后台播放/收藏/搜索数据证言。</li>
+<li><strong>普通 ↔ 商业互带与配比</strong>：每 10 条 ＝ 4 条全网爆款结构拆解（拿量筛创作者）+ 4 条副号爆款“输入→成片”揭秘（直接转化）+ 2 条新风格/B 端产品宣传案例。评论区高频问“怎么做 XX 类型”的申请数，直接决定下一批副号与产品研发排期。</li>
+<li><strong>合规红线</strong>：拆解他人爆款只学结构不搬运画面；展示数据全部取自真实后台截图，不夸大效果。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h3>第一梯队：首批启动 5 个垂类副号</h3>
+<h4>1. <code>小开物·科技</code>（备选：<code>小开物·论文</code>）｜复用 AI 费曼老号</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第一梯队 P0（老号立即收编）｜ BL（对应原 #5「科技前沿和论文」）</li>
+<li><strong>定位与观众</strong>：面向 <strong>AI 开发者、算法研究者、AI 产品与开源团队（DevRel / 市场）</strong> 的前沿技术解读号；账号本身即 B2B 发布解读的作品集。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>每日拆解 1 篇 AI 论文 / 开源项目 / Agent 工程 · 论文与产品发布可投稿</code></li>
+<li>第 3 行：官网 / 商务与投稿联系方式（能放链接的平台放官网与投稿页）</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么（3 个栏目）</strong>：① <strong>Agent 工程拆解（带期号系列）</strong>：把论文/博客里的可操作方法、工具、工程架构讲清，拉高买方密度与涨粉；② <strong>每日前沿论文 / 7 天内新发布解读</strong>：追踪 arXiv 与头部厂商 7 天内新品（片尾注明输入来源如一篇 arXiv 论文）；③ <strong>观众投稿 / 委托解读专场</strong>：帮投稿论文或开源项目 60 秒讲清核心收益。</p>
+</li>
+<li><strong>不做什么</strong>：砍掉低播放的“认知谈资”和“风险诊断”题（实测中位仅 560–859）；<strong>禁止问句标题</strong>（6 条全没推出去）；不在中段铺无案例术语清单或整张英文架构图。</li>
+<li>
+<p><strong>商业模式与四问</strong>（深度对齐《官方讲解号变现回路》）：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>主线 A — M2 发布解读委托（AI 公司、模型厂、开源项目、高校实验室 DevRel，¥1,999 档或按条报价）</strong> ＞ 副线 B — 研究者与技术作者自用订阅（M1） ＞ 粉丝过万后接工具方/API/云厂商商单（现金流补充）。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：① 机构或有发布计划的个人投稿/询价“帮我把这篇论文/产品做成视频”（合格 ＝ 真实机构/开源项目）；② 置顶口令回复领「论文原文 + 中文一页卡」（低门槛意向探针）；③ 个人注册并在 7 天内出片。</li>
+<li><strong>门槛问题</strong>：“我的论文/开源项目能做成这样的视频吗？”“要多久、多少钱？”“技术细节讲错了怎么办？”</li>
+<li><strong>信任来源</strong>：讲得准（数字口径与原文一字不差）、讲得快（发布 7 天内出片）、讲得好懂（前 15 秒给结论、贯穿同一案例）。</li>
+<li>
+<p><strong>普通 ↔ 商业互带回路与配比</strong>：</p>
+</li>
+<li>
+<p><strong>配比</strong>：每 10 条 ＝ 6 条可操作 × 陈述可得收益（含至少 3 条带期号「Agent 工程拆解」）+ 2 条前沿快讯或金融研究回测拉关注 + 1 条投稿/委托片 + 1 条行业反差谈资。</p>
+</li>
+<li><strong>闭环示例</strong>：普通片（如子智能体拆解）拿高收藏（藏/赞 ≥ 0.9）→ 置顶口令 <code>T08</code> 领原文+一页卡，同时人工把成片与数据发给原项目方 → 领取者/项目方提出委托 → 委托片片尾注明委托方并进案例页 → 委托方转发带来同类团队观众 → 其新品进入下一批选题。</li>
+<li><strong>成长路径</strong>：阶段 0（本周）：每条加置顶口令 + 主页加“可投稿”测意向率 → 阶段 1：工程题栏目化带期号（把涨粉/收藏从 0.08 提到 0.2+），每 10 条 1 条投稿片 → 阶段 2：从已讲过对象里挑 3–5 家设计合作客户，免费/低价换转发与数据授权，验出首家付费续单 → 阶段 3：验证 ¥1,999 档或按条报价，粉丝过万接工具方商单。</li>
+<li><strong>合规与交付红线</strong>：① <strong>出片前硬核数字（过去 19 条有 6 处口径误差，接委托后错一处即交付事故）；② 委托片按平台规则标明商业合作；③ 保留少量金融 Agent 拉关注时，标题必须标明「研究回测」，绝不挂任何商业钩子和引流</strong>；④ 抖音不放外链，走口令 + 主页 + 私信，需专人每日跟进投稿与询价。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h4>2. <code>小开物·拆解</code>（备选：<code>小开物·原理</code>）｜复用 AI 冷知识老号</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第一梯队 P0（老号立即升级）｜ xudong（融合原 #7「科技拆解」与原 #1 的「生活常识」物理部分）</li>
+<li><strong>定位与观众</strong>：面向<strong>大众消费者、汽车/数码/机械爱好者及消费品品牌市场部</strong>的 3D 原理拆解号；用“手边物件冷知识”拿泛流量与搜索长尾，用“3D 剖面拆解”接厂商高价商单与 B 端样片。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>3D 剖面拆解身边物件、家电与汽车黑科技原理 · 品牌拆解合作见私信</code></li>
+<li>第 3 行：官网 / 商务合作说明</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么（3 个栏目）</strong>：① <strong>手边日常物件 3D 拆解</strong>（变速自行车、拉链、安全带、燃气灶、挂挡、电车晕车——立项标准：观众今天就能在手边摸到、亲手做过那个动作）；② <strong>消费品与机械黑科技拆解</strong>（从星图/蒲公英热门投放反推：扫地机防缠绕、无叶风扇、热泵空调、咖啡机萃取、智能门锁、新能源电池包、人体机械结构）；③ <strong>高频生活搜索解题</strong>（按搜索热词做“怎么修/怎么防”，如“拉链拉不合怎么修”，答案放前 30 秒，删掉冗长发明史）。</p>
+</li>
+<li><strong>不做什么</strong>：彻底砍掉无买方且留存差的抽象冷知识与辟谣清单（如“大脑只用 10%”“恐怖片减肥”“35 种辨方向”）；不做普法（独立拆到第 7 号）；人体相关只讲机械/结构原理，绝不给医疗与健康建议。</li>
+<li>
+<p><strong>视觉与讲法硬规矩</strong>（来自 18 条归因）：</p>
+</li>
+<li>
+<p>转型期<strong>新旧内容穿插发布</strong>，防止原粉丝与推荐标签突然断开。</p>
+</li>
+<li>第一句写<strong>观众亲手做过的动作 + 看得见的变化 + 怎么回事</strong>（实测 2s 跳出最低 24.0%、播放中位 13,834）；避开季节寒暄和看不见的内部部件开场。</li>
+<li>机械类一律使用已验收的灰底三维模板（<code>exploded-view</code> / <code>teardown</code> / <code>flat-cutaway</code>），不用手绘知识卡。</li>
+<li>
+<p><strong>商业模式与四问</strong>：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>号内变现主线（星图/蒲公英 3D 产品原理商单 + 搜索长尾实用工具带货）+ M2 样板号（向制造/家电/汽车品牌卖产品拆解视频能力）</strong>。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：① 消费品/汽车/3C 品牌或代理商商单询价（合格 ＝ 有明确产品技术卖点需可视化）；② 品牌市场部询价定制同款 3D 演示；③ 搜索长尾实用题评论互动与小工具挂车成交。</li>
+<li><strong>门槛问题</strong>：品牌方痛点——“我们产品内部结构很牛但消费者看不懂，传统 3D 动画一条几万块还太慢，你们能按这个质感快速讲清吗？”</li>
+<li><strong>信任来源</strong>：肉眼可见的高精度 3D 剖面演示 + 持续吃推荐和 23% 搜索长尾的真实播放数据。</li>
+<li><strong>普通 ↔ 商业互带回路与配比</strong>：每 10 条 ＝ 5 条日常手边物件 3D 拆解（吃大流量与搜索）+ 3 条瞄准星图热门品类的消费品/汽车部件拆解样片（发完直接发给对应品牌/代理商作 BD 敲门砖）+ 2 条实用生活解题（置顶口令领“居家维修/避坑图解”或挂小工具试带货）。</li>
+<li><strong>合规红线</strong>：商单必须标明商业合作；品牌拆解基于公开结构与客观原理，不拉踩竞品；不涉医疗健康建议。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h4>3. <code>小开物·商业</code>（备选：<code>小开物·商研</code> / <code>小开物·财报</code>）｜原 AI 财经转型</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第一梯队 P0（老号改造，<strong>已拍板按方案 A 转型</strong>）｜ 庆林</li>
+<li><strong>定位与观众</strong>：面向<strong>商业从业者、企业管理者、行业分析师、市场部与经管创作者</strong>的数据动画商业解读号；彻底脱离高风险“个人理财/炒股”定位，成为小开物「研报/财报/PPT → 数据动画视频」的标杆样板。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>用数据动画讲清大厂财报、商业模式与百页行业研报 · 报告视频化合作见私信</code></li>
+<li>第 3 行：官网链接</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么（3 个栏目）</strong>：① <strong>大厂与国民品牌财报拆解</strong>（把枯燥财报变成 60 秒数据叙事：一家公司最赚钱的业务藏在哪一页、两家巨头毛利为何差 3 倍）；② <strong>百页行业研报/白皮书精读</strong>（提炼 3 个反常识数据结论，配合 <code>dataviz</code> 与 <code>pptx_video</code> 呈现）；③ <strong>商业模式与出海品牌赚钱逻辑</strong>（拆解真实生意账本与商业策略）。</p>
+</li>
+<li><strong>不做什么</strong>：<strong>绝对不碰个股推荐、二级市场涨跌预测、买卖点分析、基金理财收益承诺、炒股社群引流</strong>。</li>
+<li>
+<p><strong>商业模式与四问</strong>：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>M1/M2 转化号（研报/财报/PPT 视频化工具）+ B 端定制样板（上市公司 IR/企业市场部/咨询机构报告解读）+ 经管/企服商单</strong>。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：① 置顶口令领「本期一页财报/研报高清数据卡」（测意向）；② 经管博主/分析师试用小开物（M1）；③ 企业市场部、咨询公司或投教机构询价定制报告解读视频（M2）。</li>
+<li><strong>门槛问题</strong>：“我们刚发了 80 页行业白皮书/季度财报，没人有耐心读 PDF，能不能快速转成看得懂的数据动画？”</li>
+<li><strong>信任来源</strong>：公开财报/权威研报一手数字准确无误 + 一眼看懂的动态图表可视化。</li>
+<li><strong>普通 ↔ 商业互带回路与配比</strong>：每 10 条 ＝ 6 条国民级品牌/大厂商业模式与财报可视化（大众锚点拿播放）+ 3 条带“一页数据图卡/研报精华”口令钩子的行业白皮书解读（测行动意向与收集 B 端线索）+ 1 条“30 页 PPT/PDF 怎么变 60 秒数据视频”转化示范。高收藏的行业报告拆解，直接触达发布该报告的咨询/研究机构谈合作。</li>
+<li><strong>合规红线</strong>：全片不给任何投资建议，明确标注“基于公开财报与研报数据整理，不构成任何投资建议”；数字口径出片前逐项复核。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h4>4. <code>小开物·讲题</code>（备选：<code>小开物·考培</code>）｜新开，M2 首选验证主线</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第一梯队 P0（新号第一批）｜ BL（对应原 #2「教学讲解」）</li>
+<li><strong>定位与观众</strong>：双重受众——面向<strong>成人考公/考研/职业考证人群</strong>（高客单、买单人即观众）提供高频母题动画精讲；同时面向<strong>老师与考培机构</strong>证明“非真人动态讲题 + 课件转视频”的量产效率。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>考公 / 考研 / 考证高频母题动画拆解 · 老师 30 秒生成同款讲题视频</code></li>
+<li>第 3 行：官网链接</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么（3 个栏目）</strong>：① <strong>高频母题动画精讲</strong>（按考试和题型系列化，如行测资料分析速算、判断推理模型、考研数学/专业课核心题型，用 <code>problem</code> 左题右解 + <code>concept</code> 动画）；② <strong>报考规则与资格门槛短答</strong>（如“大专能报哪些岗”“备考 60 天怎么取舍”，倒计时节点选题）；③ <strong>面向老师的效率示范栏目</strong>（“上传一份试卷/课件，30 秒出一条动态讲题视频”，直接承接小开物）。</p>
+</li>
+<li><strong>不做什么</strong>：不做纯励志/上岸鸡汤（涨粉但领资料率极低）；暂不以 K12 个人付费为主变现（付费弱、周期慢）。</li>
+<li>
+<p><strong>商业模式与四问</strong>：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>M2 首选验证主线（卖给考培机构与老师，¥1,999/月转化工具 + 资料领取页）</strong> + 号内资料引流验证闭环（免费资料 → 企微/社群 → 体验课/合作分成）。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：① 考生评论口令领「同题型 20 题精讲 PDF / 报考规则表」（合格 ＝ 年份与目标考试对口）；② 老师/考培机构评论“同款”或私信咨询批量试卷出片（小红书试跑“试卷生成讲解视频”有效评论 12/20，全场最高信号）。</li>
+<li><strong>门槛问题</strong>：考生侧——“这道母题的通用套路是什么、完整题库在哪领？”“我这学历/专业能不能报？”；机构/老师侧——“我们每天要讲几十道题，能用试卷一键出清晰动画吗？”</li>
+<li><strong>信任来源</strong>：题解严谨无错 + 动态步骤比黑板/静态 PPT 更好懂 + 资料包从同一套讲解素材直接生成、货真价实。</li>
+<li><strong>普通 ↔ 商业互带回路与配比</strong>：每 10 条 ＝ 5 条完整高频母题动画精讲（拿完播与搜索，测哪些题型评论问“还有吗”）+ 3 条<strong>给一半价值 + 口令领完整题型合集/公式卡</strong>（C 类价值阶梯）+ 2 条面向老师/考培机构的“试卷/PPT → 讲题视频”工作流展示。私域里考生高频提问直接变成下一批母题选题，硬数字领取案例反哺 M2 机构销售。</li>
+<li><strong>合规红线</strong>：题目与答案出片前必须严格校验；<strong>绝不承诺提分与通过率、绝不说“包过”</strong>；抖音不放二维码，个人号走口令 + 时间窗，视频号/公众号/小红书承接领取页与活码。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h4>5. <code>小开物·英语</code>（备选：<code>小开物·词块</code>）｜新开，成人英语变现与样板</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第一梯队 P0（新号第一/二批，视本周 4 号 vs 6 号拍板节奏）｜ xudong（对应原 #3「成人英语」）</li>
+<li><strong>定位与观众</strong>：面向<strong>职场人、出国/旅游人群、成人实用口语与考证人群</strong>的非真人卡通情景词块学习号；同时作为向<strong>语言培训机构、英语博主</strong>展示 <code>英语词块</code> 与情景对话能力的变现样板。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>职场 / 出国实用口语情景动画 · 1 分钟记住 3 句老外高频词块</code></li>
+<li>第 3 行：官网 / 词块资料包领取说明</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么（2 个栏目）</strong>：① <strong>高频尴尬场景 3 句词块</strong>（外企开会插话/催进度/汇报、面试自我介绍、出国过海关/酒店沟通/点餐——卡通角色情景演绎，每集只讲 1 个场景、学透 3 句能立刻开口用的表达）；② <strong>中式英语纠错与地道替换</strong>（强反差开头拿量，如“老外根本不这么说 very good / I think”）。</p>
+</li>
+<li><strong>不做什么</strong>：<strong>绝对不做幼儿/少儿英语</strong>（买单人是家长，且受未成年人保护规则强约束；如需涉足后续仅作家长陪学版或 B 端机构定制）；不做枯燥长篇语法课。</li>
+<li>
+<p><strong>商业模式与四问</strong>：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>C 类价值阶梯直接变现号（资料包、低价词块训练营、分销语言课程）+ M2 语言机构/英语博主转化样板</strong>。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：① 评论口令领「本期场景 20 句完整词块 PDF + 跟读音频」进私域（合格 ＝ 职场/出国/成人备考用户）；② 私域转化资料包或体验课；③ 语言教培机构/英语博主询价同款生成工具。</li>
+<li><strong>门槛问题</strong>：用户侧——“我知道单词但到这个场景张不开嘴，有没有现成能背的完整情景包？”；机构侧——“不请外教拍片，纯动画情景能跑出流量和私域留资吗？”</li>
+<li><strong>信任来源</strong>：地道美式/英式自然发音 + 画面情景一眼懂词块语境 + 持续系列更新。</li>
+<li><strong>普通 ↔ 商业互带回路与配比</strong>：每 10 条 ＝ 7 条完整痛点短平快干货（测哪些场景收藏/点赞比最高）+ 3 条同主题“讲透 3 句、完整 20 句情景手册+音频评论口令领”商业题。高领取场景直接整理成细分主题付费资料包，同时把领取转化数据做成案例推给语言机构。</li>
+<li><strong>合规红线</strong>：不以未成年人为营销对象；不承诺“7 天流利”“保过雅思/托福”；卡通情景对话能力未全面上线产品前，对外按“内测中、评论同款申请”承接。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h3>第二梯队：第一批跑顺 2–4 周后按信号启动（4 个副号）</h3>
+<h4>6. <code>小开物·讲书</code>｜B 类图书带货与讲书团队样板</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第二梯队（第一批跑顺后 2–4 周启动；xudong 跑多风格 skill 时可先小测 10 条）｜ xudong（对应原 #4「讲书」）</li>
+<li><strong>定位与观众</strong>：面向<strong>成人阅读人群（非鸡汤向）、出版社与讲书博主/团队</strong>的深度讲书号，用 <code>插画讲书</code> 风格验证“内容即货架”的非真人带货闭环。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>不读腰封、不讲鸡汤 · 用插画拆解历史、经管与认知好书</code></li>
+<li>第 3 行：官网 / 书单入口</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么</strong>：<strong>一书一系列</strong>（核心框架、反常识人物故事或历史细节、关键观点、同主题对比书单）；可设“不推荐的书 / 避坑书单”系列建立选书可信度。</p>
+</li>
+<li><strong>不做什么</strong>：绝不做成功学/情感鸡汤；绝不照念书籍简介和腰封；不洗稿搬运他人书评。</li>
+<li>
+<p><strong>商业模式与四问</strong>：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>B 类内容即货架（图书商品卡/橱窗带货佣金）+ M2 样板号（卖给出版社、讲书生产线团队工具费，佣金归作者）</strong>。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：商品卡成交（看 GMV 与低退货率）；次级动作是讲书团队/出版社询价批量出片。</li>
+<li><strong>门槛问题</strong>：“这本书讲的具体故事值不值得买？”“同类书选哪个版本/译本？”</li>
+<li><strong>信任来源</strong>：真读过书的细节切入 + 反向推荐建立选书公信力 + 绝不卖低价疑似盗版书。</li>
+<li><strong>普通 ↔ 商业互带与配比</strong>：每 10 条 ＝ 7 条<strong>不挂车</strong>讲书内故事与观点（测评论区“书名是什么”“想读”占比）+ 3 条对高“想读”书做<strong>同书挂车版与同主题书单</strong>。成交与退货数据反哺下一批选书方向。</li>
+<li><strong>合规红线</strong>：原创解读，原文只作合理短引用；只挂正版货源；带货按规定标明佣金关系；不用“必读”“全网最低”极限词。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h4>7. <code>小开物·普法</code>｜政务/公益普法与律所内容定制样板</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第二梯队（与物理类 <code>小开物·拆解</code> 彻底拆分，有政务/公益/律所线索或第一批跑顺后启动）｜ BL（原 #1「生活知识科普」主线独立成号）</li>
+<li><strong>定位与观众</strong>：面向<strong>大众消费者</strong>的日常实用普法动画号，本质是面向<strong>政务普法采购、公益机构、律所市场部</strong>的 B 端样板号（不自营接案源）。</li>
+<li>
+<p><strong>账号描述（可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>1 分钟动画讲清租房、劳动、消费维权与反诈常识 · 仅供普法参考</code></li>
+<li>第 3 行：官网 / 公益与机构普法定制说明</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么</strong>：一集一个日常高频法律问题（租房克扣押金、试用期辞退、工伤认定、网购退款、电信诈骗、邻里纠纷）；讲法固定三段式——<strong>先抛反常识问题 → 再讲清晰法条规定 → 最后给一句能照做的建议</strong>；漫画/情景动画形式。</p>
+</li>
+<li><strong>不做什么</strong>：不蹭婚姻出轨八卦（实测线索率仅 5%）；不做复杂一步步立案操作教程；不放入睡眠、精神心理、母婴等健康内容；<strong>绝不以执业律师身份出镜、署名或提供个案法律意见</strong>。</li>
+<li>
+<p><strong>商业模式与四问</strong>：</p>
+</li>
+<li>
+<p><strong>模式</strong>：<strong>B 端样板号（政务普法宣传采购、公益宣传片、律所/法培机构内容制作工具或定制）</strong>；小红书试跑中“法律培训视频制作（7/14）”与“普法动画制作（5/12）”均为强需求信号。</p>
+</li>
+<li><strong>商业动作与合格标准</strong>：政务单位、公益组织、律所市场部或法培博主询价定制/试用小开物（暂不碰按案源分成，待合规确认）。</li>
+<li><strong>门槛问题</strong>：机构买方——“普法宣传太枯燥没人看、找外包画动画一条几万块，你们能又快又准批量出合规普法动画吗？”</li>
+<li><strong>信任来源</strong>：法条引用准确无误、脱敏真实判例支撑、画面克制专业不博眼球。</li>
+<li><strong>普通 ↔ 商业互带</strong>：日常高搜索维权题拿大众播放与收藏 → 形成“高完播、零违规”的普法动画样片库 → 支撑团队/亲戚人脉对接政务普法与律所采购。</li>
+<li><strong>合规红线</strong>：严格遵守《抖音社区法律行业公约》；不冒充律师、不夸大胜诉率；每条片尾加固定免责声明「仅供普法参考，不构成法律意见」；所有案例彻底脱敏；普法动画模板未进产品前按“内测中，评论同款申请”承接。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h4>8. <code>小开物·职场</code>｜先在主号试水子栏目，跑通再独立拆号</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第二梯队（先放主号 <code>小开物 UnfoldX</code> 作子栏目验证，不急于单独养号）｜ xudong（对应原 #9「职场办公和技能」）</li>
+<li><strong>定位与观众</strong>：面向<strong>职场白领、产品/运营/咨询人员与企业中层</strong>的办公提效与汇报可视化号，内容本身即小开物 <code>pptx_video</code> 与报告讲解的活教程。</li>
+<li>
+<p><strong>账号描述（拆号后可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>PPT 商务汇报、报告可视化与 AI 办公提效 · 让你的方案一眼看懂</code></li>
+<li>第 3 行：官网链接</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么</strong>：年终/季度 PPT 汇报怎么做成动态演示、复杂周报/方案怎么一页讲清、高频 AI 办公实战技巧。</p>
+</li>
+<li><strong>不做什么</strong>：不做职场情绪鸡汤、站队八卦。</li>
+<li><strong>商业模式与四问</strong>：<strong>M1 创作者订阅 + M2 团队办公工具转化 + 模板包/课程</strong>。商业动作：口令领 PPT/汇报模板 → 引导用户上传自己的 PPT 用小开物生成汇报视频。</li>
+<li><strong>合规红线</strong>：演示用企业数据与文档一律脱敏或使用公开样板。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h4>9. <code>小开物·史图</code>（备选：<code>小开物·游记</code>）｜地图讲历史与文旅样板</h4>
+<ul>
+<li><strong>梯队与负责人</strong>：第二梯队（有文旅客户线索或重要节假日节点再启动）｜ xudong（对应原 #8「地图讲历史和文旅」）</li>
+<li><strong>定位与观众</strong>：面向<strong>历史/地理/旅游大众及各地文旅局、景区宣传部门</strong>的地图叙事样板号。</li>
+<li>
+<p><strong>账号描述（拆号后可直接配置）</strong>：</p>
+<ul>
+<li>第 1 行：<code>小开物｜把复杂资料讲成视频</code></li>
+<li>第 2 行：<code>用动态地图与时间线讲清一座城的历史与路线 · 文旅宣传合作见私信</code></li>
+<li>第 3 行：官网链接</li>
+<li>
+<p><strong>具体内容范围</strong>：</p>
+</li>
+<li>
+<p><strong>做什么</strong>：时间线与动态地图叙事（<code>地图游记</code> 风格），踩节假日热门目的地、历史纪念日与冷门宝藏城市选题。</p>
+</li>
+<li><strong>不做什么</strong>：不做无地图/无视觉信息增量的纯文字朗读；不做未经核实的野史谣言。</li>
+<li><strong>商业模式与四问</strong>：<strong>B 端样板号（文旅局、A 级景区政府采购与品牌宣传预算）</strong>。商业动作：文旅部门/景区市场部询价城市或景区宣传片。</li>
+<li><strong>合规红线</strong>：<strong>史实与地图边界必须严格核对</strong>（严守中国地图规范，不出现错误版图）。</li>
+</ul>
+</li>
+</ul>
+<hr />
+<h3>第三梯队：不自营公域抖音号，独立推进的 4 条商业业务线</h3>
+<h4>10. B2B / SaaS 产品宣传与功能 Demo（原 #12 产品宣传）</h4>
+<ul>
+<li><strong>定位与为什么不开抖音号</strong>：抖音缺少稳定自然消费企业产品宣传片的观众，单开号必死；但市场测算与小红书试跑（“官网生成产品宣传片”有效评论 7/12）证明<strong>付费意愿、频次与现有技术基础最平衡</strong>。</li>
+<li>
+<p><strong>内容范围与商业模式（M2 核心主线）</strong>：</p>
+<ul>
+<li>官网链接 / 产品资料 / 录屏 → 45–60 秒产品宣传片、功能 Demo、客户案例视频、发布会/活动/招聘视频。</li>
+<li><strong>落地路径</strong>：国内样片放主号 <code>小开物 UnfoldX</code> 栏目 + 销售直接外联；重点打 <strong>海外 YouTube / LinkedIn / 客户官网 / 公众号</strong>（按三步触达：15 秒痛点 → 20 秒数据与软号召 → 25 秒客户证言 + 预约演示），挂每条视频独立 UTM 短链直达客户预约/试用页，归因最硬。</li>
+<li><strong>合规红线</strong>：使用客户 Logo 与业务数据必须取得书面授权。</li>
+</ul>
+</li>
+</ul>
+<h4>11. 本地高线索服务：财税代办 / 本地装修 / 保险理赔维权（M3 渠道试点）</h4>
+<ul>
+<li><strong>定位与为什么不自营</strong>：强地域服务半径（如“老刘深圳注销”37 条线索中 33 条在广东）、强人工接单履约、依赖客户企业号线索组件与私信回复。</li>
+<li>
+<p><strong>内容范围与商业模式（M3 按合格线索计费，经代运营/MCN 渠道）</strong>：</p>
+<ul>
+<li><strong>财税代办</strong>：聚焦“经营异常怎么注销”“股东失联注销”“注销多少钱”（线索率 41%–81%）；把“报税/工商变更”降级为普通攒粉题；禁止“包过/秒批/代开发票”暗示。</li>
+<li><strong>本地装修</strong>：聚焦带面积/预算锚点的报价题（“100 平装修真实成本”“70 平旧房 5 万能不能翻新”“卫生间漏水”，线索率 27%–50%）；画面必须写清服务半径；砍掉纯改造 vlog 和搞笑避坑合集（线索近 0）。</li>
+<li><strong>保险理赔维权</strong>：聚焦正在纠纷中的人（“理赔拖延 55%”“少赔 50%”“拒赔怎么办 48%”）；<strong>严格与投保/保险销售隔离</strong>（后者需牌照）。</li>
+<li><strong>第一步关键验证</strong>：不进主产品近期排期，先由渠道伙伴跑<strong>同选题「真人老板出镜 vs 小开物讲解动画（配价格分档表/流程截图/服务半径图）」合格线索率对照实验</strong>，并用成交回传校准线索价值模型。</li>
+</ul>
+</li>
+</ul>
+<h4>12. 企业内训与客户教育（M4 年度合同）</h4>
+<ul>
+<li><strong>定位与商业模式</strong>：面向企业培训部、客服与产品团队（3k–20 万/年），用 <code>pptx_video</code>、<code>concept</code> 讲清内部制度、SOP 与产品使用；在分享页低成本内嵌“看完即测”校验学习效果（E 维真分数）。选 3–5 家设计合作客户试点，不靠公域起号。</li>
+</ul>
+<h4>13. 视频剪辑服务（原 #10，闲鱼测试）</h4>
+<ul>
+<li><strong>定位与商业模式</strong>：Vlog、婚庆、影视与游戏解说属于一次性交付，不纳入小开物品牌矩阵号；仅在<strong>闲鱼</strong>上架服务商品做一次性交付与付费意愿封顶测试（以当日 App 规则为准），影视/游戏解说严格使用授权或开放许可素材。</li>
+</ul>
+<hr />
+<h2>六、双平台执行、AB 扩样本与 4 周门禁</h2>
+<h3>6.1 抖音 vs 小红书：同一母题、两套表达</h3>
+<ul>
+<li>
+<p><strong>抖音（推荐拿量 + 23% 搜索长尾）</strong>：</p>
+<ul>
+<li>死磕前 2 秒跳出（目标 ≤ 30%）与前 5 秒完播（目标 ≥ 48%）；科技/商业/考培用<strong>陈述可得收益</strong>，拆解/生活用<strong>亲手动作 + 反转</strong>。</li>
+<li>用搜索词和长尾榜反推选题（如修拉链、燃气灶、报考条件、英语场景），内容埋伏笔、评论置顶专属口令承接、私信导流。</li>
+<li>
+<p><strong>小红书（封面点击 + 收藏 + 资料领取转粉）</strong>：</p>
+</li>
+<li>
+<p>封面与标题必须同一主张，突出大字结果、对比图或资料清单；正文与评论区直接承接“一页卡 / PDF 词块 / 题集”领取，重点收割 M1 创作者与 M2 机构/老师线索。</p>
+</li>
+</ul>
+</li>
+</ul>
+<h3>6.2 多号分层 AB 与归因结果表</h3>
+<ul>
+<li>利用「主号 + 首批副号 × 多平台 × 日更 2–3 条」形成百条级样本池，采用<strong>多变量分层组合</strong>（开头句式 × 2–5 秒具象对象 × 答案前置时刻 × 钩子形态）而非单号单变量慢试。</li>
+<li>所有账号统一写入同一张「结果表」，每条作品按 <strong>24 小时 + 7 天同窗</strong>记录：<code>决策阶段（认知/判断/行动）</code>、<code>类型（普通/商业）</code>、<code>2s 跳出</code>、<code>2→5s 留存</code>、<code>收藏/点赞</code>、<code>涨粉/收藏</code>、<code>口令回复率</code>、<code>询价/投稿数</code>。</li>
+</ul>
+<h3>6.3 4 周晋级与淘汰门禁（沿用并强化《矩阵规划》§4.3）</h3>
+<p>一个垂类副号连续运行 4 周后，按以下双门禁裁决——<strong>达标才排入产品开发或扩产，否则果断停号</strong>：</p>
+<ul>
+<li><strong>晋级条件（须同时满足）：① 流量侧：完播/前 5 秒留存高于自身前两周中位数，跑出稳定搜索或破万样片；② 商业侧：有稳定的口令领取 / 评论“同款”申请，且</strong>拿到至少 1 个真实机构询价、商单意向、投稿或付费访谈。</li>
+<li><strong>淘汰条件</strong>：连续 4 周仅泛点赞/看热闹，0 领取、0 同款、0 询价，直接停号止损，不开发对应专属产品场景。</li>
+</ul>
+<hr />
+<h2>七、依据、证据等级与待验证清单</h2>
+<h3>7.1 现有依据与置信度</h3>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>依据来源</th>
+<th>核心事实</th>
+<th>证据等级与局限</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AI 费曼 19 条 &amp; 开物冷知识 18 条抖音归因（2026-11-23）</strong></td>
+<td>陈述收益 vs 问句差 7 倍；日常物件中位 9,569 vs 抽象 1,904；3D 机械中位 6,919；拉链 23.2% 搜索流量；金融涨粉好但工程题买方密</td>
+<td>真实后台一手数据，但样本小（各 18–19 条），未控制投流与发布时段，属共现关系</td>
+</tr>
+<tr>
+<td><strong>抖音高线索评论研究（2026-10-29）</strong></td>
+<td>2,719 条视频、86,846 条评论判读：线索率与播放无正相关；财税异常注销 41%–81%、装修报价 27%–50%、保险拒赔 48%–55%；作者差异占方差 62%–66%</td>
+<td>大样本一手判读；聚焦财税/装修/保险，尚未覆盖考培与讲书</td>
+</tr>
+<tr>
+<td><strong>小红书关键词试跑（2026-09-15）</strong></td>
+<td>55 个词、约 480 条评论：试卷生成讲解视频（12/20）、不露脸知识口播（8/20）、官网生成产品宣传片（7/12）、法律培训（7/14）、普法动画（5/12）信号最强</td>
+<td>真实评论但单平台单日样本小，有效信号由模型初筛</td>
+</tr>
+<tr>
+<td><strong>垂类付费核验（<code>vertical-cases.pdf</code>，2026-10-24）与场景市场测算</strong></td>
+<td>投资者教育、政务公益、考培、讲书、B2B 产品宣传均有明确付费预算；国内创作市场去重 3–12 亿元/年</td>
+<td>采购证据部分为一手，部分头部案例数字来自公开报道</td>
+</tr>
+</tbody>
+</table></div>
+<h3>7.2 仍待验证与需团队拍板的事项</h3>
+<ol>
+<li><strong>小红书高信号词在抖音复测</strong>：验证“试卷生成讲解”“普法动画”等强信号在抖音搜索与评论区是否同样成立。</li>
+<li><strong>第二批方向的创作者侧证据补齐</strong>：讲书、成人英语、职场、文旅需补齐“有人想自己做这类视频”的关键词试跑或付费访谈证据，并补一批考培/讲书评论判读（各 30–50 个搜索词）。</li>
+<li><strong>口令领取对推荐的影响 &amp; 真人 vs 动画线索对照</strong>：实测置顶口令是否影响抖音推荐；M3 渠道线先测同选题真人 vs 讲解动画线索率。</li>
+<li><strong>落地拍板 3 件事</strong>：① 首批开号数（本周先跑 4 个＝主号+3 老号，还是同步新开英语+讲题凑 6 个）；② 副号栏目名最终字面定稿（<code>·科技</code> vs <code>·论文</code>、<code>·拆解</code> vs <code>·原理</code>、<code>·商业</code> vs <code>·商研</code>、<code>·讲题</code> vs <code>·考培</code>）；③ 明确每日承接私信投稿、口令领取与 B 端询价的责任人及企业认证主体归属。</li>
+</ol>
+</main></body></html>

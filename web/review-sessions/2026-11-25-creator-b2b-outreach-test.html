@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>创作者与 B 端触达实测</title>
+<style>
+:root{--bg:#f6f3ee;--fg:#22201c;--mute:#6b665d;--line:#ddd6ca;--acc:#b8432f;--card:#fffdf9}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1b19;--fg:#ece8e1;--mute:#a39d92;--line:#3a3732;--acc:#e07a63;--card:#252320}}
+body{background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,"PingFang SC",sans-serif;margin:0;padding:24px max(16px,env(safe-area-inset-left))}
+main{max-width:900px;margin:0 auto}h1{font-size:24px;margin:0 0 8px}h2{font-size:19px;margin:32px 0 8px;border-top:1px solid var(--line);padding-top:16px}
+h3{font-size:16px;margin:22px 0 6px}h4{font-size:15px;margin:16px 0 4px}a{color:var(--acc)}
+table{border-collapse:collapse;width:100%;font-size:14px;background:var(--card)}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}th{color:var(--mute);white-space:nowrap}
+.wrap{overflow-x:auto;margin:8px 0}code{font-size:13px;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:0 4px;overflow-wrap:anywhere}
+blockquote{margin:12px 0;padding:4px 14px;border-left:3px solid var(--acc);background:var(--card)}
+img{max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:6px}
+li{margin:4px 0}.src{color:var(--mute);font-size:13px}
+</style></head><body><main>
+<h1>知识创作者与 B 端触达实测（2026-11-25）</h1>
+<p class="src">原文：<a target="_blank" rel="noopener" href="https://unfoldx-ai.feishu.cn/wiki/KXCqwSmlJiPFZmkoF0tcL4c9n9c">飞书知识库</a>（revision 3，2026-11-26 19:37 修改）</p>
+<p>抽样日期：2026-11-25。照 webdesign.so 的冷启动套路（程序判断对方缺视频 → 先做好样片 → 拿公开联系方式去敲门），对国内外 7 类知识创作者抽了约 1,250 个真实对象，对 B 端机构抽了 196 个，用脚本和公开页面逐个检查。本轮只测到“能拿到联系方式”，没有发出任何一条消息。原始 HTML 报告附在本节点下。</p>
+<blockquote>
+<p><strong>结论：</strong> 创作者侧最好做的是<strong>中文播客</strong>：小宇宙节目页上有主播自己填的联系方式，51% 留了邮箱，68% 留了邮箱或个人微信；B 站抽查约 74% 没有像样的视频版本，每 100 个节目里大约能挑出 50 个“缺视频且联系得上”的目标。其次是<strong>英文播客</strong>（69% 有可用邮箱，约 46% 没有 YouTube 频道）。B 端最值得先做的是 <strong>YC 早期 SaaS</strong>、<strong>国内中小 ToB SaaS</strong> 和<strong>海外律所、会计事务所</strong>；电商平台对脚本全部拦截，程序化不可行。</p>
+</blockquote>
+<h2>1. 创作者侧实测结果</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>人群</th>
+<th>样本</th>
+<th>缺视频</th>
+<th>有公开联系方式</th>
+<th>每 100 个能敲门的（估）</th>
+<th>可行性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>中文知识播客（xyzrank 前 1000 中知识类）</td>
+<td>349，B 站抽 19</td>
+<td>74%</td>
+<td>68%（邮箱 51%，个人微信 42%）</td>
+<td>约 50</td>
+<td>高</td>
+</tr>
+<tr>
+<td>英文知识播客（iTunes 15 个知识关键词）</td>
+<td>548，YouTube 抽 54</td>
+<td>46%</td>
+<td>69%（排除平台转发和大媒体）</td>
+<td>约 32</td>
+<td>高</td>
+</tr>
+<tr>
+<td>论文作者（arXiv AI 方向最新）</td>
+<td>40</td>
+<td>88%</td>
+<td>65%（论文首页邮箱）</td>
+<td>约 57，但有风险</td>
+<td>中</td>
+</tr>
+<tr>
+<td>开源维护者（GitHub 近 4 个月新仓库，100–3000 星）</td>
+<td>60</td>
+<td>62%</td>
+<td>提交记录邮箱 82%，<strong>个人主页公开邮箱 28%</strong></td>
+<td>约 17（只算主页邮箱）</td>
+<td>中</td>
+</tr>
+<tr>
+<td>Substack 作者（7 个知识类目头部 525 个，抽 80）</td>
+<td>80</td>
+<td>79%</td>
+<td>38%（About 页邮箱 20%）</td>
+<td>约 30</td>
+<td>中</td>
+</tr>
+<tr>
+<td>课程作者（Gumroad 课程、教程类卖家）</td>
+<td>60</td>
+<td>82%</td>
+<td>28%</td>
+<td>约 23</td>
+<td>中低</td>
+</tr>
+<tr>
+<td>国内图文作者（公众号、知乎、小红书）</td>
+<td>未实测</td>
+<td>—</td>
+<td>没有能批量读取的公开入口</td>
+<td>—</td>
+<td>批量不可行</td>
+</tr>
+</tbody>
+</table></div>
+<p>“每 100 个能敲门的”等于缺视频率乘以联系方式率，粗略地把两者当作互不相关，只用来排序。缺视频的判定方法：中文播客看 B 站同名账号或主播账号是否少于 10 条视频；英文播客看 YouTube 搜索结果里有没有同名频道；论文看项目页有没有视频；GitHub 看 README 有没有 GIF 或视频；Substack 看最近 25 篇有没有视频帖；Gumroad 看商品页有没有视频封面。</p>
+<h2>2. 每类怎么找、怎么联系、卡在哪</h2>
+<h3>中文播客（推荐先做）</h3>
+<ul>
+<li><strong>找人：</strong><code>xyzrank.com/api/podcasts</code> 直接返回 8,210 个节目，带类目、排名、小宇宙链接和 RSS。在前 1000 名里按商务、科技、历史、教育、投资等类目筛出 349 个。</li>
+<li><strong>联系方式：</strong> 小宇宙节目页的数据里有主播自己填的联系方式列表（邮箱、微信、公众号、微博、即刻）。349 个里 179 个有邮箱，145 个有个人微信，269 个（77%）至少填了一种。邮箱多是 163、Gmail、QQ 这类个人邮箱，平台统一邮箱很少。这是主播主动公开的联系入口，合规上最干净。</li>
+<li><strong>RSS 里的主播邮箱字段：</strong> 不托管在小宇宙的节目 70 个里有 62 个；托管在喜马拉雅的 65 个里只有 22 个。小宇宙托管的 RSS 对脚本返回 403，<strong>没有绕过</strong>，改读公开节目页。</li>
+<li><strong>判断缺视频：</strong> B 站搜索接口对脚本返回 412 风控，<strong>没有绕过</strong>，改用浏览器像普通用户一样搜了 19 个：11 个没开账号，3 个有账号但只发过 6 条以内（忽左忽右、小天章都属于这一档），5 个在正常更新。排名靠前的大节目也大多没做视频。</li>
+<li><strong>样片：</strong> 挑一期做成带字幕的讲解视频或 3 条切片，邮件或加微信时附上可撤回的链接。</li>
+</ul>
+<h3>英文播客</h3>
+<ul>
+<li><strong>找人：</strong> iTunes Search API 免费、不用密钥，直接给出 RSS 地址。Podcast Index 网页返回 403，没有用上。</li>
+<li><strong>联系方式：</strong> 548 个 RSS 全部能读到，其中 450 个有主播邮箱字段。去掉 anchor.fm、acast 的平台转发地址（47 个）和 BBC、NPR 等大媒体（44 个），剩下 378 个（69%）是个人或小工作室邮箱。</li>
+<li><strong>判断缺视频：</strong> 读 YouTube 搜索结果页，54 个里 29 个有同名频道。匹配规则偏保守，实际缺视频的比例可能略低于 46%。</li>
+<li><strong>注意：</strong> RSS 里的主播邮箱本来是留给 Apple 联系用的，拿来做营销属于灰色地带。邮件要一对一发送，带退订链接，第一封就附上样片。</li>
+</ul>
+<h3>论文作者</h3>
+<ul>
+<li>用 arXiv API 取最新 40 篇，读论文首页：26 篇（65%）有作者邮箱。15 篇附了项目或代码链接，其中只有 5 篇项目页有视频，基本都是计算机视觉方向的效果演示，不是讲解视频。</li>
+<li>缺口大，时机也明确（投稿期和会议宣传期）。但学术邮箱收到营销邮件很容易反感，一旦被标成垃圾邮件会连累发信域名。建议只挑 AI 方向、有项目页的论文，每周 5–10 篇，直接送做好的 1–3 分钟讲解视频，不推销产品。</li>
+</ul>
+<h3>开源维护者</h3>
+<ul>
+<li>用 GitHub 搜索取近 4 个月新建、100–3000 星的 60 个仓库：23 个 README 有 GIF 或视频，49 个的提交记录里有真实邮箱。</li>
+<li><strong>GitHub 使用条款明确禁止拿 GitHub 上收集的用户信息发垃圾邮件或做营销</strong>，所以提交记录里的邮箱不能用。只算个人主页上主动公开的邮箱是 28%，有 X 账号的是 30%，实际能做的规模比数字看上去小得多。</li>
+</ul>
+<h3>Substack / Newsletter</h3>
+<ul>
+<li>Substack 的公开类目接口能列出各类目的头部刊物。7 个知识类目共 525 个，抽 80 个查最近 25 篇：17 个发过视频，79% 没有。</li>
+<li>公开联系方式少：接口不返回作者邮箱，About 页留了邮箱的只有 20%，加上有 X 账号的也只有 38%。最常见的联系路径是“订阅后直接回复邮件”，这一步要用真实邮箱订阅，本轮没做。</li>
+</ul>
+<h3>课程作者（Gumroad）</h3>
+<ul>
+<li>Gumroad 搜索接口返回 JSON。60 个课程类卖家里，商品页有视频的只有 11 个（18%）；能找到邮箱的 17 个（28%）。</li>
+<li>缺口最大，但联系方式少，卖家质量参差不齐；他们需要的宣传片偏营销，和“知识讲解”不完全对口。</li>
+</ul>
+<h3>国内图文作者（公众号、知乎、小红书）</h3>
+<ul>
+<li>没有能程序化列出作者和联系方式的公开入口。公众号不能给陌生人发私信；知乎、小红书的私信有数量限制，批量发容易触发风控。这和现有《图文作者触达手册》的判断一致：只能人工、小批量，走作者公开的商务邮箱或平台自带的私信。</li>
+</ul>
+<h2>3. B 端：哪些机构也需要知识讲解视频</h2>
+<blockquote>
+<p><strong>结论：</strong> B 端里“程序判断缺视频 + 找到公开联系方式”这条路能走通的，是 <strong>YC 早期 SaaS</strong>、<strong>国内中小 ToB SaaS</strong> 和<strong>海外律所、会计事务所</strong>。电商平台（淘宝、1688、抖店、大众点评、小红书）和 Shopify 商品接口对脚本全部拦截，程序化不可行。共抽 196 个，能判定的 141 个。</p>
+</blockquote>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>细分</th>
+<th>需要的视频</th>
+<th>可判定 / 抽样</th>
+<th>完全没有视频（括号内：没有嵌入播放器）</th>
+<th>有公开联系方式</th>
+<th>评级</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>海外早期 SaaS（YC 2024–26 批，B2B、金融科技、医疗）</td>
+<td>首页产品讲解、How it works、上线宣传</td>
+<td>24 / 25</td>
+<td>54%（100%）</td>
+<td>任一 88%：官网邮箱 67%，表单 50%，创始人 LinkedIn 公开</td>
+<td>A</td>
+</tr>
+<tr>
+<td>国内中小 ToB SaaS（CRM、客服、低代码、协作）</td>
+<td>产品讲解、功能更新、客户案例</td>
+<td>23 / 26</td>
+<td>57%（91%）</td>
+<td>任一 100%：企业邮箱 74%，400 电话 91%</td>
+<td>A-</td>
+</tr>
+<tr>
+<td>海外律所、会计、税务（OpenStreetMap，奥斯汀）</td>
+<td>业务科普：遗产规划、报税流程</td>
+<td>18 / 22</td>
+<td>22%（50%）</td>
+<td>任一 94%：表单 72%，电话 94%，自有域名邮箱只有 28%</td>
+<td>B+</td>
+</tr>
+<tr>
+<td>海外诊所（牙科、理疗）</td>
+<td>治疗流程、术后护理</td>
+<td>17 / 22</td>
+<td>65%（76%）</td>
+<td>任一 76%</td>
+<td>B</td>
+</tr>
+<tr>
+<td>海外本地零售</td>
+<td>商品讲解</td>
+<td>27 / 33</td>
+<td>首页 52%</td>
+<td>表单 59%，电话 48%</td>
+<td>B-（商品页被限流，测不了）</td>
+</tr>
+<tr>
+<td>国内职业教育、考证机构</td>
+<td>课程讲解、引流短视频</td>
+<td>8 / 18</td>
+<td>88%</td>
+<td>电话 88%，邮箱 50%</td>
+<td>B-（4 家被拦截，样本偏大机构）</td>
+</tr>
+<tr>
+<td>国内律所</td>
+<td>法律科普</td>
+<td>7 / 18</td>
+<td>57%</td>
+<td>企业邮箱 71%</td>
+<td>样本不足</td>
+</tr>
+<tr>
+<td>国内出版社</td>
+<td>新书讲解</td>
+<td>7 / 18</td>
+<td>100%</td>
+<td>任一 14%</td>
+<td>C</td>
+</tr>
+<tr>
+<td>小鹅通、千聊店铺；抖音本地教培号</td>
+<td>课程讲解、引流</td>
+<td>没实测</td>
+<td>—</td>
+<td>只有平台私信，有频率限制</td>
+<td>C，只能半人工</td>
+</tr>
+<tr>
+<td>Shopify 独立站</td>
+<td>商品讲解</td>
+<td>0 / 28</td>
+<td>—</td>
+<td>—</td>
+<td>不可行（25 家第一次请求就返回 429 限流）</td>
+</tr>
+<tr>
+<td>淘宝、1688、抖店、大众点评、小红书</td>
+<td>商品讲解、门店种草</td>
+<td>各请求 1 次</td>
+<td>—</td>
+<td>只有平台私信</td>
+<td>不可行（跳登录页、返回 403、反爬验证）</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>“缺视频”的口径要小心：</strong> YC 样本 100% 没有嵌入 YouTube 或 Vimeo，但 46% 在官网自己放了 mp4。这些视频有的只是首屏的装饰动画，有的就是产品讲解（比如叫 HIW.mp4 的“How it works”）。表里用的是保守口径“完全没有视频”。要准确判断，还得看 mp4 的时长、有没有声音。另外，国内厂商的视频常放在 B 站、视频号上，只看官网会误判。</li>
+<li><strong>名单来源：</strong> YC 公司来自 yc-oss 公开的 JSON（共 6,408 家，筛到 1,330 家后随机抽样），每家都带一句话介绍和长描述，可以直接当样片素材。海外本地服务来自 OpenStreetMap 的公开查询接口；Justia、Clutch 两个律所/会计目录返回 Cloudflare 403，已停用。国内 SaaS、教培、律所的名单是按领域手工列的，偏头部机构；国内网站经代理访问大量超时，这是网络问题，需要换国内网络出口重测。</li>
+<li><strong>和创作者侧比：</strong> B 端有营销预算，更愿意付钱；官网邮箱和表单是合规的商务入口。但决策链更长，样片要贴着对方的产品做、没法批量复用，表单和电话也只能人工处理。</li>
+<li><strong>B 端额外的合规点：</strong> 国内不能电话外呼、不能群发短信，优先发企业公开邮箱。加拿大 CASL 最严；德国等地连 B2B 冷邮件也要求事先同意。律所和医疗行业有广告规范，样片不能替对方承诺疗效或胜诉。</li>
+<li><strong>样本小：</strong> 每类只有 7–27 个能判定，误差大约正负 15–20 个百分点。静态抓取会漏掉网页脚本加载的视频和预约插件，所以缺视频率偏高、表单率偏低。各类机构的付费意愿基本是推断。</li>
+</ul>
+<h2>4. 合规与边界</h2>
+<ul>
+<li><strong>和现有手册的冲突：</strong> 《图文作者触达手册》写的是“只用作者主动公开的商务入口，不买、不猜、不抓取”。按这条：小宇宙主播自填的联系方式、个人主页或 About 页公开的邮箱可以用；RSS 里的主播邮箱算灰色；GitHub 提交记录里的邮箱不能用。如果要用脚本批量收集，需要先改手册的口径。</li>
+<li><strong>海外：</strong> 美国 CAN-SPAM 要求写明真实发件人、地址，并提供退订方式。收件人在欧盟适用 GDPR，冷邮件要能说明“正当利益”，并允许对方要求删除；加拿大 CASL 更严。</li>
+<li><strong>国内：</strong> 个人邮箱和微信号属于个人信息，《个人信息保护法》要求处理有合法依据，而且只能用于对方公开时的用途（合作联系）。加微信要人工逐个加。</li>
+<li><strong>样片版权：</strong> 拿别人的内容做样片属于未授权改编，只能一对一发给本人看，不能公开发布。</li>
+<li><strong>本轮没有绕过任何限制：</strong> 小宇宙托管的 RSS 返回 403、B 站搜索接口返回 412、Podcast Index 返回 403、Shopify 和各电商平台的拦截，都改走公开页面或直接放弃。</li>
+</ul>
+<h2>5. 还没测的：真发出去有没有人回</h2>
+<p>到这一步只证明了“找得到人、拿得到联系方式”，“发出去能不能收到回复”要真发才知道。最小测试方案如下：</p>
+<ol>
+<li>中文播客 10 个、英文播客 10 个、YC 公司 10 家，先给每个做好一条样片，用一个新的发信子域名一对一发送，邮件带退订链接。</li>
+<li>记录送达、打开、回复、退订，两周后看回复率。这批只用来判断能不能放大，不用来估算转化率。</li>
+<li>发信是以用户名义对外发消息，需要先确认收件人名单、样片和邮件文案。2026-11-25 已决定<strong>暂不发送</strong>。</li>
+</ol>
+<p>数据和脚本留在本地，联系方式原文没有写进本文档。各平台的数字会随时间变化。</p>
+</main></body></html>
