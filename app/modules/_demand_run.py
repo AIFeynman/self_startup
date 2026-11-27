@@ -373,12 +373,17 @@ def add_new(ctx: Ctx, graph: dict, cards: dict) -> int:
     new = [k for k, v in cards.items() if not v.get("skip") and k not in placed]
     if not new:
         return 0
+    total = len(new)
     subs = [sb for sc in graph["scenes"] for sb in sc["subs"]]
     txt = []
     for sc in graph["scenes"]:
         txt.append(sc["name"])
         txt.extend(f"  {sb['id']} {sb['name']}：{sb['pain']}" for sb in sc["subs"])
     by = {sb["id"]: sb for sb in subs}
+    pins = {k: r["sub"] for k, r in _load("mid.json", {}).items() if r.get("sub") in by}
+    for k in [k for k in new if k in pins]:
+        by[pins[k]]["products"].append(k)
+    new = [k for k in new if k not in pins]
     line = lambda k: f"{k}|{cards[k]['scene']}|{cards[k]['pain'][:40]}"
     status(ctx, "assign", 0, len(new))
     for i in range(0, len(new), 60):
@@ -390,7 +395,7 @@ def add_new(ctx: Ctx, graph: dict, cards: dict) -> int:
     graph["n"] = sum(len(sb["products"]) for sb in subs)
     graph["updated"] = time.time()
     _save("graph.json", graph)
-    return len(new)
+    return total
 
 
 def build_graph(ctx: Ctx, cards: dict) -> dict:
@@ -476,6 +481,30 @@ def run_mid(ctx: Ctx, n: int) -> None:
     process_mid(ctx, list(found))
 
 
+def run_chain(ctx: Ctx, budget: float, scene_ids: list[str] | None = None) -> list[str]:
+    """关键链路体检：先补缺的场景，再逐个场景查缺口环节；找公司最多用预算的 6 成，剩下出卡。返回新候选。"""
+    from . import _demand_chain as chain
+    g = _load("graph.json", {})
+    cards = _load("cards.json", {})
+    status(ctx, "chain", 0, 0)
+    if scene_ids is None:
+        chain.missing_scenes(ctx, g)
+        scene_ids = [sc["id"] for sc in g["scenes"]]
+    gaps = []
+    for i in range(0, len(scene_ids), 4):
+        status(ctx, "chain", i, len(scene_ids))
+        gaps += chain.audit(ctx, g, cards, scene_ids[i:i + 4])
+    new = []
+    for i in range(0, len(gaps), 4):
+        if ctx.cost >= budget * 0.6:
+            break
+        status(ctx, "discover", i, len(gaps))
+        new += chain.find(ctx, gaps[i:i + 4], cards)
+    if new:
+        process_mid(ctx, new)
+    return new
+
+
 def process_mid(ctx: Ctx, keys: list[str]) -> None:
     """中型公司候选 → 补画像 → 出卡 → 补商业模式和收入 → 联网补全 → 归进图谱。"""
     from . import _demand_mid as mid
@@ -494,6 +523,8 @@ def process_mid(ctx: Ctx, keys: list[str]) -> None:
     fill_arr(ctx, P, cards)
     todo = [k for k in keys if k in cards and not cards[k].get("skip") and not cards[k].get("enriched")]
     enrich_web(ctx, P, cards, len(todo), todo)
+    from . import _demand_deep as deep
+    deep.fill(ctx, cards, [k for k in deep.todo(cards) if k in keys])
     g = _load("graph.json", None)
     if g:
         add_new(ctx, g, cards)
@@ -509,6 +540,8 @@ def main() -> None:
     ap.add_argument("--max-new", type=int, default=0)
     ap.add_argument("--enrich", type=int, default=0)
     ap.add_argument("--mid", type=int, default=0, help="跑几个还没跑过的中型 AI 创业公司检索方向")
+    ap.add_argument("--deep", type=float, default=0, help="给中型和大公司补深度解读，值是本次预算（美元）")
+    ap.add_argument("--chain", type=float, default=0, help="关键链路体检：查全部场景的缺口环节和缺的场景，联网补公司，值是本次预算（美元）")
     ap.add_argument("--watch", type=float, default=0, help="每周持续更新：找新来源、融资新闻线索、查漏、重跑过期检索，值是本次预算（美元）")
     a = ap.parse_args()
     ctx = Ctx()
@@ -516,6 +549,14 @@ def main() -> None:
     try:
         if a.mid:
             run_mid(ctx, a.mid)
+            return status(ctx, "done", finished=True)
+        if a.chain:
+            run_chain(ctx, a.chain)
+            return status(ctx, "done", finished=True)
+        if a.deep:
+            from . import _demand_deep as deep
+            cards = _load("cards.json", {})
+            deep.fill(ctx, cards, deep.todo(cards), budget=a.deep)
             return status(ctx, "done", finished=True)
         if a.domains_only:
             g = _load("graph.json", {})

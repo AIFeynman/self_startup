@@ -2,7 +2,8 @@
 1. 找新来源：联网找发布 AI 创业公司收入 / 融资 / 增长数据的新榜单、追踪站、报告，新来源变成检索方向；
 2. 融资新闻线索：信息推荐里最近的融资新闻，库里没有的公司去查；
 3. 查漏：中型公司少的场景，带着已收录名单去找漏掉的；
-4. 老检索方向超过 14 天重跑。
+4. 老检索方向超过 14 天重跑；
+5. 关键链路体检：每周轮 3 个最久没查的场景，缺的环节补成新痛点节点并去找公司（见 _demand_chain）。
 每周有预算上限：找公司最多用预算的 6 成，剩下留给找到的公司出卡和联网补全；结果记在 watch_log.json，页面「持续更新」里看。"""
 from __future__ import annotations
 
@@ -130,11 +131,16 @@ def run_watch(ctx, budget: float) -> dict:
                 log["gaps"].append(label.removeprefix("查漏："))
         dr._save("mid_queries.json", runs)
 
+    from . import _demand_chain as chain
+    gaps = chain.audit(ctx, graph, cards, chain.due(graph, dr._load("chain.json", {}), today.isoformat())) if graph.get("scenes") else []
+    log["chain"] = [g["link"] for g in gaps]
+    pinned = chain.find(ctx, gaps, cards) if gaps and ctx.cost < budget * DISCOVER_SHARE else []
+
     found = dr._load("mid.json", {})
     new = [k for k in found if k not in before]
     log["new"] = [found[k]["name"] for k in new]
-    if new:
-        process(ctx, new)
+    if new or pinned:
+        process(ctx, list(dict.fromkeys(new + pinned)))
     log["cost"] = round(ctx.cost, 2)
     dr._save("watch_log.json", (dr._load("watch_log.json", []) + [log])[-LOG_KEEP:])
     return log

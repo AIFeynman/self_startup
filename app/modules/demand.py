@@ -36,6 +36,7 @@ def graph():
     pending = len([k for k in dr.collect() if k not in cards]) if g else 0
     return {"pending": pending, "status": {**st, "running": running, "error": "" if running else st.get("error", "")}, "graph": g,
             "watch": {"logs": dr._load("watch_log.json", [])[-4:], "sources": list(dr._load("sources.json", {}).values())},
+            "chain": dr._load("chain.json", {}),
             "cards": {k: {**v, "tier": _demand_mid.tier(v)} for k, v in cards.items() if not v.get("skip")} if g else {}, "n_cards": sum(not v.get("skip") for v in cards.values())}
 
 

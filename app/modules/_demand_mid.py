@@ -94,20 +94,22 @@ def discover(ctx, queries: list[str], known: dict) -> dict:
     return discover_asks(ctx, [(q, P_DISCOVER, {"检索方向": q}) for q in queries], known)
 
 
-def discover_asks(ctx, asks: list[tuple[str, str, dict]], known: dict) -> dict:
-    """asks：[(标签, 提示词, 输入)]，都要求返回 {"companies": [...]}；并行问，按顺序合并进 mid.json。"""
+def discover_asks(ctx, asks: list[tuple], known: dict, keep=None, pin: list[dict] | None = None) -> dict:
+    """asks：[(标签, 提示词, 输入)]，都要求返回 {"companies": [...]}；并行问，按顺序合并进 mid.json。
+    keep 不给时只收中型公司、跳过库里的大公司；pin 与 asks 一一对应，写进候选（如赛道补漏的来源和目标痛点节点）。"""
     found = dr._load("mid.json", {})
     ask = lambda a: ctx.call(ctx.light, a[1], json.dumps(a[2], ensure_ascii=False), web=True)  # noqa: E731
+    keep = keep or (lambda k, x: tier(known.get(k) or {}) != "large" and _is_mid(x))
     with ThreadPoolExecutor(4) as ex:
         answers = list(ex.map(ask, asks))
-    for (label, _, _), o in zip(asks, answers):
+    for i, ((label, *_), o) in enumerate(zip(asks, answers)):
         for x in (o or {}).get("companies") or []:
             if not isinstance(x, dict) or not (name := str(x.get("name") or "").strip()) or dr.ANON.search(name):
                 continue
             k = dr.norm(name)
-            if not k or tier(known.get(k) or {}) == "large" or not _is_mid(x):
+            if not k or not keep(k, x):
                 continue
-            rec = found.setdefault(k, {"name": name, "found": time.strftime("%Y-%m-%d"), "sources": [], "queries": []})
+            rec = found.setdefault(k, {"name": name, "found": time.strftime("%Y-%m-%d"), "sources": [], "queries": [], **(pin[i] if pin else {})})
             rec.update({f: str(x[f]).strip()[:160] for f in FIELDS if str(x.get(f) or "").strip()})
             if (u := str(x.get("source_url") or "").strip()) and u not in rec["sources"]:
                 rec["sources"].append(u)
@@ -122,9 +124,10 @@ def add_to(P: dict, norm) -> None:
               "growth": "增长做法", "stage": "融资阶段", "funding": "融资", "arr": "收入规模", "website": "官网"}
     for rec in dr._load("mid.json", {}).values():
         p = P.setdefault(norm(rec["name"]), {"name": rec["name"], "sources": [], "parts": [], "links": [], "track": "", "date": ""})
-        if SOURCE not in p["sources"]:
-            p["sources"].append(SOURCE)
-        p["parts"].append("【中型 AI 创业公司 · 联网检索】\n" + "\n".join(f"{lab}：{rec[k]}" for k, lab in labels.items() if rec.get(k)))
+        src = rec.get("source") or SOURCE
+        if src not in p["sources"]:
+            p["sources"].append(src)
+        p["parts"].append(f"【{src} · 联网检索】\n" + "\n".join(f"{lab}：{rec[k]}" for k, lab in labels.items() if rec.get(k)))
         for link in ([("官网", rec["website"])] if rec.get("website") else []) + [("来源", u) for u in rec.get("sources", [])[:3]]:
             if link not in p["links"]:
                 p["links"].append(link)

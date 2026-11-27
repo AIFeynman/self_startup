@@ -30,6 +30,17 @@ const CSS = `
 .dm-co { scroll-margin-top: 96px; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 10px; }
 .dm-co h4 { margin: 0 0 4px; font: 700 16px/1.4 var(--serif); }
 .dm-co dl { margin: 0; font-size: 14px; line-height: 1.6; } .dm-co dt { color: var(--muted); font-size: 12px; margin-top: 6px; } .dm-co dd { margin: 0; }
+.dm-deep { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; font-size: 14px; }
+.dm-deep summary { cursor: pointer; font-weight: 700; font-size: 13px; }
+.dm-dsec { margin: 6px 0 2px; } .dm-dsec > b { font-size: 13px; }
+.dm-dsec dl { display: grid; grid-template-columns: 7.5em 1fr; gap: 2px 10px; margin: 2px 0 0; }
+.dm-dsec dt { margin: 0 !important; } .dm-dsec dd { margin: 0; }
+.dm-chain { margin: 0 0 8px; font-size: 13px; border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; background: var(--panel); }
+.dm-chain summary { cursor: pointer; } .dm-chain ol { margin: 6px 0 0; padding-left: 18px; } .dm-chain li { margin: 3px 0; line-height: 1.5; }
+.dm-chain li b { margin-right: 6px; } .dm-chain a { cursor: pointer; color: var(--accent); }
+.dm-ck { font-size: 11.5px; border-radius: 5px; padding: 0 6px; margin-right: 6px; } .dm-ck.ok { background: var(--bg-2); color: var(--muted); }
+.dm-ck.add { background: var(--accent); color: var(--bg); } .dm-ck.no { border: 1px dashed var(--line); color: var(--muted); }
+@media (max-width: 640px) { .dm-dsec dl { grid-template-columns: 1fr; } .dm-dsec dt { margin-top: 4px !important; } }
 .dm-tg { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 3px; }
 .dm-tg span, .dm-chp { font-size: 12px; background: var(--bg-2); color: var(--accent); border-radius: 5px; padding: 0 7px; margin: 2px 4px 2px 0; display: inline-block; }
 .dm-chp.b, .dm-tg .b { color: var(--muted); }
@@ -74,7 +85,7 @@ const E = (s) => (s == null ? '' : String(s)).replace(/[&<>"]/g, (c) => ({ '&': 
 const SRC = { '创业公司': '创', 'PH 日榜': 'PH', '增长 Case': '案', '大公司 / AI native': '大', '中型 AI 创业公司': '中' };
 const TIER = { small: '小', mid: '中', large: '大' };
 const TIER_NOTE = { small: '年收入 < $1M 或未融资', mid: 'A–C 轮或年收入 $1M–$100M', large: 'D 轮以后、年收入 ≥ $100M 或大厂' };
-const STAGE = { start: '正在启动', discover: '联网找中型 AI 创业公司', profile: '联网补中型公司画像', extract: '逐个产品抽取需求卡', model: '补商业模式', arr: '补收入规模', taxonomy: '建场景和痛点分类', assign: '把产品归到痛点', summary: '写场景和痛点的增长总结', done: '完成' };
+const STAGE = { start: '正在启动', discover: '联网找中型 AI 创业公司', profile: '联网补中型公司画像', deep: '联网写深度解读', chain: '关键链路体检', extract: '逐个产品抽取需求卡', model: '补商业模式', arr: '补收入规模', taxonomy: '建场景和痛点分类', assign: '把产品归到痛点', summary: '写场景和痛点的增长总结', done: '完成' };
 
 const STARS = [[0, '全部'], [1, '★ 已评分'], [4, '★4 以上'], [5, '★5']];
 
@@ -101,7 +112,7 @@ export async function demandTab(host, ctx, q0 = '') {
   const buildIdx = () => {
     idx = new Map(Object.entries(D.cards).map(([k, c]) => {
       const name = low(c.name);
-      return [k, { name, words: name.split(/[^a-z0-9\u4e00-\u9fff]+/).filter((w) => w.length > 1), big: bigrams(name), all: low([c.name, c.user, c.scene, c.pain, c.product, c.bm, c.bm_type, c.growth, c.arr, c.funding, (c.tactics || []).join(' '), (c.sources || []).join(' '), c.track].join(' | ')) }];
+      return [k, { name, words: name.split(/[^a-z0-9\u4e00-\u9fff]+/).filter((w) => w.length > 1), big: bigrams(name), all: low([c.name, c.user, c.scene, c.pain, c.product, c.bm, c.bm_type, c.growth, c.arr, c.funding, (c.tactics || []).join(' '), (c.sources || []).join(' '), c.track, c.deep ? JSON.stringify(c.deep) : ''].join(' | ')) }];
     }));
   };
   const tokScore = (t, x) => {
@@ -207,6 +218,33 @@ ${q.trim() ? `<button class="ghost" data-clearq="1">清除「${E(q)}」</button>
     if (!ps.find((x) => x.id === P)) P = ps[0]?.id || '';
   };
 
+  const deepBox = (d) => {
+    if (!d) return '';
+    const row = (t, v) => (v ? `<dt>${t}</dt><dd>${E(v)}</dd>` : '');
+    const sec = (t, body) => (body ? `<div class="dm-dsec"><b>${t}</b><dl>${body}</dl></div>` : '');
+    const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
+    const p = d.pain || {}, m = d.model || {};
+    return `<details class="dm-deep" open><summary>深度解读<span class="dm-m"> · ${E(d.date || '')} 联网整理</span></summary>
+${sec('用户痛点', row('谁在痛', p.who) + row('原来怎么凑合', p.before) + row('痛的代价', p.cost) + row('为什么是现在', p.why_now))}
+${sec('商业模式', row('谁付钱', m.payer) + row('怎么收', m.pricing) + row('单位经济', m.unit) + row('怎么扩收', m.expand))}
+${sec('壁垒', (d.moat || []).map((x) => `<dt><span class="dm-chp">${E(x.kind)}</span></dt><dd>${E(x.detail)}</dd>`).join('') + row('薄弱处', d.weak))}
+${sec('对手与差异', (d.rivals || []).map((r) => `<dt>${E(r.name)}</dt><dd>${E(r.diff)}</dd>`).join(''))}
+${sec('关键数字', (d.facts || []).map((f) => `<dt>${E(f.k)}</dt><dd>${E(f.v)}</dd>`).join('') + row('风险', d.risks))}
+${d.sources?.length ? `<div class="dm-m">出处：${d.sources.map((u) => `<a href="${E(u)}" target="_blank" rel="noopener">${E(host(u))}</a>`).join(' · ')}</div>` : ''}</details>`;
+  };
+  const chainBox = (sc) => {
+    const ch = (D.chain || {})[sc.id];
+    if (!ch?.links?.length) return '';
+    const sub = (id) => sc.subs.find((x) => x.id === id);
+    const cov = ch.links.filter((l) => l.sub && !l.added).length, add = ch.links.filter((l) => l.added).length;
+    const li = (l) => {
+      const sb = sub(l.sub), n = sb ? hits(sb).length : 0;
+      const tag = !l.sub ? '<span class="dm-ck no">暂无产品</span>' : l.added ? (n ? `<span class="dm-ck add">新补 · ${n} 家</span>` : '<span class="dm-ck no">待补</span>') : `<span class="dm-ck ok">已覆盖</span>`;
+      const name = sb && n ? `<a data-sb="${E(sb.id)}">${E(l.name)}</a>` : E(l.name);
+      return `<li>${tag}<b>${name}</b><span class="dm-m">${E(l.job)}${!sb?.products.length && l.examples?.length ? ' · 如 ' + l.examples.map(E).join('、') : ''}</span></li>`;
+    };
+    return `<details class="dm-chain"><summary><b>关键链路</b> · ${ch.links.length} 环，已覆盖 ${cov}，新补 ${add}<span class="dm-m"> · ${E(ch.date)} 体检</span></summary><ol>${ch.links.map(li).join('')}</ol></details>`;
+  };
   const company = (k) => {
     const c = D.cards[k], nw = fresh.has(k) || isNew(k);
     const v = star(k);
@@ -215,7 +253,7 @@ ${q.trim() ? `<button class="ghost" data-clearq="1">清除「${E(q)}」</button>
 <dl><dt>目标用户</dt><dd>${E(c.user)}</dd><dt>场景</dt><dd>「${E(c.scene)}」</dd><dt>痛点</dt><dd>${E(c.pain)}</dd><dt>产品</dt><dd>${E(c.product)}</dd>
 ${c.arr ? `<dt>收入规模</dt><dd>${E(c.arr)}<div class="dm-tg"><span class="b">${c.arr_grade === 'verified' ? '支付渠道验证' : '自述 / 报道，未验证'}</span></div></dd>` : ''}${c.funding ? `<dt>融资</dt><dd>${E(c.funding)}</dd>` : ''}<dt>商业模式</dt><dd>${c.bm ? E(c.bm) : '<span class="dm-m">暂无</span>'}${c.bm_type ? `<div class="dm-tg"><span class="b">${E(c.bm_type)}</span></div>` : ''}</dd>
 <dt>增长核心手段</dt><dd>${c.growth ? E(c.growth) : '<span class="dm-m">材料里没讲增长</span>'}${c.tactics.length ? `<div class="dm-tg">${c.tactics.map((t) => `<span>${E(t)}</span>`).join('')}</div>` : ''}</dd>
-${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}" target="_blank" rel="noopener">${E(l[0])}</a>`).join(' · ')}</dd>` : ''}</dl></div>`;
+${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}" target="_blank" rel="noopener">${E(l[0])}</a>`).join(' · ')}</dd>` : ''}</dl>${deepBox(c.deep)}</div>`;
   };
 
   const graph = () => {
@@ -230,7 +268,7 @@ ${c.links.length ? `<dt>来源</dt><dd>${c.links.map((l) => `<a href="${E(l[1])}
     let c2 = '', c3 = '';
     if (sc) {
       const ks = sceneKeys(sc);
-      c2 = `${sc.summary ? `<div class="dm-box">${E(sc.summary)}</div>` : ''}`
+      c2 = `${chainBox(sc)}${sc.summary ? `<div class="dm-box">${E(sc.summary)}</div>` : ''}`
         + sc.subs.filter((sb) => hits(sb).length).map((sb) => `<div class="dm-it ${sb.id === P ? 'on' : ''}" data-sb="${sb.id}">${E(sb.name)}<small>${hits(sb).length}</small>${dot(newN(sb.products))}<span class="p">${E(sb.pain)}</span>${tacCount(sb.products).slice(0, 2).map((t) => `<span class="dm-chp">${E(t[0])}</span>`).join('')}</div>`).join('');
       const sb = sc.subs.find((x) => x.id === P);
       c3 = sb
