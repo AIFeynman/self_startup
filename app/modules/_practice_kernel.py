@@ -133,6 +133,7 @@ class Exec:
 
 EXECS: dict[str, Exec] = {}
 LOCK = threading.Lock()
+KEEP_FINISHED = 200
 
 
 def running() -> list[Exec]:
@@ -152,8 +153,9 @@ def execute(key: str, code: str, transport, on_activity=lambda: None) -> Exec:
     """开线程执行一格。transport() -> (send, recv, close)。"""
     e = Exec(key, code)
     with LOCK:
-        for k in [k for k, x in EXECS.items() if x.status not in ("queued", "running") and x.key == key]:
-            EXECS.pop(k)
+        done = [k for k, x in EXECS.items() if x.status not in ("queued", "running")]
+        for k in [k for k in done if EXECS[k].key == key] + sorted(done, key=lambda k: EXECS[k].ended)[:max(0, len(done) - KEEP_FINISHED)]:
+            EXECS.pop(k, None)
         EXECS[e.id] = e
 
     def run():
@@ -178,6 +180,11 @@ def execute(key: str, code: str, transport, on_activity=lambda: None) -> Exec:
                 if r is None:
                     on_activity()
                     continue
+                state = (r.get("content") or {}).get("execution_state")
+                if (r.get("msg_type") or (r.get("header") or {}).get("msg_type")) == "status" and state in ("restarting", "dead"):
+                    e.outputs.append({"type": "error", "ename": "内核崩溃", "traceback": [],
+                                      "evalue": "内核进程退出了（常见原因：内存 / 显存不够被系统杀掉）。变量已清空，需要从本课第一格重新运行。"})
+                    break
                 if (r.get("parent_header") or {}).get("msg_id") != mid or r.get("channel") not in ("iopub", None):
                     continue
                 done = apply(e.outputs, {"msg_type": r.get("msg_type") or r["header"]["msg_type"], "content": r.get("content", {})})

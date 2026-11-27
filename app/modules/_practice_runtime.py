@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -20,7 +22,10 @@ import tarfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import httpx
 
 from .. import db, settings
 from . import _practice_kernel as K
@@ -85,7 +90,7 @@ def cost(r: dict) -> float:
 def view(kind: str) -> dict:
     r = state(kind)
     out = {k: r.get(k) for k in ("kind", "status", "price", "cap", "started_at", "ready_at", "last_active", "error")}
-    out.update(cost=cost(r), log=(r.get("log") or "")[-3000:], courses=r["info"].get("courses", []),
+    out.update(cost=cost(r), log=(r.get("log") or "")[-3000:], courses=[x.split("@")[0] for x in r["info"].get("courses", [])],
                ip=r["info"].get("ip", ""), zone=r["info"].get("zone", ""), busy=len(K.running()),
                idle_min=cfg()["idle_min"] if kind == "cloud" else 0)
     return out
@@ -116,29 +121,44 @@ def _env_noproxy() -> dict:
 
 # ---------- 课程源码：平台在本机 clone，一份给本机用、一份打包给云 ----------
 
+PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\],<>=!~ ]*$")
+
+
+def pip_pkgs(course: dict, skip_torch: bool = False) -> list[str]:
+    pkgs = [x for x in course.get("pip", []) if not (skip_torch and x.startswith("torch"))]
+    bad = [x for x in pkgs if not PKG_RE.match(x)]
+    if bad:
+        raise RuntimeError(f"course.json 的 pip 里有不合法的包名：{bad}")
+    return pkgs
+
+
 def course_src(course: dict) -> Path | None:
     repo = course.get("repo")
     if not repo:
         return None
+    url = repo["url"] if isinstance(repo, dict) else repo
+    if not url.startswith("https://"):
+        raise RuntimeError("课程仓库只接受 https:// 地址")
     dst = SRC / course["id"]
     if not (dst / ".git").exists():
         SRC.mkdir(parents=True, exist_ok=True)
-        r = _run(["git", "clone", "--depth", "1", *(["--branch", course["ref"]] if course.get("ref") else []), repo["url"] if isinstance(repo, dict) else repo, str(dst)], timeout=900)
+        r = _run(["git", "clone", "--depth", "1", *(["--branch", course["ref"]] if course.get("ref") else []), "--", url, str(dst)], timeout=900)
         if r.returncode:
             raise RuntimeError("拉取课程仓库失败：" + (r.stderr or r.stdout)[-400:])
     return dst
 
 
 def bundle(course: dict) -> Path:
-    """课程仓库（去掉 .git 和图片目录）+ 平台的 ss.py 打成 tar.gz。"""
+    """课程仓库代码 + 平台的 ss.py 打成 tar.gz；本机下的数据集 / 权重 / 图片不传（云上自己从 ModelScope 下，走内网更快）。"""
     src = course_src(course)
     out = ROOT / f"bundle-{course['id']}.tar.gz"
-    skip = set(course.get("bundle_skip", ["images", ".git"]))
+    skip = set(course.get("bundle_skip", ["images", ".git", "out", "checkpoints"]))
     with tarfile.open(out, "w:gz") as tf:
         if src:
             for p in src.iterdir():
-                if p.name not in skip:
-                    tf.add(p, arcname=f"{course['id']}/{p.name}")
+                if p.name in skip:
+                    continue
+                tf.add(p, arcname=f"{course['id']}/{p.name}", filter=lambda ti: None if ti.isfile() and ti.size > 5_000_000 else ti)
         tf.add(ASSETS / "ss.py", arcname="ss.py")
     return out
 
@@ -193,7 +213,7 @@ class Local:
         src = course_src(course)
         if src and not (self.work / course["id"]).exists():
             (self.work / course["id"]).symlink_to(src)
-        pkgs = [x for x in course.get("pip", []) if not x.startswith("torch")]
+        pkgs = pip_pkgs(course, skip_torch=True)
         if pkgs:
             say(f"安装课程依赖：{' '.join(pkgs)}")
             uv = shutil.which("uv") or str(Path.home() / ".local/bin/uv")
@@ -244,6 +264,14 @@ class Cloud:
                          "-o", "LogLevel=ERROR", str(local), f"root@{ip}:{remote}"], timeout=900)
         if r.returncode:
             raise RuntimeError("上传失败：" + (r.stderr or "")[-300:])
+
+    def get(self, remote: str, local: Path) -> None:
+        ip = state("cloud")["info"].get("ip")
+        local.parent.mkdir(parents=True, exist_ok=True)
+        r = self.runner(["scp", "-i", str(self.key), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                         "-o", "LogLevel=ERROR", f"root@{ip}:{remote}", str(local)], timeout=1800)
+        if r.returncode:
+            raise RuntimeError("下载失败：" + (r.stderr or "")[-300:])
 
     def price(self) -> tuple[str, float]:
         best = None
@@ -312,12 +340,13 @@ class Cloud:
         hours = max(1.0, self.c["cap_yuan"] / (price + self.c["disk_yuan_h"]))
         release = (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:00Z")
         say(f"开机：{self.c['instance_type']}（A10 24GB）抢占式 · {zone} · 约 {price} 元/小时 · 最晚 {hours:.1f} 小时后自动释放")
+        _check_cancel("cloud")
         res = self.ali("ecs", "RunInstances", "--RegionId", self.c["region"], "--ZoneId", zone, "--InstanceType", self.c["instance_type"],
                        "--ImageId", self.image(), "--SecurityGroupId", net["sg"], "--VSwitchId", net["vsw"], "--KeyPairName", "ss-practice",
                        "--InstanceChargeType", "PostPaid", "--SpotStrategy", "SpotAsPriceGo", "--InternetChargeType", "PayByTraffic",
                        "--InternetMaxBandwidthOut", "100", "--SystemDisk.Category", "cloud_essd", "--SystemDisk.Size", "100",
                        "--InstanceName", "ss-practice", "--AutoReleaseTime", release, "--Tag.1.Key", "ss-practice", "--Tag.1.Value", "1",
-                       "--Amount", "1", timeout=180)
+                       "--Amount", "1", "--ClientToken", r0["info"].get("client_token") or secrets.token_hex(16), timeout=180)
         iid = res["InstanceIdSets"]["InstanceIdSet"][0]
         _set("cloud", info={**state("cloud")["info"], "instance": iid, "zone": zone})
         ip = ""
@@ -329,6 +358,7 @@ class Cloud:
                 if ip:
                     break
             time.sleep(5)
+            _check_cancel("cloud")
         if not ip:
             raise RuntimeError("实例没有进入运行状态")
         _set("cloud", info={**state("cloud")["info"], "ip": ip})
@@ -339,6 +369,7 @@ class Cloud:
             time.sleep(5)
         else:
             raise RuntimeError("SSH 连不上")
+        _check_cancel("cloud")
         say("安装 Python 环境、PyTorch、Jupyter（阿里云镜像源，约 3–5 分钟）")
         self.put(ASSETS / "cloud_setup.sh", "/root/cloud_setup.sh")
         token = secrets.token_hex(16)
@@ -349,7 +380,7 @@ class Cloud:
             raise RuntimeError("云端环境安装失败（见日志）")
         port = _free_port()
         tun = subprocess.Popen([*self.ssh_base(ip)[:-1], "-N", "-L", f"{port}:127.0.0.1:8888",
-                                "-R", f"18780:127.0.0.1:{platform_port()}", "-o", "ExitOnForwardFailure=yes", f"root@{ip}"],
+                                "-R", f"18780:127.0.0.1:{gateway_port()}", "-o", "ExitOnForwardFailure=yes", f"root@{ip}"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=_env_noproxy())
         s = K.Server(f"http://127.0.0.1:{port}", token)
         for _ in range(30):
@@ -364,7 +395,7 @@ class Cloud:
     def install(self, course: dict, say) -> None:
         say(f"上传课程「{course['title']}」代码")
         self.put(bundle(course), f"/root/bundle-{course['id']}.tar.gz")
-        pkgs = " ".join(f"'{p}'" for p in course.get("pip", []))
+        pkgs = " ".join(shlex.quote(p) for p in pip_pkgs(course))
         code, out = self.sh(f"cd /root/work && tar xzf /root/bundle-{course['id']}.tar.gz && "
                             + (f"/root/venv/bin/pip install -q -i https://mirrors.aliyun.com/pypi/simple/ {pkgs}" if pkgs else "true"),
                             timeout=1800)
@@ -373,29 +404,98 @@ class Cloud:
 
     def shutdown(self, r: dict, say) -> None:
         info = r["info"]
-        if info.get("ip") and r["status"] in ("ready", "stopping"):
-            for c in info.get("courses", []):
-                dst = ROOT / "artifacts" / c / time.strftime("%Y%m%d-%H%M")
-                code, out = self.sh(f"cd /root/work/{c} && ls out/*.pth 2>/dev/null | head -20", timeout=60)
-                files = [x for x in out.split() if x.endswith(".pth")]
-                if files:
-                    dst.mkdir(parents=True, exist_ok=True)
-                    say(f"拉回 {c} 的权重 {len(files)} 个到 {dst}")
-                    for f in files:
-                        self.runner(["scp", "-i", str(self.key), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-                                     "-o", "LogLevel=ERROR", f"root@{info['ip']}:/root/work/{c}/{f}", str(dst)], timeout=1800)
-        if info.get("tunnel"):
+        try:
+            if info.get("ip") and info.get("tunnel"):
+                self.pull_weights(info, say)
+        except Exception as e:  # noqa: BLE001
+            say("拉回权重失败（照常释放实例）：" + str(e)[:300])
+        finally:
+            if info.get("tunnel"):
+                try:
+                    os.killpg(info["tunnel"], 15)
+                except OSError:
+                    pass
+            if info.get("instance"):
+                self.release(info["instance"], say)
+
+    def pull_weights(self, info: dict, say) -> None:
+        for c in [x.split("@")[0] for x in info.get("courses", [])]:
+            code, out = self.sh(f"cd /root/work/{shlex.quote(c)} && find out -name '*.pth' -newer /root/bundle-{shlex.quote(c)}.tar.gz 2>/dev/null | head -20", timeout=60)
+            files = [x for x in out.split() if x.endswith(".pth")]
+            if files:
+                say(f"拉回 {c} 在云上训出的权重 {len(files)} 个（存为 out/cloud_*.pth，不覆盖本机的）")
+                for f in files:
+                    self.get(f"/root/work/{c}/{f}", Local().work / c / "out" / ("cloud_" + Path(f).name))
+
+    def release(self, iid: str, say, tries: int = 12) -> None:
+        """DeleteInstance --Force；实例还在 Pending / Starting 时会报错，隔 10 秒重试，最多约 2 分钟。"""
+        say(f"释放实例 {iid}")
+        for i in range(tries):
             try:
-                os.killpg(info["tunnel"], 15)
-            except OSError:
-                pass
-        if info.get("instance"):
-            say(f"释放实例 {info['instance']}")
-            self.ali("ecs", "DeleteInstance", "--InstanceId", info["instance"], "--Force", "true")
+                self.ali("ecs", "DeleteInstance", "--InstanceId", iid, "--Force", "true")
+                return
+            except RuntimeError as e:
+                if "NotFound" in str(e):
+                    return
+                if i == tries - 1:
+                    raise
+                time.sleep(10)
+
+    def orphans(self, keep: str = "") -> list[str]:
+        ins = self.ali("ecs", "DescribeInstances", "--RegionId", self.c["region"], "--Tag.1.Key", "ss-practice", "--Tag.1.Value", "1",
+                       "--PageSize", "50").get("Instances", {}).get("Instance", [])
+        return [x["InstanceId"] for x in ins if x["InstanceId"] != keep]
 
 
 RUNNERS = {"local": Local, "cloud": Cloud}
 _locks = {k: threading.Lock() for k in RUNNERS}
+_state_lock = threading.Lock()
+
+
+class Cancelled(RuntimeError):
+    pass
+
+
+def _check_cancel(kind: str) -> None:
+    if state(kind)["status"] != "starting":
+        raise Cancelled("开机中被停止")
+
+
+# ---------- 云端只能经反向隧道调平台的这两个接口（云上跑的是第三方代码，不能碰平台其余 API） ----------
+
+GATEWAY_PATHS = ("/api/practice/llm", "/api/practice/pull")
+_gateway: list[int] = []
+
+
+class _Gateway(BaseHTTPRequestHandler):
+    def do_POST(self):  # noqa: N802
+        if self.path not in GATEWAY_PATHS:
+            self.send_error(403)
+            return
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        try:
+            r = httpx.post(f"http://127.0.0.1:{platform_port()}{self.path}", content=body,
+                           headers={"Content-Type": "application/json"}, timeout=1800, trust_env=False)
+            code, data = r.status_code, r.content
+        except httpx.HTTPError as e:
+            code, data = 502, json.dumps({"detail": str(e)}).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *a):
+        pass
+
+
+def gateway_port() -> int:
+    with _state_lock:
+        if not _gateway:
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), _Gateway)
+            threading.Thread(target=srv.serve_forever, daemon=True, name="practice-gateway").start()
+            _gateway.append(srv.server_address[1])
+        return _gateway[0]
 
 
 def runner(kind: str):
@@ -412,47 +512,65 @@ def start(kind: str, quote: bool = False) -> dict:
              "hours": round(c.c["cap_yuan"] / price, 1), "instance_type": c.c["instance_type"]}
         if quote:
             return q
-        _set("cloud", price=price, cap=c.c["cap_yuan"], info={"zone": zone})
-    r = state(kind)
-    if r["status"] in ("starting", "ready"):
-        return view(kind)
-    _set(kind, status="starting", error="", log="", started_at=time.time() if kind == "cloud" else None, stopped_at=None,
-         ready_at=None, last_active=time.time())
-    if kind == "local":
-        _set(kind, info={})
+    with _state_lock:
+        r = state(kind)
+        if r["status"] in ("starting", "ready", "stopping"):
+            return view(kind)
+        _set(kind, status="starting", error="", log="", started_at=time.time() if kind == "cloud" else None, stopped_at=None,
+             ready_at=None, last_active=time.time(),
+             **({"price": price, "cap": c.c["cap_yuan"], "info": {"zone": zone, "client_token": secrets.token_hex(16)}}
+                if kind == "cloud" else {"info": {}}))
 
     def go():
         with _locks[kind]:
             say = lambda s: _log(kind, s)  # noqa: E731
             try:
                 got = runner(kind).boot(say)
-                _set(kind, status="ready", port=got["port"], token=got["token"], info={**state(kind)["info"], **got["info"], "courses": []},
-                     ready_at=time.time(), last_active=time.time())
+                with _state_lock:
+                    cancelled = state(kind)["status"] != "starting"
+                    info = {**state(kind)["info"], **got["info"], "courses": []}
+                    if cancelled:
+                        _set(kind, info=info)
+                    else:
+                        _set(kind, status="ready", port=got["port"], token=got["token"], info=info, ready_at=time.time(), last_active=time.time())
+                if cancelled:
+                    raise Cancelled("开机中被停止")
                 say("就绪")
             except Exception as e:  # noqa: BLE001
-                log.exception("practice runtime %s boot failed", kind)
-                say("失败：" + str(e))
-                _set(kind, status="failed", error=str(e)[:500])
+                cancelled = isinstance(e, Cancelled)
+                if not cancelled:
+                    log.exception("practice runtime %s boot failed", kind)
+                say(("已取消开机" if cancelled else "失败：" + str(e)) + "，清理中")
                 try:
                     runner(kind).shutdown(state(kind), say)
+                    if kind == "cloud":
+                        _sweep(say)
+                    _set(kind, status="stopped" if cancelled else "failed", error="" if cancelled else str(e)[:500],
+                         stopped_at=time.time(), port=None, token=None)
                 except Exception as e2:  # noqa: BLE001
-                    say("清理失败：" + str(e2) + "（实例仍会在自动释放时间到点释放）")
-                _set(kind, stopped_at=time.time())
+                    say("清理失败：" + str(e2) + "（实例仍会在自动释放时间到点释放，可再点停止重试）")
+                    _set(kind, status="failed", error=("清理失败：" + str(e2))[:500], stopped_at=time.time())
     threading.Thread(target=go, daemon=True, name=f"practice-boot-{kind}").start()
     return view(kind)
 
 
 def stop(kind: str, reason: str = "手动停止") -> dict:
-    r = state(kind)
-    if r["status"] in ("stopped",):
+    with _state_lock:
+        r = state(kind)
+        if r["status"] in ("stopped", "stopping"):
+            return view(kind)
+        _set(kind, status="stopping")
+    if r["status"] == "starting":
+        _log(kind, f"停止：{reason}（等开机线程收尾后释放）")
         return view(kind)
-    _set(kind, status="stopping")
 
     def go():
         say = lambda s: _log(kind, s)  # noqa: E731
         say(f"停止：{reason}")
         try:
             runner(kind).shutdown(state(kind), say)
+            if kind == "cloud":
+                _sweep(say)
             _set(kind, status="stopped", stopped_at=time.time(), port=None, token=None)
             say(f"已停止 · 本次约 {cost(state(kind))} 元" if kind == "cloud" else "已停止")
         except Exception as e:  # noqa: BLE001
@@ -463,15 +581,40 @@ def stop(kind: str, reason: str = "手动停止") -> dict:
 
 
 def ensure_course(kind: str, course: dict) -> None:
-    r = state(kind)
-    if course["id"] in r["info"].get("courses", []):
+    """课程装过、且依赖没变就跳过；course.json 的 pip 改了会重装。"""
+    import hashlib
+    key = course["id"] + "@" + hashlib.md5(json.dumps(course.get("pip", [])).encode()).hexdigest()[:8]
+    if key in state(kind)["info"].get("courses", []):
         return
     with _locks[kind]:
         r = state(kind)
-        if course["id"] in r["info"].get("courses", []):
+        if key in r["info"].get("courses", []):
             return
         runner(kind).install(course, lambda s: _log(kind, s))
-        _set(kind, info={**r["info"], "courses": [*r["info"].get("courses", []), course["id"]]})
+        keep = [x for x in r["info"].get("courses", []) if x.split("@")[0] != course["id"]]
+        _set(kind, info={**r["info"], "courses": [*keep, key]})
+
+
+def _sweep(say) -> None:
+    """按标签找 ss-practice 的实例，除了当前在用的都释放（RunInstances 超时、平台重启丢了实例 id 时兜底）。"""
+    r = state("cloud")
+    keep = r["info"].get("instance", "") if r["status"] in ("starting", "ready") else ""
+    c = Cloud()
+    for iid in c.orphans(keep):
+        say(f"发现遗留实例 {iid}，释放")
+        c.release(iid, say)
+
+
+def _kernel_busy(kind: str) -> bool:
+    """运行环境里还有内核在跑（平台重启后执行线程没了，但云上训练可能还在继续）。"""
+    s = server(kind)
+    if not s:
+        return False
+    try:
+        ks = httpx.get(s.base + "/api/kernels", headers=s._h(), timeout=10, trust_env=False).json()
+    except (httpx.HTTPError, ValueError):
+        return False
+    return any(k.get("execution_state") == "busy" for k in ks)
 
 
 def guard() -> str:
@@ -484,6 +627,9 @@ def guard() -> str:
         stop("cloud", f"到花费上限 {r.get('cap') or c['cap_yuan']} 元")
         return "cap"
     if not K.running() and time.time() - (r.get("last_active") or 0) > c["idle_min"] * 60:
+        if _kernel_busy("cloud"):
+            touch("cloud")
+            return ""
         stop("cloud", f"空闲超过 {c['idle_min']} 分钟")
         return "idle"
     return ""
@@ -501,9 +647,12 @@ def _guard_loop():
 def on_startup():
     for kind in RUNNERS:
         r = state(kind)
-        if r["status"] in ("starting", "stopping"):
-            _set(kind, status="failed", error="平台重启时运行环境还在启动 / 停止中，请检查后重新开")
-        if r["status"] == "ready" and not (server(kind) and server(kind).ok()):
-            _set(kind, status="failed" if kind == "cloud" else "stopped",
-                 error="平台重启后连不上运行环境（云端实例仍会在自动释放时间到点释放，可点停止立即释放）" if kind == "cloud" else "")
+        lost = r["status"] in ("starting", "stopping") or (r["status"] == "ready" and not (server(kind) and server(kind).ok()))
+        if lost and kind == "local":
+            _set(kind, status="stopped", error="")
+        elif lost:
+            _set(kind, status="ready")
+            stop(kind, "平台重启后连不上云端运行环境，释放实例")
+        elif kind == "cloud" and r["status"] == "failed" and r["info"].get("instance"):
+            stop(kind, "上次释放失败，重试")
     threading.Thread(target=_guard_loop, daemon=True, name="practice-guard").start()

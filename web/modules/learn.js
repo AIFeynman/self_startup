@@ -822,8 +822,10 @@ async function renderItem(el, ctx, iid) {
     const prBtn = h('span');
     api.get('/api/practice/for?url=' + encodeURIComponent(it.url)).then((pc) => {
       prBtn.replaceChildren(pc.id ? h('button', { title: `边讲边跑代码：${pc.title}`, onclick: () => { location.hash = `#practice/${pc.id}`; } }, '去实践 →')
-        : h('button', { title: '让 Claude 按这个仓库写一门讲解 + 可运行代码的实践课', onclick: async () => {
-          try { await api.post('/api/practice/generate', { topic: it.title || it.url, repo: it.url, runtime: 'local' }); toast('已开始生成实践课，完成后在「实践」里'); } catch (err) { toast(err.message, true); }
+        : h('button', { title: '让 Claude 按这个仓库写一门讲解 + 可运行代码的实践课', onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          try { await api.post('/api/practice/generate', { topic: it.title || it.url, repo: it.url, runtime: 'local' }); toast('已开始生成实践课，完成后在「实践」里'); } catch (err) { btn.disabled = false; toast(err.message, true); }
         } }, '做成实践课'));
     }).catch(() => {});
     el.append(h('div.ln-tabs2', {}, [

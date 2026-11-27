@@ -2,14 +2,16 @@
 
 课程 = practice/courses/<id>/（平台自带）或 data/practice/courses/<id>/（按主题 / 仓库生成）：
   course.json：id / title / summary / repo（要学的仓库）/ pip（依赖）/ runtime（cloud=阿里云 GPU，local=本机）/ know（相关知识）
-  NN-xxx.md：一课。`## ` 分步；每步是「讲解 markdown + ```python 代码格 + > 思考：问题」，代码格信息串可带 long / gpu。
-运行：_practice_runtime（本机 / 阿里云，用时才开机）+ _practice_kernel（Jupyter 协议执行、输出收集）。
+  NN-xxx.md：一课。`## ` 分步；每步是「讲解 markdown + ```python 代码格 + > 思考：问题」，代码格信息串可带 long / cloud。
+运行：默认都在本机（Mac 的 CPU / Apple GPU）；只有标了 cloud 的格子（全量训练这类本机跑不动的）才开阿里云 GPU，
+云上训出的权重用 ss.from_cloud() 拉回本机接着用。_practice_runtime 管运行环境，_practice_kernel 管执行和输出收集。
 问答：每步复用批注组件（doc = practice:<course>:<lesson>:<step>），讲解 + 代码 + 输出一起交给本机 Claude。
 """
 from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 from pathlib import Path
 
@@ -37,11 +39,14 @@ MINE = RT.ROOT / "courses"
 
 # ---------- 课程 ----------
 
+COURSE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
 def course_dirs() -> list[Path]:
     out = []
     for base in (BUILTIN, MINE):
         if base.exists():
-            out += sorted(p for p in base.iterdir() if (p / "course.json").exists())
+            out += sorted(p for p in base.iterdir() if COURSE_ID.match(p.name) and (p / "course.json").exists())
     return out
 
 
@@ -65,8 +70,9 @@ def lesson_meta(p: Path) -> dict:
     m = H1.search(text)
     meta = dict(META.findall(text.split("\n## ", 1)[0]))
     return {"id": p.stem, "title": m[1].strip() if m else p.stem, "minutes": int(meta.get("minutes", 0) or 0),
-            "know": [x.strip() for x in meta.get("know", "").split(",") if x.strip()], "gpu": meta.get("gpu") == "yes",
-            "cells": len(FENCE.findall(text))}
+            "know": [x.strip() for x in meta.get("know", "").split(",") if x.strip()],
+            "cloud": sum("cloud" in f[0].split() for f in FENCE.findall(text)),
+            "optional": sum(bool({"cloud", "optional"} & set(f[0].split())) for f in FENCE.findall(text)), "cells": len(FENCE.findall(text))}
 
 
 def parse_lesson(text: str) -> dict:
@@ -82,7 +88,8 @@ def parse_lesson(text: str) -> dict:
             pre = body[pos:fm.start()]
             parts += _md_parts(pre)
             flags = fm[1].split()
-            parts.append({"type": "code", "n": n, "code": fm[2].rstrip("\n"), "long": "long" in flags, "gpu": "gpu" in flags})
+            parts.append({"type": "code", "n": n, "code": fm[2].rstrip("\n"), "long": "long" in flags, "cloud": "cloud" in flags,
+                          "optional": "optional" in flags or "cloud" in flags})
             n += 1
             pos = fm.end()
         parts += _md_parts(body[pos:])
@@ -181,7 +188,8 @@ class RunIn(BaseModel):
     kind: str = ""
 
 
-BOOT = ("import os, sys, warnings\nwarnings.filterwarnings('ignore', message='IProgress not found')\n"
+BOOT = ("import os, sys, warnings\nwarnings.filterwarnings('ignore', message='IProgress not found')\nwarnings.filterwarnings('ignore', category=FutureWarning)\n"
+        "os.environ['HF_DATASETS_DISABLE_PROGRESS_BARS'] = '1'\nos.environ['TRANSFORMERS_VERBOSITY'] = 'error'\nos.environ['DATASETS_VERBOSITY'] = 'error'\n"
         "W = os.environ.get('SS_WORK') or os.getcwd()\nos.chdir(W)\nsys.path.insert(0, W)\n"
         "os.path.isdir({cid!r}) and os.chdir({cid!r})\nsys.path.insert(0, os.getcwd())\nimport ss\n")
 _klocks: dict[tuple, threading.Lock] = {}
@@ -200,15 +208,18 @@ def _kernel_for(c: dict, kind: str) -> tuple[K.Server, str]:
     r = db.row("SELECT kernel FROM practice_kernels WHERE course=? AND kind=?", [c["id"], kind])
     if r and s.kernel_alive(r["kernel"]):
         return s, r["kernel"]
+    if kind == "local":
+        shutil.copy(RT.ASSETS / "ss.py", RT.Local().work / "ss.py")   # 课程工具库更新后，新内核拿到的是最新版
     kid = s.new_kernel()
-    db.execute("INSERT OR REPLACE INTO practice_kernels (course, kind, kernel) VALUES (?,?,?)", [c["id"], kind, kid])
     boot = K.execute(f"{c['id']}:_boot:0", BOOT.format(cid=c["id"]), lambda: K.ws_transport(s, kid))
-    for _ in range(300):
+    for _ in range(600):
         if boot.status not in ("queued", "running"):
             break
         threading.Event().wait(0.1)
     if boot.status != "done":
+        s.shutdown(kid)
         raise HTTPException(500, "内核初始化失败：" + json.dumps(boot.outputs, ensure_ascii=False)[:300])
+    db.execute("INSERT OR REPLACE INTO practice_kernels (course, kind, kernel) VALUES (?,?,?)", [c["id"], kind, kid])
     return s, kid
 
 
@@ -216,7 +227,7 @@ def _kernel_for(c: dict, kind: str) -> tuple[K.Server, str]:
 def run(body: RunIn):
     c = load_course(body.course)
     lesson_path(c, body.lesson)
-    kind = body.kind or c.get("runtime", "local")
+    kind = body.kind or "local"
     if not RT.server(kind):
         raise HTTPException(409, "运行环境没开")
     RT.touch(kind)
@@ -241,6 +252,24 @@ def exec_view(eid: str, ver: int = -1):
     return v
 
 
+class PullIn(BaseModel):
+    course: str
+    path: str
+
+
+@router.post("/pull")
+def pull(body: PullIn):
+    """课程里 ss.from_cloud(path)：把云端课程目录下的文件拉到本机同一位置（云上训的权重拿回来接着用）。"""
+    c = load_course(body.course)
+    if ".." in body.path or body.path.startswith("/"):
+        raise HTTPException(400, "只接受课程目录内的相对路径")
+    if not RT.server("cloud"):
+        raise HTTPException(409, "云端没开机；如果已经释放，权重已自动拉回本机课程目录")
+    dst = RT.Local().work / c["id"] / body.path
+    RT.Cloud().get(f"/root/work/{c['id']}/{body.path}", dst)
+    return {"path": str(dst), "size": dst.stat().st_size}
+
+
 class KindIn(BaseModel):
     course: str
     kind: str = ""
@@ -249,7 +278,7 @@ class KindIn(BaseModel):
 @router.post("/interrupt")
 def interrupt(body: KindIn):
     c = load_course(body.course)
-    kind = body.kind or c.get("runtime", "local")
+    kind = body.kind or "local"
     s = RT.server(kind)
     r = db.row("SELECT kernel FROM practice_kernels WHERE course=? AND kind=?", [c["id"], kind])
     if s and r:
@@ -260,7 +289,7 @@ def interrupt(body: KindIn):
 @router.post("/restart")
 def restart(body: KindIn):
     c = load_course(body.course)
-    kind = body.kind or c.get("runtime", "local")
+    kind = body.kind or "local"
     r = db.row("SELECT kernel FROM practice_kernels WHERE course=? AND kind=?", [c["id"], kind])
     s = RT.server(kind)
     if r and s:
@@ -280,7 +309,7 @@ def _maybe_done(key: str) -> None:
     except (HTTPException, StopIteration):
         return
     ok = db.row("SELECT count(*) AS n FROM practice_cells WHERE course=? AND lesson=? AND status='done'", [cid, lid])["n"]
-    if meta["cells"] and ok >= meta["cells"]:
+    if meta["cells"] and ok >= meta["cells"] - meta["optional"]:   # 云端全量 / 可选格子不算，必做的本机格子都跑通就算学完
         db.execute("INSERT OR IGNORE INTO practice_done (course, lesson, at) VALUES (?,?,?)", [cid, lid, db.now()])
         from . import _read_log
         _read_log.log("practice", f"{cid}/{lid}", f"{c['title']} · {meta['title']}", f"#practice/{cid}/{lid}", "实践")
@@ -293,9 +322,13 @@ class LlmIn(BaseModel):
     system: str = ""
 
 
+LLM_PREAMBLE = ("你正在一段教学代码里充当被调用的大模型：只根据收到的输入生成文本，严格按要求的格式输出。"
+                "不要使用任何工具，不要搜索、不要读文件、不要访问输入里出现的网址。\n\n")
+
+
 @router.post("/llm")
 def llm(body: LlmIn):
-    r = agent.run_once(body.prompt, module="practice", system=body.system, readonly=True)
+    r = agent.run_once(body.prompt, module="practice", system=LLM_PREAMBLE + body.system, readonly=True)
     return {"text": r["text"]}
 
 

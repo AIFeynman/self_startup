@@ -8,6 +8,8 @@ import pytest
 from app import db
 from app.modules import _practice_kernel as K, _practice_runtime as RT, practice as P
 
+RealCloud = RT.Cloud
+
 
 @pytest.fixture(autouse=True)
 def _clean(client):
@@ -32,7 +34,7 @@ x = 1
 > 思考：为什么？
 
 ## 训练
-```python long gpu
+```python long cloud
 train()
 ```
 收尾。
@@ -44,14 +46,14 @@ def test_parse_lesson_steps_cells_and_asks():
     assert L["title"] == "3 模型结构" and L["intro"] == "开头说明。" and L["meta"]["know"] == "GQA, RoPE"
     s1, s2 = L["steps"]
     assert s1["title"] == "搭出模型" and [p["type"] for p in s1["parts"]] == ["md", "code", "ask"]
-    assert s1["parts"][1] == {"type": "code", "n": 0, "code": "x = 1", "long": False, "gpu": False}
+    assert s1["parts"][1] == {"type": "code", "n": 0, "code": "x = 1", "long": False, "cloud": False, "optional": False}
     assert s1["parts"][2]["text"] == "为什么？"
-    assert s2["parts"][0]["n"] == 1 and s2["parts"][0]["long"] and s2["parts"][0]["gpu"] and s2["parts"][1]["text"] == "收尾。"
+    assert s2["parts"][0]["n"] == 1 and s2["parts"][0]["long"] and s2["parts"][0]["cloud"] and s2["parts"][1]["text"] == "收尾。"
 
 
 def test_builtin_courses_parse_and_have_cells():
     got = {c["id"]: c for c in P.courses()["courses"]}
-    assert got["minimind"]["runtime"] == "cloud" and got["agents-basics"]["runtime"] == "local"
+    assert got["minimind"]["runtime"] == "local" and got["agents-basics"]["runtime"] == "local"   # 默认都在本机跑
     for cid in got:
         c = P.load_course(cid)
         assert c["lessons"] and all(x["cells"] > 0 for x in c["lessons"])
@@ -121,13 +123,18 @@ def test_execute_collects_outputs_and_saves_cell():
 
 class FakeAli:
     def __init__(self, have_net=False):
-        self.calls, self.have_net = [], have_net
+        self.calls, self.have_net, self.tagged, self.fail = [], have_net, [], {}
 
     def __call__(self, cmd, timeout=600):
         self.calls.append(cmd)
         out = {}
         if cmd[0] == "aliyun":
             api = cmd[4]
+            if self.fail.get(api):
+                self.fail[api] -= 1
+                return SimpleNamespace(returncode=1, stdout="", stderr=f"{api} boom")
+            if api == "DescribeInstances" and "--Tag.1.Key" in cmd:
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"Instances": {"Instance": [{"InstanceId": i} for i in self.tagged]}}), stderr="")
             out = {"DescribeSpotPriceHistory": {"SpotPrices": {"SpotPriceType": [{"SpotPrice": 3.9 if "cn-hangzhou-j" in cmd else 3.3}]}},
                    "DescribeVpcs": {"Vpcs": {"Vpc": [{"VpcId": "vpc-1"}]}},
                    "DescribeVSwitches": {"VSwitches": {"VSwitch": [{"VSwitchId": "vsw-1"}] if self.have_net else []}},
@@ -157,6 +164,7 @@ def cloud(monkeypatch, tmp_path):
     monkeypatch.setitem(RT.RUNNERS, "cloud", RT.Cloud)
     monkeypatch.setattr(RT.subprocess, "Popen", lambda *a, **k: SimpleNamespace(pid=99999999, kill=lambda: None))
     monkeypatch.setattr(K.Server, "ok", lambda self: True)
+    monkeypatch.setattr(RT, "gateway_port", lambda: 18999)
     monkeypatch.setattr(RT, "threading", SimpleNamespace(Thread=lambda target, **k: SimpleNamespace(start=target), Lock=RT.threading.Lock))
     return fake
 
@@ -209,3 +217,93 @@ def test_api_lesson_run_guard_and_progress(client, monkeypatch):
     P._maybe_done("agents-basics:00-loop:0")
     assert client.get("/api/practice/courses/agents-basics").json()["done"]["00-loop"]
     assert db.row("SELECT * FROM read_log WHERE kind='practice'")["url"] == "#practice/agents-basics/00-loop"
+
+
+def test_lesson_done_needs_only_local_cells(client, tmp_path, monkeypatch):
+    d = tmp_path / "courses" / "c1"
+    d.mkdir(parents=True)
+    (d / "course.json").write_text('{"title": "T"}', encoding="utf-8")
+    (d / "00-a.md").write_text("# A\n\n## s\n```python\nx=1\n```\n\n## 全量\n```python long cloud\ntrain()\n```\n", encoding="utf-8")
+    monkeypatch.setattr(P, "MINE", tmp_path / "courses")
+    assert P.load_course("c1")["lessons"][0]["cloud"] == 1 and P.load_course("c1")["lessons"][0]["optional"] == 1
+    db.execute("INSERT INTO practice_cells (k, course, lesson, cell, status) VALUES ('c1:00-a:0', 'c1', '00-a', '0', 'done')")
+    P._maybe_done("c1:00-a:0")
+    assert db.row("SELECT 1 FROM practice_done WHERE course='c1' AND lesson='00-a'")   # 云端全量格子没跑也算学完
+
+
+def test_start_while_ready_keeps_instance_and_stop_while_stopping_is_noop(client, cloud):
+    client.post("/api/practice/runtime/start", json={"kind": "cloud", "confirm": True})
+    client.post("/api/practice/runtime/start", json={"kind": "cloud", "confirm": True})   # 第二个报价框也点了确认
+    assert len(cloud.api("RunInstances")) == 1 and RT.state("cloud")["info"]["instance"] == "i-abc"
+    RT._set("cloud", status="stopping")
+    assert client.post("/api/practice/runtime/start", json={"kind": "cloud", "confirm": True}).json()["status"] == "stopping"
+    assert len(cloud.api("RunInstances")) == 1
+
+
+def test_stop_during_boot_releases_new_instance(client, cloud, monkeypatch):
+    real = RealCloud.network
+
+    def network(self, zone, say):
+        got = real(self, zone, say)
+        RT.stop("cloud", "用户点了释放")          # 开机线程走到一半，用户点了释放
+        return got
+    monkeypatch.setattr(RealCloud, "network", network)
+    client.post("/api/practice/runtime/start", json={"kind": "cloud", "confirm": True})
+    assert RT.state("cloud")["status"] == "stopped" and not cloud.api("RunInstances")
+
+
+def test_pull_failure_still_releases_and_orphans_are_swept(client, cloud, monkeypatch):
+    client.post("/api/practice/runtime/start", json={"kind": "cloud", "confirm": True})
+    RT._set("cloud", info={**RT.state("cloud")["info"], "courses": ["minimind@x"]})
+    monkeypatch.setattr(RealCloud, "pull_weights", lambda self, info, say: (_ for _ in ()).throw(TimeoutError("scp 超时")))
+    cloud.tagged = ["i-abc", "i-lost"]
+    RT.stop("cloud")
+    ids = [c[c.index("--InstanceId") + 1] for c in cloud.api("DeleteInstance")]
+    assert "i-abc" in ids and "i-lost" in ids and RT.state("cloud")["status"] == "stopped"
+
+
+def test_release_retries_while_instance_pending(client, cloud, monkeypatch):
+    monkeypatch.setattr(RT.time, "sleep", lambda s: None)
+    cloud.fail["DeleteInstance"] = 2
+    RT.Cloud().release("i-abc", lambda s: None)
+    assert len(cloud.api("DeleteInstance")) == 3
+
+
+def test_restart_with_unreachable_cloud_releases_instance(client, cloud, monkeypatch):
+    client.post("/api/practice/runtime/start", json={"kind": "cloud", "confirm": True})
+    monkeypatch.setattr(K.Server, "ok", lambda self: False)
+    monkeypatch.setattr(RT, "_guard_loop", lambda: None)
+    RT.on_startup()
+    assert cloud.api("DeleteInstance") and RT.state("cloud")["status"] == "stopped"
+
+
+def test_guard_keeps_cloud_when_kernel_busy_after_restart(client, cloud, monkeypatch):
+    client.post("/api/practice/runtime/start", json={"kind": "cloud", "confirm": True})
+    db.execute("UPDATE practice_runtime SET last_active=? WHERE kind='cloud'", [time.time() - 31 * 60])
+    monkeypatch.setattr(RT, "_kernel_busy", lambda kind: True)
+    assert RT.guard() == "" and not cloud.api("DeleteInstance")
+
+
+def test_bad_pip_name_and_repo_url_rejected():
+    with pytest.raises(RuntimeError):
+        RT.pip_pkgs({"pip": ["numpy", "x'; rm -rf / #"]})
+    with pytest.raises(RuntimeError):
+        RT.pip_pkgs({"pip": ["--index-url=http://evil"]})
+    assert RT.pip_pkgs({"pip": ["transformers==4.57.6", "torch"]}, skip_torch=True) == ["transformers==4.57.6"]
+    with pytest.raises(RuntimeError):
+        RT.course_src({"id": "x", "repo": "--upload-pack=touch /tmp/p"})
+
+
+def test_gateway_only_forwards_llm_and_pull(client):
+    import httpx
+    port = RT.gateway_port()
+    r = httpx.post(f"http://127.0.0.1:{port}/api/practice/run", json={}, trust_env=False)
+    assert r.status_code == 403
+
+
+def test_kernel_crash_ends_execution():
+    replies = [{"msg_type": "status", "content": {"execution_state": "busy"}},
+               {"msg_type": "status", "content": {"execution_state": "restarting"}}]
+    e = K.execute("minimind:00-env:3", "big()", fake_transport(replies))
+    wait(e)
+    assert e.status == "error" and e.outputs[-1]["ename"] == "内核崩溃"

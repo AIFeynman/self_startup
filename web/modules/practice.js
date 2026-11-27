@@ -4,7 +4,7 @@
 import { annotate } from './_annotate.js';
 
 const VIZ = 'application/vnd.ssviz+json';
-const RT_NAME = { cloud: '阿里云 GPU', local: '本机' };
+const RT_NAME = { cloud: '阿里云 GPU', local: '本机 Mac' };
 const ST_NAME = { stopped: '未开机', starting: '开机中', ready: '已就绪', stopping: '释放中', failed: '出错' };
 
 const CSS = `
@@ -14,8 +14,9 @@ const CSS = `
 .pr-toc a.on { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent); }
 .pr-toc a.done::before { content: '✓ '; color: var(--ok); }
 .pr-toc .hd { font-size: 12px; color: var(--muted); padding: 4px 12px 6px; }
+.pr-rts { position: sticky; top: 0; z-index: 5; margin: 0 0 14px; display: grid; gap: 6px; }
 .pr-rt { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
-  padding: 8px 12px; margin: 0 0 14px; font-size: 13px; position: sticky; top: 0; z-index: 5; }
+  padding: 7px 12px; font-size: 13px; }
 .pr-rt .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .pr-rt .dot.ready { background: var(--ok); } .pr-rt .dot.starting, .pr-rt .dot.stopping { background: var(--warn); animation: prb 1s infinite alternate; }
 .pr-rt .dot.failed { background: var(--err); }
@@ -114,7 +115,7 @@ function viz(ctx, d) {
       return box('vz-bars', d.items.map((x) => h('div.r', {}, [h('span', {}, x[0]), h('i', { style: { width: `${(Math.abs(x[1]) / mx) * 100}%` } }), h('span', {}, `${x[1]}${d.unit}`)])));
     }
     case 'tokens':
-      return box('vz-tok', [h('div', {}, d.items.map(([t, id], i) => h('span', { title: `#${i} · id ${id}`, style: { background: `hsl(${(i * 67) % 360} 70% 84%)` } }, t.replace(/\n/g, '↵'))))]);
+      return box('vz-tok', [h('div', {}, d.items.map(([t, id, on], i) => h('span', { title: `#${i} · id ${id}`, style: { background: on === false ? 'var(--bg-2)' : `hsl(${(i * 67) % 360} 70% 84%)`, color: on === false ? 'var(--muted)' : '' } }, t.replace(/\n/g, '↵'))))]);
     case 'compare':
       return box('vz-cmp-b', [h('div.vz-cmp', {}, [d.a, d.b].map(([t, x]) => h('div', {}, [h('b', {}, t), h('pre', {}, x)])))]);
     case 'heat': {
@@ -174,7 +175,7 @@ const outText = (outputs) => outputs.map((o) => (o.type === 'stream' ? o.text : 
 function runtimeBar(ctx, kind, cid) {
   const { h, api, toast } = ctx;
   const bar = h('div.pr-rt');
-  let v = null, timer = null, showLog = false, waiters = [];
+  let v = null, timer = null, showLog = false, waiters = [], starting = null, first = null;
   const fmtMin = (s) => `${Math.max(0, Math.round((Date.now() / 1000 - s) / 60))} 分钟`;
   const paint = () => {
     const st = v?.status || 'stopped';
@@ -196,7 +197,7 @@ function runtimeBar(ctx, kind, cid) {
     try { v = (await api.get('/api/practice/runtime'))[kind]; } catch { /* 下次再试 */ }
     paint();
     if (v?.status === 'ready') { const w = waiters; waiters = []; w.forEach((f) => f()); }
-    if (v?.status === 'failed') { const w = waiters; waiters = []; w.forEach((f) => f(new Error(v.error || '运行环境启动失败'))); }
+    if (['failed', 'stopped'].includes(v?.status)) { const w = waiters; waiters = []; w.forEach((f) => f(new Error(v.error || '运行环境没开起来（已停止）'))); }
     timer = setTimeout(poll, ['starting', 'stopping'].includes(v?.status) ? 2500 : 20000);
   };
   const quoteBox = (q) => new Promise((resolve) => {
@@ -211,7 +212,11 @@ function runtimeBar(ctx, kind, cid) {
     ]));
     document.body.append(m);
   });
-  async function start() {
+  function start() {
+    starting ||= doStart().finally(() => { starting = null; });
+    return starting;
+  }
+  async function doStart() {
     try {
       if (kind === 'cloud') {
         const r = await api.post('/api/practice/runtime/start', { kind });
@@ -224,11 +229,14 @@ function runtimeBar(ctx, kind, cid) {
     } catch (e) { toast(e.message, true); return false; }
   }
   const ready = async () => {
+    await first;
     if (v?.status === 'ready') return;
-    if (!['starting'].includes(v?.status) && !(await start())) throw new Error('没开运行环境');
+    if (v?.status === 'stopping') throw new Error(`${RT_NAME[kind]}正在释放，等它停下后再运行`);
+    if (v?.status !== 'starting' && !(await start())) throw new Error('没开运行环境');
+    if (v?.status === 'ready') return;
     await new Promise((res, rej) => waiters.push((err) => (err ? rej(err) : res())));
   };
-  poll();
+  first = poll();
   return { el: bar, ready, state: () => v };
 }
 
@@ -269,9 +277,9 @@ async function coursePage(el, ctx, cid) {
     h('div.row', { style: { gap: '6px', flexWrap: 'wrap', margin: '0 0 12px' } }, [h('span.tag', {}, c.topic), h('span.tag.line', {}, RT_NAME[c.runtime]),
       c.repo ? h('a', { href: c.repo, target: '_blank', rel: 'noopener' }, c.repo.replace('https://github.com/', '')) : null,
       ...(c.know || []).map((k) => h('span.tag.gray', {}, k))]),
-    c.runtime === 'cloud' ? h('div.card.flat', { style: { marginBottom: '12px' } }, md('这门课要用 GPU：第一次运行代码时会提示开一台**阿里云 A10**（抢占式约 3–4 元/小时），用完空闲 30 分钟自动释放。讲解部分不用开机也能看。')) : null,
+    c.lessons.some((x) => x.cloud) ? h('div.card.flat', { style: { marginBottom: '12px' } }, md('代码默认都在**本机 Mac** 上跑（用 Apple GPU）。少数标了「云端 GPU · 可选」的格子是全量训练，本机要跑好几个小时，点运行时会先报价、确认后才开一台**阿里云 A10**（抢占式约 3–4 元/小时），空闲 30 分钟自动释放，训出的权重自动拉回本机。')) : null,
     h('div.card', {}, h('div.list', {}, c.lessons.map((x) => h('a.item', { href: `#practice/${cid}/${x.id}`, style: { display: 'block', textDecoration: 'none', color: 'inherit' } }, [
-      h('div.row', {}, [h('span.item-title.grow', {}, (c.done[x.id] ? '✓ ' : '') + x.title), x.gpu ? h('span.tag.line', {}, 'GPU') : null,
+      h('div.row', {}, [h('span.item-title.grow', {}, (c.done[x.id] ? '✓ ' : '') + x.title), x.cloud ? h('span.tag.line', { title: '有可选的云端全量训练格子' }, '含云端可选') : null,
         h('span.muted', {}, `${x.cells} 格 · ${x.minutes} 分钟`)]),
       x.know.length ? h('div.muted', {}, x.know.join(' · ')) : null])))),
   );
@@ -282,8 +290,8 @@ async function coursePage(el, ctx, cid) {
 async function lessonPage(el, ctx, cid, lid) {
   const { h, api, md, toast } = ctx;
   const [c, L] = await Promise.all([api.get('/api/practice/courses/' + enc(cid)), api.get(`/api/practice/courses/${enc(cid)}/lessons/${enc(lid)}`)]);
-  const kind = c.runtime || 'local';
-  const rt = runtimeBar(ctx, kind, cid);
+  const hasCloud = L.steps.some((s) => s.parts.some((p) => p.cloud));
+  const rts = { local: runtimeBar(ctx, 'local', cid), cloud: hasCloud ? runtimeBar(ctx, 'cloud', cid) : null };
   const idx = c.lessons.findIndex((x) => x.id === lid);
   const toc = h('nav.pr-toc', {}, [h('div.hd', {}, c.title), ...c.lessons.map((x) => h('a' + (x.id === lid ? '.on' : '') + (c.done[x.id] ? '.done' : ''), { href: `#practice/${cid}/${x.id}` }, x.title))]);
   const main = h('div');
@@ -310,7 +318,7 @@ async function lessonPage(el, ctx, cid, lid) {
     know.length ? h('div.pr-know', {}, [h('span.muted', {}, '相关知识：'), ...know.map((k) => { const b = h('button', { onclick: () => openKnow(k, b) }, k); return b; })]) : null, kpop]);
   introWrap = annotate(ctx, introBody, { doc: `practice:${cid}:${lid}:intro`, title: `${c.title} · ${L.title}`, link: `#practice/${cid}/${lid}`,
     source: () => `课程：${c.title}\n本课：${L.title}\n${L.intro}`, compact: true });
-  main.append(rt.el, introWrap);
+  main.append(h('div.pr-rts', {}, [rts.local.el, rts.cloud?.el]), introWrap);
 
   const stepText = (i) => {
     const s = L.steps[i];
@@ -331,11 +339,14 @@ async function lessonPage(el, ctx, cid, lid) {
     cl.fix.style.display = ['error', 'failed'].includes(st) ? '' : 'none';
   };
   const follow = async (cl, eid) => {
-    let ver = -1;
+    let ver = -1, fails = 0;
     for (;;) {
       if (!cl.ta.isConnected) return;
       let r;
-      try { r = await api.get(`/api/practice/exec/${eid}?ver=${ver}`); } catch (e) { setSt(cl, 'failed'); return toast(e.message, true); }
+      try { r = await api.get(`/api/practice/exec/${eid}?ver=${ver}`); fails = 0; } catch (e) {
+        if (++fails < 6 && !/没有这次执行/.test(e.message)) { await new Promise((res) => setTimeout(res, 2000)); continue; }
+        setSt(cl, 'failed'); return toast(e.message, true);
+      }
       if (!r.same) { cl.outputs = r.outputs; renderOutputs(ctx, cl.out, r.outputs); ver = r.ver; }
       setSt(cl, r.status, r.secs);
       if (!['queued', 'running'].includes(r.status)) {
@@ -348,9 +359,9 @@ async function lessonPage(el, ctx, cid, lid) {
   };
   const runCell = async (cl) => {
     setSt(cl, 'queued');
-    try { await rt.ready(); } catch (e) { setSt(cl, 'failed'); cl.out.replaceChildren(h('pre.err', {}, e.message)); return; }
+    try { await rts[cl.kind].ready(); } catch (e) { setSt(cl, 'failed'); cl.out.replaceChildren(h('pre.err', {}, e.message)); return; }
     try {
-      const r = await api.post('/api/practice/run', { course: cid, lesson: lid, cell: cl.n, code: cl.ta.value, kind });
+      const r = await api.post('/api/practice/run', { course: cid, lesson: lid, cell: cl.n, code: cl.ta.value, kind: cl.kind });
       follow(cl, r.id);
     } catch (e) { setSt(cl, 'failed'); toast(e.message, true); }
   };
@@ -372,8 +383,8 @@ async function lessonPage(el, ctx, cid, lid) {
         ta.value = saved?.code || p.code;
         const out = h('div.pr-out');
         const st = h('span.st');
-        const cl = { n: p.n, ta, out, st, outputs: saved?.outputs || [], ok: saved?.status === 'done' };
-        cl.stop = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => api.post('/api/practice/interrupt', { course: cid, kind }) }, '■ 中断');
+        const cl = { n: p.n, ta, out, st, kind: p.cloud ? 'cloud' : 'local', outputs: saved?.outputs || [], ok: saved?.status === 'done' || p.optional };
+        cl.stop = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => api.post('/api/practice/interrupt', { course: cid, kind: cl.kind }) }, '■ 中断');
         cl.fix = h('button.sm.ghost', { style: { display: 'none' }, onclick: () => wrap._ask('这一格运行出错了，帮我看看原因，并给出改好的代码。') }, '让 Claude 看报错');
         ta.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); runCell(cl); }
@@ -381,7 +392,8 @@ async function lessonPage(el, ctx, cid, lid) {
         });
         body.append(h('div.pr-cell', {}, [
           h('div.bar', {}, [h('button.sm.primary', { title: 'Shift+Enter', onclick: () => runCell(cl) }, '▶ 运行'), cl.stop, h('span', {}, `[${p.n + 1}]`),
-            p.gpu ? h('span.tag.line', {}, 'GPU') : null, p.long ? h('span.tag.line', {}, '要跑几分钟') : null, st, h('span.grow'), cl.fix,
+            p.cloud ? h('span.tag', { title: '本机跑太慢的全量训练，放到阿里云 GPU 上跑（会先弹窗报价）' }, '云端 GPU · 可选') : h('span.muted', {}, p.optional ? '本机 · 可选' : '本机'),
+            p.long ? h('span.tag.line', {}, '要跑几分钟') : null, st, h('span.grow'), cl.fix,
             h('button.sm.ghost', { title: '恢复成课程里的原始代码', onclick: () => { ta.value = p.code; } }, '还原')]),
           ta, out]));
         if (saved) { renderOutputs(ctx, out, saved.outputs); setSt(cl, saved.status, saved.secs); }
