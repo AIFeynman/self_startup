@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Harness 实践课提纲 v2</title>
+<style>
+:root{--ink:#1d2433;--navy:#163a63;--teal:#0f8f86;--muted:#5d6779;--line:#e3e7ee;--soft:#f5f8fa;--warn:#fff7e6;--warnb:#e8b04a;--new:#eef7ff}
+*{box-sizing:border-box}
+body{margin:0;background:#fff;color:var(--ink);font:15.5px/1.75 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+main{max-width:1000px;margin:0 auto;padding:40px 20px 80px}
+h1,h2,h3{font-family:"Songti SC","Noto Serif SC",Georgia,serif;color:var(--navy);line-height:1.35}
+h1{font-size:30px;margin:0 0 6px}
+h2{font-size:23px;margin:46px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--teal)}
+h3{font-size:18.5px;margin:22px 0 6px}
+.sub{color:var(--muted);margin:0 0 18px}
+a{color:var(--teal)}
+code{background:var(--soft);padding:1px 5px;border-radius:4px;font-size:13.5px;word-break:break-all}
+table{border-collapse:collapse;width:100%;margin:10px 0 6px;font-size:14px}
+th{background:var(--navy);color:#fff;text-align:left;padding:7px 9px;font-weight:600}
+td{border-bottom:1px solid var(--line);padding:7px 9px;vertical-align:top}
+.tw{overflow-x:auto}
+.box{background:var(--soft);border-left:3px solid var(--teal);padding:10px 14px;margin:14px 0;border-radius:0 6px 6px 0}
+.warn{background:var(--warn);border-left-color:var(--warnb)}
+.lesson{border:1px solid var(--line);border-radius:10px;padding:12px 18px 6px;margin:14px 0}
+.lesson.add{background:var(--new);border-color:#cfe3f7}
+.lesson h3{margin-top:2px}
+.tag{display:inline-block;font-size:12px;padding:0 8px;border-radius:10px;background:#e6f4f2;color:var(--teal);margin:0 6px 4px 0}
+.tag.n{background:#eef1f6;color:var(--navy)}
+.tag.b{background:#fdecc8;color:#8a5a00}
+dl{margin:4px 0}
+dt{font-weight:600;color:var(--navy);margin-top:6px}
+dd{margin:0 0 4px 0}
+li{margin:3px 0}
+footer{margin-top:60px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:13px}
+@media (max-width:600px){main{padding:24px 16px 60px}h1{font-size:24px}h2{font-size:20px}body{font-size:15px}.lesson{padding:10px 12px 4px}}
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Harness 实践课提纲 v2</h1>
+<p class="sub">主线：DeepSeek Harness（dsh），官方 Python SDK 在课程页面里逐格驱动。2026-11-27</p>
+
+<div class="box"><b>本版变更（相对 v1）</b>
+<ul>
+<li>主线确定为 dsh。其他项目里有价值的机制（记忆、Hooks、交接文件、workflow 续跑等）<b>都改成在 dsh 上实现</b>，不再只是「去看另一个仓库」。</li>
+<li>新增第二部分「让 harness 自己变好」（第 12–16 课）：尺子、信号与归因、写回 7 层、进化外循环、闸门与运行中自进化。这些是 dsh 没设计的环节，在 dsh 上用 Python 搭出来。框架沿用平台已有的《Harness 自进化 Know-how 地图》（2026-11-22）：被进化的 7 层对象、7 步闭环、L0–L4 成熟度。</li>
+<li>扩展方式改为「Python 优先」：dsh 能接本地 stdio MCP 服务、能通过 hooks 桥运行任意命令钩子，所以新能力用 Python MCP 服务、确定性约束用 Python 钩子脚本、配置用 patch 文件。写 TypeScript 原生插件降为可选，不装 Node 也能学完。</li>
+</ul></div>
+
+<h2>课程怎么搭</h2>
+<p>两部分，前一部分给后一部分准备好零件：</p>
+<ol>
+<li><b>拆 dsh（第 0–11 课）</b>：逐个环节看 dsh 怎么做、改它、量出差别。dsh 没有的环节（长期记忆、确定性钩子、会话交接）在这一部分用 Python 补到 dsh 上。</li>
+<li><b>让 harness 自己变好（第 12–16 课）</b>：用前面得到的轨迹、反馈和可改的层，搭一个「采信号 → 归因 → 提议 → 验证 → 晋升 → 写回」的闭环，最后让 dsh 自己改自己的配置，并检验改进是真的还是刷分。</li>
+</ol>
+<p>每课骨架：<b>根本问题 → dsh 怎么做（源码位置）→ 动手（可量化的现象）→ 对照材料 → 坑</b>。课程自带一个小工作区（带测试和种子 bug）和一组可自动判分的小任务，后面的评测和进化都用它。</p>
+
+<h3>对照材料各自的用法</h3>
+<div class="tw"><table>
+<tr><th>材料</th><th>在课里的角色</th></tr>
+<tr><td><a href="https://github.com/deepseek-ai/deepseek-harness">deepseek-harness</a> 源码</td><td>主线。每课指到具体包，例如 <code>packages/compaction/compaction-tool-result-pruner</code></td></tr>
+<tr><td><a href="https://github.com/shareAI-lab/learn-claude-code">learn-claude-code</a></td><td>机制的 100 行最小版。需要时把它的做法<b>移植成 dsh 上的钩子、MCP 服务或 patch</b>，跑同一个任务对比</td></tr>
+<tr><td><a href="https://github.com/Electricitysheep/dsh-handbook">dsh-handbook</a></td><td>中文讲解、踩坑、实测数字（基于 0.1.x，命令以 0.2.x 为准）</td></tr>
+<tr><td><a href="https://github.com/walkinglabs/learn-harness-engineering">learn-harness-engineering</a></td><td>它的 6 个对照项目改成在 dsh 上复现（第 10、15 课）</td></tr>
+<tr><td>《Harness 自进化 Know-how 地图》（平台已有）＋ 2026 年 harness 进化论文</td><td>第二部分的框架和对照（AHE、Meta-Harness、HarnessFix、Self-Harness、RRSI、Rethinking the Evaluation…）</td></tr>
+</table></div>
+
+<h2>全景：dsh 的分层，和缺口</h2>
+<div class="tw"><table>
+<tr><th>层</th><th>回答的问题</th><th>dsh 已有（packages/…）</th><th>dsh 没有、课里补</th><th>课</th></tr>
+<tr><td>循环</td><td>模型怎么一步步调工具、何时停</td><td><code>core/agent-loop</code> <code>core/tools</code> <code>tool-executor-native/ptc</code> <code>fs</code> <code>shell</code> <code>llm</code></td><td>—</td><td>0–2</td></tr>
+<tr><td>上下文</td><td>每次喂给模型什么、怎么省、满了怎么办</td><td><code>context/agent-instructions</code> <code>core/system-prompt</code> <code>spill</code> <code>compaction</code> <code>skill</code></td><td>跨会话长期记忆（Python MCP 记忆服务）</td><td>3–5</td></tr>
+<tr><td>边界</td><td>能做什么、谁批准、错了能否拦住</td><td>权限预设、审批协议、<code>sandbox</code>（Seatbelt）、<code>guard</code>、实验包 <code>auto-review</code></td><td>项目级硬约束（Python 命令钩子，经 <code>hooks-claude-code</code> 桥）</td><td>6–7</td></tr>
+<tr><td>编排</td><td>复杂任务怎么拆、怎么判断做完、怎么长期跑</td><td><code>todo</code> <code>plan</code> <code>goal</code> <code>subagent</code> <code>team</code> <code>workflow</code> <code>jobs</code> <code>session</code> 实验包 <code>ralph</code></td><td>会话交接文件、初始化阶段、干净收尾（钩子 + AGENTS.md）</td><td>8–10</td></tr>
+<tr><td>观测</td><td>发生了什么、用户满不满意</td><td><code>session-query</code>（SQLite 全文检索）<code>feedback</code> <code>telemetry</code> 实验包 <code>timeline</code></td><td>评测集与判分器（尺子）</td><td>11–12</td></tr>
+<tr><td>进化</td><td>怎么用失败改 harness、怎么知道改对了</td><td>—（只有反馈采集，「反馈绝不进模型」）</td><td>归因、提议、验证、晋升、写回、退役的整个外循环</td><td>13–16</td></tr>
+</table></div>
+<p><b>读表要点</b>：dsh 把「运行一个 agent」需要的东西做得很全，观测层也给了原始材料（会话库、反馈、遥测）；但它不负责「用这些材料改自己」。这一段正是第二部分要搭的，而且只能搭在一个可拆、可配置的 harness 上，这也是选 dsh 当主线的理由之一。</p>
+
+<h2>第一部分 · 拆 dsh</h2>
+
+<div class="lesson"><h3>0 开课：模型 + harness，各管什么</h3>
+<span class="tag">20 分钟</span><span class="tag n">profile：sdk-minimal vs sdk</span>
+<dl><dt>动手</dt><dd>装 SDK，隔离 <code>DSH_HOME</code>；同一个修 bug 任务分别用 <code>sdk-minimal</code>（只有 shell + 压缩）和完整 <code>sdk</code> 跑，比工具清单、步数、token、测试是否通过；打印两个 profile 的配置树，标出多出来的包。</dd>
+<dt>对照</dt><dd>learn-claude-code「Agent = 模型 + Harness」；Know-how 地图 A1「同一模型换外壳分差十几到二十分」。</dd></dl></div>
+
+<div class="lesson"><h3>1 循环：一轮里到底发生了什么</h3>
+<span class="tag">30 分钟</span><span class="tag n">core/agent-loop</span>
+<dl><dt>dsh 怎么做</dt><dd><code>agent.ts</code>：请求 → 流式解析 → 工具执行 → 结果回填 → 再请求；<code>inbox.ts</code>：运行中插入的消息如何进循环。</dd>
+<dt>动手</dt><dd>订阅通知画轨迹（每步：请求、工具、耗时、token、缓存命中）；给一个做不完的任务看 <code>finish_reason</code>；运行中 steer 一句话看从哪步生效。</dd>
+<dt>对照</dt><dd>learn-claude-code s01 的 30 行循环，逐项对到 dsh 轨迹上。</dd></dl></div>
+
+<div class="lesson"><h3>2 工具：模型看到的，和真正执行的</h3>
+<span class="tag">35 分钟</span><span class="tag n">core/tools · tool-executor-native / ptc</span>
+<dl><dt>动手</dt><dd>同一多文件检索任务用 native 与 PTC（Code mode）执行器各跑一次，比请求数、token、耗时；patch 关掉文件工具看模型怎么绕；让工具报错看恢复。</dd>
+<dt>对照</dt><dd>learn-claude-code s02；dsh-handbook 第 8 章。</dd></dl></div>
+
+<div class="lesson"><h3>3 上下文与缓存：每次喂了什么、花了多少</h3>
+<span class="tag">35 分钟</span><span class="tag n">context · system-prompt · llm</span>
+<dl><dt>动手</dt><dd>把一次请求按来源拆成堆叠柱（系统提示 / 工具定义 / AGENTS.md / 历史 / 本轮）；连跑 5 轮记录缓存命中与费用，再在前缀插时间戳对比；改 AGENTS.md 一条规则看是否被遵守。</dd>
+<dt>对照</dt><dd>dsh-handbook 第 14 章（命中率 97% 的条件）；learn-harness-engineering 第 4 讲；Know-how 地图 F1「常驻上下文怎么限量」。</dd></dl></div>
+
+<div class="lesson"><h3>4 上下文满了：大输出转存与压缩</h3>
+<span class="tag">40 分钟</span><span class="tag n">spill · compaction-basic · tool-result-pruner</span>
+<dl><dt>动手</dt><dd>工具吐 200KB 日志看 spill 后模型拿到什么、能否取回；长会话触发自动压缩，压缩前后各检查一次早期约束（如「不许改 tests/」）的遵守率；patch 换压缩策略再比。</dd>
+<dt>对照</dt><dd>learn-claude-code s08 四步压缩；论文 <a href="https://arxiv.org/search/?query=Governance+Decay+Context+Compaction&searchtype=all">Governance Decay</a>（2026，压缩会抹掉安全约束）。</dd></dl></div>
+
+<div class="lesson add"><h3>5 长期记忆：dsh 没有，自己接一个</h3>
+<span class="tag">40 分钟</span><span class="tag b">补到 dsh 上</span><span class="tag n">Python stdio MCP + skill</span>
+<dl><dt>根本问题</dt><dd>会话一结束经验就没了。记什么、谁来写、怎么召回、错的记忆怎么办？</dd>
+<dt>动手</dt><dd>用 Python 写一个记忆 MCP 服务（写入 / 检索 / 标记过期三个工具），通过 <code>mcp-client</code> 的 stdio 配置接进 dsh；跑「第一次踩坑 → 记下 → 第二次同类任务」两轮，比步数和成功率；故意写一条错记忆，看它会不会被盲信；对比「记忆放 MCP 按需查」和「直接写进 AGENTS.md」的上下文成本。</dd>
+<dt>对照</dt><dd>learn-claude-code s09（筛选、提取、整理）；Know-how 地图 F3–F4（记忆谁写、冲突与遗忘，采用率约一成）；ACE（把上下文当可演化的 playbook）。</dd></dl></div>
+
+<div class="lesson"><h3>6 权限、审批与沙箱</h3>
+<span class="tag">40 分钟</span><span class="tag n">权限预设 · 审批协议 · sandbox · auto-review</span>
+<dl><dt>动手</dt><dd>用 SDK 接管审批：读放行、工作区外写拒绝、<code>rm</code> 拒绝，表格列出每次审批；只靠沙箱看越界写在哪层被拦；工作区放带提示注入的 README 看哪层拦住；开实验包 <code>auto-review</code>（模型审动作）统计误放行和误拒绝。</dd>
+<dt>对照</dt><dd>learn-claude-code s03；dsh-handbook 第 13 章。</dd></dl></div>
+
+<div class="lesson add"><h3>7 钩子与扩展点：把软规则变硬</h3>
+<span class="tag">40 分钟</span><span class="tag b">补到 dsh 上</span><span class="tag n">hooks-claude-code · patch · 插件 waterfall</span>
+<dl><dt>根本问题</dt><dd>写在 AGENTS.md 里的规则靠模型自觉；什么规则该升级成每次强制执行的检查？</dd>
+<dt>动手</dt><dd>同一条规则三种写法对比遵守率：写进 AGENTS.md / Python <code>PreToolUse</code> 钩子拦截 / <code>Stop</code> 钩子在测试没过时强制再跑一轮（经 <code>hooks-claude-code</code> 桥）；用 patch 换模型、关工具、调压缩阈值。可选：用 TypeScript 写一个最小原生插件（需要 Node 24 + pnpm）。</dd>
+<dt>对照</dt><dd>learn-claude-code s04；dsh-handbook 第 3–4 章；Know-how 地图 H2「怎样把约束做硬」。</dd></dl></div>
+
+<div class="lesson"><h3>8 规划与目标：先列计划，独立判断做完没</h3>
+<span class="tag">35 分钟</span><span class="tag n">todo · plan · goal · ralph</span>
+<dl><dt>动手</dt><dd>多步任务四种跑法：直接 / <code>/plan</code> / <code>/goal</code> / 实验包 <code>ralph</code>（每轮全新子 agent），比完成度、步数、成本；plan 审阅时用 SDK 驳回一次看它怎么改。</dd>
+<dt>对照</dt><dd>learn-claude-code s05、s17；learn-harness-engineering 第 7、9 讲（过早宣布完成）。</dd></dl></div>
+
+<div class="lesson"><h3>9 子 Agent、团队与 workflow</h3>
+<span class="tag">35 分钟</span><span class="tag n">subagent · team · workflow</span>
+<dl><dt>动手</dt><dd>读很多文件的调研任务：单 agent vs 委托子 agent，比主上下文峰值、总 token、耗时、质量；用 workflow 工具写一个固定的扇出脚本，和让模型自己决定怎么拆对比。</dd>
+<dt>对照</dt><dd>learn-claude-code s06、s13、s16。</dd></dl></div>
+
+<div class="lesson add"><h3>10 长任务连续性：恢复、交接、干净收尾</h3>
+<span class="tag">35 分钟</span><span class="tag b">补到 dsh 上</span><span class="tag n">session · jobs · 钩子 + AGENTS.md</span>
+<dl><dt>动手</dt><dd>运行中强制关掉运行时，用 <code>resume_session</code> 恢复；用 <code>SessionStart</code> / <code>Stop</code> 钩子实现「开工先读进度文件、收工必须写交接和清理现场」，对比有无交接时第二个会话的接续准确率（在 dsh 上复现 learn-harness-engineering 项目 03）。</dd>
+<dt>对照</dt><dd>learn-claude-code s10–s12；learn-harness-engineering 第 5、6、12 讲。</dd></dl></div>
+
+<div class="lesson"><h3>11 观测：轨迹、会话库与反馈</h3>
+<span class="tag">30 分钟</span><span class="tag n">session-query · feedback · telemetry · timeline</span>
+<dl><dt>根本问题</dt><dd>要改进 harness，先得能回答「它刚才为什么这样做」。</dd>
+<dt>动手</dt><dd>用 <code>session-query</code> 的 SQLite 库查出前面所有课的会话，统计每类工具的调用次数、失败率、耗时；用 <code>/feedback</code> 和逐条评分记录几条人工评价，看它们存在哪、为什么「绝不进模型」；把一次失败的完整轨迹还原成时间线。</dd>
+<dt>对照</dt><dd>Know-how 地图 B1「trace 怎么记才能拿来归因」；learn-harness-engineering 第 11 讲。</dd></dl></div>
+
+<h2>第二部分 · 让 harness 自己变好</h2>
+<p>沿用 Know-how 地图的 7 步闭环：采信号 → 归因分类 → 提议改动 → 验证 → 晋升 → 写回 → 维护退役。顺序有讲究：<b>没有可靠的尺子，后面所有「改进」都无法验证</b>，所以先做尺子。</p>
+
+<div class="lesson add"><h3>12 尺子：可重复的评测，和什么才算真提升</h3>
+<span class="tag">45 分钟</span><span class="tag b">dsh 没有</span>
+<dl><dt>根本问题</dt><dd>同一配置跑两次结果都不一样，改了一处凭什么说变好了？</dd>
+<dt>动手</dt><dd>建 10 道可自动判分的任务（测试通过即对），分成训练集和留出集；同一配置跑 3 次算噪声线；做配对比较（同题对同题）；把评测目录放在 agent 改不到的位置（沙箱 + 权限只读），故意让 agent 有机会改测试，看防线是否生效。</dd>
+<dt>对照</dt><dd>论文 <a href="https://arxiv.org/abs/2607.12227">Rethinking the Evaluation of Harness Evolution</a>（必须对齐预算的基线 + 留出评测，否则分不清真提升和过拟合）；Know-how 地图 C、D 两类问题。</dd></dl></div>
+
+<div class="lesson add"><h3>13 信号与归因：从失败轨迹找到 harness 的毛病</h3>
+<span class="tag">40 分钟</span><span class="tag b">dsh 没有</span>
+<dl><dt>动手</dt><dd>从会话库取出第 12 课里失败的轨迹，让一个独立的诊断 agent 逐条读、按症状分桶（工具误用、上下文丢约束、过早停止、权限卡住……）并给出「是 harness 的问题还是模型能力问题」；人工抽查 5 条，算诊断准确率。</dd>
+<dt>对照</dt><dd><a href="https://arxiv.org/abs/2606.06324">HarnessFix</a>（基于轨迹诊断再修 harness，比初始 harness 提升 6.3%–18.4%）；<a href="https://arxiv.org/abs/2604.25850">AHE</a>（三根可观测支柱，让每次改动都成为可证伪的约定）。</dd></dl></div>
+
+<div class="lesson add"><h3>14 提议与写回：一次失败该改哪一层</h3>
+<span class="tag">40 分钟</span><span class="tag b">dsh 没有</span>
+<dl><dt>根本问题</dt><dd>同一个失败可以加一行 AGENTS.md、写一个 skill、记一条记忆、改工具说明、加一个钩子、或改编排；改哪层最划算、最不容易腐烂？</dd>
+<dt>动手</dt><dd>挑第 13 课的 3 类失败，每类各在两层上做一次单变量修改（例如「软规则 vs 钩子」「AGENTS.md vs skill」），用第 12 课的尺子比较，记录每次改动挂的证据；用 ACE 的「生成 → 反思 → 整理」把经验写成可演化的 playbook（dsh skill 文件）。</dd>
+<dt>对照</dt><dd>Know-how 地图「7 层对象」与 E、F 两类问题；<a href="https://arxiv.org/abs/2510.04618">ACE</a>。</dd></dl></div>
+
+<div class="lesson add"><h3>15 进化外循环：让 dsh 改自己的配置</h3>
+<span class="tag">60 分钟</span><span class="tag b">dsh 没有</span><span class="tag n">花钱最多的一课</span>
+<dl><dt>动手</dt><dd>搭一个外循环：读失败轨迹 → 提议一个 patch（AGENTS.md / skill / 钩子 / 配置，<b>每轮只改一处</b>）→ 在训练集上评测 → 好于噪声线才接受，否则回滚 → 记账（本轮花费）。跑 3–5 轮，最后在留出集上验证；对比三种提议者：外部强模型、dsh 自己（Self-Harness 式）、随机改动的对照组。限制每轮改动大小，看能否减少过拟合。</dd>
+<dt>对照</dt><dd><a href="https://arxiv.org/abs/2603.28052">Meta-Harness</a>（在 harness 代码上做外循环搜索，上下文 token 少 4 倍）；<a href="https://arxiv.org/abs/2606.09498">Self-Harness</a>（agent 改进自己的 harness）；<a href="https://arxiv.org/abs/2609.24972">RRSI</a>（约束提议与选择防止退化）；<a href="https://arxiv.org/abs/2608.01918">HarnessCompass</a>（5 轮 Pass@1 54% → 66%，厂商自报）；<a href="https://arxiv.org/abs/2611.13524">The RSI Tax</a>（改进本身的花费可能不值）。</dd></dl></div>
+
+<div class="lesson add"><h3>16 闸门、退役与运行中自进化</h3>
+<span class="tag">45 分钟</span><span class="tag b">dsh 没有</span>
+<dl><dt>根本问题</dt><dd>哪些改动可以自动生效、哪些要人批？规则越积越多怎么办？能不能在一次任务里就边做边改？</dd>
+<dt>动手</dt><dd>给第 15 课的改动按风险分级（只读规则可自动、钩子与权限要人批），用 SDK 的审批协议实现人工闸门；统计每条规则的触发次数和贡献，退役没用的；试一次「运行中自进化」——允许 agent 在任务中给自己新建工具或 skill，看是帮了忙还是添了乱；最后对照 Know-how 地图的 L0–L4 成熟度给自己的配置定级。</dd>
+<dt>对照</dt><dd><a href="https://arxiv.org/abs/2607.08124">TTHE</a>（测试时 harness 进化，难点是执行得来的代理信号是否可靠）；<a href="https://arxiv.org/abs/2511.13646">Live-SWE-agent</a>（运行中自建工具）；Know-how 地图 H、I 两类问题。</dd></dl></div>
+
+<h2>运行方式与成本</h2>
+<ul>
+<li>运行环境：本机。课程依赖加 <code>deepseek-harness-sdk</code>（自带运行时，macOS 14 arm64 有包，不需要系统 Node）；<code>DSH_HOME</code> 和工作区放在课程目录下，与本机其他配置隔离。</li>
+<li>模型：DeepSeek API（<code>deepseek-v4-flash</code>，本机已有 key）。真实的工具调用、缓存、压缩只有走真实 API 才看得到。「问 Claude」仍走本机 Claude。</li>
+<li>成本（推断，开写第 0 课时实测给准数）：第一部分每课几毛到一两元；第二部分的评测和外循环要反复跑整组任务，第 15 课单次外循环可能到十几元。课程工具里加「单格上限 + 整课上限」，超了停下等人确认。</li>
+</ul>
+
+<h2>还要你定的</h2>
+<div class="box warn">
+<ol>
+<li><b>花钱</b>：这门课要调 DeepSeek API。建议上限：单格 2 元、整门课 60 元（第 15 课占大头）。可以按这个数，或给个你的数。</li>
+<li><b>旧课去留</b>：推荐新建「Agent Harness 实践（dsh）」并下线旧 agents-basics（学习记录留库不删）。</li>
+<li><b>TypeScript 插件</b>（第 7 课可选格）：要不要在本机装 Node 24 + pnpm（用 fnm 装到用户目录，不动系统 Node）。不装也能学完。</li>
+</ol></div>
+
+<h2>自主决策</h2>
+<div class="tw"><table>
+<tr><th>选了什么</th><th>备选</th><th>理由</th><th>改回代价</th></tr>
+<tr><td>dsh 缺的能力用 Python MCP 服务和命令钩子补</td><td>都用 TypeScript 写原生插件</td><td>dsh 支持 stdio MCP 和 hooks 桥；课程内核是 Python，不装 Node 也能学完</td><td>个别课改用原生插件，约 1 小时/课</td></tr>
+<tr><td>进化部分沿用平台已有的 7 层 / 7 步 / L0–L4 框架</td><td>按某一篇论文的框架组织</td><td>和平台已有调研一致，论文各管闭环中的一段，挂在对应课上</td><td>小</td></tr>
+<tr><td>先做尺子再做进化（第 12 课在 13–16 前）</td><td>直接从进化外循环开讲</td><td>没有可重复评测，进化结果无法判断真假（Rethinking 一文的核心结论）</td><td>小</td></tr>
+<tr><td>17 课（0–16）</td><td>压成 12 课</td><td>第一部分每课一个 dsh 环节；第二部分闭环每段一课，合并会让实验互相干扰</td><td>小，可合并 8/9、15/16</td></tr>
+</table></div>
+
+<h2>调研来源</h2>
+<ul>
+<li>dsh 源码（本地克隆，最近提交 2026-11-22，0.2.3-alpha.2）：<code>packages/README.zh.md</code>；<code>packages/mcp/mcp-client</code>（stdio / Streamable HTTP）；<code>packages/experimental/hooks-claude-code</code>、<code>hook-protocol</code>（PreToolUse / Stop 等命令钩子）；<code>auto-review</code>、<code>tool-ralph</code>、<code>session-inspector</code>、<code>timeline</code>；<code>feedback</code>、<code>telemetry</code>、<code>session-query</code>、<code>goal</code>、<code>workflow</code>、<code>context</code>、<code>skill</code>；<code>python/sdk/README.zh.md</code> 与 examples。</li>
+<li>本地论文库（关键词 harness evolution / self-harness / harness flaws / self-improving agent / meta-harness / skill evolution / agentic context engineering），2026 年为主：AHE、Meta-Harness、Self-Harness、Rethinking the Evaluation of Harness Evolution、HarnessFix、RRSI、TTHE、HarnessCompass、The RSI Tax；早于 2026 的只选了 ACE 和 Live-SWE-agent（分别对应第 14、16 课，与章节高度匹配）。</li>
+<li>平台文档《Agent Harness 自进化 / 自迭代：领域 Know-how 地图》（2026-11-22）。</li>
+<li>learn-claude-code（s01–s17）、dsh-handbook、learn-harness-engineering（14 讲 + 6 项目）。</li>
+</ul>
+
+<footer>v2 · 2026-11-27 · v1 见同目录 2026-11-27-agent-harness-course-outline.html · 下一步：定下上面三件事后，先写第 0、1 课并实测成本，再往下写。</footer>
+</main>
+</body>
+</html>
