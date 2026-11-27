@@ -12,6 +12,8 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   const rated = !compact && !doc.startsWith('review:');
   const wrap = h('div.an-wrap' + (compact ? '.compact' : ''), {}, [h('div.an-body', {}, [rated ? rateStars(ctx, { doc, title, link }) : null, body]), rail]);
   wrap._src = { doc, title, link }; // ⌘K 快记时带上出处
+  const src = () => (typeof source === 'function' ? source() : source);   // 函数：提问那一刻再取（实践课要带上最新输出 / 报错）
+  wrap._ask = (text = '') => startNew({ quote: '', prefix: '', suffix: '', ask: true, text });
   let threads = [];
   let showResolved = false;
   let composer = null; // 正在写的新批注 {quote, prefix, suffix, ask}
@@ -139,13 +141,14 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
   function newCard() {
     const c = composer;
     const ta = h('textarea', { rows: 3, placeholder: c.ask ? '问 Claude 什么？留空 = 解释这段' : '写评论…（Enter 发送，Shift+Enter 换行）' });
+    if (c.text) ta.value = c.text;
     const kind = noteKindSelect(ctx, doc);
     const send = async (ask) => {
       const text = ta.value.trim();
       if (!ask && !text) { ta.focus(); return toast('先写点评论', true); }
       try {
         const note_kind = kind.remember();
-        await api.post('/api/annotations', { doc, title, link, quote: c.quote, prefix: c.prefix, suffix: c.suffix, text, ask, source, note_kind });
+        await api.post('/api/annotations', { doc, title, link, quote: c.quote, prefix: c.prefix, suffix: c.suffix, text, ask, source: src(), note_kind });
         composer = null;
         window.getSelection()?.removeAllRanges();
         rail.scrollTop = 0;
@@ -178,7 +181,7 @@ export function annotate(ctx, body, { doc, title = '', link = '', source = '', c
       if (!text && !ask) return;
       try {
         const note_kind = kind.remember();
-        await api.post(`/api/annotations/${t.id}/msgs`, { text, ask, source, note_kind });
+        await api.post(`/api/annotations/${t.id}/msgs`, { text, ask, source: src(), note_kind });
         load();
         if (note_kind && text) toast('已贴到便签');
       } catch (e) { toast(e.message, true); }

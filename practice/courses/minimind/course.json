@@ -1,0 +1,10 @@
+{
+  "title": "从零训练一个小语言模型（minimind）",
+  "topic": "LLM 训练",
+  "summary": "用 minimind 的 64M 小模型走一遍大模型训练全流程：分词 → 数据 → 结构 → 前向与 loss → 预训练，每一步都能看到模型内部发生了什么。",
+  "level": "入门",
+  "repo": "https://github.com/jingyaogong/minimind",
+  "runtime": "cloud",
+  "pip": ["transformers==4.57.6", "datasets==3.6.0", "jsonlines"],
+  "know": ["分词 BPE", "自注意力", "GQA", "RoPE", "SwiGLU", "交叉熵损失", "预训练", "混合精度"]
+}

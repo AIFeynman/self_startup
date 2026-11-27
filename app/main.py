@@ -62,7 +62,7 @@ async def _kb_sync_after_write(request: Request, call_next):
     resp = await call_next(request)
     if request.url.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-cache"  # 本地开发：前端改动立即生效
-    if request.method != "GET" and request.url.path.startswith("/api/") and not request.url.path.startswith(("/api/chat", "/api/kb", "/api/voice")):
+    if request.method != "GET" and request.url.path.startswith("/api/") and not request.url.path.startswith(("/api/chat", "/api/kb", "/api/voice", "/api/practice")):
         kb.schedule_sync()
     return resp
 

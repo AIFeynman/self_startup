@@ -817,12 +817,20 @@ async function renderItem(el, ctx, iid) {
     h('button.ghost', { onclick: async () => { if (!confirm('删除该条目？（产物文件保留）')) return; await api.del(`/api/learn/items/${it.id}`); location.hash = '#learn'; } }, [ui.icon('trash'), '删除']),
   ]));
 
-  // GitHub 项目：深读笔记 / Deep Dive 两个标签（#learn/item/<id>/deepdive）
+  // GitHub 项目：深读笔记 / Deep Dive 两个标签（#learn/item/<id>/deepdive），有对应实践课时多一个「去实践」
   if (it.kind === 'github') {
+    const prBtn = h('span');
+    api.get('/api/practice/for?url=' + encodeURIComponent(it.url)).then((pc) => {
+      prBtn.replaceChildren(pc.id ? h('button', { title: `边讲边跑代码：${pc.title}`, onclick: () => { location.hash = `#practice/${pc.id}`; } }, '去实践 →')
+        : h('button', { title: '让 Claude 按这个仓库写一门讲解 + 可运行代码的实践课', onclick: async () => {
+          try { await api.post('/api/practice/generate', { topic: it.title || it.url, repo: it.url, runtime: 'local' }); toast('已开始生成实践课，完成后在「实践」里'); } catch (err) { toast(err.message, true); }
+        } }, '做成实践课'));
+    }).catch(() => {});
     el.append(h('div.ln-tabs2', {}, [
       h('button' + (ddTab ? '' : '.on'), { onclick: () => { location.replace(`#learn/item/${it.id}`); } }, '深读笔记'),
       h('button' + (ddTab ? '.on' : ''), { title: '自己拉仓库、写测试、做实验的深度解读（点了才生成）', onclick: () => { location.replace(`#learn/item/${it.id}/deepdive`); } },
         ['Deep Dive', it.dd_status === 'running' ? h('span.muted.dots', { style: { marginLeft: '6px' } }, '生成中') : it.dd_status === 'done' ? (!ddTab && !it.dd_opened_at ? unreadTag(h) : ' ✓') : '']),
+      prBtn,
     ]));
   }
   if (ddTab) {

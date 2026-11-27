@@ -1,0 +1,9 @@
+{
+  "title": "Agent 入门：从一个循环开始",
+  "topic": "Agents",
+  "summary": "不用任何框架，亲手写出一个能调用工具、能看结果、能纠错的 Agent，看清 Claude Code 这类工具的骨架。",
+  "level": "入门",
+  "runtime": "local",
+  "pip": [],
+  "know": ["Agent 循环", "工具调用", "ReAct", "上下文窗口", "记忆压缩"]
+}

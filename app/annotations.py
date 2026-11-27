@@ -2,7 +2,8 @@
 
 doc 是材料的稳定标识：research:<id>:synth / research:<id>:r<结果id> / research_doc:<id> / learn:item:<id> /
 learn:plan:<id> / learn:step:<id> / kb:<相对路径> /
-intel:event:<id> / intel:company:<slug> / intel:growth:<id> / review:<日期>:improve|check|reflection。一条批注 = 一段划线（quote 为空表示针对全文）+ 一串讨论；
+intel:event:<id> / intel:company:<slug> / intel:growth:<id> / review:<日期>:improve|check|reflection /
+practice:<课程>:<课>:<步骤序号|intro>（实践课的一步，source 带讲解 + 代码 + 最新输出）。一条批注 = 一段划线（quote 为空表示针对全文）+ 一串讨论；
 每份材料可以打 1–5 星（doc_ratings，按 doc 一条），深读条目的星级同步回 learn_items.rating。
 问 Claude 时在后台线程里跑 claude -p，第一问带上全文和划线，追问续接同一个会话。讨论同步进知识库 annotations/。
 """
