@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Harness 实践课提纲 v1</title>
+<style>
+:root{--ink:#1d2433;--navy:#163a63;--teal:#0f8f86;--muted:#5d6779;--line:#e3e7ee;--soft:#f5f8fa;--warn:#fff7e6;--warnb:#e8b04a}
+*{box-sizing:border-box}
+body{margin:0;background:#fff;color:var(--ink);font:15.5px/1.75 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+main{max-width:980px;margin:0 auto;padding:40px 20px 80px}
+h1,h2,h3{font-family:"Songti SC","Noto Serif SC",Georgia,serif;color:var(--navy);line-height:1.35}
+h1{font-size:30px;margin:0 0 6px}
+h2{font-size:23px;margin:46px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--teal)}
+h3{font-size:18.5px;margin:26px 0 6px}
+.sub{color:var(--muted);margin:0 0 22px}
+a{color:var(--teal)}
+code{background:var(--soft);padding:1px 5px;border-radius:4px;font-size:13.5px;word-break:break-all}
+table{border-collapse:collapse;width:100%;margin:10px 0 6px;font-size:14px}
+th{background:var(--navy);color:#fff;text-align:left;padding:7px 9px;font-weight:600}
+td{border-bottom:1px solid var(--line);padding:7px 9px;vertical-align:top}
+.tw{overflow-x:auto}
+.box{background:var(--soft);border-left:3px solid var(--teal);padding:10px 14px;margin:14px 0;border-radius:0 6px 6px 0}
+.warn{background:var(--warn);border-left-color:var(--warnb)}
+.lesson{border:1px solid var(--line);border-radius:10px;padding:14px 18px 8px;margin:16px 0}
+.lesson h3{margin-top:2px}
+.tag{display:inline-block;font-size:12px;padding:0 8px;border-radius:10px;background:#e6f4f2;color:var(--teal);margin-right:6px}
+.tag.n{background:#eef1f6;color:var(--navy)}
+dl{margin:6px 0}
+dt{font-weight:600;color:var(--navy);margin-top:6px}
+dd{margin:0 0 4px 0}
+ol li,ul li{margin:3px 0}
+footer{margin-top:60px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:13px}
+@media (max-width:600px){main{padding:24px 16px 60px}h1{font-size:24px}h2{font-size:20px}body{font-size:15px}}
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Harness 实践课提纲 v1</h1>
+<p class="sub">重做「实践」TAB 里的 Agent 课（原 agents-basics 0–6）。主线：DeepSeek Harness（dsh），用它的官方 Python SDK 在课程页面里逐格驱动。其余项目只做辅助对照。2026-11-27</p>
+
+<div class="box"><b>一句话</b>：每课拆 dsh 的一个 harness 环节，固定四步——<b>读它的源码位置 → 用 SDK 跑一次看现象 → 改一个配置或插件再跑 → 量出差别</b>。learn-claude-code 的同名章节作为「100 行最小实现」对照，帮你看清机制本身；dsh-handbook 提供中文踩坑与实测数字。</div>
+
+<h2>为什么要重做</h2>
+<p>旧课 7 节、每节 2–3 格，问题不在格子少，而在<b>摸不到真正的 harness</b>：工具调用是让本机 Claude 按 JSON 文本协议「演」出来的，没有原生 tool_use、没有前缀缓存、没有自动压缩、没有审批和沙箱，循环、记忆、子 Agent 都是课程里手写的玩具版。学完知道概念，但不知道生产级 harness 里这些环节长什么样、改了会怎样。</p>
+<p>所以新课换成「拿一个真实、开源、可拆的 harness 当标本」。</p>
+
+<h2>主线选型：为什么是 dsh</h2>
+<p>入选候选的标准：开源、2026 年仍在活跃更新、能在本机跑、harness 各环节可以单独替换或观察。按这条筛出四个，比较的轴是「离生产有多近」和「改一个环节要动多少东西」：</p>
+<div class="tw"><table>
+<tr><th>项目</th><th>是什么</th><th>离生产</th><th>改一个环节</th><th>本机能跑</th><th>定位</th></tr>
+<tr><td><a href="https://github.com/deepseek-ai/deepseek-harness">deepseek-ai/deepseek-harness</a>（dsh）</td><td>DeepSeek 官方 Agent 运行时，2026-08-13 开源，MIT，TypeScript；「一切皆插件」，能力拆成 50 多个包</td><td>生产级（官方 CLI / Web / 桌面都基于它）</td><td>换一个 patch 文件或插件，不动核心</td><td>能：<code>pip install deepseek-harness-sdk</code> 自带运行时（有 macOS 14 arm64 包），不需要系统 Node；用 DeepSeek API</td><td><b>主线</b></td></tr>
+<tr><td><a href="https://github.com/shareAI-lab/learn-claude-code">shareAI-lab/learn-claude-code</a></td><td>s01–s17，每章用 Python 从零写一个机制（循环、工具、权限、Hooks、Todo、子 Agent、技能、压缩、记忆、任务图、后台、定时、团队、MCP、集成、workflow、goal loop）</td><td>教学版</td><td>改 code.py</td><td>能：Anthropic SDK，可指向 DeepSeek 的 Anthropic 兼容接口</td><td>辅助：每课的「最小实现」对照</td></tr>
+<tr><td><a href="https://github.com/Electricitysheep/dsh-handbook">Electricitysheep/dsh-handbook</a></td><td>dsh 中文白皮书 15 章：profile 与插件、插件开发、工具与上下文、MCP/子代理/工作流、安全沙箱、缓存与成本（实测命中率 97%）</td><td>—</td><td>—</td><td>—</td><td>辅助：中文讲解、踩坑、实测数字（注意它基于 0.1.x，与当前 0.2.x 有破坏性变更）</td></tr>
+<tr><td><a href="https://github.com/walkinglabs/learn-harness-engineering">walkinglabs/learn-harness-engineering</a></td><td>14 讲 + 6 个对照项目：为什么强模型仍会失败、仓库是唯一事实源、长任务连续性、过早宣布完成、评估者循环、可观测性</td><td>—</td><td>—</td><td>项目可在 dsh 上复现</td><td>辅助：最后的综合实验题</td></tr>
+</table></div>
+<p><b>读表要点</b>：learn-claude-code 讲机制最清楚，但它是教学重写，不会遇到真实系统的约束（缓存前缀、压缩后约束丢失、审批流、沙箱后端）；dsh 是生产系统，而且把每个环节拆成了独立的包和扩展点，正好「一课一个包」。所以主线用 dsh，看不懂某个机制时翻 learn-claude-code 同名章的 100 行版本。其他参考过但不进课的：<a href="https://github.com/Windy3f3f3f3f/claude-code-from-scratch">claude-code-from-scratch</a>（TS 版重写，和 learn-claude-code 重叠）、<a href="https://github.com/humanlayer/12-factor-agents">12-factor-agents</a>（原则清单，第 11 课引用）、<a href="https://github.com/ghuntley/how-to-build-a-coding-agent">how-to-build-a-coding-agent</a>（Go 版最小 agent）、<a href="https://github.com/shareAI-lab/claw0">claw0</a>（偏聊天网关）。</p>
+
+<h2>全景：dsh 的 harness 分层与课程映射</h2>
+<p>按「一个请求从进来到结束要经过什么」分四层，每层对应几个 dsh 包。课程按层推进：先让循环转起来，再管上下文，再管边界，最后管质量和长期运行。</p>
+<div class="tw"><table>
+<tr><th>层</th><th>回答的问题</th><th>dsh 包（packages/…）</th><th>课</th></tr>
+<tr><td>循环层</td><td>模型怎么一步步调工具、什么时候停</td><td><code>core/agent-loop</code> <code>core/tools</code> <code>core/tool-executor-native</code> <code>core/tool-executor-ptc</code> <code>fs</code> <code>shell</code> <code>llm</code></td><td>0–2</td></tr>
+<tr><td>上下文层</td><td>每次请求到底喂给模型什么、怎么省、满了怎么办</td><td><code>context</code> <code>core/system-prompt</code> <code>spill</code> <code>compaction</code> <code>skill</code></td><td>3–4, 8</td></tr>
+<tr><td>边界层</td><td>能做什么、谁批准、做错了能拦住吗</td><td><code>preset</code>（权限预设）<code>sandbox</code>（Seatbelt / bwrap / Landlock）<code>guard</code> 审批协议</td><td>6–7</td></tr>
+<tr><td>编排与质量层</td><td>复杂任务怎么拆、怎么判断真的做完、怎么长期跑、怎么量化</td><td><code>todo</code> <code>plan</code> <code>goal</code> <code>subagent</code> <code>team</code> <code>jobs</code> <code>schedule</code> <code>session</code> <code>workflow</code> <code>mcp</code> <code>telemetry</code></td><td>5, 9–12</td></tr>
+</table></div>
+
+<h2>逐课提纲</h2>
+<p>每课骨架：<b>根本问题 → dsh 怎么做（源码位置）→ 动手实验（可量化的现象）→ 辅助对照 → 坑</b>。实验全部通过 SDK 在页面格子里跑，工作区是课程自带的一个小仓库（带测试、带种子 bug），结果用 ss 可视化（轨迹、表格、柱状图）。</p>
+
+<div class="lesson"><h3>0 开课：模型 + harness，各管什么</h3>
+<span class="tag">约 20 分钟</span><span class="tag n">sdk-minimal vs sdk</span>
+<dl><dt>根本问题</dt><dd>同一个模型，为什么换个 harness 表现差很多？harness 到底包了哪些东西？</dd>
+<dt>动手</dt><dd>装 SDK，隔离的 <code>DSH_HOME</code>；同一个任务（修一个带测试的小 bug）分别用 <code>sdk-minimal</code>（只有 shell + 压缩）和完整 <code>sdk</code> profile 跑，比较：工具清单、步数、token、是否通过测试。打印两个 profile 的配置树，标出多出来的每个包。</dd>
+<dt>辅助</dt><dd>learn-claude-code README「Agent = 模型 + Harness」；learn-harness-engineering 第 1–2 讲。</dd>
+<dt>坑</dt><dd>dsh-handbook 正文基于 0.1.x，命令要以 0.2.x 官方文档为准；SDK 不会读 <code>~/.dsh</code>，必须显式给 home。</dd></dl></div>
+
+<div class="lesson"><h3>1 循环：一轮对话里到底发生了什么</h3>
+<span class="tag">约 30 分钟</span><span class="tag n">core/agent-loop</span>
+<dl><dt>根本问题</dt><dd>Agent 的「自主」只是一个 while 循环吗？它靠什么决定继续还是结束？</dd>
+<dt>dsh 怎么做</dt><dd>读 <code>packages/core/agent-loop</code> 的 <code>agent.ts</code>（请求 → 流式解析 → 工具执行 → 结果回填 → 再请求）和 <code>inbox.ts</code>（运行中插入的消息怎么进循环）。</dd>
+<dt>动手</dt><dd>用 <code>on_notification</code> 订阅事件，把一次运行画成轨迹（每步：模型请求、工具名、耗时、token）；改 <code>max_tokens</code>、给一个做不完的任务，观察 <code>finish_reason</code> 的几种取值；运行中途用 steer 插一句话，看它从哪一步生效。</dd>
+<dt>辅助</dt><dd>learn-claude-code s01：30 行循环 + bash，和 dsh 的轨迹逐项对应。</dd></dl></div>
+
+<div class="lesson"><h3>2 工具：模型看到的工具，和真正执行的</h3>
+<span class="tag">约 35 分钟</span><span class="tag n">core/tools · tool-executor-native / ptc · fs · shell</span>
+<dl><dt>根本问题</dt><dd>工具描述、返回格式、执行方式各怎么影响成功率和成本？</dd>
+<dt>dsh 怎么做</dt><dd>原生工具调用 vs PTC（Code mode：模型写一段代码一次编排多次工具调用）；<code>core/agent-tool-presentation</code> 决定模型看到的工具说明。</dd>
+<dt>动手</dt><dd>同一个多文件检索任务分别用 native 和 PTC 执行器，比请求次数、总 token、耗时；用 patch 关掉一个文件工具，看模型怎么用 shell 绕过去；让工具返回报错，看模型怎么恢复。</dd>
+<dt>辅助</dt><dd>learn-claude-code s02（加一个工具只加一个 handler）；dsh-handbook 第 8 章 8.2–8.3.1。</dd></dl></div>
+
+<div class="lesson"><h3>3 上下文与缓存：每次请求喂了什么、花了多少钱</h3>
+<span class="tag">约 35 分钟</span><span class="tag n">context · core/system-prompt · llm</span>
+<dl><dt>根本问题</dt><dd>上下文由哪些部分拼成？为什么「前缀稳定」能让成本降一个量级？</dd>
+<dt>dsh 怎么做</dt><dd><code>context</code> 包注入工作区指令（AGENTS.md）、时间上下文、引用；DeepSeek 前缀缓存按「从头开始一致的部分」计费。</dd>
+<dt>动手</dt><dd>把一次请求的上下文按来源拆块画成堆叠柱（系统提示 / 工具定义 / 指令文件 / 历史 / 本轮输入）；连续跑 5 轮，记录缓存命中 token 和费用；故意在系统提示开头插时间戳破坏前缀，再跑 5 轮对比。改 AGENTS.md 里一条规则，看它是否被遵守。</dd>
+<dt>辅助</dt><dd>dsh-handbook 第 14 章（实测命中率 97% 的条件）；learn-harness-engineering 第 4 讲（一个巨型指令文件为什么失败）。</dd></dl></div>
+
+<div class="lesson"><h3>4 上下文满了：大输出转存与压缩</h3>
+<span class="tag">约 40 分钟</span><span class="tag n">spill · compaction-basic · compaction-tool-result-pruner</span>
+<dl><dt>根本问题</dt><dd>长任务必然撑满上下文，丢什么、留什么、丢了会出什么事？</dd>
+<dt>dsh 怎么做</dt><dd><code>spill</code> 把超大工具输出落盘只留路径；<code>tool-result-pruner</code> 先裁旧工具结果；<code>compaction-basic</code> 生成历史摘要；<code>/compact</code> 手动触发。</dd>
+<dt>动手</dt><dd>让工具吐 200KB 日志，看 spill 后模型拿到什么、还能不能取回原文；跑一个长会话触发自动压缩，压缩前后各问一次早期约定的约束（如「不许改 tests/」），统计遵守率——复现「压缩会悄悄抹掉安全约束」的现象；换压缩策略（patch）再比。</dd>
+<dt>辅助</dt><dd>learn-claude-code s08 四步压缩（转存 → 裁剪 → 微压缩 → 摘要，切点要保护 tool_use / tool_result 配对）；论文 <i>Governance Decay: How Context Compaction Silently Erases Safety Constraints</i>（2026，本地论文库）。</dd></dl></div>
+
+<div class="lesson"><h3>5 规划与目标：先列计划，独立判断做完没有</h3>
+<span class="tag">约 35 分钟</span><span class="tag n">todo · plan · goal</span>
+<dl><dt>根本问题</dt><dd>Agent 常见两种失败：走哪算哪、过早宣布完成。harness 用什么机制拦？</dd>
+<dt>dsh 怎么做</dt><dd><code>todo</code> 工具；<code>/plan</code> 先出计划、审阅后再执行；<code>/goal</code> 每次准备停止时由独立判断决定是否继续，目标不可能或超上限时交还用户。</dd>
+<dt>动手</dt><dd>一个多步任务三种跑法：直接跑 / <code>/plan</code> / <code>/goal</code>，比完成度（测试通过数）、步数、成本；在 plan 审阅时用 SDK 驳回一次，看它怎么改。</dd>
+<dt>辅助</dt><dd>learn-claude-code s05、s17；learn-harness-engineering 第 7、9 讲。</dd></dl></div>
+
+<div class="lesson"><h3>6 权限、审批与沙箱</h3>
+<span class="tag">约 40 分钟</span><span class="tag n">preset · sandbox · 审批协议 · guard</span>
+<dl><dt>根本问题</dt><dd>给 Agent 多大权限？谁来批？批错了还有没有最后一道防线？</dd>
+<dt>dsh 怎么做</dt><dd>三层：权限预设（<code>permission_mode</code>）→ 审批流（<code>approval/request</code>，SDK 可接管）→ 沙箱（macOS 用 Seatbelt）；<code>guard</code> 里的重复调用提醒和超时策略。</dd>
+<dt>动手</dt><dd>用 SDK 写一个审批处理器：读操作放行、写工作区外拒绝、带 <code>rm</code> 的命令拒绝，跑一个会触发这些操作的任务，表格列出每次审批；关掉审批只靠沙箱，看越界写文件在哪一层被拦；在工作区放一个带提示注入的 README，看它是否被执行、哪层拦住。</dd>
+<dt>辅助</dt><dd>learn-claude-code s03；dsh-handbook 第 13 章（三层安全、插件审计清单）。</dd></dl></div>
+
+<div class="lesson"><h3>7 扩展点：不改核心，改行为</h3>
+<span class="tag">约 45 分钟</span><span class="tag n">profile · cordis.patch.yml · 插件 waterfall</span>
+<dl><dt>根本问题</dt><dd>想给 harness 加规则（如每次请求前检查、工具前后记录），该 fork 还是挂钩子？</dd>
+<dt>dsh 怎么做</dt><dd>profile 是配置栈，patch 文件按顺序叠加；插件接入 <code>agent/request</code> 等 waterfall。</dd>
+<dt>动手</dt><dd>先只用 patch：换模型、关工具、调压缩阈值，每个改动一格对比；再写一个最小插件（每次请求前注入一条提醒 + 记录工具调用），用 <code>dsh plugin add file:</code> 装进隔离 home，跑任务验证生效。</dd>
+<dt>辅助</dt><dd>learn-claude-code s04 Hooks；dsh-handbook 第 3–4 章（插件开发三层测试）。</dd>
+<dt>坑</dt><dd>写插件要 pnpm 和 Node ≥ 24（本机现在是 23.11）；只用 patch 不需要。</dd></dl></div>
+
+<div class="lesson"><h3>8 技能与 MCP：能力按需加载</h3>
+<span class="tag">约 30 分钟</span><span class="tag n">skill · mcp</span>
+<dl><dt>根本问题</dt><dd>能力越加越多，全塞进提示词会怎样？</dd>
+<dt>动手</dt><dd>准备 10 个技能，对比「全文塞系统提示」和「只给目录、用到再加载」的上下文 token 与正确率；接一个本地 MCP server（课程自带的小服务），看它的工具怎么并入同一个工具池。</dd>
+<dt>辅助</dt><dd>learn-claude-code s07、s14；dsh-handbook 第 9 章 9.1、9.6。</dd></dl></div>
+
+<div class="lesson"><h3>9 子 Agent 与团队：拆任务、隔离上下文</h3>
+<span class="tag">约 35 分钟</span><span class="tag n">subagent · team</span>
+<dl><dt>根本问题</dt><dd>什么时候该拆给子 Agent？拆了省的是什么、多花的是什么？</dd>
+<dt>动手</dt><dd>一个需要读很多文件的调研任务：单 Agent vs 委托子 Agent，比主上下文 token 峰值、总 token、耗时、答案质量；用 team 任务板让两个 Agent 认领任务，看冲突怎么处理。</dd>
+<dt>辅助</dt><dd>learn-claude-code s06、s13；dsh-handbook 第 9 章 9.2、9.7。</dd></dl></div>
+
+<div class="lesson"><h3>10 长期运行：会话恢复、后台作业、定时</h3>
+<span class="tag">约 30 分钟</span><span class="tag n">session · jobs · schedule</span>
+<dl><dt>根本问题</dt><dd>任务跨越多个会话、中途被打断，怎么接上？</dd>
+<dt>动手</dt><dd>运行中强制关掉运行时，用 <code>resume_session</code> 恢复，看它怎么修复被中断的一轮；后台跑一个慢命令，主循环继续做别的；对比「有交接文件（进度日志）」和「没有」两种情况下第二个会话的接续准确率。</dd>
+<dt>辅助</dt><dd>learn-claude-code s09–s12；learn-harness-engineering 第 5、12 讲，项目 03（多会话连续性）。</dd></dl></div>
+
+<div class="lesson"><h3>11 可观测与评测：别只看一次成功</h3>
+<span class="tag">约 35 分钟</span><span class="tag n">telemetry · benchmarks/</span>
+<dl><dt>根本问题</dt><dd>改了 harness，怎么知道是真变好还是运气？</dd>
+<dt>动手</dt><dd>建 6 道可自动判分的小任务，每个配置跑 3 次，统计通过率、步数、成本的分布；用一个独立裁判模型评分，和自动判分对比一致性；读 dsh <code>benchmarks/</code> 看官方怎么测。</dd>
+<dt>辅助</dt><dd>dsh-handbook 附录 C（同模型 3 个 Agent 实测）；learn-harness-engineering 第 10–11 讲，项目 06；12-factor-agents。</dd></dl></div>
+
+<div class="lesson"><h3>12 综合：做一次 harness 工程对照实验</h3>
+<span class="tag">约 45 分钟</span><span class="tag n">复现 learn-harness-engineering 项目 01 / 05</span>
+<dl><dt>根本问题</dt><dd>把前面学的机制组合起来，到底能提升多少？</dd>
+<dt>动手</dt><dd>同一组任务三种配置：只有提示词 / 加 AGENTS.md + 验证命令 / 再加 plan + goal + 独立评估者；用第 11 课的评测框架量化，写出自己的结论和下一步改什么。</dd></dl></div>
+
+<h2>运行方式与成本</h2>
+<ul>
+<li>运行环境：本机（课程 runtime 仍是 local）。课程 <code>pip</code> 加 <code>deepseek-harness-sdk</code>；工作区和 <code>DSH_HOME</code> 放在课程目录下，与本机其他配置隔离。</li>
+<li>模型：DeepSeek 官方 API（<code>deepseek-v4-flash</code>，本机已有 <code>DEEPSEEK_API_KEY</code>）。与旧课不同，这门课不走本机 Claude——要看原生工具调用、缓存命中、压缩这些真实行为，必须走真实 API。</li>
+<li>成本：按每格几次到几十次请求估算，整门课约几元人民币（推断，开写第一课时实测一格后给准数，并在每格输出里显示本格花费）。</li>
+<li>「问 Claude」照常走本机 Claude，不受影响。</li>
+</ul>
+
+<h2>需要你定的</h2>
+<div class="box warn">
+<ol>
+<li><b>主线框架</b>：推荐 dsh（生产级、可拆、有 Python SDK）。备选是以 learn-claude-code 为主线（纯 Python 从零写，机制更透明，但接触不到真实系统的约束）。主线定了之后改动返工大，请先确认。</li>
+<li><b>花钱</b>：这门课要调用 DeepSeek API，预计整门几元。确认可以用、以及是否要设上限（建议在 ss 里加单格和整课的花费上限）。</li>
+<li><b>第 7 课插件开发</b>：需要在本机装 Node 24 + pnpm（只影响这一课）。选项：装（推荐，用 fnm 装到用户目录，不动系统 Node）/ 不装，第 7 课只做 patch 配置。</li>
+<li><b>旧课去留</b>：推荐新建一门「Agent Harness 实践（dsh）」并下线旧 agents-basics（旧课的学习记录保留在库里不删）。备选：保留旧课作为入门。</li>
+</ol></div>
+
+<h2>调研来源</h2>
+<ul>
+<li>dsh 源码：<a href="https://github.com/deepseek-ai/deepseek-harness">deepseek-ai/deepseek-harness</a>（本地克隆，最近提交 2026-11-22，版本 0.2.3-alpha.2；<code>packages/README.zh.md</code> 包地图、<code>python/sdk/README.zh.md</code> SDK 说明与 examples：minimal / compact / plan / goal / permission / manage_plugins）。PyPI：<code>deepseek-harness-runtime-bin 0.2.2rc2</code> 有 macOS 14 arm64 包。</li>
+<li><a href="https://github.com/Electricitysheep/dsh-handbook">dsh-handbook</a>（最近提交 2026-11-04）第 3、4、6、8、9、13、14 章与附录 C。</li>
+<li><a href="https://github.com/shareAI-lab/learn-claude-code">learn-claude-code</a>（最近提交 2026-11-15，s01–s17，约 1.3 万行 Python）。</li>
+<li><a href="https://github.com/walkinglabs/learn-harness-engineering">learn-harness-engineering</a>（最近提交 2026-11-24，14 讲 + 6 个项目，含 dsh / Claude Code / Codex / pi 的 harness 设计对比）。</li>
+<li>本地开源项目库检索（agent harness / coding agent tutorial / build agent from scratch / context engineering 等 8 组关键词）；本地论文库检索（agent harness / context compaction / agent memory / long-horizon agent）。</li>
+</ul>
+
+<h2>自主决策</h2>
+<div class="tw"><table>
+<tr><th>选了什么</th><th>备选</th><th>理由</th><th>改回代价</th></tr>
+<tr><td>主线推荐 dsh，并用它的 Python SDK 驱动</td><td>learn-claude-code 为主线；或用 dsh CLI（需 Node 24）</td><td>生产级且按包可拆；SDK 自带运行时，能直接在课程内核里跑</td><td>提纲阶段改回只需重排，开写后约半天</td></tr>
+<tr><td>模型用 DeepSeek API，不用本机 Claude</td><td>继续用本机 Claude 模拟工具调用</td><td>原生工具调用、缓存、压缩只有真实 API 才看得到；dsh 官方适配器就是 DeepSeek</td><td>dsh 支持换 provider，改配置即可</td></tr>
+<tr><td>13 课（0–12），按四层推进</td><td>照搬 learn-claude-code 17 章顺序</td><td>dsh 的包分组天然是四层；定时、workflow 等次要机制并入相邻课</td><td>小</td></tr>
+</table></div>
+
+<footer>v1 · 2026-11-27 · 下一步：确认上面四个问题后，先写第 0、1 课并实测成本，再批量写其余课。</footer>
+</main>
+</body>
+</html>
